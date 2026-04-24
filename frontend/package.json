@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
-    "test": "vitest",
+    "test": "vitest --config vite.config.test.ts",
     "test:coverage": "vitest run --coverage",
     "e2e": "npx playwright test",
     "generate-report": "node scripts/generate-report.js"

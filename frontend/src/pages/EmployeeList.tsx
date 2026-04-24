@@ -100,6 +100,16 @@ const EmployeeList: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
+      render: (status: string) => {
+        switch (status) {
+          case 'active':
+            return '在职';
+          case 'inactive':
+            return '离职';
+          default:
+            return status;
+        }
+      },
     },
     {
       title: '标签',

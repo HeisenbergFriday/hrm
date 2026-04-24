@@ -1,13 +1,11 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Divider, Descriptions, Collapse, Avatar } from 'antd'
-import { UserOutlined, PlusOutlined, EditOutlined, ReloadOutlined, FileTextOutlined, IdcardOutlined, MailOutlined, PhoneOutlined, HomeOutlined, BriefcaseOutlined, GraduationCapOutlined, AwardOutlined, BankOutlined, EnvironmentOutlined } from '@ant-design/icons'
+import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Divider, Descriptions, Avatar } from 'antd'
+import { UserOutlined, PlusOutlined, EditOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { employeeAPI } from '../services/api'
-import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
 const { Option } = Select
-const { Panel } = Collapse
 
 interface EmployeeProfile {
   id: string
@@ -353,7 +351,7 @@ const EmployeeProfile: React.FC = () => {
                 name="birth_date"
                 label="出生日期"
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
                 name="nationality"
@@ -413,25 +411,25 @@ const EmployeeProfile: React.FC = () => {
                 name="entry_date"
                 label="入职日期"
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
                 name="probation_end_date"
                 label="试用期结束日期"
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
                 name="contract_start_date"
                 label="合同开始日期"
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
                 name="contract_end_date"
                 label="合同结束日期"
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
             </Tabs.TabPane>
             <Tabs.TabPane tab="教育背景" key="education">
@@ -463,7 +461,7 @@ const EmployeeProfile: React.FC = () => {
                 name="graduation_date"
                 label="毕业日期"
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
             </Tabs.TabPane>
             <Tabs.TabPane tab="财务信息" key="finance">

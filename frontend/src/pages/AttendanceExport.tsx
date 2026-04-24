@@ -204,6 +204,8 @@ const AttendanceExport: React.FC = () => {
         onCancel={() => setExportModalVisible(false)}
         onOk={handleExport}
         confirmLoading={exportMutation.isPending}
+        okText="确定"
+        cancelText="取消"
       >
         <div style={{ padding: '20px 0' }}>
           <div style={{ marginBottom: 16 }}>

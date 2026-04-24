@@ -33,6 +33,15 @@ func (r *EmployeeRepository) FindProfileByID(id string) (*database.EmployeeProfi
 	return &profile, nil
 }
 
+func (r *EmployeeRepository) FindProfileByUserID(userID string) (*database.EmployeeProfile, error) {
+	var profile database.EmployeeProfile
+	err := r.db.Where("user_id = ?", userID).First(&profile).Error
+	if err != nil {
+		return nil, err
+	}
+	return &profile, nil
+}
+
 func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[string]string) ([]database.EmployeeProfile, int64, error) {
 	var profiles []database.EmployeeProfile
 	var total int64

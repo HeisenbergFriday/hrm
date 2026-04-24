@@ -19,37 +19,41 @@ const fetchPermissions = async () => {
   await new Promise(resolve => setTimeout(resolve, 1000))
   return [
     {
+      key: 'user',
       title: '用户管理',
       value: 'user',
       children: [
-        { title: '查看用户', value: 'user:view' },
-        { title: '编辑用户', value: 'user:edit' },
-        { title: '删除用户', value: 'user:delete' },
+        { key: 'user:view', title: '查看用户', value: 'user:view' },
+        { key: 'user:edit', title: '编辑用户', value: 'user:edit' },
+        { key: 'user:delete', title: '删除用户', value: 'user:delete' },
       ],
     },
     {
+      key: 'department',
       title: '部门管理',
       value: 'department',
       children: [
-        { title: '查看部门', value: 'department:view' },
-        { title: '编辑部门', value: 'department:edit' },
-        { title: '删除部门', value: 'department:delete' },
+        { key: 'department:view', title: '查看部门', value: 'department:view' },
+        { key: 'department:edit', title: '编辑部门', value: 'department:edit' },
+        { key: 'department:delete', title: '删除部门', value: 'department:delete' },
       ],
     },
     {
+      key: 'attendance',
       title: '考勤管理',
       value: 'attendance',
       children: [
-        { title: '查看考勤', value: 'attendance:view' },
-        { title: '编辑考勤', value: 'attendance:edit' },
+        { key: 'attendance:view', title: '查看考勤', value: 'attendance:view' },
+        { key: 'attendance:edit', title: '编辑考勤', value: 'attendance:edit' },
       ],
     },
     {
+      key: 'approval',
       title: '审批管理',
       value: 'approval',
       children: [
-        { title: '查看审批', value: 'approval:view' },
-        { title: '审批处理', value: 'approval:process' },
+        { key: 'approval:view', title: '查看审批', value: 'approval:view' },
+        { key: 'approval:process', title: '审批处理', value: 'approval:process' },
       ],
     },
   ]
@@ -123,7 +127,7 @@ const Permission: React.FC = () => {
         ) : rolesError ? (
           <div className="error-container">
             <Alert message="加载失败" type="error" showIcon />
-            <Button className="retry-button" onClick={refetchRoles}>重试</Button>
+            <Button className="retry-button" onClick={() => refetchRoles()}>重试</Button>
           </div>
         ) : roles?.length ? (
           <Table
@@ -144,6 +148,8 @@ const Permission: React.FC = () => {
         onOk={handleModalOk}
         onCancel={handleModalCancel}
         width={600}
+        okText="确定"
+        cancelText="取消"
       >
         <Form
           initialValues={editingRole}
@@ -162,7 +168,7 @@ const Permission: React.FC = () => {
             ) : permissionsError ? (
               <div className="error-container">
                 <Alert message="加载失败" type="error" showIcon />
-                <Button className="retry-button" onClick={refetchPermissions}>重试</Button>
+                <Button className="retry-button" onClick={() => refetchPermissions()}>重试</Button>
               </div>
             ) : permissions?.length ? (
               <Tree

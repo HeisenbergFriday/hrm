@@ -45,6 +45,14 @@ func (s *UserService) GetUsersByDepartment(departmentID string, page, pageSize i
 	return s.userRepo.FindByDepartment(departmentID, page, pageSize)
 }
 
+func (s *UserService) GetSyncedEmployees(page, pageSize int) ([]database.User, int64, error) {
+	return s.userRepo.FindSyncedEmployees(page, pageSize)
+}
+
+func (s *UserService) GetSyncedEmployeesByDepartment(departmentID string, page, pageSize int) ([]database.User, int64, error) {
+	return s.userRepo.FindSyncedEmployeesByDepartment(departmentID, page, pageSize)
+}
+
 func (s *UserService) UpdateUserExtension(userID string, extension map[string]interface{}) error {
 	user, err := s.userRepo.FindByUserID(userID)
 	if err != nil {

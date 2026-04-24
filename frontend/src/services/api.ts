@@ -157,6 +157,7 @@ export const auditAPI = {
     start_date?: string
     end_date?: string
     user_id?: string
+    operation?: string
   }) => api.get('/audit/logs', { params }),
 }
 
@@ -199,6 +200,98 @@ export const talentAPI = {
     api.get('/talent/analysis', { params }),
   getAnalysisDetail: (id: string) => api.get(`/talent/analysis/${id}`),
   createAnalysis: (data: any) => api.post('/talent/analysis', data),
+}
+
+// 大小周与节假日管理模块
+export const weekScheduleAPI = {
+  getRules: () => api.get('/week-schedule/rules'),
+  createRule: (data: Record<string, unknown>) => api.post('/week-schedule/rules', data),
+  updateRule: (id: number | string, data: Record<string, unknown>) => api.put(`/week-schedule/rules/${id}`, data),
+  deleteRule: (id: number | string) => api.delete(`/week-schedule/rules/${id}`),
+  batchSetRules: (data: { user_ids: string[]; base_date: string; pattern: string; shift_id?: number; conflict_mode: string; dry_run: boolean }) =>
+    api.post('/week-schedule/rules/batch', data),
+
+  getShifts: () => api.get('/week-schedule/shifts'),
+  createShift: (data: { name: string; check_in_time: string; check_out_time: string }) =>
+    api.post('/week-schedule/shifts', data),
+
+  getCalendar: (params: { weeks?: number; user_id?: string; department_id?: string }) =>
+    api.get('/week-schedule/calendar', { params }),
+
+  setOverride: (data: Record<string, unknown>) => api.post('/week-schedule/overrides', data),
+  deleteOverride: (id: number | string) => api.delete(`/week-schedule/overrides/${id}`),
+
+  getHolidays: (params: { year: number }) => api.get('/week-schedule/holidays', { params }),
+  createHoliday: (data: Record<string, unknown>) => api.post('/week-schedule/holidays', data),
+  batchCreateHolidays: (data: { holidays: Array<{ date: string; name: string; type: string }> }) =>
+    api.post('/week-schedule/holidays/batch', data),
+  deleteHoliday: (id: number | string) => api.delete(`/week-schedule/holidays/${id}`),
+
+  syncToDingtalk: (data: { weeks: number }) => api.post('/week-schedule/sync/to-dingtalk', data),
+  syncFromDingtalk: () => api.post('/week-schedule/sync/from-dingtalk'),
+  syncHolidaysFromJuhe: () => api.post('/week-schedule/holidays/sync/from-juhe'),
+  getSyncLogs: (params: { page?: number; page_size?: number }) => api.get('/week-schedule/sync/logs', { params }),
+}
+
+// 员工下班时间配置
+export const shiftConfigAPI = {
+  list: () => api.get('/shift-config/list'),
+  catalogs: () => api.get('/shift-config/catalogs'),
+  preview: (data: {
+    user_ids: string[]
+    shift_id?: number
+    end_time?: string
+    name?: string
+    check_in?: string
+    check_out?: string
+    start_date: string
+    end_date: string
+  }) => api.post('/shift-config/preview', data),
+  set: (data: { user_ids: string[]; shift_id: number; end_time: string; note?: string }) =>
+    api.post('/shift-config/set', data),
+  apply: (data: {
+    user_ids: string[]
+    shift_id?: number
+    end_time?: string
+    note?: string
+    name?: string
+    check_in?: string
+    check_out?: string
+    start_date: string
+    end_date: string
+  }) => api.post('/shift-config/apply', data),
+  remove: (userId: string) => api.delete(`/shift-config/${userId}`),
+  getOrCreateShift: (data: { name: string; check_in: string; check_out: string }) =>
+    api.post('/shift-config/get-or-create-shift', data),
+}
+
+// 年假与调休模块
+export const leaveAPI = {
+  getEligibility: (params: { user_id: string; year: number }) =>
+    api.get('/leave/eligibility', { params }),
+  recalculateEligibility: (data: { user_id: string; year: number }) =>
+    api.post('/leave/eligibility/recalculate', data),
+  getGrants: (params: { user_id: string; year: number }) =>
+    api.get('/leave/grants', { params }),
+  runQuarterGrant: (data: { year: number; quarter: number }) =>
+    api.post('/leave/grants/run-quarter', data),
+  regrant: (data: { user_id: string; year: number }) =>
+    api.post('/leave/grants/regrant', data),
+  syncToDingTalk: () =>
+    api.post('/leave/grants/sync-to-dingtalk', { confirm: true }),
+  consume: (data: { user_id: string; days: number; approval_ref?: string; remark?: string }) =>
+    api.post('/leave/consume', data),
+  getConsumeLog: (params: { user_id: string }) =>
+    api.get('/leave/consume-log', { params }),
+}
+
+export const overtimeAPI = {
+  getMatches: (params: { user_id: string; start_date: string; end_date: string }) =>
+    api.get('/overtime/matches', { params }),
+  runMatch: (data: { start_date: string; end_date: string }) =>
+    api.post('/overtime/matches/run', data),
+  getCompBalance: (params: { user_id: string }) =>
+    api.get('/comp-time/balance', { params }),
 }
 
 export default api

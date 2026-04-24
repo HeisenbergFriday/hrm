@@ -27,6 +27,10 @@ func (s *EmployeeService) GetProfileByID(id string) (*database.EmployeeProfile, 
 	return s.employeeRepo.FindProfileByID(id)
 }
 
+func (s *EmployeeService) GetProfileByUserID(userID string) (*database.EmployeeProfile, error) {
+	return s.employeeRepo.FindProfileByUserID(userID)
+}
+
 func (s *EmployeeService) CreateProfile(profile *database.EmployeeProfile) error {
 	return s.employeeRepo.CreateProfile(profile)
 }

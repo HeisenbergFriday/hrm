@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react'
+import axios from 'axios'
 import { Card, Form, Input, Button, message, Typography, Space, Modal, QRCode, Spin } from 'antd'
 import { UserOutlined, LockOutlined, LoginOutlined, QrcodeOutlined, MobileOutlined, LoadingOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import axios from 'axios'
+import { authAPI } from '../services/api'
 import { useAuthStore } from '../store/authStore'
 
 const { Title } = Typography
@@ -80,12 +81,12 @@ const Login: React.FC = () => {
   const onFinish = async (values: any) => {
     setLoading(true)
     try {
-      const response = await axios.post('/api/v1/auth/login', {
+      const response = await authAPI.login({
         username: values.username,
         password: values.password
       })
 
-      const { token, user } = response.data.data
+      const { token, user } = response.data
       login(user, token)
       message.success('登录成功')
       navigate('/')

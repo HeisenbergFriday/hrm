@@ -8,6 +8,7 @@ import (
 	"peopleops/internal/config"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
+	"peopleops/internal/service"
 )
 
 func main() {
@@ -18,7 +19,8 @@ func main() {
 
 	// 初始化数据库
 	if err := database.Init(); err != nil {
-		log.Fatalf("初始化数据库失败: %v", err)
+		log.Printf("初始化数据库失败: %v，将继续运行", err)
+		// 注意：数据库初始化失败，部分功能可能不可用
 	}
 
 	// 初始化Redis缓存
@@ -33,6 +35,11 @@ func main() {
 
 	// 初始化路由
 	router := api.SetupRouter()
+
+	// 启动年假/调休定时任务
+	leaveJobs := service.NewLeaveJobScheduler(database.DB)
+	leaveJobs.SeedDefaultRules()
+	leaveJobs.Start()
 
 	// 启动服务器
 	port := os.Getenv("PORT")

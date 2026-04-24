@@ -1,27 +1,48 @@
-// 测试环境设置
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom/vitest'
+import { cleanup } from '@testing-library/react'
+import { afterEach, vi } from 'vitest'
 
-// 全局mock配置
-jest.mock('./services/api', () => {
+vi.mock('./services/api', async () => {
+  const mocks = await import('./services/api.mock')
+
   return {
-    authAPI: require('./services/api.mock').authAPIMock,
-    userAPI: require('./services/api.mock').userAPIMock,
-    departmentAPI: require('./services/api.mock').departmentAPIMock,
-    attendanceAPI: require('./services/api.mock').attendanceAPIMock,
-    syncAPI: require('./services/api.mock').syncAPIMock,
-    orgAPI: require('./services/api.mock').orgAPIMock,
-  };
-});
+    authAPI: mocks.authAPIMock,
+    userAPI: mocks.userAPIMock,
+    departmentAPI: mocks.departmentAPIMock,
+    attendanceAPI: mocks.attendanceAPIMock,
+    syncAPI: mocks.syncAPIMock,
+    orgAPI: mocks.orgAPIMock,
+  }
+})
 
-// 全局变量
-(global as any).window = {
-  ...global.window,
-  location: {
-    href: 'http://localhost:3000',
-  },
-  localStorage: {
-    getItem: jest.fn(),
-    setItem: jest.fn(),
-    removeItem: jest.fn(),
-  },
-};
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: vi.fn().mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+})
+
+Object.defineProperty(window, 'scrollTo', {
+  writable: true,
+  value: vi.fn(),
+})
+
+class ResizeObserverMock {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+;(globalThis as any).ResizeObserver = ResizeObserverMock
+
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})

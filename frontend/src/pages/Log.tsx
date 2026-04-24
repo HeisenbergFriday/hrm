@@ -68,7 +68,7 @@ const Log: React.FC = () => {
             <Option value="同步">同步</Option>
           </Select>
           <RangePicker onChange={handleDateChange} />
-          <Button type="primary" onClick={refetch} icon={<CalendarOutlined />}>
+          <Button type="primary" onClick={() => refetch()} icon={<CalendarOutlined />}>
             查询
           </Button>
         </div>
@@ -80,14 +80,14 @@ const Log: React.FC = () => {
         ) : isError ? (
           <div className="error-container">
             <Alert message="加载失败" type="error" showIcon />
-            <Button className="retry-button" onClick={refetch}>重试</Button>
+            <Button className="retry-button" onClick={() => refetch()}>重试</Button>
           </div>
-        ) : logs?.items?.length ? (
+        ) : logs?.data?.items?.length ? (
           <Table
             columns={columns}
-            dataSource={logs.items}
+            dataSource={logs.data.items}
             rowKey="id"
-            pagination={{ total: logs.total, pageSize: 10 }}
+            pagination={{ total: logs.data.total, pageSize: 10 }}
           />
         ) : (
           <div className="empty-container">

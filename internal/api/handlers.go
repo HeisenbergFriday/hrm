@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"peopleops/internal/database"
@@ -26,6 +27,21 @@ type Response struct {
 type PagedResponse struct {
 	Items interface{} `json:"items"`
 	Total int64       `json:"total"`
+}
+
+func applyDingTalkProfileFields(profile *database.EmployeeProfile, user dingtalk.UserInfo, status string) {
+	profile.WorkEmail = user.Email
+	profile.ProfileStatus = status
+	if user.HiredDate != "" {
+		profile.EntryDate = user.HiredDate
+	}
+	if user.PlannedRegularDate != "" {
+		profile.PlannedRegularDate = user.PlannedRegularDate
+	}
+	if user.ActualRegularDate != "" {
+		profile.ActualRegularDate = user.ActualRegularDate
+		profile.ProbationEndDate = user.ActualRegularDate
+	}
 }
 
 // HealthCheck 健康检查
@@ -279,6 +295,7 @@ func SyncUsers(c *gin.Context) {
 
 	// 写入数据库
 	userService := service.NewUserService(database.DB)
+	employeeService := service.NewEmployeeService(database.DB)
 	count := 0
 	for _, u := range users {
 		deptID := ""
@@ -314,6 +331,19 @@ func SyncUsers(c *gin.Context) {
 			existing.Avatar = u.Avatar
 			existing.Status = status
 			userService.UpdateUser(existing)
+		}
+
+		profile, profileErr := employeeService.GetProfileByUserID(u.UserID)
+		if profileErr != nil {
+			profile := &database.EmployeeProfile{
+				UserID:     u.UserID,
+				EmployeeID: u.UserID,
+			}
+			applyDingTalkProfileFields(profile, u, status)
+			employeeService.CreateProfile(profile)
+		} else {
+			applyDingTalkProfileFields(profile, u, status)
+			employeeService.UpdateProfile(profile)
 		}
 		count++
 	}
@@ -774,9 +804,9 @@ func GetEmployees(c *gin.Context) {
 	var err error
 
 	if departmentID != "" {
-		users, total, err = userService.GetUsersByDepartment(departmentID, page, pageSize)
+		users, total, err = userService.GetSyncedEmployeesByDepartment(departmentID, page, pageSize)
 	} else {
-		users, total, err = userService.GetUsers(page, pageSize)
+		users, total, err = userService.GetSyncedEmployees(page, pageSize)
 	}
 
 	if err != nil {
@@ -811,10 +841,14 @@ func GetEmployee(c *gin.Context) {
 		return
 	}
 
+	// 一并返回员工档案（按 user_id 查），避免前端再发请求
+	employeeService := service.NewEmployeeService(database.DB)
+	profile, _ := employeeService.GetProfileByUserID(user.UserID)
+
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
 		Message: "success",
-		Data:    gin.H{"employee": user},
+		Data:    gin.H{"employee": user, "profile": profile},
 	})
 }
 
@@ -826,8 +860,11 @@ func SyncOrgData(c *gin.Context) {
 	depts, deptErr := dingtalk.SyncDepartments()
 	deptCount := 0
 	deptStatus := "success"
+	deptErrMsg := ""
 	if deptErr != nil {
 		deptStatus = "failed"
+		deptErrMsg = deptErr.Error()
+		log.Printf("[SyncOrgData] 部门同步失败: %v", deptErr)
 	} else {
 		deptService := service.NewDepartmentService(database.DB)
 		for _, d := range depts {
@@ -848,12 +885,15 @@ func SyncOrgData(c *gin.Context) {
 		syncService.UpdateSyncStatus("departments", "success", fmt.Sprintf("同步 %d 个部门", deptCount))
 	}
 
-	// 同步用户
-	users, userErr := dingtalk.SyncUsers()
+	// 同步用户（复用已有部门列表，避免重复调用 SyncDepartments）
+	users, userErr := dingtalk.SyncUsersWithDepts(depts)
 	userCount := 0
 	userStatus := "success"
+	userErrMsg := ""
 	if userErr != nil {
 		userStatus = "failed"
+		userErrMsg = userErr.Error()
+		log.Printf("[SyncOrgData] 用户同步失败: %v", userErr)
 	} else {
 		userService := service.NewUserService(database.DB)
 		employeeService := service.NewEmployeeService(database.DB)
@@ -874,12 +914,12 @@ func SyncOrgData(c *gin.Context) {
 					Position: u.Position, Avatar: u.Avatar, Status: status,
 				})
 				// 同时创建员工档案
-				employeeService.CreateProfile(&database.EmployeeProfile{
-					UserID:        u.UserID,
-					EmployeeID:    u.UserID, // 使用钉钉UserID作为员工工号
-					WorkEmail:     u.Email,
-					ProfileStatus: status,
-				})
+				profile := &database.EmployeeProfile{
+					UserID:     u.UserID,
+					EmployeeID: u.UserID,
+				}
+				applyDingTalkProfileFields(profile, u, status)
+				employeeService.CreateProfile(profile)
 			} else {
 				existing.Name = u.Name
 				existing.Email = u.Email
@@ -890,19 +930,18 @@ func SyncOrgData(c *gin.Context) {
 				existing.Status = status
 				userService.UpdateUser(existing)
 				// 检查是否存在员工档案
-				profile, profileErr := employeeService.GetProfileByID(u.UserID)
+				profile, profileErr := employeeService.GetProfileByUserID(u.UserID)
 				if profileErr != nil {
 					// 创建员工档案
-					employeeService.CreateProfile(&database.EmployeeProfile{
-						UserID:        u.UserID,
-						EmployeeID:    u.UserID, // 使用钉钉UserID作为员工工号
-						WorkEmail:     u.Email,
-						ProfileStatus: status,
-					})
+					profile := &database.EmployeeProfile{
+						UserID:     u.UserID,
+						EmployeeID: u.UserID,
+					}
+					applyDingTalkProfileFields(profile, u, status)
+					employeeService.CreateProfile(profile)
 				} else {
-					// 更新员工档案
-					profile.WorkEmail = u.Email
-					profile.ProfileStatus = status
+					// 更新员工档案：始终同步入职日期（若钉钉有值则覆盖）
+					applyDingTalkProfileFields(profile, u, status)
 					employeeService.UpdateProfile(profile)
 				}
 			}
@@ -916,8 +955,8 @@ func SyncOrgData(c *gin.Context) {
 		Message: "success",
 		Data: gin.H{
 			"sync_status": gin.H{
-				"departments": gin.H{"count": deptCount, "status": deptStatus},
-				"employees":   gin.H{"count": userCount, "status": userStatus},
+				"departments": gin.H{"count": deptCount, "status": deptStatus, "error": deptErrMsg},
+				"employees":   gin.H{"count": userCount, "status": userStatus, "error": userErrMsg},
 				"sync_time":   time.Now(),
 			},
 		},
@@ -1063,7 +1102,14 @@ func SyncAttendance(c *gin.Context) {
 			record.Extension["abnormal_type"] = abnormalType
 		}
 
-		database.DB.Create(record)
+		if err := service.NewAttendanceService(database.DB).SaveRecord(record); err != nil {
+			syncService.UpdateSyncStatus("attendance", "failed", err.Error())
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "鍚屾鑰冨嫟澶辫触: " + err.Error(),
+			})
+			return
+		}
 		count++
 	}
 
@@ -1907,5 +1953,817 @@ func CreateTalentAnalysis(c *gin.Context) {
 		Code:    http.StatusOK,
 		Message: "success",
 		Data:    gin.H{"analysis": analysis},
+	})
+}
+
+// ===================== 大小周管理 =====================
+
+// GetWeekScheduleRules 获取所有大小周规则
+func GetWeekScheduleRules(c *gin.Context) {
+	svc := service.NewWeekScheduleService(database.DB)
+	rules, err := svc.GetAllRules()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取规则列表失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"items": rules},
+	})
+}
+
+// CreateWeekScheduleRule 创建大小周规则
+func CreateWeekScheduleRule(c *gin.Context) {
+	var rule database.WeekScheduleRule
+	if err := c.ShouldBindJSON(&rule); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误",
+		})
+		return
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	if err := svc.CreateRule(&rule); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "创建规则失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"rule": rule},
+	})
+}
+
+// UpdateWeekScheduleRule 更新大小周规则
+func UpdateWeekScheduleRule(c *gin.Context) {
+	idStr := c.Param("id")
+	svc := service.NewWeekScheduleService(database.DB)
+
+	var id uint
+	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "ID 格式错误",
+		})
+		return
+	}
+
+	existing, err := svc.GetRuleByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{
+			Code:    http.StatusNotFound,
+			Message: "规则不存在",
+		})
+		return
+	}
+
+	var input database.WeekScheduleRule
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误",
+		})
+		return
+	}
+
+	if input.ScopeType != "" {
+		existing.ScopeType = input.ScopeType
+	}
+	if input.ScopeID != "" || input.ScopeType == "company" {
+		existing.ScopeID = input.ScopeID
+	}
+	if input.ScopeName != "" {
+		existing.ScopeName = input.ScopeName
+	}
+	if input.BaseDate != "" {
+		existing.BaseDate = input.BaseDate
+	}
+	if input.Pattern != "" {
+		existing.Pattern = input.Pattern
+	}
+	if input.Status != "" {
+		existing.Status = input.Status
+	}
+
+	if err := svc.UpdateRule(existing); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "更新规则失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"rule": existing},
+	})
+}
+
+// DeleteWeekScheduleRule 删除大小周规则
+func DeleteWeekScheduleRule(c *gin.Context) {
+	idStr := c.Param("id")
+	var id uint
+	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "ID 格式错误",
+		})
+		return
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	if err := svc.DeleteRule(id); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "删除规则失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+	})
+}
+
+// BatchSetWeekScheduleRules 批量为员工设置大小周规则
+func BatchSetWeekScheduleRules(c *gin.Context) {
+	var input service.BatchSetUserRulesInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	if len(input.UserIDs) == 0 {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "请选择至少一个员工",
+		})
+		return
+	}
+
+	if input.BaseDate == "" || input.Pattern == "" {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "base_date 和 pattern 不能为空",
+		})
+		return
+	}
+
+	if input.ConflictMode == "" {
+		input.ConflictMode = "skip"
+	}
+
+	var users []database.User
+	if err := database.DB.Where("user_id IN ?", input.UserIDs).Find(&users).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "查询用户信息失败",
+		})
+		return
+	}
+
+	userMap := make(map[string]database.User, len(users))
+	for _, u := range users {
+		userMap[u.UserID] = u
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	result, err := svc.BatchSetUserRules(&input, userMap)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "批量设置失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    result,
+	})
+}
+
+// GetDingTalkShifts 获取钉钉班次列表
+func GetDingTalkShifts(c *gin.Context) {
+	shifts, err := dingtalk.GetShiftList()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取班次列表失败: " + err.Error(),
+		})
+		return
+	}
+
+	type ShiftItem struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+	}
+
+	var items []ShiftItem
+	for _, shift := range shifts {
+		if idVal, ok := shift["id"].(float64); ok && int64(idVal) > 0 {
+			name, _ := shift["name"].(string)
+			items = append(items, ShiftItem{
+				ID:   int64(idVal),
+				Name: name,
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"items": items},
+	})
+}
+
+// DebugAttendanceGroups 返回所有考勤组及其班次详情，用于诊断休息班次 ID
+func DebugAttendanceGroups(c *gin.Context) {
+	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
+	if opUserID == "" {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "未配置 DINGTALK_ADMIN_USER_ID",
+		})
+		return
+	}
+
+	groups, err := dingtalk.GetAttendanceGroups()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取考勤组失败: " + err.Error(),
+		})
+		return
+	}
+
+	shifts, _ := dingtalk.GetShiftList()
+	shiftNameMap := make(map[int64]string, len(shifts))
+	for _, s := range shifts {
+		if id, ok := s["id"].(float64); ok && id > 0 {
+			name, _ := s["name"].(string)
+			shiftNameMap[int64(id)] = name
+		}
+	}
+
+	type GroupInfo struct {
+		GroupID   interface{} `json:"group_id"`
+		GroupName interface{} `json:"group_name"`
+		GroupType interface{} `json:"group_type"`
+		ShiftIDs  []int64     `json:"shift_ids"`
+		Shifts    []gin.H     `json:"shifts"`
+		RawKeys   []string    `json:"raw_keys"`
+	}
+
+	result := make([]GroupInfo, 0, len(groups))
+	for _, g := range groups {
+		gid, _ := g["group_id"].(float64)
+		info := GroupInfo{
+			GroupID:   g["group_id"],
+			GroupName: g["group_name"],
+			GroupType: g["group_type"],
+			RawKeys:   make([]string, 0, len(g)),
+		}
+		for k := range g {
+			info.RawKeys = append(info.RawKeys, k)
+		}
+
+		detail, detailErr := dingtalk.GetAttendanceGroup(opUserID, int64(gid))
+		if detailErr == nil {
+			shiftIDs := dingtalk.CollectAttendanceGroupShiftIDs(detail)
+			info.ShiftIDs = make([]int64, 0, len(shiftIDs))
+			info.Shifts = make([]gin.H, 0, len(shiftIDs))
+			for sid := range shiftIDs {
+				info.ShiftIDs = append(info.ShiftIDs, sid)
+				info.Shifts = append(info.Shifts, gin.H{
+					"shift_id":   sid,
+					"shift_name": shiftNameMap[sid],
+				})
+			}
+			restID := dingtalk.GetAttendanceGroupRestClassID(detail)
+			info.RawKeys = append(info.RawKeys, fmt.Sprintf("detected_rest_shift_id=%d", restID))
+		}
+		result = append(result, info)
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"groups": result, "all_shifts": shifts},
+	})
+}
+
+// CreateDingTalkShift 在钉钉创建新班次
+func CreateDingTalkShift(c *gin.Context) {
+	var input struct {
+		Name         string `json:"name" binding:"required"`
+		CheckInTime  string `json:"check_in_time" binding:"required"`
+		CheckOutTime string `json:"check_out_time" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
+	if opUserID == "" {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "未配置 DINGTALK_ADMIN_USER_ID",
+		})
+		return
+	}
+
+	shiftID, err := dingtalk.CreateShift(opUserID, input.Name, input.CheckInTime, input.CheckOutTime)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"id": shiftID, "name": input.Name},
+	})
+}
+func GetWeekCalendar(c *gin.Context) {
+	userID := c.Query("user_id")
+	departmentID := c.Query("department_id")
+	weeksStr := c.DefaultQuery("weeks", "8")
+
+	var weeks int
+	fmt.Sscanf(weeksStr, "%d", &weeks)
+	if weeks <= 0 {
+		weeks = 8
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	calendar, err := svc.GetWeekCalendar(userID, departmentID, weeks)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取日历失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"items": calendar},
+	})
+}
+
+// SetWeekOverride 手动设置某周为大周/小周
+func SetWeekOverride(c *gin.Context) {
+	var override database.WeekScheduleOverride
+	if err := c.ShouldBindJSON(&override); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误",
+		})
+		return
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	if err := svc.SetOverride(&override); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "设置覆盖失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"override": override},
+	})
+}
+
+// DeleteWeekOverride 取消手动覆盖
+func DeleteWeekOverride(c *gin.Context) {
+	idStr := c.Param("id")
+	var id uint
+	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "ID 格式错误",
+		})
+		return
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	if err := svc.DeleteOverride(id); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "删除覆盖失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+	})
+}
+
+// SyncWeekToDingTalk 将大小周配置推送到钉钉
+func SyncWeekToDingTalk(c *gin.Context) {
+	var input struct {
+		Weeks int `json:"weeks"`
+	}
+	c.ShouldBindJSON(&input)
+	if input.Weeks <= 0 {
+		input.Weeks = 4
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	result, err := svc.SyncToDingTalk(input.Weeks)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "同步到钉钉失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    result,
+	})
+}
+
+// SyncWeekFromDingTalk 从钉钉拉取大小周配置
+func SyncWeekFromDingTalk(c *gin.Context) {
+	svc := service.NewWeekScheduleService(database.DB)
+	result, err := svc.SyncFromDingTalkConservative()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "从钉钉同步失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    result,
+	})
+}
+
+// GetWeekSyncLogs 获取大小周同步日志
+func GetWeekSyncLogs(c *gin.Context) {
+	pageStr := c.DefaultQuery("page", "1")
+	pageSizeStr := c.DefaultQuery("page_size", "20")
+
+	var page, pageSize int
+	fmt.Sscanf(pageStr, "%d", &page)
+	fmt.Sscanf(pageSizeStr, "%d", &pageSize)
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	logs, total, err := svc.GetSyncLogs(page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取同步日志失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data: PagedResponse{
+			Items: logs,
+			Total: total,
+		},
+	})
+}
+
+// ===================== 法定节假日管理 =====================
+
+// GetHolidays 获取节假日列表（按年）
+func GetHolidays(c *gin.Context) {
+	yearStr := c.DefaultQuery("year", fmt.Sprintf("%d", time.Now().Year()))
+	var year int
+	fmt.Sscanf(yearStr, "%d", &year)
+	if year <= 0 {
+		year = time.Now().Year()
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	holidays, err := svc.GetHolidaysByYear(year)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取节假日列表失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"items": holidays, "year": year},
+	})
+}
+
+// CreateHoliday 创建单个节假日
+func CreateHoliday(c *gin.Context) {
+	var holiday database.StatutoryHoliday
+	if err := c.ShouldBindJSON(&holiday); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误",
+		})
+		return
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	if err := svc.CreateHoliday(&holiday); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "创建节假日失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"holiday": holiday},
+	})
+}
+
+// BatchCreateHolidays 批量创建节假日
+func BatchCreateHolidays(c *gin.Context) {
+	var input struct {
+		Holidays []database.StatutoryHoliday `json:"holidays"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误",
+		})
+		return
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	created, err := svc.BatchCreateHolidays(input.Holidays)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "批量创建失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"created": created, "total": len(input.Holidays)},
+	})
+}
+
+// SyncHolidaysFromJuhe 从聚合数据API同步节假日
+func SyncHolidaysFromJuhe(c *gin.Context) {
+	svc := service.NewWeekScheduleService(database.DB)
+	created, err := svc.SyncHolidaysFromJuhe()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "从聚合数据同步节假日失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"created": created},
+	})
+}
+
+// DeleteHoliday 删除节假日
+func DeleteHoliday(c *gin.Context) {
+	idStr := c.Param("id")
+	var id uint
+	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "ID 格式错误",
+		})
+		return
+	}
+
+	svc := service.NewWeekScheduleService(database.DB)
+	if err := svc.DeleteHoliday(id); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "删除节假日失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+	})
+}
+
+// ===================== 员工下班时间配置 =====================
+
+// GetShiftConfigs 获取所有员工的下班时间配置（含默认 18:30 的员工）
+func GetShiftConfigs(c *gin.Context) {
+	svc := service.NewShiftConfigService(database.DB)
+	items, err := svc.GetAllWithUsers()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取配置失败: " + err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"items": items},
+	})
+}
+
+// SetShiftConfigs 批量/单个设置员工下班时间（仅写本地 DB，不调用钉钉 API）
+func GetShiftCatalogs(c *gin.Context) {
+	svc := service.NewShiftConfigService(database.DB)
+	items, err := svc.ListShiftCatalogs()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "????????????: " + err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"items": items},
+	})
+}
+
+func PreviewShiftConfigs(c *gin.Context) {
+	var input service.PreviewShiftConfigInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	svc := service.NewShiftConfigService(database.DB)
+	result, err := svc.Preview(&input)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "预览失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    result,
+	})
+}
+
+func SetShiftConfigs(c *gin.Context) {
+	var input service.SetShiftConfigInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	svc := service.NewShiftConfigService(database.DB)
+	count, err := svc.SetConfigs(&input)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "设置失败: " + err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"updated": count},
+	})
+}
+
+// DeleteShiftConfig 删除员工自定义下班时间（恢复默认 18:30）
+func ApplyShiftConfigs(c *gin.Context) {
+	var input service.ApplyShiftConfigInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "??????: " + err.Error(),
+		})
+		return
+	}
+
+	svc := service.NewShiftConfigService(database.DB)
+	result, err := svc.ApplyAndSync(&input)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "???????????: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: result.Message,
+		Data:    result,
+	})
+}
+
+func DeleteShiftConfig(c *gin.Context) {
+	userID := c.Param("user_id")
+	svc := service.NewShiftConfigService(database.DB)
+	if err := svc.DeleteConfig(userID); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "删除失败: " + err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+	})
+}
+
+// GetOrCreateCustomShift 查找或创建钉钉班次，返回班次 ID
+func GetOrCreateCustomShift(c *gin.Context) {
+	var input struct {
+		Name     string `json:"name" binding:"required"`
+		CheckIn  string `json:"check_in" binding:"required"`
+		CheckOut string `json:"check_out" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	svc := service.NewShiftConfigService(database.DB)
+	shiftID, err := svc.GetOrCreateShift(input.Name, input.CheckIn, input.CheckOut)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取/创建班次失败: " + err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"shift_id": shiftID},
 	})
 }
