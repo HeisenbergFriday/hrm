@@ -23,10 +23,20 @@ logs
 
 # Build
 /build
+.gocache/
+frontend/dist/
+*.msi
 
 # Frontend
 node_modules/
 frontend/node_modules/
+
+# Local tool configuration
+.claude/
+
+# Scratch files
+query
+test_dingtalk_dept.go
 
 # OS
 .DS_Store

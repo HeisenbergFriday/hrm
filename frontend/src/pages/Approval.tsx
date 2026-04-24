@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Card, Typography, DatePicker, Table, Spin, Empty, Alert, Button, Select, Badge } from 'antd'
-import { FileOutlined, CalendarOutlined } from '@ant-design/icons'
+import { CalendarOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 
 const { Title } = Typography
@@ -93,7 +93,7 @@ const Approval: React.FC = () => {
             <Option value="rejected">已拒绝</Option>
           </Select>
           <RangePicker onChange={handleDateChange} />
-          <Button type="primary" onClick={refetch} icon={<CalendarOutlined />}>
+          <Button type="primary" onClick={() => refetch()} icon={<CalendarOutlined />}>
             查询
           </Button>
         </div>
@@ -105,7 +105,7 @@ const Approval: React.FC = () => {
         ) : isError ? (
           <div className="error-container">
             <Alert message="加载失败" type="error" showIcon />
-            <Button className="retry-button" onClick={refetch}>重试</Button>
+            <Button className="retry-button" onClick={() => refetch()}>重试</Button>
           </div>
         ) : approvals?.items?.length ? (
           <Table

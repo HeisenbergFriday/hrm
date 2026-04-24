@@ -486,7 +486,7 @@ const TalentAnalysis: React.FC = () => {
             label="分析日期"
             rules={[{ required: true, message: '请选择分析日期' }]}
           >
-            <DatePicker style={{ width: '100%' }} />
+            <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
           </Form.Item>
         </Form>
       </Modal>

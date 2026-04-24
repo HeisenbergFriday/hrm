@@ -100,7 +100,7 @@ const Organization: React.FC = () => {
             ) : departmentsError ? (
               <div className="error-container">
                 <Alert message="加载失败" type="error" showIcon />
-                <Button className="retry-button" onClick={refetchDepartments}>重试</Button>
+                <Button className="retry-button" onClick={() => refetchDepartments()}>重试</Button>
               </div>
             ) : departments?.length ? (
               <Tree
@@ -124,14 +124,14 @@ const Organization: React.FC = () => {
             ) : usersError ? (
               <div className="error-container">
                 <Alert message="加载失败" type="error" showIcon />
-                <Button className="retry-button" onClick={refetchUsers}>重试</Button>
+                <Button className="retry-button" onClick={() => refetchUsers()}>重试</Button>
               </div>
-            ) : users?.items?.length ? (
+            ) : users?.data?.items?.length ? (
               <Table
                 columns={columns}
-                dataSource={users.items}
+                dataSource={users.data.items}
                 rowKey="id"
-                pagination={{ total: users.total, pageSize: 10 }}
+                pagination={{ total: users.data.total, pageSize: 10 }}
               />
             ) : (
               <div className="empty-container">
@@ -147,6 +147,8 @@ const Organization: React.FC = () => {
         open={isModalVisible}
         onOk={handleModalOk}
         onCancel={handleModalCancel}
+        okText="确定"
+        cancelText="取消"
       >
         <Form
           initialValues={editingUser}

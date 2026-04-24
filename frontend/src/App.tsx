@@ -1,7 +1,7 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { Layout, Menu, ConfigProvider, theme } from 'antd'
 import { Link, Routes, Route, useLocation } from 'react-router-dom'
-import { UserOutlined, TeamOutlined, ClockCircleOutlined, FileOutlined, KeyOutlined, HistoryOutlined, SettingOutlined, LogoutOutlined, WarningOutlined, FileExcelOutlined, FileTextOutlined, BarChartOutlined, SyncOutlined, LockOutlined, SwapOutlined } from '@ant-design/icons'
+import { UserOutlined, TeamOutlined, ClockCircleOutlined, FileOutlined, KeyOutlined, HistoryOutlined, SettingOutlined, LogoutOutlined, WarningOutlined, FileExcelOutlined, FileTextOutlined, BarChartOutlined, SyncOutlined, LockOutlined, SwapOutlined, CalendarOutlined, ScheduleOutlined } from '@ant-design/icons'
 
 import Login from './pages/Login'
 import Home from './pages/Home'
@@ -31,6 +31,9 @@ import DepartmentTree from './pages/DepartmentTree'
 import EmployeeList from './pages/EmployeeList'
 import EmployeeDetail from './pages/EmployeeDetail'
 import SyncLog from './pages/SyncLog'
+import WeekSchedule from './pages/WeekSchedule'
+import EmployeeShiftConfig from './pages/EmployeeShiftConfig'
+import LeaveOvertime from './pages/LeaveOvertime'
 
 import { useAuthStore } from './store/authStore'
 
@@ -51,11 +54,11 @@ function App() {
   return (
     <ConfigProvider>
       <Layout>
-        <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed}>
+        <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} style={{ position: 'fixed', height: '100vh', overflow: 'auto', zIndex: 100, left: 0, top: 0 }}>
           <div className="logo" style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
-            People Ops
+            人事管理系统
           </div>
-          <Menu theme="dark" mode="inline" defaultSelectedKeys={['/']}>
+          <Menu theme="dark" mode="inline" selectedKeys={[location.pathname]}>
             <Menu.Item key="/" icon={<UserOutlined />}>
               <Link to="/">首页</Link>
             </Menu.Item>
@@ -77,6 +80,12 @@ function App() {
               </Menu.Item>
               <Menu.Item key="/attendance-export" icon={<FileExcelOutlined />}>
                 <Link to="/attendance-export">导出记录</Link>
+              </Menu.Item>
+              <Menu.Item key="/week-schedule" icon={<CalendarOutlined />}>
+                <Link to="/week-schedule">大小周与节假日</Link>
+              </Menu.Item>
+              <Menu.Item key="/employee-shift-config" icon={<ClockCircleOutlined />}>
+                <Link to="/employee-shift-config">员工下班时间</Link>
               </Menu.Item>
             </Menu.SubMenu>
             <Menu.SubMenu key="approval" icon={<FileOutlined />} title="审批管理">
@@ -124,6 +133,9 @@ function App() {
                 <Link to="/talent-analysis">人才分析</Link>
               </Menu.Item>
             </Menu.SubMenu>
+            <Menu.Item key="/leave-overtime" icon={<ScheduleOutlined />}>
+              <Link to="/leave-overtime">年假与调休</Link>
+            </Menu.Item>
             <Menu.Item key="/setting" icon={<SettingOutlined />}>
               <Link to="/setting">系统设置</Link>
             </Menu.Item>
@@ -132,7 +144,7 @@ function App() {
             </Menu.Item>
           </Menu>
         </Sider>
-        <Layout>
+        <Layout style={{ marginLeft: collapsed ? 80 : 200, transition: 'margin-left 0.2s' }}>
           <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 24px' }}>
             <div style={{ color: '#fff' }}>{user?.name || '管理员'}</div>
           </Header>
@@ -150,6 +162,8 @@ function App() {
               <Route path="/attendance" element={<Attendance />} />
               <Route path="/attendance-stats" element={<AttendanceStats />} />
               <Route path="/attendance-export" element={<AttendanceExport />} />
+              <Route path="/week-schedule" element={<WeekSchedule />} />
+              <Route path="/employee-shift-config" element={<EmployeeShiftConfig />} />
               <Route path="/approval" element={<Approval />} />
               <Route path="/approval-templates" element={<ApprovalTemplate />} />
               <Route path="/approval-instances" element={<ApprovalInstance />} />
@@ -163,6 +177,7 @@ function App() {
               <Route path="/employee-profile" element={<EmployeeProfile />} />
               <Route path="/employee-flow" element={<EmployeeFlow />} />
               <Route path="/talent-analysis" element={<TalentAnalysis />} />
+              <Route path="/leave-overtime" element={<LeaveOvertime />} />
               <Route path="/permission" element={<Permission />} />
               <Route path="/log" element={<Log />} />
               <Route path="/setting" element={<Setting />} />

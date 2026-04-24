@@ -2,60 +2,123 @@ package service
 
 import (
 	"testing"
-	"time"
-	"peopleops/internal/database"
 
-	"github.com/stretchr/testify/assert"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
+	"peopleops/internal/database"
+	"peopleops/internal/dingtalk"
 )
 
-// 测试考勤服务
-func TestAttendanceService(t *testing.T) {
-	// 创建内存数据库连接
-	db, err := gorm.Open(mysql.Open("root:password@tcp(localhost:3306)/peopleops_test?charset=utf8mb4&parseTime=True&loc=Local"), &gorm.Config{})
-	assert.NoError(t, err)
+type fakeAttendanceRepository struct {
+	records        map[string]*database.Attendance
+	findAllRecords []database.Attendance
+}
 
-	// 自动迁移表结构
-	err = db.AutoMigrate(&database.Attendance{})
-	assert.NoError(t, err)
+func (r *fakeAttendanceRepository) FindAll(page, pageSize int, filters map[string]string) ([]database.Attendance, int64, error) {
+	result := make([]database.Attendance, len(r.findAllRecords))
+	copy(result, r.findAllRecords)
+	return result, int64(len(result)), nil
+}
 
-	// 创建考勤服务
-	attendanceService := NewAttendanceService(db)
+func (r *fakeAttendanceRepository) Upsert(record *database.Attendance) error {
+	if r.records == nil {
+		r.records = make(map[string]*database.Attendance)
+	}
+	key := record.UserID + "|" + record.CheckType + "|" + record.CheckTime.Format("2006-01-02 15:04:05")
+	copied := *record
+	r.records[key] = &copied
+	return nil
+}
 
-	// 测试获取考勤记录
-	t.Run("GetAttendanceRecords", func(t *testing.T) {
-		records, total, err := attendanceService.GetAttendanceRecords(1, 10, "", "", time.Now().AddDate(0, 0, -7), time.Now())
-		assert.NoError(t, err)
-		assert.NotNil(t, records)
-		assert.GreaterOrEqual(t, total, int64(0))
+func TestAttendanceServiceSyncRecordsIsIdempotent(t *testing.T) {
+	repo := &fakeAttendanceRepository{}
+	svc := &AttendanceService{attendanceRepo: repo}
+
+	input := []dingtalk.AttendanceRecord{
+		{
+			UserID:         "user-1",
+			CheckType:      "OffDuty",
+			UserCheckTime:  "2026-04-23 18:30:00",
+			LocationResult: "Office",
+			TimeResult:     "Early",
+		},
+	}
+	userNameMap := map[string]string{"user-1": "Alice"}
+
+	if _, err := svc.SyncRecords(input, userNameMap); err != nil {
+		t.Fatalf("first sync failed: %v", err)
+	}
+	if _, err := svc.SyncRecords(input, userNameMap); err != nil {
+		t.Fatalf("second sync failed: %v", err)
+	}
+
+	if got := len(repo.records); got != 1 {
+		t.Fatalf("expected one stored attendance record after duplicate sync, got %d", got)
+	}
+
+	for _, record := range repo.records {
+		if record.UserName != "Alice" {
+			t.Fatalf("expected user name to be preserved, got %q", record.UserName)
+		}
+		if abnormalType, ok := record.Extension["abnormal_type"]; !ok || abnormalType != "早退" {
+			t.Fatalf("expected abnormal_type to be leave early, got %#v", record.Extension["abnormal_type"])
+		}
+	}
+}
+
+func TestAttendanceServiceGetStatsIncludesUsersWithoutPunches(t *testing.T) {
+	engine := NewAttendanceRuleEngine(nil)
+	engine.holidayFinder = func(date string) (*database.StatutoryHoliday, bool) {
+		return nil, false
+	}
+	engine.scheduleFinder = func(userID, departmentID, date string) (attendanceSchedule, error) {
+		return attendanceSchedule{
+			CheckIn:  "09:00",
+			CheckOut: "18:30",
+			Source:   "default",
+		}, nil
+	}
+
+	svc := &AttendanceService{
+		attendanceRepo: &fakeAttendanceRepository{},
+		ruleEngine:     engine,
+		userLoader: func(filters map[string]string) ([]database.User, error) {
+			return []database.User{
+				{UserID: "user-1", Name: "Alice", DepartmentID: "dept-1"},
+			}, nil
+		},
+		departmentNameLoader: func() (map[string]string, error) {
+			return map[string]string{"dept-1": "Engineering"}, nil
+		},
+	}
+
+	stats, err := svc.GetStats(map[string]string{
+		"start_date": "2026-04-23",
+		"end_date":   "2026-04-23",
 	})
+	if err != nil {
+		t.Fatalf("expected stats to succeed, got error: %v", err)
+	}
 
-	// 测试获取考勤统计
-	t.Run("GetAttendanceStats", func(t *testing.T) {
-		stats, err := attendanceService.GetAttendanceStats("", time.Now().AddDate(0, 0, -30), time.Now())
-		assert.NoError(t, err)
-		assert.NotNil(t, stats)
-	})
+	summary := stats["summary"].(map[string]interface{})
+	if got := summary["total_users"].(int); got != 1 {
+		t.Fatalf("expected one user in scope, got %d", got)
+	}
+	if got := summary["absent_count"].(int); got != 1 {
+		t.Fatalf("expected one absent workday for zero-punch user, got %d", got)
+	}
 
-	// 测试同步考勤数据
-	t.Run("SyncAttendance", func(t *testing.T) {
-		count, err := attendanceService.SyncAttendance(time.Now().AddDate(0, 0, -7), time.Now())
-		assert.NoError(t, err)
-		assert.GreaterOrEqual(t, count, int64(0))
-	})
+	deptStats := stats["department_stats"].([]departmentStat)
+	if len(deptStats) != 1 {
+		t.Fatalf("expected one department stat row, got %d", len(deptStats))
+	}
+	if deptStats[0].DepartmentName != "Engineering" {
+		t.Fatalf("expected department name to be populated, got %q", deptStats[0].DepartmentName)
+	}
 
-	// 测试导出考勤数据
-	t.Run("ExportAttendance", func(t *testing.T) {
-		filePath, err := attendanceService.ExportAttendance("", "", time.Now().AddDate(0, 0, -30), time.Now(), "test_user", "测试用户")
-		assert.NoError(t, err)
-		assert.NotEmpty(t, filePath)
-	})
-
-	// 测试获取最近同步时间
-	t.Run("GetLastSyncTime", func(t *testing.T) {
-		time, err := attendanceService.GetLastSyncTime()
-		assert.NoError(t, err)
-		assert.NotNil(t, time)
-	})
+	abnormalDetails := stats["abnormal_details"].([]abnormalDetail)
+	if len(abnormalDetails) != 3 {
+		t.Fatalf("expected 3 abnormal buckets, got %d", len(abnormalDetails))
+	}
+	if abnormalDetails[2].Type != "absent" || abnormalDetails[2].Count != 1 {
+		t.Fatalf("expected absent bucket to contain the missing user, got %#v", abnormalDetails[2])
+	}
 }

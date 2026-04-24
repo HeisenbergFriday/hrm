@@ -109,6 +109,30 @@ const mockData = {
       code: 200,
       message: 'success',
       data: {
+        items: [
+          {
+            id: '1',
+            user_id: 'user123',
+            name: '张三',
+            email: 'zhangsan@example.com',
+            mobile: '13800138000',
+            department_id: '1',
+            position: '工程师',
+            avatar: 'https://example.com/avatar.jpg',
+            status: 'active'
+          },
+          {
+            id: '2',
+            user_id: 'user456',
+            name: '李四',
+            email: 'lisi@example.com',
+            mobile: '13900139000',
+            department_id: '1',
+            position: '产品经理',
+            avatar: 'https://example.com/avatar2.jpg',
+            status: 'active'
+          }
+        ],
         users: [
           {
             id: '1',
@@ -439,7 +463,13 @@ export const orgAPIMock = {
   },
   getEmployees: async (params: any) => {
     await delay(MOCK_DELAY);
-    return mockData.users.success;
+    return {
+      ...mockData.users.success,
+      data: {
+        items: mockData.users.success.data.items,
+        total: mockData.users.success.data.total
+      }
+    };
   },
   getEmployee: async (id: string) => {
     await delay(MOCK_DELAY);

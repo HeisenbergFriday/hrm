@@ -19,6 +19,23 @@ func (r *AttendanceRepository) Create(record *database.Attendance) error {
 	return r.db.Create(record).Error
 }
 
+func (r *AttendanceRepository) Upsert(record *database.Attendance) error {
+	var existing database.Attendance
+	err := r.db.
+		Where("user_id = ? AND check_time = ? AND check_type = ?", record.UserID, record.CheckTime, record.CheckType).
+		First(&existing).Error
+	if err == nil {
+		existing.UserName = record.UserName
+		existing.Location = record.Location
+		existing.Extension = record.Extension
+		return r.db.Save(&existing).Error
+	}
+	if err != gorm.ErrRecordNotFound {
+		return err
+	}
+	return r.db.Create(record).Error
+}
+
 func (r *AttendanceRepository) FindByID(id string) (*database.Attendance, error) {
 	var record database.Attendance
 	err := r.db.First(&record, "id = ?", id).Error

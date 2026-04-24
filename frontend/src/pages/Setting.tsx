@@ -83,7 +83,7 @@ const Setting: React.FC = () => {
             ) : isError ? (
               <div className="error-container">
                 <Alert message="加载失败" type="error" showIcon />
-                <Button className="retry-button" onClick={refetchSyncStatus}>重试</Button>
+                <Button className="retry-button" onClick={() => refetchSyncStatus()}>重试</Button>
               </div>
             ) : syncStatus ? (
               <div>

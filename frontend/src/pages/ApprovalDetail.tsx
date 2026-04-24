@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Card, Typography, Descriptions, Timeline, Tag, Button, Spin, Alert, Divider } from 'antd'
+import { Card, Typography, Descriptions, Timeline, Tag, Button, Spin, Alert, Divider, Empty } from 'antd'
 import { ArrowLeftOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -122,7 +122,7 @@ const ApprovalDetail: React.FC = () => {
               {Object.entries(approvalData.data.approval.content || {}).map(([key, value]) => (
                 <div key={key} style={{ marginBottom: 12 }}>
                   <Text strong>{key}：</Text>
-                  <Text>{value}</Text>
+                  <Text>{String(value ?? '-')}</Text>
                 </div>
               ))}
             </div>

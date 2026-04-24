@@ -1,49 +1,60 @@
 package config
 
 import (
-	"os"
-	"path/filepath"
-
 	"github.com/joho/godotenv"
 )
 
-func Load() error {
-	// 加载.env文件
-	// 尝试从当前目录和上级目录加载
-	if err := godotenv.Load(); err != nil {
-		// 尝试从上级目录加载
-		if err := godotenv.Load(filepath.Join("..", ".env")); err != nil {
-			// 尝试从上级的上级目录加载
-			if err := godotenv.Load(filepath.Join("..", "..", ".env")); err != nil {
-				// .env文件不存在时不报错
-			}
-		}
-	}
-
-	// 初始化默认值
-	setDefaults()
-
-	return nil
+// LoadEnv 加载环境变量
+func LoadEnv() error {
+	return godotenv.Load()
 }
 
-func setDefaults() {
-	if os.Getenv("PORT") == "" {
-		os.Setenv("PORT", "8080")
+// Config 应用配置
+type Config struct {
+	DefaultCheckIn  string `json:"default_check_in"`  // 默认上班时间
+	DefaultCheckOut string `json:"default_check_out"` // 默认下班时间
+	HolidaysFile    string `json:"holidays_file"`    // 节假日配置文件路径
+}
+
+// LoadConfig 加载配置
+func LoadConfig() (*Config, error) {
+	// 默认配置
+	config := &Config{
+		DefaultCheckIn:  "09:00",
+		DefaultCheckOut: "18:30",
+		HolidaysFile:    "internal/config/holidays.json",
 	}
 
-	if os.Getenv("DATABASE_URL") == "" {
-		os.Setenv("DATABASE_URL", "root:password@tcp(localhost:3306)/peopleops?charset=utf8mb4&parseTime=True&loc=Local")
-	}
+	// 尝试从环境变量或配置文件加载
+	// 这里可以扩展为从配置文件加载
 
-	if os.Getenv("DINGTALK_APP_KEY") == "" {
-		os.Setenv("DINGTALK_APP_KEY", "your_app_key")
-	}
+	return config, nil
+}
 
-	if os.Getenv("DINGTALK_APP_SECRET") == "" {
-		os.Setenv("DINGTALK_APP_SECRET", "your_app_secret")
+// GetDefaultCheckIn 获取默认上班时间
+func GetDefaultCheckIn() string {
+	config, err := LoadConfig()
+	if err != nil {
+		return "09:00"
 	}
+	return config.DefaultCheckIn
+}
 
-	if os.Getenv("JWT_SECRET") == "" {
-		os.Setenv("JWT_SECRET", "your_jwt_secret")
+// GetDefaultCheckOut 获取默认下班时间
+func GetDefaultCheckOut() string {
+	config, err := LoadConfig()
+	if err != nil {
+		return "18:30"
 	}
+	return config.DefaultCheckOut
+}
+
+// Load 加载配置（保持向后兼容）
+func Load() error {
+	// 加载环境变量
+	if err := LoadEnv(); err != nil {
+		// 环境变量加载失败不影响程序运行
+	}
+	_, err := LoadConfig()
+	return err
 }

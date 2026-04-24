@@ -151,6 +151,73 @@ func SetupRouter() *gin.Engine {
 				talent.GET("/analysis/:id", GetTalentAnalysisDetail)
 				talent.POST("/analysis", CreateTalentAnalysis)
 			}
+
+			// 大小周管理模块
+			weekSchedule := authRequired.Group("/week-schedule")
+			{
+				weekSchedule.GET("/rules", GetWeekScheduleRules)
+				weekSchedule.POST("/rules", CreateWeekScheduleRule)
+				weekSchedule.POST("/rules/batch", BatchSetWeekScheduleRules)
+				weekSchedule.PUT("/rules/:id", UpdateWeekScheduleRule)
+				weekSchedule.DELETE("/rules/:id", DeleteWeekScheduleRule)
+
+				weekSchedule.GET("/shifts", GetDingTalkShifts)
+				weekSchedule.POST("/shifts", CreateDingTalkShift)
+				weekSchedule.GET("/debug/attendance-groups", DebugAttendanceGroups)
+
+				weekSchedule.GET("/calendar", GetWeekCalendar)
+
+				weekSchedule.POST("/overrides", SetWeekOverride)
+				weekSchedule.DELETE("/overrides/:id", DeleteWeekOverride)
+
+				weekSchedule.POST("/sync/to-dingtalk", SyncWeekToDingTalk)
+				weekSchedule.POST("/sync/from-dingtalk", SyncWeekFromDingTalk)
+				weekSchedule.GET("/sync/logs", GetWeekSyncLogs)
+
+				// 法定节假日
+				weekSchedule.GET("/holidays", GetHolidays)
+				weekSchedule.POST("/holidays", CreateHoliday)
+				weekSchedule.POST("/holidays/batch", BatchCreateHolidays)
+				weekSchedule.POST("/holidays/sync/from-juhe", SyncHolidaysFromJuhe)
+				weekSchedule.DELETE("/holidays/:id", DeleteHoliday)
+			}
+
+			// 年假模块
+			leave := authRequired.Group("/leave")
+			{
+				leave.GET("/eligibility", GetLeaveEligibility)
+				leave.POST("/eligibility/recalculate", RecalculateLeaveEligibility)
+				leave.GET("/grants", GetLeaveGrants)
+				leave.POST("/grants/run-quarter", RunQuarterGrant)
+				leave.POST("/grants/regrant", RegrantLeave)
+				leave.POST("/grants/sync-to-dingtalk", SyncGrantsToDingTalk)
+				leave.GET("/vacation-types", ListVacationTypes)
+				leave.POST("/consume", ConsumeAnnualLeave)
+				leave.GET("/consume-log", GetConsumeLog)
+			}
+
+			// 加班与调休模块
+			overtime := authRequired.Group("/overtime")
+			{
+				overtime.GET("/matches", GetOvertimeMatches)
+				overtime.POST("/matches/run", RunOvertimeMatch)
+			}
+			compTime := authRequired.Group("/comp-time")
+			{
+				compTime.GET("/balance", GetCompTimeBalance)
+			}
+
+			// 员工下班时间配置
+			shiftConfig := authRequired.Group("/shift-config")
+			{
+				shiftConfig.GET("/list", GetShiftConfigs)
+				shiftConfig.GET("/catalogs", GetShiftCatalogs)
+				shiftConfig.POST("/preview", PreviewShiftConfigs)
+				shiftConfig.POST("/set", SetShiftConfigs)
+				shiftConfig.POST("/apply", ApplyShiftConfigs)
+				shiftConfig.DELETE("/:user_id", DeleteShiftConfig)
+				shiftConfig.POST("/get-or-create-shift", GetOrCreateCustomShift)
+			}
 		}
 	}
 

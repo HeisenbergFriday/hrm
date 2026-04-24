@@ -3,6 +3,18 @@ import { Card, Table, Button, message, Spin, Typography, DatePicker } from 'antd
 import { SyncOutlined, ReloadOutlined } from '@ant-design/icons'
 import { orgAPI, syncAPI } from '../services/api'
 
+// 格式化时间函数
+const formatDateTime = (dateString: string): string => {
+  const date = new Date(dateString)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+}
+
 const { Title } = Typography
 const { RangePicker } = DatePicker
 
@@ -109,6 +121,7 @@ const SyncLog: React.FC = () => {
       title: '同步时间',
       dataIndex: 'sync_time',
       key: 'sync_time',
+      render: (syncTime: string) => formatDateTime(syncTime),
     },
     {
       title: '耗时',
@@ -138,11 +151,11 @@ const SyncLog: React.FC = () => {
             <div style={{ display: 'flex', gap: '24px', marginTop: '8px' }}>
               <div>
                 <p>部门同步状态: {syncStatus.departments.status}</p>
-                <p>最后同步时间: {syncStatus.departments.last_sync_time}</p>
+                <p>最后同步时间: {formatDateTime(syncStatus.departments.last_sync_time)}</p>
               </div>
               <div>
                 <p>员工同步状态: {syncStatus.users.status}</p>
-                <p>最后同步时间: {syncStatus.users.last_sync_time}</p>
+                <p>最后同步时间: {formatDateTime(syncStatus.users.last_sync_time)}</p>
               </div>
             </div>
           )}

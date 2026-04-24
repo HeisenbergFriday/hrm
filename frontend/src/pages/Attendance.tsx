@@ -29,8 +29,6 @@ const Attendance: React.FC = () => {
   const [pageSize, setPageSize] = useState(10)
   const [selectedRecord, setSelectedRecord] = useState<AttendanceRecord | null>(null)
   const [drawerVisible, setDrawerVisible] = useState(false)
-  const [users, setUsers] = useState<any[]>([])
-  const [departments, setDepartments] = useState<any[]>([])
 
   const queryParams = {
     page,
@@ -52,22 +50,19 @@ const Attendance: React.FC = () => {
   })
 
   // 获取员工列表
-  useQuery({
+  const { data: usersData } = useQuery({
     queryKey: ['users'],
     queryFn: () => userAPI.getUsers({ page: 1, page_size: 100 }),
-    onSuccess: (data) => {
-      setUsers(data.data.items)
-    },
   })
 
   // 获取部门列表
-  useQuery({
+  const { data: departmentsData } = useQuery({
     queryKey: ['departments'],
     queryFn: () => departmentAPI.getDepartments(),
-    onSuccess: (data) => {
-      setDepartments(data.data.departments)
-    },
   })
+
+  const users = usersData?.data?.items || []
+  const departments = departmentsData?.data?.departments || []
 
   const syncMutation = useMutation({
     mutationFn: (data?: { start_date?: string; end_date?: string }) => attendanceAPI.sync(data),

@@ -67,6 +67,27 @@ func (r *UserRepository) FindAll(page, pageSize int) ([]database.User, int64, er
 	return users, total, nil
 }
 
+func (r *UserRepository) FindSyncedEmployees(page, pageSize int) ([]database.User, int64, error) {
+	var users []database.User
+	var total int64
+
+	offset := (page - 1) * pageSize
+	query := r.db.Model(&database.User{}).
+		Joins("JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Where("users.deleted_at IS NULL").
+		Where("users.user_id <> ?", "admin")
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if err := query.Select("users.*").Order("users.created_at DESC").Offset(offset).Limit(pageSize).Find(&users).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return users, total, nil
+}
+
 func (r *UserRepository) FindByDepartment(departmentID string, page, pageSize int) ([]database.User, int64, error) {
 	var users []database.User
 	var total int64
@@ -82,6 +103,28 @@ func (r *UserRepository) FindByDepartment(departmentID string, page, pageSize in
 	// 查询数据
 	err = r.db.Where("department_id = ?", departmentID).Offset(offset).Limit(pageSize).Find(&users).Error
 	if err != nil {
+		return nil, 0, err
+	}
+
+	return users, total, nil
+}
+
+func (r *UserRepository) FindSyncedEmployeesByDepartment(departmentID string, page, pageSize int) ([]database.User, int64, error) {
+	var users []database.User
+	var total int64
+
+	offset := (page - 1) * pageSize
+	query := r.db.Model(&database.User{}).
+		Joins("JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Where("users.deleted_at IS NULL").
+		Where("users.user_id <> ?", "admin").
+		Where("users.department_id = ?", departmentID)
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if err := query.Select("users.*").Order("users.created_at DESC").Offset(offset).Limit(pageSize).Find(&users).Error; err != nil {
 		return nil, 0, err
 	}
 

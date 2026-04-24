@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Descriptions, Timeline, Tag, Progress } from 'antd'
+import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Descriptions, Tag, Divider } from 'antd'
 import { UserAddOutlined, SwapOutlined, UserDeleteOutlined, ReloadOutlined, PlusOutlined, EditOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { employeeAPI } from '../services/api'
@@ -436,7 +436,7 @@ const EmployeeFlow: React.FC = () => {
           <Card
             extra={
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button icon={<ReloadOutlined />} onClick={refetchTransfers} loading={transfersLoading}>
+                <Button icon={<ReloadOutlined />} onClick={() => refetchTransfers()} loading={transfersLoading}>
                   刷新
                 </Button>
                 <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)}>
@@ -467,7 +467,7 @@ const EmployeeFlow: React.FC = () => {
           <Card
             extra={
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button icon={<ReloadOutlined />} onClick={refetchResignations} loading={resignationsLoading}>
+                <Button icon={<ReloadOutlined />} onClick={() => refetchResignations()} loading={resignationsLoading}>
                   刷新
                 </Button>
                 <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)}>
@@ -498,7 +498,7 @@ const EmployeeFlow: React.FC = () => {
           <Card
             extra={
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button icon={<ReloadOutlined />} onClick={refetchOnboarding} loading={onboardingLoading}>
+                <Button icon={<ReloadOutlined />} onClick={() => refetchOnboarding()} loading={onboardingLoading}>
                   刷新
                 </Button>
                 <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)}>
@@ -619,7 +619,7 @@ const EmployeeFlow: React.FC = () => {
                 label="转岗日期"
                 rules={[{ required: true, message: '请选择转岗日期' }]}
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
                 name="reason"
@@ -673,14 +673,14 @@ const EmployeeFlow: React.FC = () => {
                 label="离职日期"
                 rules={[{ required: true, message: '请选择离职日期' }]}
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
                 name="last_working_day"
                 label="最后工作日"
                 rules={[{ required: true, message: '请选择最后工作日' }]}
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
                 name="resign_reason"
@@ -721,7 +721,7 @@ const EmployeeFlow: React.FC = () => {
                 name="birth_date"
                 label="出生日期"
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
                 name="id_card_number"
@@ -767,7 +767,7 @@ const EmployeeFlow: React.FC = () => {
                 label="入职日期"
                 rules={[{ required: true, message: '请选择入职日期' }]}
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
                 name="employment_type"
@@ -784,7 +784,7 @@ const EmployeeFlow: React.FC = () => {
                 name="probation_end_date"
                 label="试用期结束日期"
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
                 name="emergency_contact"

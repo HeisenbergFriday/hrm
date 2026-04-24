@@ -54,7 +54,6 @@ const AttendanceStats: React.FC = () => {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [expandedRows, setExpandedRows] = useState<string[]>([])
-  const [departments, setDepartments] = useState<any[]>([])
 
   const queryParams = {
     start_date: dateRange[0]?.format('YYYY-MM-DD') || undefined,
@@ -68,13 +67,12 @@ const AttendanceStats: React.FC = () => {
   })
 
   // 获取部门列表
-  useQuery({
+  const { data: departmentsData } = useQuery({
     queryKey: ['departments'],
     queryFn: () => departmentAPI.getDepartments(),
-    onSuccess: (data) => {
-      setDepartments(data.data.departments)
-    },
   })
+
+  const departments = departmentsData?.data?.departments || []
 
   const syncMutation = useMutation({
     mutationFn: (data?: { start_date?: string; end_date?: string }) => attendanceAPI.sync(data),

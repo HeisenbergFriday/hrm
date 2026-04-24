@@ -1,149 +1,131 @@
 package repository
 
 import (
-	"peopleops/internal/database"
 	"testing"
 
-	"gorm.io/driver/mysql"
+	"peopleops/internal/database"
+
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
-var testDB *gorm.DB
+func setupUserRepositoryTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
 
-func setupTestDB() error {
-	dsn := "root:password@tcp(localhost:3306)/peopleops_test?charset=utf8mb4&parseTime=True&loc=Local"
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
-		return err
+		t.Fatalf("create test db: %v", err)
 	}
 
-	testDB = db
-	return testDB.AutoMigrate(&database.User{})
+	if err := db.AutoMigrate(&database.User{}, &database.EmployeeProfile{}); err != nil {
+		t.Fatalf("migrate test db: %v", err)
+	}
+
+	return db
 }
 
-func teardownTestDB() error {
-	if testDB == nil {
-		return nil
-	}
-	sqlDB, err := testDB.DB()
-	if err != nil {
-		return err
-	}
-	return sqlDB.Close()
-}
-
-func TestUserRepository_Create(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if err := setupTestDB(); err != nil {
-		t.Skipf("Setup test DB failed: %v (is MySQL running?)", err)
-	}
-	defer teardownTestDB()
-
-	repo := NewUserRepository(testDB)
+func createTestUser(t *testing.T, db *gorm.DB, userID, name, departmentID string) {
+	t.Helper()
 
 	user := &database.User{
-		UserID:       "test_user_id",
-		Name:         "Test User",
-		Email:        "test@example.com",
-		Mobile:       "13800138000",
-		DepartmentID: "1",
-		Position:     "Test Position",
-		Avatar:       "",
+		UserID:       userID,
+		Name:         name,
+		Email:        userID + "@example.com",
+		Mobile:       "1380000" + userID,
+		DepartmentID: departmentID,
 		Status:       "active",
-		Extension:    map[string]interface{}{},
 	}
 
-	if err := repo.Create(user); err != nil {
-		t.Fatalf("Create user failed: %v", err)
-	}
-
-	var createdUser database.User
-	if err := testDB.Where("user_id = ?", user.UserID).First(&createdUser).Error; err != nil {
-		t.Fatalf("Find created user failed: %v", err)
-	}
-
-	if createdUser.Name != user.Name {
-		t.Errorf("Expected name %s, got %s", user.Name, createdUser.Name)
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("create user %s: %v", userID, err)
 	}
 }
 
-func TestUserRepository_FindByUserID(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if err := setupTestDB(); err != nil {
-		t.Skipf("Setup test DB failed: %v (is MySQL running?)", err)
-	}
-	defer teardownTestDB()
+func createTestProfile(t *testing.T, db *gorm.DB, userID string) {
+	t.Helper()
 
-	repo := NewUserRepository(testDB)
-
-	user := &database.User{
-		UserID:       "test_user_id_find",
-		Name:         "Test User Find",
-		Email:        "test_find@example.com",
-		Mobile:       "13800138001",
-		DepartmentID: "1",
-		Position:     "Test Position",
-		Avatar:       "",
-		Status:       "active",
-		Extension:    map[string]interface{}{},
+	profile := &database.EmployeeProfile{
+		UserID:        userID,
+		EmployeeID:    userID,
+		ProfileStatus: "active",
 	}
 
-	if err := repo.Create(user); err != nil {
-		t.Fatalf("Create user failed: %v", err)
-	}
-
-	foundUser, err := repo.FindByUserID(user.UserID)
-	if err != nil {
-		t.Fatalf("Find user by userID failed: %v", err)
-	}
-
-	if foundUser.UserID != user.UserID {
-		t.Errorf("Expected userID %s, got %s", user.UserID, foundUser.UserID)
+	if err := db.Create(profile).Error; err != nil {
+		t.Fatalf("create profile %s: %v", userID, err)
 	}
 }
 
-func TestUserRepository_FindAll(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if err := setupTestDB(); err != nil {
-		t.Skipf("Setup test DB failed: %v (is MySQL running?)", err)
-	}
-	defer teardownTestDB()
+func TestFindSyncedEmployeesExcludesLocalUsers(t *testing.T) {
+	db := setupUserRepositoryTestDB(t)
+	repo := NewUserRepository(db)
 
-	repo := NewUserRepository(testDB)
+	createTestUser(t, db, "admin", "管理员", "local")
+	createTestUser(t, db, "local-only", "本地用户", "local")
+	createTestUser(t, db, "ding-1", "钉钉员工1", "dept-a")
+	createTestUser(t, db, "ding-2", "钉钉员工2", "dept-b")
 
-	for i := 0; i < 5; i++ {
-		user := &database.User{
-			UserID:       "test_user_id_" + string(rune('a'+i)),
-			Name:         "Test User " + string(rune('0'+i)),
-			Email:        "test" + string(rune('0'+i)) + "@example.com",
-			Mobile:       "1380013800" + string(rune('0'+i)),
-			DepartmentID: "1",
-			Position:     "Test Position",
-			Avatar:       "",
-			Status:       "active",
-			Extension:    map[string]interface{}{},
-		}
-		if err := repo.Create(user); err != nil {
-			t.Fatalf("Create user failed: %v", err)
-		}
-	}
+	createTestProfile(t, db, "ding-1")
+	createTestProfile(t, db, "ding-2")
 
-	users, total, err := repo.FindAll(1, 5)
+	users, total, err := repo.FindSyncedEmployees(1, 10)
 	if err != nil {
-		t.Fatalf("Find all users failed: %v", err)
+		t.Fatalf("find synced employees: %v", err)
 	}
 
-	if len(users) > 5 {
-		t.Errorf("Expected at most 5 users, got %d", len(users))
+	if total != 2 {
+		t.Fatalf("expected total 2 synced employees, got %d", total)
 	}
 
-	if total < 5 {
-		t.Errorf("Expected at least 5 total users, got %d", total)
+	if len(users) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(users))
+	}
+
+	got := map[string]bool{}
+	for _, user := range users {
+		got[user.UserID] = true
+	}
+
+	if !got["ding-1"] || !got["ding-2"] {
+		t.Fatalf("expected ding-1 and ding-2 in result, got %#v", got)
+	}
+
+	if got["admin"] || got["local-only"] {
+		t.Fatalf("local users should be excluded, got %#v", got)
+	}
+}
+
+func TestFindSyncedEmployeesByDepartment(t *testing.T) {
+	db := setupUserRepositoryTestDB(t)
+	repo := NewUserRepository(db)
+
+	createTestUser(t, db, "ding-a-1", "部门A员工1", "dept-a")
+	createTestUser(t, db, "ding-a-2", "部门A员工2", "dept-a")
+	createTestUser(t, db, "ding-b-1", "部门B员工1", "dept-b")
+	createTestUser(t, db, "local-a", "本地A", "dept-a")
+
+	createTestProfile(t, db, "ding-a-1")
+	createTestProfile(t, db, "ding-a-2")
+	createTestProfile(t, db, "ding-b-1")
+
+	users, total, err := repo.FindSyncedEmployeesByDepartment("dept-a", 1, 10)
+	if err != nil {
+		t.Fatalf("find synced employees by department: %v", err)
+	}
+
+	if total != 2 {
+		t.Fatalf("expected total 2 department employees, got %d", total)
+	}
+
+	if len(users) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(users))
+	}
+
+	for _, user := range users {
+		if user.DepartmentID != "dept-a" {
+			t.Fatalf("unexpected department %s for user %s", user.DepartmentID, user.UserID)
+		}
+		if user.UserID == "local-a" {
+			t.Fatalf("local user should not be returned")
+		}
 	}
 }
