@@ -263,6 +263,130 @@ func TestOrgOverviewCollectsWarningsAndPendingCounts(t *testing.T) {
 	}
 }
 
+func TestDepartmentTreeAndOverviewSupportDepartmentLevelStats(t *testing.T) {
+	db := setupOrgServiceTestDB(t)
+	createOrgDepartment(t, db, "root", "HQ", "")
+	createOrgDepartment(t, db, "dept-a", "DeptA", "root")
+	createOrgDepartment(t, db, "dept-a-1", "DeptAChild", "dept-a")
+	createOrgDepartment(t, db, "dept-b", "DeptB", "root")
+
+	createOrgUser(t, db, &database.User{
+		UserID:       "dept-a-active",
+		Name:         "Alice",
+		DepartmentID: "dept-a",
+		Status:       "active",
+	})
+	createOrgProfile(t, db, &database.EmployeeProfile{
+		UserID:             "dept-a-active",
+		EmployeeID:         "E-101",
+		PlannedRegularDate: "2026-05-08",
+		ProfileStatus:      "active",
+	})
+
+	createOrgUser(t, db, &database.User{
+		UserID:       "dept-a-child-active",
+		Name:         "Bob",
+		DepartmentID: "dept-a-1",
+		Status:       "active",
+	})
+	createOrgProfile(t, db, &database.EmployeeProfile{
+		UserID:             "dept-a-child-active",
+		EmployeeID:         "E-102",
+		PlannedRegularDate: "2026-05-20",
+		ProfileStatus:      "active",
+	})
+
+	createOrgUser(t, db, &database.User{
+		UserID:       "dept-a-child-inactive",
+		Name:         "Carol",
+		DepartmentID: "dept-a-1",
+		Status:       "inactive",
+	})
+	createOrgProfile(t, db, &database.EmployeeProfile{
+		UserID:        "dept-a-child-inactive",
+		EmployeeID:    "E-104",
+		ProfileStatus: "inactive",
+	})
+
+	createOrgUser(t, db, &database.User{
+		UserID:       "dept-b-active",
+		Name:         "David",
+		DepartmentID: "dept-b",
+		Status:       "active",
+	})
+	createOrgProfile(t, db, &database.EmployeeProfile{
+		UserID:             "dept-b-active",
+		EmployeeID:         "E-103",
+		PlannedRegularDate: "2026-05-12",
+		ProfileStatus:      "active",
+	})
+
+	svc := NewOrgService(db)
+	svc.nowFn = func() time.Time {
+		return time.Date(2026, 4, 30, 9, 0, 0, 0, time.Local)
+	}
+
+	scope := &OrgDataScope{Mode: "all", all: true}
+	scope.init()
+
+	tree, err := svc.GetDepartmentTree(scope)
+	if err != nil {
+		t.Fatalf("get department tree: %v", err)
+	}
+
+	nodeByID := make(map[string]*OrgDepartmentTreeNode)
+	var walk func(nodes []*OrgDepartmentTreeNode)
+	walk = func(nodes []*OrgDepartmentTreeNode) {
+		for _, node := range nodes {
+			nodeByID[node.ID] = node
+			if len(node.Children) > 0 {
+				walk(node.Children)
+			}
+		}
+	}
+	walk(tree)
+
+	deptA := nodeByID["dept-a"]
+	if deptA == nil {
+		t.Fatalf("expected dept-a node in tree")
+	}
+	if deptA.DirectHeadcount != 1 || deptA.DirectActiveCount != 1 {
+		t.Fatalf("unexpected direct counts for dept-a: %+v", deptA)
+	}
+	if deptA.Headcount != 3 || deptA.ActiveCount != 2 || deptA.InactiveCount != 1 {
+		t.Fatalf("unexpected rollup counts for dept-a: %+v", deptA)
+	}
+
+	deptAChild := nodeByID["dept-a-1"]
+	if deptAChild == nil {
+		t.Fatalf("expected dept-a-1 node in tree")
+	}
+	if deptAChild.DirectHeadcount != 2 || deptAChild.DirectActiveCount != 1 {
+		t.Fatalf("unexpected direct counts for dept-a-1: %+v", deptAChild)
+	}
+
+	overview, err := svc.GetOverview(scope, "dept-a")
+	if err != nil {
+		t.Fatalf("get overview by department: %v", err)
+	}
+
+	if overview.Summary.TotalEmployees != 3 {
+		t.Fatalf("expected 3 employees in dept-a subtree, got %d", overview.Summary.TotalEmployees)
+	}
+	if overview.Summary.ActiveEmployees != 2 {
+		t.Fatalf("expected 2 active employees in dept-a subtree, got %d", overview.Summary.ActiveEmployees)
+	}
+	if overview.Summary.ProbationEmployeeCount != 2 {
+		t.Fatalf("expected 2 probation employees in dept-a subtree, got %d", overview.Summary.ProbationEmployeeCount)
+	}
+	if overview.Summary.PlannedRegularizationCount != 2 {
+		t.Fatalf("expected 2 planned regularization warnings in dept-a subtree, got %d", overview.Summary.PlannedRegularizationCount)
+	}
+	if overview.Scope == nil || len(overview.Scope.RootDepartmentIDs) != 1 || overview.Scope.RootDepartmentIDs[0] != "dept-a" {
+		t.Fatalf("unexpected overview scope: %+v", overview.Scope)
+	}
+}
+
 func TestGetEmployeeAggregateBuildsTimelineAndOrgRelation(t *testing.T) {
 	db := setupOrgServiceTestDB(t)
 	createOrgDepartment(t, db, "dept-a", "研发中心", "")
