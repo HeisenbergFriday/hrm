@@ -24,6 +24,24 @@ update_when:
 
 本次阶段 1A 在组织模块侧只沉淀员工详情聚合与档案字段补齐相关长期知识，不涉及组织分析、绩效、权限、强制分布、C/D 面谈等能力变更。
 
+阶段 2A 已补充组织概览的最小统计能力，仅覆盖基础统计卡片，不扩展到趋势分析、复杂图表、绩效、假勤、权限、强制分布、C/D 面谈等内容。
+
+### 阶段 2A：组织概览最小能力
+
+`GET /api/v1/org/overview` 当前沉淀的最小统计项：
+- 在职人数
+- 试用期人数
+- 计划转正预警数量
+- 员工类型分布
+- 职级分布
+- 岗位序列分布
+
+当前统计口径：
+- 三组分布按在职员工统计。
+- 试用期人数按“在职且未填写实际转正日期，并且存在计划转正日期或试用期结束日期”的员工统计。
+- 计划转正预警数量按当前代码实际逻辑统计：`buildEmployeeWarnings()` 会先以 `planned_regular_date` 优先、`probation_end_date` 兜底生成 `probation_due` 预警；仅当员工在职、未填写 `actual_regular_date`、该日期可解析、且落在“今天到未来 30 天”窗口内时，`buildOverviewSummary()` 才会累计到 `planned_regularization_count`。当前该数量与 `probation_due_count` 使用同一触发条件。
+- 前端当前只做统计卡片展示，不做趋势、复杂图表。
+
 ---
 
 ## 数据模型
@@ -118,10 +136,26 @@ Response：
     "code": 200,
     "message": "success",
     "data": {
-        "total_departments": 10,
-        "total_employees": 100,
-        "active_employees": 95,
-        "inactive_employees": 5
+        "overview": {
+            "scope": {
+                "mode": "all",
+                "department_names": []
+            },
+            "summary": {
+                "active_employees": 95,
+                "probation_employee_count": 8,
+                "planned_regularization_count": 3
+            },
+            "employee_type_distribution": [
+                { "key": "正式", "label": "正式", "count": 80 }
+            ],
+            "job_level_distribution": [
+                { "key": "P5", "label": "P5", "count": 20 }
+            ],
+            "job_family_distribution": [
+                { "key": "技术", "label": "技术", "count": 40 }
+            ]
+        }
     }
 }
 ```
@@ -315,6 +349,9 @@ Response：
 `frontend/src/pages/EmployeeList.tsx`
 
 功能：
+- 组织概览统计卡片：在职人数、试用期人数、计划转正预警
+- 组织概览分布卡片：员工类型、职级、岗位序列
+- 当前组织概览仅做卡片展示，不做趋势图和复杂图表
 - 员工列表（支持分页、搜索、筛选）
 - 点击员工查看详情
 
