@@ -101,7 +101,7 @@ D:\ai项目
 | `/users` | 用户 CRUD | `handlers.go` |
 | `/departments` | 部门 CRUD | `handlers.go` |
 | `/sync` | 钉钉同步（部门、用户、状态） | `handlers.go` |
-| `/org` | 组织架构（部门树、员工列表、员工详情、同步） | `handlers.go` |
+| `/org` | 组织架构（概览、部门树、员工列表、员工详情、同步） | `handlers.go` |
 | `/attendance` | 考勤记录、统计、导出、最近同步时间 | `handlers.go` |
 | `/approvals` | 审批模板、审批实例、审批详情、审批同步 | `handlers.go` |
 | `/permission` | 角色、权限 | `handlers.go` |
@@ -126,7 +126,7 @@ D:\ai项目
 | `/login` | Login.tsx | 账号密码/钉钉扫码登录 |
 | `/callback` | Callback.tsx | 钉钉 OAuth 回调 |
 | `/department-tree` | DepartmentTree.tsx | 部门树浏览 |
-| `/employees` | EmployeeList.tsx | 员工列表 |
+| `/employees` | EmployeeList.tsx | 员工列表 + 组织概览统计卡片入口（调用 `/api/v1/org/overview`） |
 | `/employees/:id` | EmployeeDetail.tsx | 聚合员工详情（组织关系/档案快照/时间轴） |
 | `/attendance` | Attendance.tsx | 考勤查询 |
 | `/attendance-stats` | AttendanceStats.tsx | 考勤异常统计 |
