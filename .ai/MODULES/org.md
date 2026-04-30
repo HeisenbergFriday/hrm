@@ -42,6 +42,22 @@ update_when:
 - 计划转正预警数量按当前代码实际逻辑统计：`buildEmployeeWarnings()` 会先以 `planned_regular_date` 优先、`probation_end_date` 兜底生成 `probation_due` 预警；仅当员工在职、未填写 `actual_regular_date`、该日期可解析、且落在“今天到未来 30 天”窗口内时，`buildOverviewSummary()` 才会累计到 `planned_regularization_count`。当前该数量与 `probation_due_count` 使用同一触发条件。
 - 前端当前只做统计卡片展示，不做趋势、复杂图表。
 
+### 阶段 2B：部门维度基础统计 / 组织结构轻量分析
+
+- 本阶段在阶段 2A `org/overview` 全局组织概览基础上，补齐部门维度的最小统计能力。
+- 部门树节点人数口径：
+- `direct_active_count` = 当前部门直接归属且在职人数。
+- `active_count` = 当前部门含下级部门汇总后的在职人数。
+- 选中部门后的统计卡片口径：
+- 复用 `GET /api/v1/org/overview?department_id=...`。
+- 默认含下级部门汇总。
+- 统计项包括：汇总在职人数、试用期人数、计划转正预警数量。
+- 前端入口：
+- `frontend/src/pages/DepartmentTree.tsx`
+- 只做轻量统计卡片，不做趋势、排行榜、复杂图表。
+- 阶段 2B 明确未做：
+- 绩效、假勤、权限、强制分布、C/D 面谈、薪酬、编制、预算、成本。
+
 ---
 
 ## 数据模型
@@ -102,6 +118,10 @@ type User struct {
 ### GET /api/v1/org/departments/tree
 获取部门树
 
+阶段 2B 节点人数口径补充：
+- `direct_active_count`：当前部门直接归属且在职人数。
+- `active_count`：当前部门含下级部门汇总后的在职人数。
+
 Response：
 ```json
 {
@@ -129,6 +149,10 @@ Response：
 
 ### GET /api/v1/org/overview
 获取组织概览
+
+补充说明：
+- 当传入 `department_id` 时，当前统计默认按该部门及其下级部门汇总。
+- 阶段 2B 的部门统计卡片直接复用该接口，不新增专用部门统计接口。
 
 Response：
 ```json
@@ -344,6 +368,9 @@ Response：
 功能：
 - 展示部门树
 - 点击部门查看员工列表
+- 展示部门树节点在职人数，区分 `direct_active_count` 与 `active_count`
+- 选中部门后展示轻量统计卡片，复用 `GET /api/v1/org/overview?department_id=...`
+- 当前只做轻量统计卡片，不做趋势、排行榜、复杂图表
 
 ### 员工列表页面
 `frontend/src/pages/EmployeeList.tsx`

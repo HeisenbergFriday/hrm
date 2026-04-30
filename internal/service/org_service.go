@@ -142,14 +142,15 @@ type OrgDepartmentSyncResult struct {
 }
 
 type OrgDepartmentTreeNode struct {
-	ID              string                   `json:"id"`
-	Name            string                   `json:"name"`
-	ParentID        string                   `json:"parent_id"`
-	Headcount       int                      `json:"headcount"`
-	ActiveCount     int                      `json:"active_count"`
-	InactiveCount   int                      `json:"inactive_count"`
-	DirectHeadcount int                      `json:"direct_headcount"`
-	Children        []*OrgDepartmentTreeNode `json:"children"`
+	ID                string                   `json:"id"`
+	Name              string                   `json:"name"`
+	ParentID          string                   `json:"parent_id"`
+	Headcount         int                      `json:"headcount"`
+	ActiveCount       int                      `json:"active_count"`
+	InactiveCount     int                      `json:"inactive_count"`
+	DirectHeadcount   int                      `json:"direct_headcount"`
+	DirectActiveCount int                      `json:"direct_active_count"`
+	Children          []*OrgDepartmentTreeNode `json:"children"`
 }
 
 type OrgEmployeeFilters struct {
@@ -584,6 +585,7 @@ func (s *OrgService) GetDepartmentTree(scope *OrgDataScope) ([]*OrgDepartmentTre
 		count.DirectHeadcount++
 		if strings.EqualFold(snapshot.Status, "active") {
 			count.ActiveCount++
+			count.DirectActiveCount++
 		} else {
 			count.InactiveCount++
 		}
@@ -597,14 +599,15 @@ func (s *OrgService) GetDepartmentTree(scope *OrgDataScope) ([]*OrgDepartmentTre
 			count = &OrgDepartmentTreeNode{}
 		}
 		nodeMap[department.DepartmentID] = &OrgDepartmentTreeNode{
-			ID:              department.DepartmentID,
-			Name:            department.Name,
-			ParentID:        department.ParentID,
-			Headcount:       count.Headcount,
-			ActiveCount:     count.ActiveCount,
-			InactiveCount:   count.InactiveCount,
-			DirectHeadcount: count.DirectHeadcount,
-			Children:        []*OrgDepartmentTreeNode{},
+			ID:                department.DepartmentID,
+			Name:              department.Name,
+			ParentID:          department.ParentID,
+			Headcount:         count.Headcount,
+			ActiveCount:       count.ActiveCount,
+			InactiveCount:     count.InactiveCount,
+			DirectHeadcount:   count.DirectHeadcount,
+			DirectActiveCount: count.DirectActiveCount,
+			Children:          []*OrgDepartmentTreeNode{},
 		}
 	}
 

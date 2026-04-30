@@ -80,7 +80,7 @@ D:\ai项目
 | 模块 | 说明 | 相关文档 |
 |---|---|---|
 | 认证 | 账号密码登录、钉钉扫码、钉钉内免登、JWT | `.ai/MODULES/auth.md` |
-| 组织与员工 | 部门树、员工列表、聚合员工详情、组织同步 | `.ai/MODULES/org.md` |
+| 组织与员工 | 部门树、部门维度轻量统计、员工列表、聚合员工详情、组织同步 | `.ai/MODULES/org.md` |
 | 考勤 | 记录查询、异常统计、导出、最近同步时间 | `.ai/MODULES/attendance.md` |
 | 审批 | 审批模板、审批实例、审批详情、审批同步 | `.ai/MODULES/approval.md` |
 | 员工档案 | 档案、调岗、离职、入职、人才分析 | `.ai/MODULES/employee-profile.md` |
@@ -125,7 +125,7 @@ D:\ai项目
 |---|---|---|
 | `/login` | Login.tsx | 账号密码/钉钉扫码登录 |
 | `/callback` | Callback.tsx | 钉钉 OAuth 回调 |
-| `/department-tree` | DepartmentTree.tsx | 部门树浏览 |
+| `/department-tree` | DepartmentTree.tsx | 部门树浏览 + 部门维度轻量统计入口（选中部门复用 `/api/v1/org/overview?department_id=...`） |
 | `/employees` | EmployeeList.tsx | 员工列表 + 组织概览统计卡片入口（调用 `/api/v1/org/overview`） |
 | `/employees/:id` | EmployeeDetail.tsx | 聚合员工详情（组织关系/档案快照/时间轴） |
 | `/attendance` | Attendance.tsx | 考勤查询 |
