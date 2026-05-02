@@ -1,8 +1,8 @@
 import React, { useState } from 'react'
 import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Descriptions, Tag, Divider } from 'antd'
-import { UserAddOutlined, SwapOutlined, UserDeleteOutlined, ReloadOutlined, PlusOutlined, EditOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons'
+import { UserAddOutlined, SwapOutlined, UserDeleteOutlined, ReloadOutlined, PlusOutlined, EditOutlined, CheckOutlined, CloseOutlined, TableOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { employeeAPI } from '../services/api'
+import { employeeAPI, departmentAPI } from '../services/api'
 import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
@@ -78,11 +78,49 @@ interface Onboarding {
   updated_at: string
 }
 
+interface LifecycleLedgerItem {
+  id: number
+  user_id: string
+  user_name: string
+  employee_id: string
+  department_id: string
+  department_name: string
+  position: string
+  user_status: string
+  profile_status: string
+  employment_type: string
+  entry_date: string
+  planned_regular_date: string
+  actual_regular_date: string
+  latest_transfer_date: string
+  latest_transfer_status: string
+  latest_transfer_old_department: string
+  latest_transfer_old_position: string
+  latest_transfer_new_department: string
+  latest_transfer_new_position: string
+  latest_resign_date: string
+  latest_resignation_status: string
+  latest_last_working_day: string
+  latest_resign_reason: string
+  latest_onboarding_status: string
+}
+
 const EmployeeFlow: React.FC = () => {
   const [activeTab, setActiveTab] = useState('transfer')
   const [modalVisible, setModalVisible] = useState(false)
   const [form] = Form.useForm()
   const [currentItem, setCurrentItem] = useState<any>(null)
+  const [ledgerKeyword, setLedgerKeyword] = useState('')
+  const [ledgerDepartmentID, setLedgerDepartmentID] = useState<string>()
+  const [ledgerStatus, setLedgerStatus] = useState<string>()
+  const [ledgerPage, setLedgerPage] = useState(1)
+  const [ledgerPageSize, setLedgerPageSize] = useState(10)
+
+  const { data: departmentsData } = useQuery({
+    queryKey: ['departments'],
+    queryFn: () => departmentAPI.getDepartments(),
+  })
+  const departments: { department_id: string; name: string }[] = departmentsData?.data?.departments || []
 
   // 转岗
   const { data: transfersData, isLoading: transfersLoading, refetch: refetchTransfers } = useQuery({
@@ -126,6 +164,18 @@ const EmployeeFlow: React.FC = () => {
   const { data: onboardingData, isLoading: onboardingLoading, refetch: refetchOnboarding } = useQuery({
     queryKey: ['employee-onboardings'],
     queryFn: () => employeeAPI.getOnboardings(),
+  })
+
+  const { data: ledgerData, isLoading: ledgerLoading, refetch: refetchLedger } = useQuery({
+    queryKey: ['employee-lifecycle-ledger', ledgerPage, ledgerPageSize, ledgerDepartmentID, ledgerStatus, ledgerKeyword],
+    queryFn: () =>
+      employeeAPI.getLifecycleLedger({
+        page: ledgerPage,
+        page_size: ledgerPageSize,
+        department_id: ledgerDepartmentID,
+        status: ledgerStatus,
+        keyword: ledgerKeyword,
+      }),
   })
 
   const createOnboardingMutation = useMutation({
@@ -173,6 +223,96 @@ const EmployeeFlow: React.FC = () => {
         return <Tag>{status}</Tag>
     }
   }
+
+  const getEmploymentStatusTag = (item: LifecycleLedgerItem) => {
+    if (item.latest_resignation_status) {
+      return getStatusTag(item.latest_resignation_status)
+    }
+    if (item.user_status === 'inactive' || item.profile_status === 'inactive') {
+      return <Tag color="default">离职/停用</Tag>
+    }
+    return <Tag color="green">在职</Tag>
+  }
+
+  const ledgerColumns = [
+    {
+      title: '员工',
+      key: 'employee',
+      render: (_: unknown, record: LifecycleLedgerItem) => (
+        <div>
+          <div>{record.user_name || '-'}</div>
+          <div style={{ fontSize: 12, color: '#666' }}>{record.employee_id || record.user_id || '-'}</div>
+        </div>
+      ),
+    },
+    {
+      title: '部门/岗位',
+      key: 'organization',
+      render: (_: unknown, record: LifecycleLedgerItem) => (
+        <div>
+          <div>{record.department_name || record.department_id || '-'}</div>
+          <div style={{ fontSize: 12, color: '#666' }}>{record.position || '-'}</div>
+        </div>
+      ),
+    },
+    {
+      title: '用工类型',
+      dataIndex: 'employment_type',
+      key: 'employment_type',
+      render: (value: string) => value || '-',
+    },
+    {
+      title: '入职日期',
+      dataIndex: 'entry_date',
+      key: 'entry_date',
+      render: (value: string) => value || '-',
+    },
+    {
+      title: '计划转正日',
+      dataIndex: 'planned_regular_date',
+      key: 'planned_regular_date',
+      render: (value: string) => value || '-',
+    },
+    {
+      title: '实际转正日',
+      dataIndex: 'actual_regular_date',
+      key: 'actual_regular_date',
+      render: (value: string) => value || '-',
+    },
+    {
+      title: '最近调岗',
+      key: 'latest_transfer',
+      render: (_: unknown, record: LifecycleLedgerItem) => {
+        if (!record.latest_transfer_date) {
+          return '-'
+        }
+        return (
+          <div>
+            <div>{record.latest_transfer_date}</div>
+            <div style={{ fontSize: 12, color: '#666' }}>
+              {`${record.latest_transfer_old_department || '-'} / ${record.latest_transfer_old_position || '-'} -> ${record.latest_transfer_new_department || '-'} / ${record.latest_transfer_new_position || '-'}`}
+            </div>
+            <div style={{ marginTop: 4 }}>{record.latest_transfer_status ? getStatusTag(record.latest_transfer_status) : null}</div>
+          </div>
+        )
+      },
+    },
+    {
+      title: '离职/停用状态',
+      key: 'employment_status',
+      render: (_: unknown, record: LifecycleLedgerItem) => (
+        <div>
+          <div>{getEmploymentStatusTag(record)}</div>
+          {record.latest_resign_date ? (
+            <div style={{ fontSize: 12, color: '#666' }}>{`离职日期：${record.latest_resign_date}`}</div>
+          ) : null}
+          {!record.latest_resign_date && (record.user_status === 'inactive' || record.profile_status === 'inactive') ? (
+            <div style={{ fontSize: 12, color: '#666' }}>已停用，暂无离职记录</div>
+          ) : null}
+        </div>
+      ),
+    },
+  ]
 
   const transferColumns = [
     {
@@ -432,6 +572,85 @@ const EmployeeFlow: React.FC = () => {
     <div>
       <Title level={4}>入转调离管理</Title>
       <Tabs activeKey={activeTab} onChange={setActiveTab}>
+        <Tabs.TabPane tab="台账" key="ledger" icon={<TableOutlined />}>
+          <Card
+            extra={
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Input.Search
+                  allowClear
+                  placeholder="搜索姓名 / 工号 / 员工 ID"
+                  style={{ width: 260 }}
+                  onSearch={(value) => {
+                    setLedgerPage(1)
+                    setLedgerKeyword(value.trim())
+                  }}
+                />
+                <Select
+                  allowClear
+                  placeholder="按部门筛选"
+                  style={{ width: 220 }}
+                  value={ledgerDepartmentID}
+                  onChange={(value) => {
+                    setLedgerPage(1)
+                    setLedgerDepartmentID(value)
+                  }}
+                  options={departments.map((department) => ({
+                    label: department.name,
+                    value: department.department_id,
+                  }))}
+                />
+                <Select
+                  allowClear
+                  placeholder="按状态筛选"
+                  style={{ width: 180 }}
+                  value={ledgerStatus}
+                  onChange={(value) => {
+                    setLedgerPage(1)
+                    setLedgerStatus(value)
+                  }}
+                  options={[
+                    { label: '在职', value: 'active' },
+                    { label: '离职/停用', value: 'inactive' },
+                  ]}
+                />
+                <Button icon={<ReloadOutlined />} onClick={() => refetchLedger()} loading={ledgerLoading}>
+                  刷新
+                </Button>
+              </div>
+            }
+          >
+            <div style={{ marginBottom: 16 }}>
+              <Text type="secondary">
+                当前台账口径：以 `users` 作为当前员工基表，入职/转正优先取员工档案；员工档案缺失时，入职日期和用工类型回退到最近一条入职记录。调岗、离职仅展示最近一次记录。
+              </Text>
+            </div>
+            {ledgerLoading ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                <Spin size="large" />
+              </div>
+            ) : ledgerData?.data?.items?.length ? (
+              <Table
+                columns={ledgerColumns}
+                dataSource={ledgerData.data.items as LifecycleLedgerItem[]}
+                rowKey="id"
+                scroll={{ x: 1200 }}
+                pagination={{
+                  current: ledgerPage,
+                  pageSize: ledgerPageSize,
+                  total: ledgerData.data.total,
+                  showSizeChanger: true,
+                  showTotal: (total: number) => `共 ${total} 条台账记录`,
+                  onChange: (page, pageSize) => {
+                    setLedgerPage(page)
+                    setLedgerPageSize(pageSize)
+                  },
+                }}
+              />
+            ) : (
+              <Empty description="暂无台账数据" />
+            )}
+          </Card>
+        </Tabs.TabPane>
         <Tabs.TabPane tab="转岗管理" key="transfer" icon={<SwapOutlined />}>
           <Card
             extra={

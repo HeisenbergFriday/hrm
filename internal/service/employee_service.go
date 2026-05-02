@@ -23,6 +23,10 @@ func (s *EmployeeService) GetProfiles(page, pageSize int, filters map[string]str
 	return s.employeeRepo.FindAllProfiles(page, pageSize, filters)
 }
 
+func (s *EmployeeService) GetLifecycleLedger(page, pageSize int, filters map[string]string) ([]repository.EmployeeLifecycleLedgerItem, int64, error) {
+	return s.employeeRepo.FindLifecycleLedger(page, pageSize, filters)
+}
+
 func (s *EmployeeService) GetProfileByID(id string) (*database.EmployeeProfile, error) {
 	return s.employeeRepo.FindProfileByID(id)
 }

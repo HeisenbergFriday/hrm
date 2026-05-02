@@ -134,6 +134,7 @@ func SetupRouter() *gin.Engine {
 				employee.GET("/profiles/:id", GetEmployeeProfile)
 				employee.POST("/profiles", CreateEmployeeProfile)
 				employee.PUT("/profiles/:id", UpdateEmployeeProfile)
+				employee.GET("/ledger", GetEmployeeLifecycleLedger)
 
 				// 人事流程
 				employee.GET("/transfers", GetTransfers)
