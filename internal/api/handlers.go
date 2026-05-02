@@ -10,6 +10,7 @@ import (
 	"peopleops/internal/middleware"
 	"peopleops/internal/service"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -1721,6 +1722,34 @@ func UpdateEmployeeProfile(c *gin.Context) {
 }
 
 // GetTransfers 获取调动记录列表
+func GetEmployeeLifecycleLedger(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	filters := map[string]string{
+		"department_id": c.Query("department_id"),
+		"status":        c.Query("status"),
+		"keyword":       strings.TrimSpace(c.Query("keyword")),
+	}
+
+	employeeService := service.NewEmployeeService(database.DB)
+	items, total, err := employeeService.GetLifecycleLedger(page, pageSize, filters)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取入转调离台账失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"items": items, "total": total},
+	})
+}
+
 func GetTransfers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))

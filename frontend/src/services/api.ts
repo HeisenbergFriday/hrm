@@ -177,6 +177,8 @@ export const employeeAPI = {
   getProfile: (id: string) => api.get(`/employee/profiles/${id}`),
   createProfile: (data: any) => api.post('/employee/profiles', data),
   updateProfile: (id: string, data: any) => api.put(`/employee/profiles/${id}`, data),
+  getLifecycleLedger: (params?: { page?: number; page_size?: number; department_id?: string; status?: string; keyword?: string }) =>
+    api.get('/employee/ledger', { params }),
   
   // 转岗
   getTransfers: (params?: { page?: number; page_size?: number; status?: string }) => 

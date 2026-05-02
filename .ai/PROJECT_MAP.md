@@ -1,6 +1,6 @@
 ---
 purpose: 项目目录结构、模块职责、代码入口索引
-last_updated: 2026-04-30
+last_updated: 2026-05-02
 source_of_truth:
   - 项目实际目录结构
   - internal/api/router.go（后端路由）
@@ -135,7 +135,7 @@ D:\ai项目
 | `/approval-instances` | ApprovalInstance.tsx | 审批实例 |
 | `/approval-detail/:id` | ApprovalDetail.tsx | 审批实例详情 |
 | `/employee-profile` | EmployeeProfile.tsx | 员工档案 |
-| `/employee-flow` | EmployeeFlow.tsx | 入转调离流程 |
+| `/employee-flow` | EmployeeFlow.tsx | 入转调离流程与台账入口（台账页签调用 `/api/v1/employee/ledger`） |
 | `/talent-analysis` | TalentAnalysis.tsx | 人才分析 |
 | `/week-schedule` | WeekSchedule.tsx | 大小周+法定节假日管理 |
 | `/employee-shift-config` | EmployeeShiftConfig.tsx | 员工自定义下班时间 |

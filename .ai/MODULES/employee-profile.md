@@ -1,9 +1,11 @@
 ---
 purpose: 员工档案模块业务规则说明
-last_updated: 2026-04-30
+last_updated: 2026-05-02
 source_of_truth:
   - internal/api/handlers.go（员工档案相关 handler）
   - internal/database/models.go（EmployeeProfile、EmployeeTransfer、EmployeeResignation、EmployeeOnboarding、TalentAnalysis 模型）
+  - internal/repository/employee_repository.go（入转调离台账查询）
+  - internal/service/employee_service.go（入转调离台账服务）
   - frontend/src/pages/EmployeeProfile.tsx（员工档案）
   - frontend/src/pages/EmployeeFlow.tsx（员工流程）
 update_when:
@@ -11,6 +13,7 @@ update_when:
   - 修改调岗流程时
   - 修改离职流程时
   - 修改入职流程时
+  - 修改入转调离台账列表口径时
   - 修改人才分析逻辑时
 ---
 
@@ -324,6 +327,121 @@ Body：
 
 #### PUT /api/v1/talent/analysis/:id
 更新人才分析
+
+---
+
+### 阶段 3A：入转调离台账
+
+阶段 3A 目标：
+- 基于现有员工档案、组织关系、员工流转记录和操作日志能力，补齐“入职 / 转正 / 调岗 / 离职”台账的最小可用展示能力。
+- 当前阶段只做台账梳理和最小增强，不重做完整入职、转正、调岗、离职审批流程。
+- 当前阶段不修改假期、假勤、打卡、排班相关功能。
+
+#### GET /api/v1/employee/ledger
+查询入转调离台账列表。
+
+Query 参数：
+- `page`：页码，默认 1
+- `page_size`：每页数量，默认 20
+- `department_id`：按当前部门筛选
+- `status`：按 `users.status` 筛选，当前支持 `active / inactive`
+- `keyword`：按员工姓名、员工 ID、工号、邮箱、手机号、岗位模糊搜索
+
+当前实现入口：
+- 后端：`internal/repository/employee_repository.go` -> `FindLifecycleLedger`
+- 服务：`internal/service/employee_service.go` -> `GetLifecycleLedger`
+- Handler：`internal/api/handlers.go` -> `GetEmployeeLifecycleLedger`
+- 路由：`internal/api/router.go` -> `GET /api/v1/employee/ledger`
+- 前端：`frontend/src/pages/EmployeeFlow.tsx` 台账页签
+
+#### 台账基表与默认过滤
+
+- 台账基表是 `users`
+- 默认排除 `admin`
+- 通过 `users.department_id` 关联当前部门
+- 通过 `users.user_id = employee_profiles.user_id` 左关联员工档案
+- 当前口径优先体现“当前员工 + 当前组织归属”，不是全量历史快照表
+
+#### 当前字段口径
+
+入职信息：
+- `entry_date` 优先取 `employee_profiles.entry_date`
+- 档案缺失或未填时，回退到最近一条 `employee_onboardings.entry_date`
+- 当前台账只展示入职日期与最近入职状态，不展开完整入职流程节点
+
+用工类型：
+- `employment_type` 优先取 `employee_profiles.employment_type`
+- 档案缺失或未填时，回退到最近一条 `employee_onboardings.employment_type`
+
+转正信息：
+- `planned_regular_date` 来自 `employee_profiles.planned_regular_date`
+- `actual_regular_date` 来自 `employee_profiles.actual_regular_date`
+- 当前阶段没有独立转正表，仍以员工档案字段为准
+
+调岗信息：
+- 取 `employee_transfers` 中按 `transfer_date DESC, id DESC` 排序的最近一条记录
+- 当前展示最近一次调岗日期、状态、原部门/原岗位、新部门/新岗位
+- 当前只做“最近一次调岗”展示，不做全历史调岗台账
+
+离职 / 停用状态：
+- 最近离职记录取 `employee_resignations` 中按 `resign_date DESC, id DESC` 排序的最近一条
+- 如果存在最近离职记录，优先展示该离职记录的日期、状态、最后工作日、离职原因
+- 如果没有离职记录，但 `users.status = inactive` 或 `employee_profiles.profile_status = inactive`，则按“离职/停用”展示
+- 当前阶段不区分停用原因，不额外补离职审批流状态推导
+
+部门与岗位：
+- 部门来自 `users.department_id` 关联的当前 `departments.name`
+- 岗位来自 `users.position`
+- 当前阶段不回溯历史部门树，不做某次调岗时点的组织快照恢复
+
+操作日志 / 时间线口径：
+- 员工详情时间线继续复用 `OrgService.buildEmployeeTimeline`
+- 当前复用的审计资源包括：
+  - `employee_profile:{user_id}`：档案创建 / 更新
+  - `employee_transfer:{user_id}`：调岗记录创建
+  - `employee_resignation:{user_id}`：离职记录创建
+  - `employee_onboarding:{employee_id}`：入职记录创建
+- 当前 `GET /api/v1/employee/ledger` 本身不直接返回操作日志字段；操作日志作为员工详情时间线补充能力保留
+
+#### 阶段 3A 已支持字段
+
+- 员工姓名
+- 员工 ID / 工号
+- 当前部门
+- 当前岗位
+- 用工类型
+- 入职日期
+- 计划转正日
+- 实际转正日
+- 最近一次调岗日期
+- 最近一次调岗状态
+- 最近一次调岗原部门 / 原岗位
+- 最近一次调岗新部门 / 新岗位
+- 最近一次离职日期
+- 最近一次离职状态
+- 最后工作日
+- 离职原因
+- 当前在职 / 离职 / 停用状态
+- 最近入职记录状态
+
+#### 阶段 3A 暂不支持
+
+- 完整入职流程台账明细
+- 完整转正审批流与转正历史表
+- 多次调岗的完整历史列表与趋势分析
+- 完整离职审批流与离职手续看板
+- 历史组织快照恢复
+- 跨模块的绩效、假勤、打卡、排班字段拼接
+- 权限改造、数据范围改造
+- 强制分布、C/D 面谈、复杂分析看板、复杂图表
+
+#### 后续 3B-3F 边界
+
+- 3B：只考虑在台账基础上补更完整的历史记录、筛选口径或展示细节，不改假勤、打卡、排班
+- 3C：如需做转正能力，只进入独立转正流程 / 审批 / 留痕，不回头扩大 3A
+- 3D：如需做调岗审批流，只处理调岗流程闭环，不混入绩效、权限、假勤
+- 3E：如需做离职闭环，只处理离职审批、手续和状态一致性，不扩展到考勤或假期结算
+- 3F：如需做分析看板，只在已有台账稳定后再考虑，不在 3A 引入复杂图表和跨模块统计
 
 ---
 
