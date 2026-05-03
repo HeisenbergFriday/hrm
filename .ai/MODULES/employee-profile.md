@@ -1,6 +1,6 @@
 ---
 purpose: 员工档案模块业务规则说明
-last_updated: 2026-05-02
+last_updated: 2026-05-03
 source_of_truth:
   - internal/api/handlers.go（员工档案相关 handler）
   - internal/database/models.go（EmployeeProfile、EmployeeTransfer、EmployeeResignation、EmployeeOnboarding、TalentAnalysis 模型）
@@ -103,6 +103,47 @@ type EmployeeOnboarding struct {
     UpdatedAt      time.Time
 }
 ```
+
+**注意**：以上模型定义已过时，实际代码中 `EmployeeOnboarding` 字段已更新，详见 `internal/database/models.go`。
+
+## 当前口径与限制（阶段 3B 更新）
+
+### employee_onboardings 与 users 的关联
+
+**当前状态**：
+- `employee_onboardings.employee_id` 是员工工号，不是 `users.user_id`
+- `employee_onboardings` 表中没有 `user_id` 字段
+- 无法通过外键直接关联到 `users` 表
+
+**判断是否已建档的口径**：
+- 通过 `employee_profiles.employee_id` 匹配工号判断
+- 如果 `employee_profiles` 中存在相同 `employee_id`，视为已建档
+- 如果不存在，视为候选入职人员（未建档）
+
+**阶段 3B 实现**（已完成）：
+- 台账查询合并候选入职人员（未建档的 onboarding 记录）
+- 状态映射：
+  - `pending` 且未建档 → 候选入职
+  - `processing` 且未建档 → 入职处理中
+  - `completed` 且未建档 → 入职已完成/待建档
+  - 已建档 → 已入职
+- 候选入职人员字段来源：
+  - `user_id`: 空字符串（候选人员尚未创建 users 记录）
+  - `employee_id`: `onboarding.employee_id`（工号）
+  - `onboarding_id`: `onboarding.onboarding_id`（入职记录唯一标识）
+  - `is_candidate`: `true`
+- 不修改 users 创建时机
+- 分页逻辑：候选入职人员排在已入职员工前面，参与 total 计算，支持 keyword / department_id / status 筛选
+- 前端 rowKey：`is_candidate ? 'candidate:' + onboarding_id : 'user:' + id`
+- 前端状态筛选：增加"候选入职"选项，筛选 `status=candidate` 只显示候选人员
+
+**后续建议**：
+- 阶段 4+ 增加 `employee_onboardings.user_id` 字段
+- 明确 users 创建时机（入职申请创建时 / 入职流程完成时 / 手动建档时）
+- 建立 onboarding → user → employee_profile 的明确关联链路
+- 避免依赖 `employee_id` 工号匹配，改用明确的外键关联
+
+---
 
 ### EmployeeTransfer
 转岗记录

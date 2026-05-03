@@ -103,6 +103,10 @@ interface LifecycleLedgerItem {
   latest_last_working_day: string
   latest_resign_reason: string
   latest_onboarding_status: string
+  // 阶段 3B 新增字段
+  is_candidate: boolean
+  onboarding_id: string
+  onboarding_status_display: string
 }
 
 const EmployeeFlow: React.FC = () => {
@@ -225,6 +229,16 @@ const EmployeeFlow: React.FC = () => {
   }
 
   const getEmploymentStatusTag = (item: LifecycleLedgerItem) => {
+    // 阶段 3B：候选入职人员状态展示
+    if (item.is_candidate) {
+      const colorMap: Record<string, string> = {
+        '候选入职': 'blue',
+        '入职处理中': 'orange',
+        '入职已完成/待建档': 'purple',
+      }
+      return <Tag color={colorMap[item.onboarding_status_display] || 'default'}>{item.onboarding_status_display}</Tag>
+    }
+
     if (item.latest_resignation_status) {
       return getStatusTag(item.latest_resignation_status)
     }
@@ -611,6 +625,7 @@ const EmployeeFlow: React.FC = () => {
                   options={[
                     { label: '在职', value: 'active' },
                     { label: '离职/停用', value: 'inactive' },
+                    { label: '候选入职', value: 'candidate' },
                   ]}
                 />
                 <Button icon={<ReloadOutlined />} onClick={() => refetchLedger()} loading={ledgerLoading}>
@@ -621,7 +636,7 @@ const EmployeeFlow: React.FC = () => {
           >
             <div style={{ marginBottom: 16 }}>
               <Text type="secondary">
-                当前台账口径：以 `users` 作为当前员工基表，入职/转正优先取员工档案；员工档案缺失时，入职日期和用工类型回退到最近一条入职记录。调岗、离职仅展示最近一次记录。
+                当前台账口径：以 `users` 作为当前员工基表，入职/转正优先取员工档案；员工档案缺失时，入职日期和用工类型回退到最近一条入职记录。调岗、离职仅展示最近一次记录。阶段 3B：合并候选入职人员（未建档的 onboarding 记录）。
               </Text>
             </div>
             {ledgerLoading ? (
@@ -632,7 +647,7 @@ const EmployeeFlow: React.FC = () => {
               <Table
                 columns={ledgerColumns}
                 dataSource={ledgerData.data.items as LifecycleLedgerItem[]}
-                rowKey="id"
+                rowKey={(record) => record.is_candidate ? `candidate:${record.onboarding_id}` : `user:${record.id}`}
                 scroll={{ x: 1200 }}
                 pagination={{
                   current: ledgerPage,
