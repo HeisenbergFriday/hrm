@@ -133,3 +133,18 @@ VITE_APP_VERSION=1.0.0
 - 使用密钥管理系统存储敏感信息
 - 配置高可用数据库和 Redis
 - 使用 HTTPS 加密传输
+
+## 10. 钉钉登录专用配置
+
+如果系统只保留钉钉登录，需要额外确认下面几个变量和地址：
+
+```env
+DINGTALK_CORP_ID=dingxxxxxxxx
+DINGTALK_APP_HOME_URL=http://your-host:8080
+DINGTALK_REDIRECT_URI=http://your-host:8080/callback
+```
+
+- `DINGTALK_APP_HOME_URL` 用于钉钉微应用首页，应该指向应用根地址 `/`，不要指向 `/callback`。
+- `DINGTALK_REDIRECT_URI` 只用于扫码登录回调，应该指向前端页面 `/callback`。
+- 手机端和电脑端都必须能访问这个地址。`localhost` 只能本机访问，钉钉里会失败。
+- 开发时如果前端是 `3000`、后端是 `8080`，钉钉后台仍然建议填写最终对外可访问的统一地址，优先使用后端托管的 `8080` 页面，不要直接填 Vite 开发端口 `3000`。
