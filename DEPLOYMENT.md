@@ -224,3 +224,13 @@ export default defineConfig({
 - **开发团队**：People Ops 开发组
 - **联系邮箱**：dev@peopleops.com
 - **技术支持**：support@peopleops.com
+
+## 13. 钉钉登录部署补充
+
+如果当前版本不再使用本地账号密码登录，而是只保留钉钉扫码和钉钉内免登，请按下面方式部署：
+
+1. 先执行 `npm run build`，让后端通过 `frontend/dist` 提供前端页面。
+2. 启动 Go 服务后，统一从后端端口访问，例如 `http://your-host:8080/`。
+3. 钉钉微应用首页配置为 `http://your-host:8080/`。
+4. 钉钉 OAuth 回调地址配置为 `http://your-host:8080/callback`。
+5. 不要再把钉钉首页或回调地址配置成 `http://your-host:3000/...`，因为 `3000` 只是本地前端开发端口，未运行时就会出现 `net::ERR_CONNECTION_REFUSED`。
