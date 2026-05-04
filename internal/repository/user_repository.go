@@ -37,6 +37,24 @@ func (r *UserRepository) FindByUserID(userID string) (*database.User, error) {
 	return &user, nil
 }
 
+func (r *UserRepository) FindByEmail(email string) (*database.User, error) {
+	var user database.User
+	err := r.db.Where("email = ?", email).First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *UserRepository) FindByMobile(mobile string) (*database.User, error) {
+	var user database.User
+	err := r.db.Where("mobile = ?", mobile).First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func (r *UserRepository) FindByID(id string) (*database.User, error) {
 	var user database.User
 	err := r.db.First(&user, "id = ?", id).Error

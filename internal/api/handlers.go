@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"gorm.io/gorm"
 )
 
 // 统一响应结构
@@ -409,27 +411,39 @@ func SyncDepartments(c *gin.Context) {
 
 // GetDingTalkConfig 返回钉钉前端配置（corpId 等），供 JS-SDK 初始化
 func GetDingTalkConfig(c *gin.Context) {
+	corpID := dingtalk.GetCorpID()
+	appHomeURL := resolveDingTalkAppHomeURL(c)
+	redirectURI := resolveDingTalkRedirectURI(c)
+	missingConfig := []string{}
+	if corpID == "" {
+		missingConfig = append(missingConfig, "DINGTALK_CORP_ID")
+	}
+	log.Printf("[dingtalk/config] host=%s app_home_url=%s redirect_uri=%s missing=%v", c.Request.Host, appHomeURL, redirectURI, missingConfig)
+
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
 		Message: "success",
 		Data: gin.H{
-			"corp_id":   dingtalk.GetCorpID(),
-			"client_id": os.Getenv("DINGTALK_APP_KEY"),
+			"corp_id":      corpID,
+			"client_id":    os.Getenv("DINGTALK_APP_KEY"),
+			"redirect_uri": redirectURI,
+			"app_home_url": appHomeURL,
+			"missing":      missingConfig,
 		},
 	})
 }
 
-// DingTalkQRLoginStart 钉钉扫码登录开始
+// DingTalkQRLoginStart 閽夐拤鎵爜鐧诲綍寮€濮?
 func DingTalkQRLoginStart(c *gin.Context) {
-	// 生成state参数
 	state := "test_state"
+	redirectURI := resolveDingTalkRedirectURI(c)
+	log.Printf("[dingtalk/qr/start] host=%s forwarded_host=%s redirect_uri=%s ua=%s", c.Request.Host, c.GetHeader("X-Forwarded-Host"), redirectURI, c.GetHeader("User-Agent"))
 
-	// 获取钉钉扫码登录二维码
-	qrCodeURL, err := dingtalk.GetQRCode(state)
+	qrCodeURL, err := dingtalk.GetQRCodeWithRedirect(state, redirectURI)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
-			Message: "获取二维码失败",
+			Message: "get qrcode failed",
 			Data:    gin.H{"error": err.Error()},
 		})
 		return
@@ -439,13 +453,14 @@ func DingTalkQRLoginStart(c *gin.Context) {
 		Code:    http.StatusOK,
 		Message: "success",
 		Data: gin.H{
-			"qr_code_url": qrCodeURL,
-			"state":       state,
+			"qr_code_url":  qrCodeURL,
+			"state":        state,
+			"redirect_uri": redirectURI,
 		},
 	})
 }
 
-// DingTalkInAppLogin 钉钉内免登
+// DingTalkInAppLogin 閽夐拤鍐呭厤鐧?
 func DingTalkInAppLogin(c *gin.Context) {
 	var req struct {
 		Code string `json:"code" binding:"required"`
@@ -454,71 +469,112 @@ func DingTalkInAppLogin(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
-			Message: "参数错误",
+			Message: "invalid request",
 		})
 		return
 	}
+	log.Printf("[dingtalk/in-app] host=%s has_code=%t ua=%s", c.Request.Host, strings.TrimSpace(req.Code) != "", c.GetHeader("User-Agent"))
 
-	// 1. 通过免登码获取企业内 userid
 	userid, err := dingtalk.GetUserIDByInAppCode(req.Code)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
-			Message: "钉钉免登失败: " + err.Error(),
+			Message: "dingtalk in-app login failed: " + err.Error(),
 		})
 		return
 	}
+	log.Printf("[dingtalk/in-app] resolved_userid=%s", userid)
 
-	// 2. 通过 userid 获取用户详细信息（Contact.User.Read）
 	userDetail, err := dingtalk.GetUserDetailByUserID(userid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
-			Message: "获取用户详情失败: " + err.Error(),
+			Message: "get dingtalk user detail failed: " + err.Error(),
 		})
 		return
 	}
+	log.Printf("[dingtalk/in-app] user_detail=%v", userDetail)
 
 	name, _ := userDetail["name"].(string)
 	email, _ := userDetail["email"].(string)
 	mobile, _ := userDetail["mobile"].(string)
 	avatar, _ := userDetail["avatar"].(string)
 	position, _ := userDetail["title"].(string)
+	deptID := "1"
+	if deptList, ok := userDetail["dept_id_list"].([]interface{}); ok && len(deptList) > 0 {
+		if id, ok := deptList[0].(float64); ok {
+			deptID = fmt.Sprintf("%d", int64(id))
+		}
+	}
 
-	// 3. 查找或创建本地用户（用钉钉 userid 匹配）
 	userService := service.NewUserService(database.DB)
-	user, err := userService.GetUserByUserID(userid)
+	user, err := findLocalUserByDingTalkIdentity(userService, userid)
 	if err != nil {
-		// 用户不存在，自动创建
-		deptID := "1"
-		if deptList, ok := userDetail["dept_id_list"].([]interface{}); ok && len(deptList) > 0 {
-			if id, ok := deptList[0].(float64); ok {
-				deptID = fmt.Sprintf("%d", int64(id))
-			}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "query local user failed: " + err.Error(),
+			})
+			return
 		}
 
-		newUser := &database.User{
-			UserID: userid, Name: name, Email: email,
-			Mobile: mobile, Avatar: avatar, Position: position,
-			DepartmentID: deptID, Status: "active",
+		user, err = findLocalUserByContact(userService, email, mobile)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				respondDingTalkUserNotSynced(c, "dingtalk_in_app", userid, name)
+				return
+			}
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "query local user failed: " + err.Error(),
+			})
+			return
 		}
-		userService.CreateUser(newUser)
-		user = newUser
+	}
+
+	user.Name = name
+	user.Avatar = avatar
+	user.Position = position
+	user.DepartmentID = deptID
+	user.Status = "active"
+	if err := assignUserEmailSafely(userService, user, email); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "update local user email failed: " + err.Error(),
+		})
+		return
+	}
+	if err := assignUserMobileSafely(userService, user, mobile); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "update local user mobile failed: " + err.Error(),
+		})
+		return
+	}
+	if err := userService.UpdateUser(user); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "update local user failed: " + err.Error(),
+		})
+		return
 	}
 
 	tokenString, expiresAt, err := generateToken(fmt.Sprintf("%d", user.ID), user.Name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
-			Message: "生成令牌失败",
+			Message: "generate token failed",
 		})
 		return
 	}
 
 	database.DB.Create(&database.LoginLog{
-		UserID: fmt.Sprintf("%d", user.ID), UserName: user.Name,
-		LoginType: "dingtalk_in_app", LoginStatus: "success",
-		IP: c.ClientIP(), UserAgent: c.GetHeader("User-Agent"),
+		UserID:      fmt.Sprintf("%d", user.ID),
+		UserName:    user.Name,
+		LoginType:   "dingtalk_in_app",
+		LoginStatus: "success",
+		IP:          c.ClientIP(),
+		UserAgent:   c.GetHeader("User-Agent"),
 	})
 
 	c.JSON(http.StatusOK, Response{
@@ -527,89 +583,166 @@ func DingTalkInAppLogin(c *gin.Context) {
 		Data: gin.H{
 			"token": tokenString,
 			"user": gin.H{
-				"id": user.ID, "user_id": user.UserID,
-				"name": user.Name, "email": user.Email,
-				"mobile": user.Mobile, "department_id": user.DepartmentID,
-				"position": user.Position, "avatar": user.Avatar,
-				"status": user.Status,
+				"id":            user.ID,
+				"user_id":       user.UserID,
+				"name":          user.Name,
+				"email":         user.Email,
+				"mobile":        user.Mobile,
+				"department_id": user.DepartmentID,
+				"position":      user.Position,
+				"avatar":        user.Avatar,
+				"status":        user.Status,
 			},
 			"expires_at": expiresAt,
 		},
 	})
 }
 
-// DingTalkCallback 钉钉回调
+// DingTalkCallback 閽夐拤鍥炶皟
 func DingTalkCallback(c *gin.Context) {
 	code := c.Query("authCode")
 	if code == "" {
 		code = c.Query("code")
 	}
+	log.Printf("[dingtalk/callback] host=%s raw_query=%s has_code=%t ua=%s", c.Request.Host, c.Request.URL.RawQuery, code != "", c.GetHeader("User-Agent"))
 
 	if code == "" {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
-			Message: "缺少授权码参数",
+			Message: "missing auth code",
 		})
 		return
 	}
 
-	// 通过code获取用户信息
 	userInfo, err := dingtalk.GetUserInfoByCode(code)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
-			Message: "获取用户信息失败: " + err.Error(),
+			Message: "get dingtalk user info failed: " + err.Error(),
+		})
+		return
+	}
+	log.Printf("[dingtalk/callback] user_info=%v", userInfo)
+
+	associatedUserID := getStringByKeys(userInfo, "associated_user_id", "associatedUserId", "userid", "userId")
+	unionID := getStringByKeys(userInfo, "unionId", "unionid", "union_id")
+	openID := getStringByKeys(userInfo, "openId", "openid", "open_id")
+	dtUserID := associatedUserID
+	if dtUserID == "" && unionID != "" {
+		resolvedUserID, resolveErr := dingtalk.GetUserIDByUnionID(unionID)
+		if resolveErr == nil {
+			dtUserID = resolvedUserID
+		} else {
+			log.Printf("[dingtalk/callback] resolve unionid failed: union_id=%s err=%v", unionID, resolveErr)
+		}
+	}
+
+	if dtUserID == "" && openID == "" {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "missing dingtalk user identity",
 		})
 		return
 	}
 
-	// 查找或创建本地用户
-	dtUserID := ""
-	if v, ok := userInfo["unionId"].(string); ok {
-		dtUserID = v
-	} else if v, ok := userInfo["nick"].(string); ok {
-		dtUserID = v
+	var name, email, mobile, avatar, position string
+	deptID := "1"
+	if dtUserID != "" {
+		userDetail, detailErr := dingtalk.GetUserDetailByUserID(dtUserID)
+		if detailErr == nil {
+			name, _ = userDetail["name"].(string)
+			email, _ = userDetail["email"].(string)
+			mobile, _ = userDetail["mobile"].(string)
+			avatar, _ = userDetail["avatar"].(string)
+			position, _ = userDetail["title"].(string)
+			if deptList, ok := userDetail["dept_id_list"].([]interface{}); ok && len(deptList) > 0 {
+				if id, ok := deptList[0].(float64); ok {
+					deptID = fmt.Sprintf("%d", int64(id))
+				}
+			}
+		}
+	}
+	if name == "" {
+		name, _ = userInfo["nick"].(string)
+	}
+	if email == "" {
+		email, _ = userInfo["email"].(string)
+	}
+	if mobile == "" {
+		mobile, _ = userInfo["mobile"].(string)
+	}
+	if avatar == "" {
+		avatar, _ = userInfo["avatarUrl"].(string)
 	}
 
 	userService := service.NewUserService(database.DB)
-	user, err := userService.GetUserByUserID(dtUserID)
+	user, err := findLocalUserByDingTalkIdentity(userService, dtUserID, associatedUserID)
 	if err != nil {
-		// 用户不存在，自动创建
-		nick, _ := userInfo["nick"].(string)
-		email, _ := userInfo["email"].(string)
-		mobile, _ := userInfo["mobile"].(string)
-		avatarUrl, _ := userInfo["avatarUrl"].(string)
-
-		newUser := &database.User{
-			UserID:       dtUserID,
-			Name:         nick,
-			Email:        email,
-			Mobile:       mobile,
-			Avatar:       avatarUrl,
-			DepartmentID: "1",
-			Status:       "active",
-		}
-		if createErr := userService.CreateUser(newUser); createErr != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusInternalServerError, Response{
 				Code:    http.StatusInternalServerError,
-				Message: "创建用户失败",
+				Message: "query local user failed: " + err.Error(),
 			})
 			return
 		}
-		user = newUser
+
+		user, err = findLocalUserByContact(userService, email, mobile)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				identityForLog := dtUserID
+				if identityForLog == "" {
+					identityForLog = openID
+				}
+				if identityForLog == "" {
+					identityForLog = unionID
+				}
+				respondDingTalkUserNotSynced(c, "dingtalk_qr", identityForLog, name)
+				return
+			}
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "query local user failed: " + err.Error(),
+			})
+			return
+		}
 	}
 
-	// 生成 JWT
+	user.Name = name
+	user.Avatar = avatar
+	user.Position = position
+	user.DepartmentID = deptID
+	user.Status = "active"
+	if err := assignUserEmailSafely(userService, user, email); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "update local user email failed: " + err.Error(),
+		})
+		return
+	}
+	if err := assignUserMobileSafely(userService, user, mobile); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "update local user mobile failed: " + err.Error(),
+		})
+		return
+	}
+	if err := userService.UpdateUser(user); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "update local user failed: " + err.Error(),
+		})
+		return
+	}
+
 	tokenString, expiresAt, err := generateToken(fmt.Sprintf("%d", user.ID), user.Name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
-			Message: "生成令牌失败",
+			Message: "generate token failed",
 		})
 		return
 	}
 
-	// 写入登录日志
 	database.DB.Create(&database.LoginLog{
 		UserID:      fmt.Sprintf("%d", user.ID),
 		UserName:    user.Name,
@@ -638,6 +771,148 @@ func DingTalkCallback(c *gin.Context) {
 			"expires_at": expiresAt,
 		},
 	})
+}
+
+func respondDingTalkUserNotSynced(c *gin.Context, loginType, userID, userName string) {
+	database.DB.Create(&database.LoginLog{
+		UserID:      userID,
+		UserName:    userName,
+		LoginType:   loginType,
+		LoginStatus: "failed",
+		IP:          c.ClientIP(),
+		UserAgent:   c.GetHeader("User-Agent"),
+		ErrorMsg:    "user not synced",
+	})
+
+	c.JSON(http.StatusForbidden, Response{
+		Code:    http.StatusForbidden,
+		Message: "dingtalk user not synced, please sync org data first",
+	})
+}
+
+func requestBaseURL(c *gin.Context) string {
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if forwardedProto := strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")); forwardedProto != "" {
+		scheme = strings.Split(forwardedProto, ",")[0]
+	}
+
+	host := strings.TrimSpace(c.GetHeader("X-Forwarded-Host"))
+	if host == "" {
+		host = strings.TrimSpace(c.Request.Host)
+	}
+	if host == "" {
+		return dingtalk.GetAppHomeURL()
+	}
+
+	return fmt.Sprintf("%s://%s", scheme, host)
+}
+
+func getStringByKeys(data map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := data[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func findLocalUserByDingTalkIdentity(userService *service.UserService, candidates ...string) (*database.User, error) {
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		user, err := userService.GetUserByUserID(candidate)
+		if err == nil {
+			return user, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+
+	return nil, gorm.ErrRecordNotFound
+}
+
+func findLocalUserByContact(userService *service.UserService, email, mobile string) (*database.User, error) {
+	email = strings.TrimSpace(email)
+	if email != "" {
+		user, err := userService.GetUserByEmail(email)
+		if err == nil {
+			return user, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+
+	mobile = strings.TrimSpace(mobile)
+	if mobile != "" {
+		user, err := userService.GetUserByMobile(mobile)
+		if err == nil {
+			return user, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+
+	return nil, gorm.ErrRecordNotFound
+}
+
+func assignUserEmailSafely(userService *service.UserService, user *database.User, email string) error {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil
+	}
+
+	existing, err := userService.GetUserByEmail(email)
+	if err == nil && existing.ID != user.ID {
+		log.Printf("[dingtalk/login] skip email update for user_id=%s because email=%s already belongs to user_id=%s", user.UserID, email, existing.UserID)
+		return nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	user.Email = email
+	return nil
+}
+
+func assignUserMobileSafely(userService *service.UserService, user *database.User, mobile string) error {
+	mobile = strings.TrimSpace(mobile)
+	if mobile == "" {
+		return nil
+	}
+
+	existing, err := userService.GetUserByMobile(mobile)
+	if err == nil && existing.ID != user.ID {
+		log.Printf("[dingtalk/login] skip mobile update for user_id=%s because mobile=%s already belongs to user_id=%s", user.UserID, mobile, existing.UserID)
+		return nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	user.Mobile = mobile
+	return nil
+}
+
+func resolveDingTalkAppHomeURL(c *gin.Context) string {
+	if configured := dingtalk.GetConfiguredAppHomeURL(); configured != "" {
+		return configured
+	}
+	return requestBaseURL(c)
+}
+
+func resolveDingTalkRedirectURI(c *gin.Context) string {
+	if configured := dingtalk.GetConfiguredRedirectURI(); configured != "" {
+		return configured
+	}
+	return resolveDingTalkAppHomeURL(c) + "/callback"
 }
 
 // Logout 登出
