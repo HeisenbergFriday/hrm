@@ -33,6 +33,14 @@ func (s *UserService) GetUserByUserID(userID string) (*database.User, error) {
 	return s.userRepo.FindByUserID(userID)
 }
 
+func (s *UserService) GetUserByEmail(email string) (*database.User, error) {
+	return s.userRepo.FindByEmail(email)
+}
+
+func (s *UserService) GetUserByMobile(mobile string) (*database.User, error) {
+	return s.userRepo.FindByMobile(mobile)
+}
+
 func (s *UserService) GetUserByID(id string) (*database.User, error) {
 	return s.userRepo.FindByID(id)
 }
