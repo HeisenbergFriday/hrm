@@ -10,7 +10,17 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:8080',
-        changeOrigin: true
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            if (req.headers.host) {
+              proxyReq.setHeader('X-Forwarded-Host', req.headers.host)
+            }
+
+            const protoHeader = req.socket.encrypted ? 'https' : 'http'
+            proxyReq.setHeader('X-Forwarded-Proto', protoHeader)
+          })
+        },
       }
     }
   }
