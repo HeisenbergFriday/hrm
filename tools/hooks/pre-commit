@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# 检测结构性变更时提醒更新 CLAUDE.md
+# 触发条件：internal/service/, internal/api/, internal/repository/, models.go, frontend/src/pages/ 有新增或删除
+
+STAGED=$(git diff --cached --name-only)
+
+STRUCTURAL_CHANGED=false
+CHANGED_FILES=""
+
+while IFS= read -r file; do
+  case "$file" in
+    internal/service/*.go|\
+    internal/api/*.go|\
+    internal/repository/*.go|\
+    internal/database/models.go|\
+    frontend/src/pages/*.tsx|\
+    frontend/src/services/*.ts)
+      STRUCTURAL_CHANGED=true
+      CHANGED_FILES="$CHANGED_FILES\n    $file"
+      ;;
+  esac
+done <<< "$STAGED"
+
+if [ "$STRUCTURAL_CHANGED" = "true" ]; then
+  if echo "$STAGED" | grep -q "^CLAUDE\.md$"; then
+    echo "[hook] CLAUDE.md 已同步更新 ✓"
+  else
+    echo ""
+    echo "[hook] 检测到结构性变更，但 CLAUDE.md 未修改："
+    echo -e "$CHANGED_FILES"
+    echo ""
+    echo "  如需更新，请 Ctrl+C 取消后编辑 CLAUDE.md 再提交。"
+    echo "  如无需更新，输入 y 直接提交："
+    read -r answer < /dev/tty
+    if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
+      echo "[hook] 已取消提交。"
+      exit 1
+    fi
+  fi
+fi
+
+exit 0
