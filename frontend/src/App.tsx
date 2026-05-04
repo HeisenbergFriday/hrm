@@ -1,7 +1,27 @@
-import { useState } from 'react'
-import { Layout, Menu, ConfigProvider, theme } from 'antd'
-import { Link, Routes, Route, useLocation } from 'react-router-dom'
-import { UserOutlined, TeamOutlined, ClockCircleOutlined, FileOutlined, KeyOutlined, HistoryOutlined, SettingOutlined, LogoutOutlined, WarningOutlined, FileExcelOutlined, FileTextOutlined, BarChartOutlined, SyncOutlined, LockOutlined, SwapOutlined, CalendarOutlined, ScheduleOutlined } from '@ant-design/icons'
+import { useEffect, useState } from 'react'
+import { Layout, Menu, ConfigProvider, theme, Spin, message } from 'antd'
+import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
+import {
+  LoadingOutlined,
+  UserOutlined,
+  TeamOutlined,
+  ClockCircleOutlined,
+  FileOutlined,
+  KeyOutlined,
+  HistoryOutlined,
+  SettingOutlined,
+  LogoutOutlined,
+  WarningOutlined,
+  FileExcelOutlined,
+  FileTextOutlined,
+  BarChartOutlined,
+  SyncOutlined,
+  LockOutlined,
+  SwapOutlined,
+  CalendarOutlined,
+  ScheduleOutlined,
+} from '@ant-design/icons'
+import axios from 'axios'
 
 import Login from './pages/Login'
 import Home from './pages/Home'
@@ -39,16 +59,144 @@ import { useAuthStore } from './store/authStore'
 
 const { Header, Sider, Content } = Layout
 
+const authPaths = ['/login', '/callback', '/login-error']
+
+function isDingTalkEnv(): boolean {
+  return /DingTalk/i.test(navigator.userAgent)
+}
+
+function getAxiosErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    const serverMessage = error.response?.data?.message
+    if (typeof serverMessage === 'string' && serverMessage.trim() !== '') {
+      return serverMessage
+    }
+  }
+
+  return fallback
+}
+
+function AuthRoutes() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/callback" element={<Callback />} />
+      <Route path="/login-error" element={<LoginError />} />
+    </Routes>
+  )
+}
+
 function App() {
   const [collapsed, setCollapsed] = useState(false)
+  const [autoLogging, setAutoLogging] = useState(false)
   const location = useLocation()
-  const { isLoggedIn, user } = useAuthStore()
+  const navigate = useNavigate()
+  const { isLoggedIn, user, login, logout } = useAuthStore()
 
-  const { token: { colorBgContainer, borderRadiusLG } } = theme.useToken()
+  const {
+    token: { colorBgContainer, borderRadiusLG },
+  } = theme.useToken()
 
-  const noAuthPaths = ['/login', '/callback', '/login-error']
-  if (!isLoggedIn && !noAuthPaths.includes(location.pathname)) {
-    return <Login />
+  const handleLogout = async () => {
+    try {
+      await axios.post('/api/v1/auth/logout')
+    } catch (err) {
+      console.warn('[logout] request failed', err)
+    } finally {
+      logout()
+      navigate('/login?mode=scan', { replace: true })
+    }
+  }
+
+  useEffect(() => {
+    if (!isDingTalkEnv() || isLoggedIn || authPaths.includes(location.pathname)) {
+      return
+    }
+
+    setAutoLogging(true)
+
+    const doAutoLogin = async () => {
+      try {
+        const configRes = await axios.get('/api/v1/auth/dingtalk/config')
+        const { corp_id: corpId, missing } = configRes.data.data
+        const dd = (window as any).dd
+
+        if (!corpId || (Array.isArray(missing) && missing.includes('DINGTALK_CORP_ID'))) {
+          message.error('缺少 DINGTALK_CORP_ID，暂时无法使用钉钉内免登')
+          setAutoLogging(false)
+          navigate('/login', { replace: true })
+          return
+        }
+
+        if (!dd?.runtime?.permission?.requestAuthCode) {
+          message.error('钉钉 JS-SDK 未加载或未授权')
+          setAutoLogging(false)
+          navigate('/login', { replace: true })
+          return
+        }
+
+        dd.runtime.permission.requestAuthCode({
+          corpId,
+          onSuccess: async (result: { code: string }) => {
+            try {
+              const response = await axios.post('/api/v1/auth/dingtalk/in-app', {
+                code: result.code,
+              })
+              const { token, user } = response.data.data
+              login(user, token)
+              message.success('登录成功', 0.6)
+              setAutoLogging(false)
+            } catch (err) {
+              console.error('[DingTalk InApp] login failed', err)
+              message.error(getAxiosErrorMessage(err, '钉钉内免登失败'))
+              setAutoLogging(false)
+              navigate('/login', { replace: true })
+            }
+          },
+          onFail: (err: unknown) => {
+            console.error('[DingTalk InApp] requestAuthCode failed', err)
+            message.error('获取钉钉授权码失败')
+            setAutoLogging(false)
+            navigate('/login', { replace: true })
+          },
+        })
+      } catch (err) {
+        console.error('[DingTalk InApp] init failed', err)
+        message.error(getAxiosErrorMessage(err, '钉钉内免登初始化失败'))
+        setAutoLogging(false)
+        navigate('/login', { replace: true })
+      }
+    }
+
+    const timer = setTimeout(doAutoLogin, 300)
+    return () => clearTimeout(timer)
+  }, [isLoggedIn, location.pathname, login, navigate])
+
+  if (authPaths.includes(location.pathname)) {
+    return (
+      <ConfigProvider>
+        <AuthRoutes />
+      </ConfigProvider>
+    )
+  }
+
+  if (!isLoggedIn) {
+    if (autoLogging) {
+      return (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f0f2f5' }}>
+          <div style={{ textAlign: 'center' }}>
+            <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
+            <p style={{ marginTop: 16 }}>正在通过钉钉自动登录，请稍候...</p>
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <ConfigProvider>
+        <Login />
+      </ConfigProvider>
+    )
   }
 
   return (
@@ -139,8 +287,8 @@ function App() {
             <Menu.Item key="/setting" icon={<SettingOutlined />}>
               <Link to="/setting">系统设置</Link>
             </Menu.Item>
-            <Menu.Item key="/logout" icon={<LogoutOutlined />}>
-              <Link to="/login">退出登录</Link>
+            <Menu.Item key="/logout" icon={<LogoutOutlined />} onClick={handleLogout}>
+              退出登录
             </Menu.Item>
           </Menu>
         </Sider>
@@ -151,9 +299,6 @@ function App() {
           <Content style={{ margin: '24px 16px', padding: 24, minHeight: 280, background: colorBgContainer, borderRadius: borderRadiusLG }}>
             <Routes>
               <Route path="/" element={<Home />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/callback" element={<Callback />} />
-              <Route path="/login-error" element={<LoginError />} />
               <Route path="/department-tree" element={<DepartmentTree />} />
               <Route path="/employees" element={<EmployeeList />} />
               <Route path="/employees/:id" element={<EmployeeDetail />} />

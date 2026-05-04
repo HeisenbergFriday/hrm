@@ -1,15 +1,27 @@
 import React, { useEffect, useState } from 'react'
-import { Card, Spin, Typography, Result, Button } from 'antd'
-import { LoadingOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
+import { Result, Button, message } from 'antd'
+import { CloseCircleOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
 
-const { Title } = Typography
+function isDingTalkEnv(): boolean {
+  return /DingTalk/i.test(navigator.userAgent)
+}
+
+function getAxiosErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    const serverMessage = error.response?.data?.message
+    if (typeof serverMessage === 'string' && serverMessage.trim() !== '') {
+      return serverMessage
+    }
+  }
+
+  return fallback
+}
 
 const Callback: React.FC = () => {
   const [loading, setLoading] = useState(true)
-  const [success, setSuccess] = useState(false)
   const [error, setError] = useState('')
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -21,79 +33,58 @@ const Callback: React.FC = () => {
       const state = searchParams.get('state')
 
       if (!code) {
-        setError('缺少code参数')
+        if (isDingTalkEnv()) {
+          navigate('/', { replace: true })
+          return
+        }
+        setError('缺少 code 参数')
         setLoading(false)
         return
       }
 
       try {
         const response = await axios.get('/api/v1/auth/dingtalk/callback', {
-          params: { code, state }
+          params: { code, state },
         })
-        
+
         if (response.data.code === 200) {
-          setSuccess(true)
-          // 使用auth store存储token
           const { token, user } = response.data.data
           login(user, token)
-          // 延迟跳转到首页
-          setTimeout(() => {
-            navigate('/')
-          }, 2000)
-        } else {
-          setError(response.data.message)
+          message.success('登录成功', 0.6)
+          navigate('/', { replace: true })
+          return
         }
+
+        setError(response.data.message || '登录失败')
       } catch (err) {
-        setError('登录失败，请重试')
+        setError(getAxiosErrorMessage(err, '登录失败，请重试'))
       } finally {
         setLoading(false)
       }
     }
 
-    handleCallback()
+    void handleCallback()
   }, [searchParams, navigate, login])
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f0f2f5' }}>
-        <Card style={{ width: 400, textAlign: 'center' }}>
-          <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
-          <p style={{ marginTop: 16 }}>正在处理登录，请稍候...</p>
-        </Card>
-      </div>
-    )
-  }
-
-  if (success) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f0f2f5' }}>
-        <Card style={{ width: 400 }}>
-          <Result
-            status="success"
-            icon={<CheckCircleOutlined />}
-            title="登录成功"
-            subTitle="正在跳转到首页..."
-          />
-        </Card>
-      </div>
+      <div style={{ minHeight: '100vh', background: '#f0f2f5' }} />
     )
   }
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f0f2f5' }}>
-      <Card style={{ width: 400 }}>
-        <Result
-          status="error"
-          icon={<CloseCircleOutlined />}
-          title="登录失败"
-          subTitle={error}
-          extra={[
-            <Button type="primary" key="login" onClick={() => navigate('/login')}>
-              返回登录页
-            </Button>
-          ]}
-        />
-      </Card>
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#f0f2f5' }}>
+      <Result
+        status="error"
+        icon={<CloseCircleOutlined />}
+        title="登录失败"
+        subTitle={error}
+        extra={[
+          <Button type="primary" key="login" onClick={() => navigate('/login?mode=scan', { replace: true })}>
+            返回扫码页
+          </Button>,
+        ]}
+      />
     </div>
   )
 }
