@@ -1,7 +1,12 @@
 package api
 
 import (
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
 	"peopleops/internal/middleware"
+	"strings"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -222,5 +227,44 @@ func SetupRouter() *gin.Engine {
 		}
 	}
 
+	registerFrontendRoutes(router)
+
 	return router
+}
+
+func registerFrontendRoutes(router *gin.Engine) {
+	distDir := filepath.Join("frontend", "dist")
+	indexFile := filepath.Join(distDir, "index.html")
+
+	router.NoRoute(func(c *gin.Context) {
+		requestPath := c.Request.URL.Path
+		if strings.HasPrefix(requestPath, "/api/") {
+			c.JSON(http.StatusNotFound, Response{
+				Code:    http.StatusNotFound,
+				Message: "API route not found",
+			})
+			return
+		}
+
+		if _, err := os.Stat(indexFile); err != nil {
+			c.String(http.StatusServiceUnavailable, "frontend build not found at %s, please run npm run build in D:\\ai项目\\frontend", indexFile)
+			return
+		}
+
+		cleanPath := strings.TrimPrefix(path.Clean(requestPath), "/")
+		if cleanPath != "" && cleanPath != "." {
+			if strings.HasPrefix(cleanPath, "..") {
+				c.Status(http.StatusNotFound)
+				return
+			}
+
+			candidate := filepath.Join(distDir, filepath.FromSlash(cleanPath))
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				c.File(candidate)
+				return
+			}
+		}
+
+		c.File(indexFile)
+	})
 }
