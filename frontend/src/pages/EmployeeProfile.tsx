@@ -263,11 +263,11 @@ const EmployeeProfilePage: React.FC = () => {
           }
         >
           {isLoading ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
               <Spin size="large" />
             </div>
           ) : isError ? (
-            <div style={{ padding: '20px' }}>
+            <div style={{ padding: 20 }}>
               <Alert
                 message="加载失败"
                 description={(error as Error)?.message || '获取员工档案失败，请稍后重试'}
@@ -313,17 +313,17 @@ const EmployeeProfilePage: React.FC = () => {
           <Tabs defaultActiveKey="basic" style={{ marginTop: 24 }}>
             <Tabs.TabPane tab="基本信息" key="basic">
               <Descriptions column={2} bordered>
-                <Descriptions.Item label="姓名" span={1}>{currentProfile?.name}</Descriptions.Item>
-                <Descriptions.Item label="工号" span={1}>{currentProfile?.employee_id}</Descriptions.Item>
-                <Descriptions.Item label="性别" span={1}>{currentProfile?.gender}</Descriptions.Item>
-                <Descriptions.Item label="出生日期" span={1}>{currentProfile?.birth_date}</Descriptions.Item>
-                <Descriptions.Item label="国籍" span={1}>{currentProfile?.nationality}</Descriptions.Item>
-                <Descriptions.Item label="身份证号" span={1}>{currentProfile?.id_card_number}</Descriptions.Item>
-                <Descriptions.Item label="工作邮箱" span={1}>{currentProfile?.work_email}</Descriptions.Item>
-                <Descriptions.Item label="个人邮箱" span={1}>{currentProfile?.personal_email}</Descriptions.Item>
-                <Descriptions.Item label="紧急联系人" span={1}>{currentProfile?.emergency_contact}</Descriptions.Item>
-                <Descriptions.Item label="紧急联系电话" span={1}>{currentProfile?.emergency_phone}</Descriptions.Item>
-                <Descriptions.Item label="地址" span={2}>{currentProfile?.address}</Descriptions.Item>
+                <Descriptions.Item label="姓名">{currentProfile?.name || '-'}</Descriptions.Item>
+                <Descriptions.Item label="工号">{currentProfile?.employee_id || '-'}</Descriptions.Item>
+                <Descriptions.Item label="性别">{currentProfile?.gender || '-'}</Descriptions.Item>
+                <Descriptions.Item label="出生日期">{currentProfile?.birth_date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="国籍">{currentProfile?.nationality || '-'}</Descriptions.Item>
+                <Descriptions.Item label="身份证号">{currentProfile?.id_card_number || '-'}</Descriptions.Item>
+                <Descriptions.Item label="工作邮箱">{currentProfile?.work_email || '-'}</Descriptions.Item>
+                <Descriptions.Item label="个人邮箱">{currentProfile?.personal_email || '-'}</Descriptions.Item>
+                <Descriptions.Item label="紧急联系人">{currentProfile?.emergency_contact || '-'}</Descriptions.Item>
+                <Descriptions.Item label="紧急联系电话">{currentProfile?.emergency_phone || '-'}</Descriptions.Item>
+                <Descriptions.Item label="地址" span={2}>{currentProfile?.address || '-'}</Descriptions.Item>
               </Descriptions>
             </Tabs.TabPane>
             <Tabs.TabPane tab="工作信息" key="work">
@@ -363,10 +363,10 @@ const EmployeeProfilePage: React.FC = () => {
             </Tabs.TabPane>
             <Tabs.TabPane tab="教育背景" key="education">
               <Descriptions column={2} bordered>
-                <Descriptions.Item label="学历" span={1}>{currentProfile?.education}</Descriptions.Item>
-                <Descriptions.Item label="毕业院校" span={1}>{currentProfile?.graduate_school}</Descriptions.Item>
-                <Descriptions.Item label="专业" span={1}>{currentProfile?.major}</Descriptions.Item>
-                <Descriptions.Item label="毕业日期" span={1}>{currentProfile?.graduation_date}</Descriptions.Item>
+                <Descriptions.Item label="学历">{currentProfile?.education || '-'}</Descriptions.Item>
+                <Descriptions.Item label="毕业院校">{currentProfile?.graduate_school || '-'}</Descriptions.Item>
+                <Descriptions.Item label="专业">{currentProfile?.major || '-'}</Descriptions.Item>
+                <Descriptions.Item label="毕业日期">{currentProfile?.graduation_date || '-'}</Descriptions.Item>
               </Descriptions>
             </Tabs.TabPane>
             <Tabs.TabPane tab="技能证书" key="skills">
@@ -384,9 +384,9 @@ const EmployeeProfilePage: React.FC = () => {
             </Tabs.TabPane>
             <Tabs.TabPane tab="财务信息" key="finance">
               <Descriptions column={2} bordered>
-                <Descriptions.Item label="银行账号" span={1}>{currentProfile?.bank_account}</Descriptions.Item>
-                <Descriptions.Item label="银行名称" span={1}>{currentProfile?.bank_name}</Descriptions.Item>
-                <Descriptions.Item label="税号" span={2}>{currentProfile?.tax_number}</Descriptions.Item>
+                <Descriptions.Item label="银行账号">{currentProfile?.bank_account || '-'}</Descriptions.Item>
+                <Descriptions.Item label="银行名称">{currentProfile?.bank_name || '-'}</Descriptions.Item>
+                <Descriptions.Item label="税号" span={2}>{currentProfile?.tax_number || '-'}</Descriptions.Item>
               </Descriptions>
             </Tabs.TabPane>
           </Tabs>
@@ -417,10 +417,10 @@ const EmployeeProfilePage: React.FC = () => {
             <Tabs.TabPane tab="基本信息" key="basic">
               <Form.Item
                 name="user_id"
-                label="用户ID"
-                rules={[{ required: true, message: '请输入用户ID' }]}
+                label="用户 ID"
+                rules={[{ required: true, message: '请输入用户 ID' }]}
               >
-                <Input placeholder="请输入用户ID" />
+                <Input placeholder="请输入用户 ID" />
               </Form.Item>
               <Form.Item
                 name="employee_id"
@@ -436,69 +436,39 @@ const EmployeeProfilePage: React.FC = () => {
               >
                 <Input placeholder="请输入姓名" />
               </Form.Item>
-              <Form.Item
-                name="gender"
-                label="性别"
-              >
+              <Form.Item name="gender" label="性别">
                 <Select placeholder="请选择性别">
                   <Option value="男">男</Option>
                   <Option value="女">女</Option>
                 </Select>
               </Form.Item>
-              <Form.Item
-                name="birth_date"
-                label="出生日期"
-              >
+              <Form.Item name="birth_date" label="出生日期">
                 <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
-              <Form.Item
-                name="nationality"
-                label="国籍"
-              >
+              <Form.Item name="nationality" label="国籍">
                 <Input placeholder="请输入国籍" />
               </Form.Item>
-              <Form.Item
-                name="id_card_number"
-                label="身份证号"
-              >
+              <Form.Item name="id_card_number" label="身份证号">
                 <Input placeholder="请输入身份证号" />
               </Form.Item>
-              <Form.Item
-                name="work_email"
-                label="工作邮箱"
-              >
+              <Form.Item name="work_email" label="工作邮箱">
                 <Input placeholder="请输入工作邮箱" />
               </Form.Item>
-              <Form.Item
-                name="personal_email"
-                label="个人邮箱"
-              >
+              <Form.Item name="personal_email" label="个人邮箱">
                 <Input placeholder="请输入个人邮箱" />
               </Form.Item>
-              <Form.Item
-                name="emergency_contact"
-                label="紧急联系人"
-              >
+              <Form.Item name="emergency_contact" label="紧急联系人">
                 <Input placeholder="请输入紧急联系人" />
               </Form.Item>
-              <Form.Item
-                name="emergency_phone"
-                label="紧急联系电话"
-              >
+              <Form.Item name="emergency_phone" label="紧急联系电话">
                 <Input placeholder="请输入紧急联系电话" />
               </Form.Item>
-              <Form.Item
-                name="address"
-                label="地址"
-              >
+              <Form.Item name="address" label="地址">
                 <Input.TextArea placeholder="请输入地址" rows={3} />
               </Form.Item>
             </Tabs.TabPane>
             <Tabs.TabPane tab="工作信息" key="work">
-              <Form.Item
-                name="employment_type"
-                label="雇佣类型"
-              >
+              <Form.Item name="employment_type" label="雇佣类型">
                 <Select placeholder="请选择雇佣类型">
                   {employmentTypeOptions.map((item) => (
                     <Option key={item} value={item}>{item}</Option>
@@ -547,52 +517,31 @@ const EmployeeProfilePage: React.FC = () => {
               </Form.Item>
             </Tabs.TabPane>
             <Tabs.TabPane tab="教育背景" key="education">
-              <Form.Item
-                name="education"
-                label="学历"
-              >
+              <Form.Item name="education" label="学历">
                 <Select placeholder="请选择学历">
                   {educationOptions.map((item) => (
                     <Option key={item} value={item}>{item}</Option>
                   ))}
                 </Select>
               </Form.Item>
-              <Form.Item
-                name="graduate_school"
-                label="毕业院校"
-              >
+              <Form.Item name="graduate_school" label="毕业院校">
                 <Input placeholder="请输入毕业院校" />
               </Form.Item>
-              <Form.Item
-                name="major"
-                label="专业"
-              >
+              <Form.Item name="major" label="专业">
                 <Input placeholder="请输入专业" />
               </Form.Item>
-              <Form.Item
-                name="graduation_date"
-                label="毕业日期"
-              >
+              <Form.Item name="graduation_date" label="毕业日期">
                 <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
             </Tabs.TabPane>
             <Tabs.TabPane tab="财务信息" key="finance">
-              <Form.Item
-                name="bank_account"
-                label="银行账号"
-              >
+              <Form.Item name="bank_account" label="银行账号">
                 <Input placeholder="请输入银行账号" />
               </Form.Item>
-              <Form.Item
-                name="bank_name"
-                label="银行名称"
-              >
+              <Form.Item name="bank_name" label="银行名称">
                 <Input placeholder="请输入银行名称" />
               </Form.Item>
-              <Form.Item
-                name="tax_number"
-                label="税号"
-              >
+              <Form.Item name="tax_number" label="税号">
                 <Input placeholder="请输入税号" />
               </Form.Item>
             </Tabs.TabPane>

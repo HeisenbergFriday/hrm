@@ -39,6 +39,8 @@ func TestAttendanceServiceSyncRecordsIsIdempotent(t *testing.T) {
 			UserCheckTime:  "2026-04-23 18:30:00",
 			LocationResult: "Office",
 			TimeResult:     "Early",
+			SourceType:     "USER",
+			IsLegal:        "Y",
 		},
 	}
 	userNameMap := map[string]string{"user-1": "Alice"}
@@ -60,6 +62,12 @@ func TestAttendanceServiceSyncRecordsIsIdempotent(t *testing.T) {
 		}
 		if abnormalType, ok := record.Extension["abnormal_type"]; !ok || abnormalType != "早退" {
 			t.Fatalf("expected abnormal_type to be leave early, got %#v", record.Extension["abnormal_type"])
+		}
+		if sourceType, ok := record.Extension["sourceType"]; !ok || sourceType != "USER" {
+			t.Fatalf("expected sourceType to be stored, got %#v", record.Extension["sourceType"])
+		}
+		if isLegal, ok := record.Extension["isLegal"]; !ok || isLegal != "Y" {
+			t.Fatalf("expected isLegal to be stored, got %#v", record.Extension["isLegal"])
 		}
 	}
 }

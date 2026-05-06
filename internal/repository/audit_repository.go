@@ -28,6 +28,12 @@ func (r *AuditRepository) FindAll(page, pageSize int, filters map[string]string)
 	if v, ok := filters["user_id"]; ok && v != "" {
 		query = query.Where("user_id = ?", v)
 	}
+	if v, ok := filters["operation"]; ok && v != "" {
+		query = query.Where("operation = ?", v)
+	}
+	if v, ok := filters["resource"]; ok && v != "" {
+		query = query.Where("resource = ?", v)
+	}
 	if v, ok := filters["start_date"]; ok && v != "" {
 		t, err := time.Parse("2006-01-02", v)
 		if err == nil {
