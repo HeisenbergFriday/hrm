@@ -92,6 +92,7 @@ function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const { isLoggedIn, user, login, logout } = useAuthStore()
+  const selectedMenuKey = location.pathname.startsWith('/employees/') ? '/employees' : location.pathname
 
   const {
     token: { colorBgContainer, borderRadiusLG },
@@ -202,23 +203,42 @@ function App() {
   return (
     <ConfigProvider>
       <Layout>
-        <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} style={{ position: 'fixed', height: '100vh', overflow: 'auto', zIndex: 100, left: 0, top: 0 }}>
-          <div className="logo" style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+        <Sider
+          collapsible
+          collapsed={collapsed}
+          onCollapse={setCollapsed}
+          style={{ position: 'fixed', height: '100vh', overflow: 'auto', zIndex: 100, left: 0, top: 0 }}
+        >
+          <div
+            className="logo"
+            style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 18, fontWeight: 'bold' }}
+          >
             人事管理系统
           </div>
-          <Menu theme="dark" mode="inline" selectedKeys={[location.pathname]}>
+          <Menu theme="dark" mode="inline" selectedKeys={[selectedMenuKey]} defaultOpenKeys={['organization']}>
             <Menu.Item key="/" icon={<UserOutlined />}>
               <Link to="/">首页</Link>
             </Menu.Item>
-            <Menu.Item key="/department-tree" icon={<TeamOutlined />}>
-              <Link to="/department-tree">部门树</Link>
-            </Menu.Item>
-            <Menu.Item key="/employees" icon={<UserOutlined />}>
-              <Link to="/employees">员工列表</Link>
-            </Menu.Item>
-            <Menu.Item key="/sync-log" icon={<HistoryOutlined />}>
-              <Link to="/sync-log">同步日志</Link>
-            </Menu.Item>
+            <Menu.SubMenu key="organization" icon={<TeamOutlined />} title="组织管理">
+              <Menu.Item key="/department-tree" icon={<TeamOutlined />}>
+                <Link to="/department-tree">组织架构</Link>
+              </Menu.Item>
+              <Menu.Item key="/employees" icon={<UserOutlined />}>
+                <Link to="/employees">组织花名册</Link>
+              </Menu.Item>
+              <Menu.Item key="/employee-profile" icon={<UserOutlined />}>
+                <Link to="/employee-profile">员工档案</Link>
+              </Menu.Item>
+              <Menu.Item key="/employee-flow" icon={<SwapOutlined />}>
+                <Link to="/employee-flow">入转调离</Link>
+              </Menu.Item>
+              <Menu.Item key="/talent-analysis" icon={<BarChartOutlined />}>
+                <Link to="/talent-analysis">人才分析</Link>
+              </Menu.Item>
+              <Menu.Item key="/sync-log" icon={<HistoryOutlined />}>
+                <Link to="/sync-log">同步日志</Link>
+              </Menu.Item>
+            </Menu.SubMenu>
             <Menu.SubMenu key="attendance" icon={<ClockCircleOutlined />} title="考勤管理">
               <Menu.Item key="/attendance" icon={<ClockCircleOutlined />}>
                 <Link to="/attendance">考勤查询</Link>
@@ -266,19 +286,6 @@ function App() {
             <Menu.SubMenu key="audit" icon={<HistoryOutlined />} title="审计日志">
               <Menu.Item key="/audit-logs" icon={<HistoryOutlined />}>
                 <Link to="/audit-logs">操作日志</Link>
-              </Menu.Item>
-            </Menu.SubMenu>
-            <Menu.SubMenu key="employee" icon={<UserOutlined />} title="员工档案中心">
-              <Menu.Item key="/employee-profile" icon={<UserOutlined />}>
-                <Link to="/employee-profile">员工档案</Link>
-              </Menu.Item>
-              <Menu.Item key="/employee-flow" icon={<SwapOutlined />}>
-                <Link to="/employee-flow">入转调离</Link>
-              </Menu.Item>
-            </Menu.SubMenu>
-            <Menu.SubMenu key="talent" icon={<BarChartOutlined />} title="人才分析">
-              <Menu.Item key="/talent-analysis" icon={<BarChartOutlined />}>
-                <Link to="/talent-analysis">人才分析</Link>
               </Menu.Item>
             </Menu.SubMenu>
             <Menu.Item key="/leave-overtime" icon={<ScheduleOutlined />}>
