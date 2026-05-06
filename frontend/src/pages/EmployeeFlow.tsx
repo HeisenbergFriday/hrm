@@ -1,9 +1,8 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Descriptions, Tag, Divider } from 'antd'
-import { UserAddOutlined, SwapOutlined, UserDeleteOutlined, ReloadOutlined, PlusOutlined, EditOutlined, CheckOutlined, CloseOutlined, TableOutlined } from '@ant-design/icons'
+import { Card, Typography, Table, Spin, Empty, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Descriptions, Tag, Divider } from 'antd'
+import { UserAddOutlined, SwapOutlined, UserDeleteOutlined, ReloadOutlined, PlusOutlined, TableOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { employeeAPI, departmentAPI } from '../services/api'
-import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -125,6 +124,7 @@ const EmployeeFlow: React.FC = () => {
     queryFn: () => departmentAPI.getDepartments(),
   })
   const departments: { department_id: string; name: string }[] = departmentsData?.data?.departments || []
+  const deptNameMap = Object.fromEntries(departments.map((d) => [d.department_id, d.name]))
 
   // 转岗
   const { data: transfersData, isLoading: transfersLoading, refetch: refetchTransfers } = useQuery({
@@ -211,6 +211,12 @@ const EmployeeFlow: React.FC = () => {
     setCurrentItem(item)
   }
 
+  const handleTabChange = (key: string) => {
+    setActiveTab(key)
+    setCurrentItem(null)
+    setModalVisible(false)
+  }
+
   const getStatusTag = (status: string) => {
     switch (status) {
       case 'pending':
@@ -248,85 +254,25 @@ const EmployeeFlow: React.FC = () => {
     return <Tag color="green">在职</Tag>
   }
 
-  const ledgerColumns = [
-    {
-      title: '员工',
-      key: 'employee',
-      render: (_: unknown, record: LifecycleLedgerItem) => (
-        <div>
-          <div>{record.user_name || '-'}</div>
-          <div style={{ fontSize: 12, color: '#666' }}>{record.employee_id || record.user_id || '-'}</div>
-        </div>
-      ),
-    },
-    {
-      title: '部门/岗位',
-      key: 'organization',
-      render: (_: unknown, record: LifecycleLedgerItem) => (
-        <div>
-          <div>{record.department_name || record.department_id || '-'}</div>
-          <div style={{ fontSize: 12, color: '#666' }}>{record.position || '-'}</div>
-        </div>
-      ),
-    },
-    {
-      title: '用工类型',
-      dataIndex: 'employment_type',
-      key: 'employment_type',
-      render: (value: string) => value || '-',
-    },
-    {
-      title: '入职日期',
-      dataIndex: 'entry_date',
-      key: 'entry_date',
-      render: (value: string) => value || '-',
-    },
-    {
-      title: '计划转正日',
-      dataIndex: 'planned_regular_date',
-      key: 'planned_regular_date',
-      render: (value: string) => value || '-',
-    },
-    {
-      title: '实际转正日',
-      dataIndex: 'actual_regular_date',
-      key: 'actual_regular_date',
-      render: (value: string) => value || '-',
-    },
-    {
-      title: '最近调岗',
-      key: 'latest_transfer',
-      render: (_: unknown, record: LifecycleLedgerItem) => {
-        if (!record.latest_transfer_date) {
-          return '-'
-        }
-        return (
-          <div>
-            <div>{record.latest_transfer_date}</div>
-            <div style={{ fontSize: 12, color: '#666' }}>
-              {`${record.latest_transfer_old_department || '-'} / ${record.latest_transfer_old_position || '-'} -> ${record.latest_transfer_new_department || '-'} / ${record.latest_transfer_new_position || '-'}`}
-            </div>
-            <div style={{ marginTop: 4 }}>{record.latest_transfer_status ? getStatusTag(record.latest_transfer_status) : null}</div>
-          </div>
-        )
-      },
-    },
-    {
-      title: '离职/停用状态',
-      key: 'employment_status',
-      render: (_: unknown, record: LifecycleLedgerItem) => (
-        <div>
-          <div>{getEmploymentStatusTag(record)}</div>
-          {record.latest_resign_date ? (
-            <div style={{ fontSize: 12, color: '#666' }}>{`离职日期：${record.latest_resign_date}`}</div>
-          ) : null}
-          {!record.latest_resign_date && (record.user_status === 'inactive' || record.profile_status === 'inactive') ? (
-            <div style={{ fontSize: 12, color: '#666' }}>已停用，暂无离职记录</div>
-          ) : null}
-        </div>
-      ),
-    },
-  ]
+  // 阶段 3B：试用期和转正提醒
+  const getProbationAlert = (plannedRegularDate: string, actualRegularDate: string) => {
+    if (actualRegularDate) {
+      return <Tag color="green" style={{ fontSize: 12 }}>已转正</Tag>
+    }
+    if (!plannedRegularDate) return null
+
+    const today = new Date()
+    const endDate = new Date(plannedRegularDate)
+    const daysLeft = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+
+    if (daysLeft < 0) {
+      return <Tag color="error" style={{ fontSize: 12 }}>转正逾期 {Math.abs(daysLeft)} 天</Tag>
+    }
+    if (daysLeft <= 30) {
+      return <Tag color="warning" style={{ fontSize: 12 }}>{daysLeft} 天后转正</Tag>
+    }
+    return null
+  }
 
   const transferColumns = [
     {
@@ -477,6 +423,114 @@ const EmployeeFlow: React.FC = () => {
     },
   ]
 
+  const ledgerColumns = [
+    {
+      title: 'Employee',
+      key: 'employee',
+      render: (_: unknown, record: LifecycleLedgerItem) => (
+        <div>
+          <div>{record.user_name || '-'}</div>
+          <div style={{ fontSize: 12, color: '#666' }}>
+            {record.employee_id || record.user_id || '-'}
+            {record.is_candidate && <Tag color="blue" style={{ marginLeft: 4, fontSize: 11 }}>候选</Tag>}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: 'Dept / Position',
+      key: 'organization',
+      render: (_: unknown, record: LifecycleLedgerItem) => (
+        <div>
+          <div>{record.department_name || record.department_id || '-'}</div>
+          <div style={{ fontSize: 12, color: '#666' }}>{record.position || '-'}</div>
+        </div>
+      ),
+    },
+    {
+      title: 'Employment Type',
+      dataIndex: 'employment_type',
+      key: 'employment_type',
+      render: (value: string) => value || '-',
+    },
+    {
+      title: 'Entry Date',
+      dataIndex: 'entry_date',
+      key: 'entry_date',
+      render: (value: string) => value || '-',
+    },
+    {
+      title: 'Planned Regular',
+      key: 'planned_regular',
+      render: (_: unknown, record: LifecycleLedgerItem) => (
+        <div>
+          <div>{record.planned_regular_date || '-'}</div>
+          {getProbationAlert(record.planned_regular_date, record.actual_regular_date)}
+        </div>
+      ),
+    },
+    {
+      title: 'Actual Regular',
+      dataIndex: 'actual_regular_date',
+      key: 'actual_regular_date',
+      render: (value: string) => value || '-',
+    },
+    {
+      title: 'Latest Transfer',
+      key: 'latest_transfer',
+      render: (_: unknown, record: LifecycleLedgerItem) => {
+        if (!record.latest_transfer_date) {
+          return '-'
+        }
+        return (
+          <div>
+            <div>{record.latest_transfer_date}</div>
+            <div style={{ fontSize: 12, color: '#666' }}>
+              {`${record.latest_transfer_old_department || '-'} / ${record.latest_transfer_old_position || '-'} -> ${record.latest_transfer_new_department || '-'} / ${record.latest_transfer_new_position || '-'}`}
+            </div>
+            <div style={{ marginTop: 4 }}>{record.latest_transfer_status ? getStatusTag(record.latest_transfer_status) : null}</div>
+          </div>
+        )
+      },
+    },
+    {
+      title: 'Status',
+      key: 'employment_status',
+      render: (_: unknown, record: LifecycleLedgerItem) => (
+        <div>
+          <div>{getEmploymentStatusTag(record)}</div>
+          {record.latest_resign_date ? (
+            <div style={{ fontSize: 12, color: '#666' }}>{`Resign date: ${record.latest_resign_date}`}</div>
+          ) : null}
+          {!record.latest_resign_date && (record.user_status === 'inactive' || record.profile_status === 'inactive') ? (
+            <div style={{ fontSize: 12, color: '#666' }}>Inactive with no resignation record</div>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'action',
+      render: (_: unknown, record: LifecycleLedgerItem) => {
+        if (record.is_candidate) {
+          return (
+            <Button
+              type="link"
+              size="small"
+              onClick={() => {
+                setActiveTab('onboarding')
+                // 切换到入职管理 Tab
+              }}
+            >
+              查看入职流程
+            </Button>
+          )
+        }
+        return null
+      },
+    },
+  ]
+
   const renderDetail = () => {
     if (!currentItem) return null
 
@@ -541,7 +595,21 @@ const EmployeeFlow: React.FC = () => {
     } else if (activeTab === 'onboarding') {
       const item = currentItem as Onboarding
       return (
-        <Card title="入职详情">
+        <Card
+          title="入职详情"
+          extra={
+            <Button
+              type="link"
+              onClick={() => {
+                setActiveTab('ledger')
+                setLedgerKeyword(item.employee_id || item.name)
+                setCurrentItem(null)
+              }}
+            >
+              查看台账
+            </Button>
+          }
+        >
           <Descriptions column={2} bordered>
             <Descriptions.Item label="入职编号" span={1}>{item.onboarding_id}</Descriptions.Item>
             <Descriptions.Item label="员工姓名" span={1}>{item.name}</Descriptions.Item>
@@ -585,7 +653,7 @@ const EmployeeFlow: React.FC = () => {
   return (
     <div>
       <Title level={4}>入转调离管理</Title>
-      <Tabs activeKey={activeTab} onChange={setActiveTab}>
+      <Tabs activeKey={activeTab} onChange={handleTabChange}>
         <Tabs.TabPane tab="台账" key="ledger" icon={<TableOutlined />}>
           <Card
             extra={
@@ -808,18 +876,18 @@ const EmployeeFlow: React.FC = () => {
               </Form.Item>
               <Form.Item
                 name="old_department_id"
-                label="原部门ID"
-                rules={[{ required: true, message: '请输入原部门ID' }]}
+                label="原部门"
+                rules={[{ required: true, message: '请选择原部门' }]}
               >
-                <Input placeholder="请输入原部门ID" />
+                <Select
+                  showSearch
+                  placeholder="请选择原部门"
+                  filterOption={(input, option) => (option?.label as string)?.includes(input)}
+                  options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
+                  onChange={(value: string) => form.setFieldsValue({ old_department_name: deptNameMap[value] || '' })}
+                />
               </Form.Item>
-              <Form.Item
-                name="old_department_name"
-                label="原部门名称"
-                rules={[{ required: true, message: '请输入原部门名称' }]}
-              >
-                <Input placeholder="请输入原部门名称" />
-              </Form.Item>
+              <Form.Item name="old_department_name" hidden><Input /></Form.Item>
               <Form.Item
                 name="old_position"
                 label="原职位"
@@ -829,18 +897,18 @@ const EmployeeFlow: React.FC = () => {
               </Form.Item>
               <Form.Item
                 name="new_department_id"
-                label="新部门ID"
-                rules={[{ required: true, message: '请输入新部门ID' }]}
+                label="新部门"
+                rules={[{ required: true, message: '请选择新部门' }]}
               >
-                <Input placeholder="请输入新部门ID" />
+                <Select
+                  showSearch
+                  placeholder="请选择新部门"
+                  filterOption={(input, option) => (option?.label as string)?.includes(input)}
+                  options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
+                  onChange={(value: string) => form.setFieldsValue({ new_department_name: deptNameMap[value] || '' })}
+                />
               </Form.Item>
-              <Form.Item
-                name="new_department_name"
-                label="新部门名称"
-                rules={[{ required: true, message: '请输入新部门名称' }]}
-              >
-                <Input placeholder="请输入新部门名称" />
-              </Form.Item>
+              <Form.Item name="new_department_name" hidden><Input /></Form.Item>
               <Form.Item
                 name="new_position"
                 label="新职位"
@@ -883,18 +951,18 @@ const EmployeeFlow: React.FC = () => {
               </Form.Item>
               <Form.Item
                 name="department_id"
-                label="部门ID"
-                rules={[{ required: true, message: '请输入部门ID' }]}
+                label="部门"
+                rules={[{ required: true, message: '请选择部门' }]}
               >
-                <Input placeholder="请输入部门ID" />
+                <Select
+                  showSearch
+                  placeholder="请选择部门"
+                  filterOption={(input, option) => (option?.label as string)?.includes(input)}
+                  options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
+                  onChange={(value: string) => form.setFieldsValue({ department_name: deptNameMap[value] || '' })}
+                />
               </Form.Item>
-              <Form.Item
-                name="department_name"
-                label="部门名称"
-                rules={[{ required: true, message: '请输入部门名称' }]}
-              >
-                <Input placeholder="请输入部门名称" />
-              </Form.Item>
+              <Form.Item name="department_name" hidden><Input /></Form.Item>
               <Form.Item
                 name="position"
                 label="职位"
@@ -977,18 +1045,18 @@ const EmployeeFlow: React.FC = () => {
               </Form.Item>
               <Form.Item
                 name="department_id"
-                label="部门ID"
-                rules={[{ required: true, message: '请输入部门ID' }]}
+                label="部门"
+                rules={[{ required: true, message: '请选择部门' }]}
               >
-                <Input placeholder="请输入部门ID" />
+                <Select
+                  showSearch
+                  placeholder="请选择部门"
+                  filterOption={(input, option) => (option?.label as string)?.includes(input)}
+                  options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
+                  onChange={(value: string) => form.setFieldsValue({ department_name: deptNameMap[value] || '' })}
+                />
               </Form.Item>
-              <Form.Item
-                name="department_name"
-                label="部门名称"
-                rules={[{ required: true, message: '请输入部门名称' }]}
-              >
-                <Input placeholder="请输入部门名称" />
-              </Form.Item>
+              <Form.Item name="department_name" hidden><Input /></Form.Item>
               <Form.Item
                 name="position"
                 label="职位"
