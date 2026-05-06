@@ -48,6 +48,64 @@ func applyDingTalkProfileFields(profile *database.EmployeeProfile, user dingtalk
 }
 
 // HealthCheck 健康检查
+
+func resolveOrgScope(c *gin.Context) (*service.OrgDataScope, error) {
+	currentUserID, _ := c.Get("userID")
+	orgService := service.NewOrgService(database.DB)
+	return orgService.ResolveScopeForUser(fmt.Sprint(currentUserID))
+}
+
+func respondOrgAccessDenied(c *gin.Context) {
+	c.JSON(http.StatusForbidden, Response{
+		Code:    http.StatusForbidden,
+		Message: "当前账号无权访问该组织数据",
+	})
+}
+
+func dingtalkDepartmentsToOrgSyncItems(depts []dingtalk.DeptInfo) []service.OrgDepartmentSyncItem {
+	items := make([]service.OrgDepartmentSyncItem, 0, len(depts))
+	for _, d := range depts {
+		items = append(items, service.OrgDepartmentSyncItem{
+			DepartmentID: fmt.Sprintf("%d", d.DeptID),
+			Name:         d.Name,
+			ParentID:     fmt.Sprintf("%d", d.ParentID),
+		})
+	}
+	return items
+}
+
+func createOperationAuditLog(c *gin.Context, operation, resource string, details map[string]interface{}) {
+	userID := fmt.Sprint(c.GetString("userID"))
+	if userID == "" {
+		if value, ok := c.Get("userID"); ok {
+			userID = fmt.Sprint(value)
+		}
+	}
+
+	userName := strings.TrimSpace(c.GetString("userName"))
+	if userName == "" {
+		if value, ok := c.Get("userName"); ok {
+			userName = fmt.Sprint(value)
+		}
+	}
+	if userID == "" {
+		userID = "system"
+	}
+	if userName == "" {
+		userName = "system"
+	}
+
+	auditService := service.NewAuditService(database.DB)
+	_ = auditService.CreateLog(&database.OperationLog{
+		UserID:    userID,
+		UserName:  userName,
+		Operation: operation,
+		Resource:  resource,
+		IP:        c.ClientIP(),
+		Details:   details,
+	})
+}
+
 func HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
@@ -1019,6 +1077,226 @@ func GetSyncStatus(c *gin.Context) {
 	})
 }
 
+func GetOrgOverview(c *gin.Context) {
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取组织范围失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	orgService := service.NewOrgService(database.DB)
+	overview, err := orgService.GetOverview(scope, c.Query("department_id"))
+	if err != nil {
+		if errors.Is(err, service.ErrOrgAccessDenied) {
+			respondOrgAccessDenied(c)
+			return
+		}
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取组织概览失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"overview": overview},
+	})
+}
+
+func GetScopedDepartments(c *gin.Context) {
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取组织范围失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	orgService := service.NewOrgService(database.DB)
+	departments, err := orgService.GetVisibleDepartments(scope)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取部门列表失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data: gin.H{
+			"departments": departments,
+			"scope":       scope,
+		},
+	})
+}
+
+func GetOrgDepartmentTree(c *gin.Context) {
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取组织范围失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	orgService := service.NewOrgService(database.DB)
+	tree, err := orgService.GetDepartmentTree(scope)
+	if err != nil {
+		if errors.Is(err, service.ErrOrgAccessDenied) {
+			respondOrgAccessDenied(c)
+			return
+		}
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取部门树失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data: gin.H{
+			"tree":  tree,
+			"scope": scope,
+		},
+	})
+}
+
+func GetOrgDepartmentHistory(c *gin.Context) {
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取组织范围失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	orgService := service.NewOrgService(database.DB)
+	logs, err := orgService.GetDepartmentHistory(scope, c.Param("id"), limit)
+	if err != nil {
+		if errors.Is(err, service.ErrOrgAccessDenied) {
+			respondOrgAccessDenied(c)
+			return
+		}
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取部门变更历史失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data: gin.H{
+			"items": logs,
+			"total": len(logs),
+		},
+	})
+}
+
+func GetOrgEmployees(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取组织范围失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	orgService := service.NewOrgService(database.DB)
+	users, total, err := orgService.ListEmployees(scope, page, pageSize, service.OrgEmployeeFilters{
+		DepartmentID: c.Query("department_id"),
+		Search:       c.Query("search"),
+		Status:       c.Query("status"),
+	})
+	if err != nil {
+		if errors.Is(err, service.ErrOrgAccessDenied) {
+			respondOrgAccessDenied(c)
+			return
+		}
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取员工列表失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data: gin.H{
+			"items": users,
+			"total": total,
+			"scope": scope,
+		},
+	})
+}
+
+func GetOrgEmployeeDetail(c *gin.Context) {
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取组织范围失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+
+	orgService := service.NewOrgService(database.DB)
+	detail, err := orgService.GetEmployeeAggregate(scope, c.Param("id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrOrgAccessDenied):
+			respondOrgAccessDenied(c)
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			c.JSON(http.StatusNotFound, Response{
+				Code:    http.StatusNotFound,
+				Message: "员工不存在",
+			})
+		default:
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "获取员工详情失败",
+				Data:    gin.H{"error": err.Error()},
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"detail": detail},
+	})
+}
 // GetDepartmentTree 获取部门树
 func GetDepartmentTree(c *gin.Context) {
 	departmentService := service.NewDepartmentService(database.DB)
