@@ -62,7 +62,7 @@ func SetupRouter() *gin.Engine {
 			// 部门相关
 			departments := authRequired.Group("/departments")
 			{
-				departments.GET("", GetDepartments)
+				departments.GET("", GetScopedDepartments)
 				departments.GET("/:id", GetDepartment)
 			}
 
@@ -78,11 +78,13 @@ func SetupRouter() *gin.Engine {
 			org := authRequired.Group("/org")
 			{
 				// 部门树
-				org.GET("/departments/tree", GetDepartmentTree)
+				org.GET("/departments/tree", GetOrgDepartmentTree)
+				org.GET("/departments/:id/history", GetOrgDepartmentHistory)
 
 				// 员工相关
-				org.GET("/employees", GetEmployees)
-				org.GET("/employees/:id", GetEmployee)
+				org.GET("/overview", GetOrgOverview)
+				org.GET("/employees", GetOrgEmployees)
+				org.GET("/employees/:id", GetOrgEmployeeDetail)
 
 				// 同步
 				org.POST("/sync", SyncOrgData)
