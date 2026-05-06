@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Divider, Descriptions, Avatar } from 'antd'
 import { UserOutlined, PlusOutlined, EditOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
+import dayjs from 'dayjs'
 import { departmentAPI, employeeAPI, orgAPI } from '../services/api'
 
 const { Title, Text } = Typography
@@ -19,6 +20,10 @@ interface EmployeeProfile {
   employment_type: string
   entry_date: string
   probation_end_date: string
+  planned_regular_date: string
+  actual_regular_date: string
+  job_level: string
+  job_family: string
   contract_start_date: string
   contract_end_date: string
   work_email: string
@@ -40,7 +45,34 @@ interface EmployeeProfile {
   updated_at: string
 }
 
-const EmployeeProfile: React.FC = () => {
+interface EmployeeItem {
+  id: number
+  user_id: string
+  name: string
+  department_id: string
+  position: string
+}
+
+interface DepartmentItem {
+  department_id: string
+  name: string
+}
+
+const employmentTypeOptions = ['正式', '试用', '实习', '劳务', '兼职']
+const educationOptions = ['高中', '大专', '本科', '硕士', '博士', '其他']
+const jobFamilyOptions = ['管理', '专业', '技术']
+const profileDateFields = [
+  'birth_date',
+  'entry_date',
+  'probation_end_date',
+  'planned_regular_date',
+  'actual_regular_date',
+  'contract_start_date',
+  'contract_end_date',
+  'graduation_date',
+]
+
+const EmployeeProfilePage: React.FC = () => {
   const [modalVisible, setModalVisible] = useState(false)
   const [currentProfile, setCurrentProfile] = useState<EmployeeProfile | null>(null)
   const [form] = Form.useForm()
@@ -64,19 +96,16 @@ const EmployeeProfile: React.FC = () => {
   })
 
   const employeeByUserID = useMemo(() => {
-    const result: Record<string, { department_id: string; position: string }> = {}
-    ;(employeesData?.data?.items || []).forEach((item: { user_id: string; department_id: string; position: string }) => {
-      result[item.user_id] = {
-        department_id: item.department_id,
-        position: item.position,
-      }
+    const result: Record<string, EmployeeItem> = {}
+    ;(employeesData?.data?.items || []).forEach((item: EmployeeItem) => {
+      result[item.user_id] = item
     })
     return result
   }, [employeesData])
 
   const departmentNameMap = useMemo(() => {
     const result: Record<string, string> = {}
-    ;(departmentsData?.data?.departments || []).forEach((item: { department_id: string; name: string }) => {
+    ;(departmentsData?.data?.departments || []).forEach((item: DepartmentItem) => {
       result[item.department_id] = item.name
     })
     return result
@@ -91,6 +120,14 @@ const EmployeeProfile: React.FC = () => {
       departmentName: departmentNameMap[employee?.department_id || ''] || employee?.department_id || '-',
       position: employee?.position || '-',
     }
+  }
+
+  const normalizeProfileFormValues = (values: Record<string, any>) => {
+    const payload: Record<string, any> = { ...values }
+    profileDateFields.forEach((field) => {
+      payload[field] = payload[field] ? payload[field].format('YYYY-MM-DD') : ''
+    })
+    return payload
   }
 
   const createProfileMutation = useMutation({
@@ -118,23 +155,34 @@ const EmployeeProfile: React.FC = () => {
     },
   })
 
+  const openCreateModal = () => {
+    setCurrentProfile(null)
+    form.resetFields()
+    form.setFieldsValue({ profile_status: 'active' })
+    setModalVisible(true)
+  }
+
   const handleCreateProfile = () => {
     form.validateFields().then((values) => {
-      createProfileMutation.mutate(values)
+      createProfileMutation.mutate(normalizeProfileFormValues(values))
     })
   }
 
   const handleUpdateProfile = () => {
     form.validateFields().then((values) => {
       if (currentProfile) {
-        updateProfileMutation.mutate({ id: currentProfile.id, data: values })
+        updateProfileMutation.mutate({ id: currentProfile.id, data: normalizeProfileFormValues(values) })
       }
     })
   }
 
   const handleEditProfile = (profile: EmployeeProfile) => {
     setCurrentProfile(profile)
-    form.setFieldsValue(profile)
+    const formValues: Record<string, any> = { ...profile }
+    profileDateFields.forEach((field) => {
+      formValues[field] = formValues[field] ? dayjs(formValues[field]) : null
+    })
+    form.setFieldsValue(formValues)
     setModalVisible(true)
   }
 
@@ -208,7 +256,7 @@ const EmployeeProfile: React.FC = () => {
               <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading}>
                 刷新
               </Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)}>
+              <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
                 新建档案
               </Button>
             </div>
@@ -251,9 +299,9 @@ const EmployeeProfile: React.FC = () => {
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <Avatar size={64} icon={<UserOutlined />} />
               <div>
-                <Text strong style={{ fontSize: 18 }}>{currentProfile?.name}</Text>
+                <Text strong style={{ fontSize: 18 }}>{currentProfile?.name || '-'}</Text>
                 <div style={{ fontSize: 14, color: '#666' }}>
-                  {currentProfile?.employee_id} / {getProfileOrg(currentProfile).departmentName} / {getProfileOrg(currentProfile).position}
+                  {currentProfile?.employee_id || '-'} / {getProfileOrg(currentProfile).departmentName} / {getProfileOrg(currentProfile).position}
                 </div>
               </div>
               <Button type="primary" onClick={() => setActiveTab('list')} style={{ marginLeft: 'auto' }}>
@@ -282,11 +330,15 @@ const EmployeeProfile: React.FC = () => {
               <Descriptions column={2} bordered>
                 <Descriptions.Item label="部门">{getProfileOrg(currentProfile).departmentName}</Descriptions.Item>
                 <Descriptions.Item label="职位">{getProfileOrg(currentProfile).position}</Descriptions.Item>
-                <Descriptions.Item label="雇佣类型" span={1}>{currentProfile?.employment_type}</Descriptions.Item>
-                <Descriptions.Item label="入职日期" span={1}>{currentProfile?.entry_date}</Descriptions.Item>
-                <Descriptions.Item label="试用期结束日期" span={1}>{currentProfile?.probation_end_date}</Descriptions.Item>
-                <Descriptions.Item label="合同开始日期" span={1}>{currentProfile?.contract_start_date}</Descriptions.Item>
-                <Descriptions.Item label="合同结束日期" span={1}>{currentProfile?.contract_end_date}</Descriptions.Item>
+                <Descriptions.Item label="雇佣类型" span={1}>{currentProfile?.employment_type || '-'}</Descriptions.Item>
+                <Descriptions.Item label="职级" span={1}>{currentProfile?.job_level || '-'}</Descriptions.Item>
+                <Descriptions.Item label="岗位序列" span={1}>{currentProfile?.job_family || '-'}</Descriptions.Item>
+                <Descriptions.Item label="入职日期" span={1}>{currentProfile?.entry_date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="试用期结束日期" span={1}>{currentProfile?.probation_end_date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="计划转正日期" span={1}>{currentProfile?.planned_regular_date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="实际转正日期" span={1}>{currentProfile?.actual_regular_date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="合同开始日期" span={1}>{currentProfile?.contract_start_date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="合同结束日期" span={1}>{currentProfile?.contract_end_date || '-'}</Descriptions.Item>
                 <Descriptions.Item label="状态" span={1}>
                   <Text type={currentProfile?.profile_status === 'active' ? 'success' : 'warning'}>
                     {currentProfile?.profile_status === 'active' ? '在职' : '离职'}
@@ -448,9 +500,19 @@ const EmployeeProfile: React.FC = () => {
                 label="雇佣类型"
               >
                 <Select placeholder="请选择雇佣类型">
-                  <Option value="全职">全职</Option>
-                  <Option value="兼职">兼职</Option>
-                  <Option value="实习">实习</Option>
+                  {employmentTypeOptions.map((item) => (
+                    <Option key={item} value={item}>{item}</Option>
+                  ))}
+                </Select>
+              </Form.Item>
+              <Form.Item name="job_level" label="职级">
+                <Input placeholder="请输入职级" />
+              </Form.Item>
+              <Form.Item name="job_family" label="岗位序列">
+                <Select placeholder="请选择岗位序列">
+                  {jobFamilyOptions.map((item) => (
+                    <Option key={item} value={item}>{item}</Option>
+                  ))}
                 </Select>
               </Form.Item>
               <Form.Item
@@ -463,6 +525,12 @@ const EmployeeProfile: React.FC = () => {
                 name="probation_end_date"
                 label="试用期结束日期"
               >
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+              </Form.Item>
+              <Form.Item name="planned_regular_date" label="计划转正日期">
+                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+              </Form.Item>
+              <Form.Item name="actual_regular_date" label="实际转正日期">
                 <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item
@@ -484,11 +552,9 @@ const EmployeeProfile: React.FC = () => {
                 label="学历"
               >
                 <Select placeholder="请选择学历">
-                  <Option value="高中">高中</Option>
-                  <Option value="大专">大专</Option>
-                  <Option value="本科">本科</Option>
-                  <Option value="硕士">硕士</Option>
-                  <Option value="博士">博士</Option>
+                  {educationOptions.map((item) => (
+                    <Option key={item} value={item}>{item}</Option>
+                  ))}
                 </Select>
               </Form.Item>
               <Form.Item
@@ -537,4 +603,4 @@ const EmployeeProfile: React.FC = () => {
   )
 }
 
-export default EmployeeProfile
+export default EmployeeProfilePage
