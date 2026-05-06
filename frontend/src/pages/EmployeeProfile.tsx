@@ -1,8 +1,8 @@
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Divider, Descriptions, Avatar } from 'antd'
 import { UserOutlined, PlusOutlined, EditOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { employeeAPI } from '../services/api'
+import { departmentAPI, employeeAPI, orgAPI } from '../services/api'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -50,6 +50,48 @@ const EmployeeProfile: React.FC = () => {
     queryKey: ['employee-profiles'],
     queryFn: () => employeeAPI.getProfiles(),
   })
+
+  const { data: employeesData } = useQuery({
+    queryKey: ['employee-profile-org-employees'],
+    queryFn: () => orgAPI.getEmployees({ page: 1, page_size: 2000 }),
+    staleTime: 60_000,
+  })
+
+  const { data: departmentsData } = useQuery({
+    queryKey: ['employee-profile-departments'],
+    queryFn: () => departmentAPI.getDepartments(),
+    staleTime: 60_000,
+  })
+
+  const employeeByUserID = useMemo(() => {
+    const result: Record<string, { department_id: string; position: string }> = {}
+    ;(employeesData?.data?.items || []).forEach((item: { user_id: string; department_id: string; position: string }) => {
+      result[item.user_id] = {
+        department_id: item.department_id,
+        position: item.position,
+      }
+    })
+    return result
+  }, [employeesData])
+
+  const departmentNameMap = useMemo(() => {
+    const result: Record<string, string> = {}
+    ;(departmentsData?.data?.departments || []).forEach((item: { department_id: string; name: string }) => {
+      result[item.department_id] = item.name
+    })
+    return result
+  }, [departmentsData])
+
+  const getProfileOrg = (profile?: EmployeeProfile | null) => {
+    if (!profile) {
+      return { departmentName: '-', position: '-' }
+    }
+    const employee = employeeByUserID[profile.user_id]
+    return {
+      departmentName: departmentNameMap[employee?.department_id || ''] || employee?.department_id || '-',
+      position: employee?.position || '-',
+    }
+  }
 
   const createProfileMutation = useMutation({
     mutationFn: (data: any) => employeeAPI.createProfile(data),
@@ -117,13 +159,13 @@ const EmployeeProfile: React.FC = () => {
       title: '部门',
       dataIndex: 'department_name',
       key: 'department_name',
-      render: () => '技术部', // 模拟数据
+      render: (_: string, record: EmployeeProfile) => getProfileOrg(record).departmentName,
     },
     {
       title: '职位',
       dataIndex: 'position',
       key: 'position',
-      render: () => '工程师', // 模拟数据
+      render: (_: string, record: EmployeeProfile) => getProfileOrg(record).position,
     },
     {
       title: '入职日期',
@@ -210,7 +252,9 @@ const EmployeeProfile: React.FC = () => {
               <Avatar size={64} icon={<UserOutlined />} />
               <div>
                 <Text strong style={{ fontSize: 18 }}>{currentProfile?.name}</Text>
-                <div style={{ fontSize: 14, color: '#666' }}>{currentProfile?.employee_id}</div>
+                <div style={{ fontSize: 14, color: '#666' }}>
+                  {currentProfile?.employee_id} / {getProfileOrg(currentProfile).departmentName} / {getProfileOrg(currentProfile).position}
+                </div>
               </div>
               <Button type="primary" onClick={() => setActiveTab('list')} style={{ marginLeft: 'auto' }}>
                 返回列表
@@ -236,6 +280,8 @@ const EmployeeProfile: React.FC = () => {
             </Tabs.TabPane>
             <Tabs.TabPane tab="工作信息" key="work">
               <Descriptions column={2} bordered>
+                <Descriptions.Item label="部门">{getProfileOrg(currentProfile).departmentName}</Descriptions.Item>
+                <Descriptions.Item label="职位">{getProfileOrg(currentProfile).position}</Descriptions.Item>
                 <Descriptions.Item label="雇佣类型" span={1}>{currentProfile?.employment_type}</Descriptions.Item>
                 <Descriptions.Item label="入职日期" span={1}>{currentProfile?.entry_date}</Descriptions.Item>
                 <Descriptions.Item label="试用期结束日期" span={1}>{currentProfile?.probation_end_date}</Descriptions.Item>
