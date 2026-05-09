@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AnnualLeaveGrantRepository struct {
@@ -53,6 +54,22 @@ func (r *AnnualLeaveGrantRepository) FindUnsyncedGrants() ([]database.AnnualLeav
 
 func (r *AnnualLeaveGrantRepository) Create(grant *database.AnnualLeaveGrant) error {
 	return r.db.Create(grant).Error
+}
+
+func (r *AnnualLeaveGrantRepository) CreateIfAbsent(grant *database.AnnualLeaveGrant) (bool, error) {
+	result := r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "user_id"},
+			{Name: "year"},
+			{Name: "quarter"},
+			{Name: "grant_type"},
+		},
+		DoNothing: true,
+	}).Create(grant)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 func (r *AnnualLeaveGrantRepository) Save(grant *database.AnnualLeaveGrant) error {

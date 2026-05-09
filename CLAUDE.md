@@ -163,6 +163,22 @@ AI 文档更新：
 | `.ai/COMMANDS.md` | 开发、测试、构建、lint 命令 | 需要运行命令、测试、构建时 |
 | `.ai/MODULES/*.md` | 各业务模块专属说明 | 只在修改对应模块时读取 |
 
+### 近期模块变更提示
+
+- 加班/调休链路已扩展为“匹配、本地余额、钉钉同步”三段状态模型，核心涉及：
+  `frontend/src/pages/LeaveOvertime.tsx`、
+  `frontend/src/services/api.ts`、
+  `internal/api/leave_handlers.go`、
+  `internal/service/overtime_matching_service.go`、
+  `internal/service/compensatory_leave_service.go`、
+  `internal/dingtalk/dingtalk.go`
+- 加班匹配结果已按 `user_id + work_date` 建模，并引入 `OvertimeSyncHistory`、`attendance_record_filter.go` 与更细的匹配/同步状态字段；涉及该领域时，优先阅读对应 service、models 与 migration
+- 年假发放与消费已补充幂等与事务语义，相关变更集中在：
+  `internal/service/annual_leave_grant_service.go`、
+  `internal/repository/annual_leave_grant_repository.go`、
+  `internal/database/models.go`、
+  `internal/database/database.go`
+
 ---
 
 ## 安全与优先级规则

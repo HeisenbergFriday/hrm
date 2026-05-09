@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AnnualLeaveGrantService struct {
@@ -123,8 +124,12 @@ func (s *AnnualLeaveGrantService) GrantForUserWithResult(userID string, year, qu
 		SourceEligibilityID: elig.ID,
 		Remark:              fmt.Sprintf("Q%d正常发放，工龄%.1f年", quarter, workingYears),
 	}
-	if err := s.grantRepo.Create(grant); err != nil {
+	created, err := s.grantRepo.CreateIfAbsent(grant)
+	if err != nil {
 		return result, err
+	}
+	if !created {
+		return s.handleExistingGrantResult(result, userID, year, quarter, "normal")
 	}
 	result.CreatedCount++
 	s.syncGrantToDingTalk(grant, result)
@@ -183,8 +188,17 @@ func (s *AnnualLeaveGrantService) RegrantForEligibilityChangeWithResult(userID s
 			SourceEligibilityID: e.ID,
 			Remark:              fmt.Sprintf("Q%d追溯发放（Q%d转正）", e.Quarter, e.RetroactiveSourceQuarter),
 		}
-		if err := s.grantRepo.Create(grant); err != nil {
+		created, err := s.grantRepo.CreateIfAbsent(grant)
+		if err != nil {
 			return result, err
+		}
+		if !created {
+			userResult, err := s.handleExistingGrantResult(&GrantOperationResult{}, userID, year, e.Quarter, "retroactive")
+			mergeGrantOperationResult(result, userResult)
+			if err != nil {
+				return result, err
+			}
+			continue
 		}
 		result.CreatedCount++
 		s.syncGrantToDingTalk(grant, result)
@@ -400,59 +414,82 @@ func (s *AnnualLeaveGrantService) ConsumeAnnualLeave(userID string, days float64
 		return fmt.Errorf("消费天数必须大于0")
 	}
 
-	if approvalRef != "" {
-		var exists int64
-		s.db.Model(&database.AnnualLeaveConsumeLog{}).
-			Where("approval_ref = ?", approvalRef).Count(&exists)
-		if exists > 0 {
-			return nil
+	approvalRef = strings.TrimSpace(approvalRef)
+	requestRef := buildConsumeRequestRef(userID, approvalRef)
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if approvalRef != "" {
+			var exists int64
+			if err := tx.Model(&database.AnnualLeaveConsumeLog{}).
+				Where("approval_ref = ?", approvalRef).
+				Count(&exists).Error; err != nil {
+				return err
+			}
+			if exists > 0 {
+				return nil
+			}
 		}
+
+		var grants []database.AnnualLeaveGrant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("user_id = ? AND remaining_days > 0", userID).
+			Order("year asc, quarter asc, id asc").
+			Find(&grants).Error; err != nil {
+			return err
+		}
+
+		totalRemaining := 0.0
+		for _, grant := range grants {
+			totalRemaining += grant.RemainingDays
+		}
+		if totalRemaining+1e-9 < days {
+			return fmt.Errorf("年假余额不足，还差 %.2f 天", days-totalRemaining)
+		}
+
+		remaining := days
+		for _, grant := range grants {
+			if remaining <= 0 {
+				break
+			}
+			if grant.RemainingDays <= 0 {
+				continue
+			}
+
+			deduct := remaining
+			if deduct > grant.RemainingDays {
+				deduct = grant.RemainingDays
+			}
+
+			newUsed := grant.UsedDays + deduct
+			newRemaining := grant.RemainingDays - deduct
+			if err := tx.Model(&database.AnnualLeaveGrant{}).
+				Where("id = ?", grant.ID).
+				Updates(map[string]interface{}{
+					"used_days":      newUsed,
+					"remaining_days": newRemaining,
+				}).Error; err != nil {
+				return fmt.Errorf("更新发放记录 %d 失败: %w", grant.ID, err)
+			}
+
+			logEntry := &database.AnnualLeaveConsumeLog{
+				UserID:      userID,
+				GrantID:     grant.ID,
+				ApprovalRef: approvalRef,
+				RequestRef:  requestRef,
+				Days:        deduct,
+				Remark:      remark,
+			}
+			if err := tx.Create(logEntry).Error; err != nil {
+				return fmt.Errorf("写入消费记录失败: %w", err)
+			}
+
+			remaining -= deduct
+		}
+		return nil
+	})
+	if err != nil && approvalRef != "" && isDuplicateKeyError(err) {
+		return nil
 	}
-
-	grants, err := s.grantRepo.FindGrantsWithRemaining(userID)
-	if err != nil {
-		return err
-	}
-
-	remaining := days
-	for _, g := range grants {
-		if remaining <= 0 {
-			break
-		}
-		if g.RemainingDays <= 0 {
-			continue
-		}
-
-		deduct := remaining
-		if deduct > g.RemainingDays {
-			deduct = g.RemainingDays
-		}
-
-		newUsed := g.UsedDays + deduct
-		newRemaining := g.RemainingDays - deduct
-
-		if err := s.grantRepo.UpdateConsumed(g.ID, newUsed, newRemaining); err != nil {
-			return fmt.Errorf("更新发放记录 %d 失败: %w", g.ID, err)
-		}
-
-		logEntry := &database.AnnualLeaveConsumeLog{
-			UserID:      userID,
-			GrantID:     g.ID,
-			ApprovalRef: approvalRef,
-			Days:        deduct,
-			Remark:      remark,
-		}
-		if err := s.db.Create(logEntry).Error; err != nil {
-			return fmt.Errorf("写入消费记录失败: %w", err)
-		}
-
-		remaining -= deduct
-	}
-
-	if remaining > 0 {
-		return fmt.Errorf("年假余额不足，还差 %.2f 天", remaining)
-	}
-	return nil
+	return err
 }
 
 // GetConsumeLog 查询用户的年假消费记录
@@ -460,4 +497,39 @@ func (s *AnnualLeaveGrantService) GetConsumeLog(userID string) ([]database.Annua
 	var logs []database.AnnualLeaveConsumeLog
 	err := s.db.Where("user_id = ?", userID).Order("created_at desc").Find(&logs).Error
 	return logs, err
+}
+
+func (s *AnnualLeaveGrantService) handleExistingGrantResult(result *GrantOperationResult, userID string, year, quarter int, grantType string) (*GrantOperationResult, error) {
+	if result == nil {
+		result = &GrantOperationResult{}
+	}
+	existing, err := s.grantRepo.FindByUserYearQuarterType(userID, year, quarter, grantType)
+	if err != nil || existing == nil {
+		return result, err
+	}
+	result.SkippedCount++
+	if existing.DingTalkSyncStatus != "success" {
+		s.syncGrantToDingTalk(existing, result)
+		if existing.DingTalkSyncStatus == "failed" {
+			return result, fmt.Errorf("%s", existing.DingTalkSyncError)
+		}
+	}
+	return result, nil
+}
+
+func buildConsumeRequestRef(userID, approvalRef string) string {
+	if approvalRef != "" {
+		return "approval:" + approvalRef
+	}
+	return fmt.Sprintf("manual:%s:%d", userID, time.Now().UnixNano())
+}
+
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lowerErr := strings.ToLower(err.Error())
+	return strings.Contains(lowerErr, "duplicate entry") ||
+		strings.Contains(lowerErr, "duplicated key") ||
+		strings.Contains(lowerErr, "unique constraint failed")
 }

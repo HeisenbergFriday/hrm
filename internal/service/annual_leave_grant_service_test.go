@@ -21,6 +21,7 @@ func setupGrantTestDB(t *testing.T) *gorm.DB {
 		&database.EmployeeProfile{},
 		&database.AnnualLeaveEligibility{},
 		&database.AnnualLeaveGrant{},
+		&database.AnnualLeaveConsumeLog{},
 		&database.LeaveRuleConfig{},
 	); err != nil {
 		t.Fatalf("迁移测试表失败: %v", err)
@@ -147,6 +148,53 @@ func TestGrantIdempotentNormalGrant(t *testing.T) {
 	}
 }
 
+func TestGrantCreateIfAbsentSkipsDuplicateInsert(t *testing.T) {
+	db := setupGrantTestDB(t)
+	svc := NewAnnualLeaveGrantService(db)
+	grant := &database.AnnualLeaveGrant{
+		UserID:        "u3b",
+		Year:          2026,
+		Quarter:       1,
+		GrantedDays:   2.5,
+		RemainingDays: 2.5,
+		GrantType:     "normal",
+	}
+
+	created, err := svc.grantRepo.CreateIfAbsent(grant)
+	if err != nil {
+		t.Fatalf("first insert failed: %v", err)
+	}
+	if !created {
+		t.Fatal("expected first insert to create a row")
+	}
+
+	duplicate := &database.AnnualLeaveGrant{
+		UserID:        "u3b",
+		Year:          2026,
+		Quarter:       1,
+		GrantedDays:   2.5,
+		RemainingDays: 2.5,
+		GrantType:     "normal",
+	}
+	created, err = svc.grantRepo.CreateIfAbsent(duplicate)
+	if err != nil {
+		t.Fatalf("duplicate insert failed: %v", err)
+	}
+	if created {
+		t.Fatal("expected duplicate insert to be skipped")
+	}
+
+	var count int64
+	if err := db.Model(&database.AnnualLeaveGrant{}).
+		Where("user_id = ? AND year = ? AND quarter = ? AND grant_type = ?", "u3b", 2026, 1, "normal").
+		Count(&count).Error; err != nil {
+		t.Fatalf("count grants failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one grant row after duplicate insert, got %d", count)
+	}
+}
+
 func TestGrantLedgerReturnsUsedDaysAndCurrentWorkingYears(t *testing.T) {
 	db := setupGrantTestDB(t)
 	db.Create(&database.EmployeeProfile{
@@ -192,5 +240,132 @@ func TestGrantLedgerReturnsUsedDaysAndCurrentWorkingYears(t *testing.T) {
 	}
 	if records[0].Remark != "Q1正常发放，工龄4.4年" {
 		t.Fatalf("备注应同步为当前工龄展示，实际: %q", records[0].Remark)
+	}
+}
+
+func TestConsumeAnnualLeaveAcrossMultipleGrantsIsAtomic(t *testing.T) {
+	db := setupGrantTestDB(t)
+	if err := db.Create(&database.AnnualLeaveGrant{
+		UserID:        "u5",
+		Year:          2026,
+		Quarter:       1,
+		GrantedDays:   1,
+		RemainingDays: 1,
+		GrantType:     "normal",
+	}).Error; err != nil {
+		t.Fatalf("seed first grant failed: %v", err)
+	}
+	if err := db.Create(&database.AnnualLeaveGrant{
+		UserID:        "u5",
+		Year:          2026,
+		Quarter:       2,
+		GrantedDays:   1,
+		RemainingDays: 1,
+		GrantType:     "normal",
+	}).Error; err != nil {
+		t.Fatalf("seed second grant failed: %v", err)
+	}
+
+	svc := NewAnnualLeaveGrantService(db)
+	if err := svc.ConsumeAnnualLeave("u5", 1.5, "approval-1", "annual leave"); err != nil {
+		t.Fatalf("consume across grants failed: %v", err)
+	}
+
+	var grants []database.AnnualLeaveGrant
+	if err := db.Where("user_id = ?", "u5").Order("quarter asc").Find(&grants).Error; err != nil {
+		t.Fatalf("query grants failed: %v", err)
+	}
+	if len(grants) != 2 {
+		t.Fatalf("expected 2 grants, got %d", len(grants))
+	}
+	if grants[0].UsedDays != 1 || grants[0].RemainingDays != 0 {
+		t.Fatalf("expected first grant to be fully consumed, got %+v", grants[0])
+	}
+	if grants[1].UsedDays != 0.5 || grants[1].RemainingDays != 0.5 {
+		t.Fatalf("expected second grant to be partially consumed, got %+v", grants[1])
+	}
+
+	var logs []database.AnnualLeaveConsumeLog
+	if err := db.Where("user_id = ?", "u5").Order("grant_id asc").Find(&logs).Error; err != nil {
+		t.Fatalf("query consume logs failed: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("expected 2 consume logs, got %d", len(logs))
+	}
+	if logs[0].ApprovalRef != "approval-1" || logs[1].ApprovalRef != "approval-1" {
+		t.Fatalf("expected both logs to share approval_ref, got %+v", logs)
+	}
+}
+
+func TestConsumeAnnualLeaveDuplicateApprovalRefIsIdempotent(t *testing.T) {
+	db := setupGrantTestDB(t)
+	if err := db.Create(&database.AnnualLeaveGrant{
+		UserID:        "u6",
+		Year:          2026,
+		Quarter:       1,
+		GrantedDays:   2,
+		RemainingDays: 2,
+		GrantType:     "normal",
+	}).Error; err != nil {
+		t.Fatalf("seed grant failed: %v", err)
+	}
+
+	svc := NewAnnualLeaveGrantService(db)
+	if err := svc.ConsumeAnnualLeave("u6", 1, "approval-2", "annual leave"); err != nil {
+		t.Fatalf("first consume failed: %v", err)
+	}
+	if err := svc.ConsumeAnnualLeave("u6", 1, "approval-2", "annual leave"); err != nil {
+		t.Fatalf("second consume failed: %v", err)
+	}
+
+	var grant database.AnnualLeaveGrant
+	if err := db.Where("user_id = ?", "u6").First(&grant).Error; err != nil {
+		t.Fatalf("query grant failed: %v", err)
+	}
+	if grant.UsedDays != 1 || grant.RemainingDays != 1 {
+		t.Fatalf("expected duplicate approval_ref to be ignored, got %+v", grant)
+	}
+
+	var logCount int64
+	if err := db.Model(&database.AnnualLeaveConsumeLog{}).Where("approval_ref = ?", "approval-2").Count(&logCount).Error; err != nil {
+		t.Fatalf("count logs failed: %v", err)
+	}
+	if logCount != 1 {
+		t.Fatalf("expected 1 consume log for duplicate approval_ref, got %d", logCount)
+	}
+}
+
+func TestConsumeAnnualLeaveInsufficientBalanceRollsBack(t *testing.T) {
+	db := setupGrantTestDB(t)
+	if err := db.Create(&database.AnnualLeaveGrant{
+		UserID:        "u7",
+		Year:          2026,
+		Quarter:       1,
+		GrantedDays:   1,
+		RemainingDays: 1,
+		GrantType:     "normal",
+	}).Error; err != nil {
+		t.Fatalf("seed grant failed: %v", err)
+	}
+
+	svc := NewAnnualLeaveGrantService(db)
+	if err := svc.ConsumeAnnualLeave("u7", 2, "approval-3", "annual leave"); err == nil {
+		t.Fatal("expected insufficient balance error")
+	}
+
+	var grant database.AnnualLeaveGrant
+	if err := db.Where("user_id = ?", "u7").First(&grant).Error; err != nil {
+		t.Fatalf("query grant failed: %v", err)
+	}
+	if grant.UsedDays != 0 || grant.RemainingDays != 1 {
+		t.Fatalf("expected grant balance to remain unchanged, got %+v", grant)
+	}
+
+	var logCount int64
+	if err := db.Model(&database.AnnualLeaveConsumeLog{}).Where("user_id = ?", "u7").Count(&logCount).Error; err != nil {
+		t.Fatalf("count logs failed: %v", err)
+	}
+	if logCount != 0 {
+		t.Fatalf("expected no consume logs on rollback, got %d", logCount)
 	}
 }

@@ -146,7 +146,7 @@ func (e *AttendanceRuleEngine) CalculateAttendance(userID, departmentID string, 
 // AggregateAttendance overlays punch records onto the expected work calendar.
 func (e *AttendanceRuleEngine) AggregateAttendance(dailyAttendances []DailyAttendance, records []database.Attendance) []DailyAttendance {
 	recordMap := make(map[string][]database.Attendance)
-	for _, record := range records {
+	for _, record := range filterAttendanceRecordsForCalculation(records, false) {
 		dateStr := record.CheckTime.Format("2006-01-02")
 		recordMap[dateStr] = append(recordMap[dateStr], record)
 	}
