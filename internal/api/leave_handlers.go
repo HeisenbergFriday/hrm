@@ -267,6 +267,7 @@ func GetOvertimeMatches(c *gin.Context) {
 func RunOvertimeMatch(c *gin.Context) {
 	var req struct {
 		StartDate string `json:"start_date"`
+		UserID    string `json:"user_id"`
 		EndDate   string `json:"end_date"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -274,7 +275,7 @@ func RunOvertimeMatch(c *gin.Context) {
 		return
 	}
 	svc := service.NewOvertimeMatchingService(database.DB)
-	if err := svc.MatchApprovedOvertime(req.StartDate, req.EndDate); err != nil {
+	if err := svc.MatchApprovedOvertimeForUser(req.UserID, req.StartDate, req.EndDate); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

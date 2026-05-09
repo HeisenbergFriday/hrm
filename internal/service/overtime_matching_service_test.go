@@ -648,3 +648,75 @@ func TestOvertimeMatch_DeleteMatchRecordsRollsBackBalance(t *testing.T) {
 		t.Fatalf("expected delete to roll back credited minutes, got %d", balance.BalanceMinutes)
 	}
 }
+
+func TestOvertimeMatch_ForUserFiltersByUserAndMonth(t *testing.T) {
+	db := setupOvertimeTestDB(t)
+	targetMayStart := time.Date(2026, 5, 12, 18, 0, 0, 0, time.Local)
+	targetMayEnd := time.Date(2026, 5, 12, 21, 0, 0, 0, time.Local)
+	targetAprilStart := time.Date(2026, 4, 12, 18, 0, 0, 0, time.Local)
+	targetAprilEnd := time.Date(2026, 4, 12, 21, 0, 0, 0, time.Local)
+	otherMayStart := time.Date(2026, 5, 13, 18, 0, 0, 0, time.Local)
+	otherMayEnd := time.Date(2026, 5, 13, 21, 0, 0, 0, time.Local)
+
+	makeOvertimeApproval(db, 19, "target-user", targetMayStart, targetMayEnd)
+	makeAttendance(db, "target-user", targetMayStart, "上班")
+	makeAttendance(db, "target-user", targetMayEnd, "下班")
+	makeOvertimeApproval(db, 20, "target-user", targetAprilStart, targetAprilEnd)
+	makeAttendance(db, "target-user", targetAprilStart, "上班")
+	makeAttendance(db, "target-user", targetAprilEnd, "下班")
+	makeOvertimeApproval(db, 21, "other-user", otherMayStart, otherMayEnd)
+	makeAttendance(db, "other-user", otherMayStart, "上班")
+	makeAttendance(db, "other-user", otherMayEnd, "下班")
+
+	svc := NewOvertimeMatchingService(db)
+	if err := svc.MatchApprovedOvertimeForUser("target-user", "2026-05-01", "2026-05-31"); err != nil {
+		t.Fatalf("match for user and month failed: %v", err)
+	}
+
+	var targetMayCount, targetAprilCount, otherMayCount int64
+	db.Model(&database.OvertimeMatchResult{}).Where("approval_id = ?", 19).Count(&targetMayCount)
+	db.Model(&database.OvertimeMatchResult{}).Where("approval_id = ?", 20).Count(&targetAprilCount)
+	db.Model(&database.OvertimeMatchResult{}).Where("approval_id = ?", 21).Count(&otherMayCount)
+	if targetMayCount != 1 {
+		t.Fatalf("expected selected user's May approval to match once, got %d", targetMayCount)
+	}
+	if targetAprilCount != 0 {
+		t.Fatalf("expected selected user's April approval to be skipped, got %d", targetAprilCount)
+	}
+	if otherMayCount != 0 {
+		t.Fatalf("expected other user's May approval to be skipped, got %d", otherMayCount)
+	}
+}
+
+func TestOvertimeMatch_ClearAndRematchRespectsUserFilter(t *testing.T) {
+	db := setupOvertimeTestDB(t)
+	targetStart := time.Date(2026, 5, 14, 18, 0, 0, 0, time.Local)
+	targetEnd := time.Date(2026, 5, 14, 21, 0, 0, 0, time.Local)
+	otherStart := time.Date(2026, 5, 15, 18, 0, 0, 0, time.Local)
+	otherEnd := time.Date(2026, 5, 15, 21, 0, 0, 0, time.Local)
+
+	makeOvertimeApproval(db, 22, "rematch-user", targetStart, targetEnd)
+	makeAttendance(db, "rematch-user", targetStart, "上班")
+	makeAttendance(db, "rematch-user", targetEnd, "下班")
+	makeOvertimeApproval(db, 23, "other-rematch-user", otherStart, otherEnd)
+	makeAttendance(db, "other-rematch-user", otherStart, "上班")
+	makeAttendance(db, "other-rematch-user", otherEnd, "下班")
+
+	svc := NewOvertimeMatchingService(db)
+	if err := svc.MatchApproval(22); err != nil {
+		t.Fatalf("initial match failed: %v", err)
+	}
+	if err := svc.ClearAndRematch("rematch-user", "2026-05-01", "2026-05-31"); err != nil {
+		t.Fatalf("clear and rematch failed: %v", err)
+	}
+
+	var targetCount, otherCount int64
+	db.Model(&database.OvertimeMatchResult{}).Where("approval_id = ?", 22).Count(&targetCount)
+	db.Model(&database.OvertimeMatchResult{}).Where("approval_id = ?", 23).Count(&otherCount)
+	if targetCount != 1 {
+		t.Fatalf("expected selected user's approval to be rematched once, got %d", targetCount)
+	}
+	if otherCount != 0 {
+		t.Fatalf("expected clear-rematch not to match other users, got %d", otherCount)
+	}
+}

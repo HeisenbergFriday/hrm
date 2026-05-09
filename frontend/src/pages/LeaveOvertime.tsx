@@ -28,7 +28,6 @@ import dayjs from 'dayjs'
 import { leaveAPI, orgAPI, overtimeAPI } from '../services/api'
 
 const { Title } = Typography
-const { RangePicker } = DatePicker
 
 const formatWorkingYears = (value?: number) =>
   Number.isFinite(value) ? Number(value).toFixed(1) : '0.0'
@@ -319,16 +318,13 @@ const GrantTab: React.FC = () => {
 
 const OvertimeTab: React.FC = () => {
   const [userID, setUserID] = useState('')
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([
-    dayjs().startOf('month'),
-    dayjs().endOf('month'),
-  ])
+  const [selectedMonth, setSelectedMonth] = useState(dayjs().startOf('month'))
   const [queryKey, setQueryKey] = useState<{ user_id: string; start_date: string; end_date: string } | null>(null)
 
   const buildOvertimeQuery = () => ({
     user_id: userID,
-    start_date: dateRange[0].format('YYYY-MM-DD'),
-    end_date: dateRange[1].format('YYYY-MM-DD'),
+    start_date: selectedMonth.startOf('month').format('YYYY-MM-DD'),
+    end_date: selectedMonth.endOf('month').format('YYYY-MM-DD'),
   })
 
   const { data, isFetching, refetch } = useQuery({
@@ -355,8 +351,8 @@ const OvertimeTab: React.FC = () => {
     mutationFn: () =>
       overtimeAPI.clearAndRematch({
         user_id: userID || undefined,
-        start_date: dateRange[0].format('YYYY-MM-DD'),
-        end_date: dateRange[1].format('YYYY-MM-DD'),
+        start_date: selectedMonth.startOf('month').format('YYYY-MM-DD'),
+        end_date: selectedMonth.endOf('month').format('YYYY-MM-DD'),
       }),
     onSuccess: () => {
       message.success('清空并重新匹配完成')
@@ -371,8 +367,8 @@ const OvertimeTab: React.FC = () => {
     mutationFn: () =>
       overtimeAPI.deleteMatches({
         user_id: userID || undefined,
-        start_date: dateRange[0].format('YYYY-MM-DD'),
-        end_date: dateRange[1].format('YYYY-MM-DD'),
+        start_date: selectedMonth.startOf('month').format('YYYY-MM-DD'),
+        end_date: selectedMonth.endOf('month').format('YYYY-MM-DD'),
       }),
     onSuccess: (res: any) => {
       message.success(res?.message || '删除完成')
@@ -386,7 +382,7 @@ const OvertimeTab: React.FC = () => {
   const handleClearRematch = () => {
     Modal.confirm({
       title: '清空并重新匹配',
-      content: `将删除所选日期范围内${userID ? '该员工' : '所有员工'}的匹配记录，然后重新执行匹配。确认？`,
+      content: `将删除所选月份内该员工的匹配记录，然后重新执行匹配。确认？`,
       okText: '确认',
       cancelText: '取消',
       onOk: () => clearRematchMutation.mutateAsync(),
@@ -396,7 +392,7 @@ const OvertimeTab: React.FC = () => {
   const handleDeleteMatches = () => {
     Modal.confirm({
       title: '删除匹配记录',
-      content: `将删除所选日期范围内${userID ? '该员工' : '所有员工'}的匹配记录（不重新匹配）。确认？`,
+      content: `将删除所选月份内该员工的匹配记录（不重新匹配）。确认？`,
       okText: '确认删除',
       okButtonProps: { danger: true },
       cancelText: '取消',
@@ -407,8 +403,9 @@ const OvertimeTab: React.FC = () => {
   const runMatchMutation = useMutation({
     mutationFn: () =>
       overtimeAPI.runMatch({
-        start_date: dateRange[0].format('YYYY-MM-DD'),
-        end_date: dateRange[1].format('YYYY-MM-DD'),
+        user_id: userID || undefined,
+        start_date: selectedMonth.startOf('month').format('YYYY-MM-DD'),
+        end_date: selectedMonth.endOf('month').format('YYYY-MM-DD'),
       }),
     onSuccess: () => {
       message.success('加班匹配完成')
@@ -613,9 +610,11 @@ const OvertimeTab: React.FC = () => {
     <div>
       <Space style={{ marginBottom: 16 }}>
         <EmployeeSelect value={userID} onChange={(next) => setUserID(next ?? '')} />
-        <RangePicker
-          value={dateRange}
-          onChange={(next) => next && setDateRange(next as [dayjs.Dayjs, dayjs.Dayjs])}
+        <DatePicker
+          picker="month"
+          value={selectedMonth}
+          allowClear={false}
+          onChange={(next) => next && setSelectedMonth(next.startOf('month'))}
         />
         <Button
           type="primary"
@@ -625,16 +624,16 @@ const OvertimeTab: React.FC = () => {
         >
           查询
         </Button>
-        <Button icon={<SyncOutlined />} onClick={() => runMatchMutation.mutate()} loading={runMatchMutation.isPending}>
+        <Button icon={<SyncOutlined />} onClick={() => runMatchMutation.mutate()} loading={runMatchMutation.isPending} disabled={!userID}>
           执行加班匹配
         </Button>
         <Button icon={<ThunderboltOutlined />} onClick={handleWizardOpen}>
           ManualLeave 同步
         </Button>
-        <Button icon={<ReloadOutlined />} onClick={handleClearRematch} loading={clearRematchMutation.isPending} danger>
+        <Button icon={<ReloadOutlined />} onClick={handleClearRematch} loading={clearRematchMutation.isPending} disabled={!userID} danger>
           清空重匹配
         </Button>
-        <Button icon={<DeleteOutlined />} onClick={handleDeleteMatches} loading={deleteMatchesMutation.isPending} danger>
+        <Button icon={<DeleteOutlined />} onClick={handleDeleteMatches} loading={deleteMatchesMutation.isPending} disabled={!userID} danger>
           删除记录
         </Button>
       </Space>

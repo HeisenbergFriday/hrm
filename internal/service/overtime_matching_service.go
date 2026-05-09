@@ -76,6 +76,10 @@ type overtimeRematchSession struct {
 }
 
 func (s *OvertimeMatchingService) MatchApprovedOvertime(startDate, endDate string) error {
+	return s.MatchApprovedOvertimeForUser("", startDate, endDate)
+}
+
+func (s *OvertimeMatchingService) MatchApprovedOvertimeForUser(userID, startDate, endDate string) error {
 	rangeStart, err := time.ParseInLocation("2006-01-02", startDate, time.Local)
 	if err != nil {
 		return fmt.Errorf("开始日期格式错误: %w", err)
@@ -89,7 +93,11 @@ func (s *OvertimeMatchingService) MatchApprovedOvertime(startDate, endDate strin
 	}
 
 	var approvals []database.Approval
-	if err := s.db.Where("status IN ?", []string{"completed", "COMPLETED"}).Find(&approvals).Error; err != nil {
+	query := s.db.Where("status IN ?", []string{"completed", "COMPLETED"})
+	if trimmedUserID := strings.TrimSpace(userID); trimmedUserID != "" {
+		query = query.Where("applicant_id = ?", trimmedUserID)
+	}
+	if err := query.Find(&approvals).Error; err != nil {
 		return err
 	}
 
@@ -99,7 +107,7 @@ func (s *OvertimeMatchingService) MatchApprovedOvertime(startDate, endDate strin
 		if !s.isApprovedOvertimeApproval(&a) {
 			continue
 		}
-		approvalStart, _ := s.extractApprovalTimeWindow(&a)
+		approvalStart, _ := s.extractApprovalTimeWindowQuiet(&a)
 		if approvalStart.IsZero() {
 			continue
 		}
@@ -472,6 +480,14 @@ func (s *OvertimeMatchingService) isOvertimeApproval(a *database.Approval) bool 
 }
 
 func (s *OvertimeMatchingService) extractApprovalTimeWindow(a *database.Approval) (time.Time, time.Time) {
+	return s.extractApprovalTimeWindowWithLogging(a, true)
+}
+
+func (s *OvertimeMatchingService) extractApprovalTimeWindowQuiet(a *database.Approval) (time.Time, time.Time) {
+	return s.extractApprovalTimeWindowWithLogging(a, false)
+}
+
+func (s *OvertimeMatchingService) extractApprovalTimeWindowWithLogging(a *database.Approval, shouldLog bool) (time.Time, time.Time) {
 	var startStr, endStr string
 
 	// 第一优先：从顶层 Content 中按常见 key 直接取值
@@ -510,13 +526,17 @@ func (s *OvertimeMatchingService) extractApprovalTimeWindow(a *database.Approval
 		}
 	}
 
-	fmt.Printf("[OvertimeMatch] 审批ID: %d, 标题: %s\n", a.ID, a.Title)
-	fmt.Printf("[OvertimeMatch] 提取的开始时间: %s, 结束时间: %s\n", startStr, endStr)
+	if shouldLog {
+		fmt.Printf("[OvertimeMatch] 审批ID: %d, 标题: %s\n", a.ID, a.Title)
+		fmt.Printf("[OvertimeMatch] 提取的开始时间: %s, 结束时间: %s\n", startStr, endStr)
+	}
 
 	start := parseApprovalTime(startStr)
 	end := parseApprovalTime(endStr)
 
-	fmt.Printf("[OvertimeMatch] 解析后的开始时间: %v, 结束时间: %v\n", start, end)
+	if shouldLog {
+		fmt.Printf("[OvertimeMatch] 解析后的开始时间: %v, 结束时间: %v\n", start, end)
+	}
 
 	return start, end
 }
@@ -847,7 +867,7 @@ func (s *OvertimeMatchingService) ClearAndRematch(userID, startDate, endDate str
 	if err != nil {
 		return fmt.Errorf("清空匹配记录失败: %w", err)
 	}
-	if err := s.MatchApprovedOvertime(startDate, endDate); err != nil {
+	if err := s.MatchApprovedOvertimeForUser(userID, startDate, endDate); err != nil {
 		return err
 	}
 	return nil

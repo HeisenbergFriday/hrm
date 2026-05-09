@@ -243,7 +243,7 @@ export const leaveAPI = {
 export const overtimeAPI = {
   getMatches: (params: { user_id: string; start_date: string; end_date: string }) =>
     api.get('/overtime/matches', { params }),
-  runMatch: (data: { start_date: string; end_date: string }) =>
+  runMatch: (data: { user_id?: string; start_date: string; end_date: string }) =>
     api.post('/overtime/matches/run', data),
   syncAndMatch: (data: { start_date: string; end_date: string }) =>
     api.post('/overtime/sync-and-match', data),
