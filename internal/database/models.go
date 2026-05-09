@@ -37,6 +37,20 @@ type Department struct {
 	DeletedAt    gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
+// DepartmentChangeLog 部门变更日志
+type DepartmentChangeLog struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	DepartmentID   string    `gorm:"type:varchar(64);not null;index" json:"department_id"`
+	DepartmentName string    `gorm:"type:varchar(128);not null" json:"department_name"`
+	ChangeType     string    `gorm:"type:varchar(32);not null;index" json:"change_type"` // created, updated
+	FieldName      string    `gorm:"type:varchar(64);not null" json:"field_name"`
+	OldValue       string    `gorm:"type:text" json:"old_value"`
+	NewValue       string    `gorm:"type:text" json:"new_value"`
+	Source         string    `gorm:"type:varchar(64);not null;index" json:"source"` // dingtalk_sync, manual
+	ChangedAt      time.Time `gorm:"index" json:"changed_at"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 // Attendance 考勤模型
 type Attendance struct {
 	ID        uint                   `gorm:"primaryKey" json:"id"`
@@ -217,6 +231,8 @@ type EmployeeProfile struct {
 	ProbationEndDate   string `gorm:"type:varchar(32)" json:"probation_end_date"`   // 试用期结束日期
 	PlannedRegularDate string `gorm:"type:varchar(32)" json:"planned_regular_date"` // 计划转正日期
 	ActualRegularDate  string `gorm:"type:varchar(32)" json:"actual_regular_date"`  // 实际转正日期
+	JobLevel           string `gorm:"type:varchar(64)" json:"job_level"`            // 职级
+	JobFamily          string `gorm:"type:varchar(32)" json:"job_family"`           // 岗位序列/人员类别
 	ContractStartDate  string `gorm:"type:varchar(32)" json:"contract_start_date"`  // 合同开始日期
 	ContractEndDate    string `gorm:"type:varchar(32)" json:"contract_end_date"`    // 合同结束日期
 	WorkEmail          string `gorm:"type:varchar(128)" json:"work_email"`          // 工作邮箱
@@ -474,16 +490,16 @@ type AnnualLeaveEligibility struct {
 // AnnualLeaveGrant 年假发放台账
 type AnnualLeaveGrant struct {
 	ID                  uint       `gorm:"primaryKey" json:"id"`
-	UserID              string     `gorm:"type:varchar(64);not null;index:idx_leave_grant_user_year" json:"user_id"`
-	Year                int        `gorm:"not null;index:idx_leave_grant_user_year" json:"year"`
-	Quarter             int        `gorm:"not null" json:"quarter"` // 1-4
+	UserID              string     `gorm:"type:varchar(64);not null;index:idx_leave_grant_user_year;uniqueIndex:idx_leave_grant_user_year_q_type" json:"user_id"`
+	Year                int        `gorm:"not null;index:idx_leave_grant_user_year;uniqueIndex:idx_leave_grant_user_year_q_type" json:"year"`
+	Quarter             int        `gorm:"not null;uniqueIndex:idx_leave_grant_user_year_q_type" json:"quarter"` // 1-4
 	WorkingYears        float64    `gorm:"not null;default:0" json:"working_years"`
 	BaseDays            float64    `gorm:"not null;default:0" json:"base_days"`
 	GrantedDays         float64    `gorm:"not null;default:0" json:"granted_days"`
 	RetroactiveDays     float64    `gorm:"default:0" json:"retroactive_days"`
 	UsedDays            float64    `gorm:"default:0" json:"used_days"`
 	RemainingDays       float64    `gorm:"default:0" json:"remaining_days"`
-	GrantType           string     `gorm:"type:varchar(32);not null" json:"grant_type"` // normal / retroactive / adjustment
+	GrantType           string     `gorm:"type:varchar(32);not null;uniqueIndex:idx_leave_grant_user_year_q_type" json:"grant_type"` // normal / retroactive / adjustment
 	SourceEligibilityID uint       `gorm:"default:0" json:"source_eligibility_id"`
 	Remark              string     `gorm:"type:text" json:"remark"`
 	DingTalkSyncStatus  string     `gorm:"column:dingtalk_sync_status;type:varchar(32);default:pending" json:"dingtalk_sync_status"` // pending / success / failed / skipped
@@ -508,22 +524,50 @@ type OvertimeRuleConfig struct {
 
 // OvertimeMatchResult 加班审批与考勤匹配结果
 type OvertimeMatchResult struct {
-	ID                  uint      `gorm:"primaryKey" json:"id"`
-	UserID              string    `gorm:"type:varchar(64);not null;index" json:"user_id"`
-	ApprovalID          uint      `gorm:"not null;uniqueIndex" json:"approval_id"`
-	ApprovalProcessID   string    `gorm:"type:varchar(64)" json:"approval_process_id"`
-	ApprovalStatus      string    `gorm:"type:varchar(32)" json:"approval_status"`
-	ApprovalStartTime   time.Time `json:"approval_start_time"`
-	ApprovalEndTime     time.Time `json:"approval_end_time"`
-	AttendanceStartTime time.Time `json:"attendance_start_time"`
-	AttendanceEndTime   time.Time `json:"attendance_end_time"`
-	MatchedMinutes      int       `gorm:"default:0" json:"matched_minutes"`
-	QualifiedMinutes    int       `gorm:"default:0" json:"qualified_minutes"`
-	MatchStatus         string    `gorm:"type:varchar(32);not null" json:"match_status"` // matched / partial / unmatched / rolled_back
-	MatchReason         string    `gorm:"type:text" json:"match_reason"`
-	CalcVersion         string    `gorm:"type:varchar(32)" json:"calc_version"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ID                       uint           `gorm:"primaryKey" json:"id"`
+	UserID                   string         `gorm:"type:varchar(64);not null;index:idx_user_work_date,unique" json:"user_id"`
+	UserName                 string         `gorm:"type:varchar(128)" json:"user_name"`
+	WorkDate                 string         `gorm:"type:varchar(32);not null;index:idx_user_work_date,unique" json:"work_date"`
+	MatchRef                 string         `gorm:"type:varchar(160);index" json:"match_ref"`
+	ApprovalID               uint           `gorm:"not null;index" json:"approval_id"`
+	ApprovalProcessID        string         `gorm:"type:varchar(64)" json:"approval_process_id"`
+	ApprovalStatus           string         `gorm:"type:varchar(32)" json:"approval_status"`
+	ApprovalStartTime        time.Time      `json:"approval_start_time"`                        // 发起申请时间（CreateTime）
+	ApprovalEndTime          time.Time      `json:"approval_end_time"`                          // 审批流通过时间（FinishTime）
+	ApprovalDurationMinutes  int            `gorm:"default:0" json:"approval_duration_minutes"` // 审批流耗时（分钟）
+	OvertimeStartTime        time.Time      `json:"overtime_start_time"`                        // 准备加班开始时间（表单填写）
+	OvertimeEndTime          time.Time      `json:"overtime_end_time"`                          // 准备加班结束时间（表单填写）
+	OvertimeDurationMinutes  int            `gorm:"default:0" json:"overtime_duration_minutes"` // 准备加班时长（分钟）
+	ActualFirstClockTime     *time.Time     `json:"actual_first_clock_time"`
+	ActualLastClockTime      *time.Time     `json:"actual_last_clock_time"`
+	ActualClockSpanMinutes   int            `gorm:"default:0" json:"actual_clock_span_minutes"`
+	BreakDeductMinutes       int            `gorm:"default:0" json:"break_deduct_minutes"`
+	EffectiveOvertimeMinutes int            `gorm:"default:0" json:"effective_overtime_minutes"`
+	MatchStatus              string         `gorm:"type:varchar(32);not null" json:"match_status"` // matched / no_clock_record / insufficient_clock_record / invalid_clock_time / zero_overtime / local_balance_failed / dingtalk_sync_failed / synced
+	MatchReason              string         `gorm:"type:text" json:"match_reason"`
+	LocalBalanceStatus       string         `gorm:"type:varchar(32);default:pending" json:"local_balance_status"`
+	DingtalkSyncStatus       string         `gorm:"type:varchar(32);default:pending" json:"dingtalk_sync_status"`
+	DingtalkSyncRequestID    string         `gorm:"type:varchar(128)" json:"dingtalk_sync_request_id"`
+	DingtalkSyncError        string         `gorm:"type:text" json:"dingtalk_sync_error"`
+	CalcVersion              string         `gorm:"type:varchar(32)" json:"calc_version"`
+	CreatedAt                time.Time      `json:"created_at"`
+	UpdatedAt                time.Time      `json:"updated_at"`
+	DeletedAt                gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// OvertimeSyncHistory 已成功同步到钉钉的加班记录快照
+type OvertimeSyncHistory struct {
+	ID                       uint       `gorm:"primaryKey" json:"id"`
+	UserID                   string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_overtime_sync_user_workdate" json:"user_id"`
+	WorkDate                 string     `gorm:"type:varchar(32);not null;uniqueIndex:idx_overtime_sync_user_workdate" json:"work_date"`
+	ApprovalID               uint       `gorm:"default:0;index" json:"approval_id"`
+	ApprovalProcessID        string     `gorm:"type:varchar(64)" json:"approval_process_id"`
+	EffectiveOvertimeMinutes int        `gorm:"default:0" json:"effective_overtime_minutes"`
+	SyncRequestID            string     `gorm:"type:varchar(128)" json:"sync_request_id"`
+	SyncMode                 string     `gorm:"type:varchar(32);default:auto" json:"sync_mode"`
+	SyncedAt                 *time.Time `json:"synced_at"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
 // CompensatoryLeaveLedger 调休余额台账
@@ -532,6 +576,7 @@ type CompensatoryLeaveLedger struct {
 	UserID         string    `gorm:"type:varchar(64);not null;index:idx_comp_leave_user_date" json:"user_id"`
 	SourceType     string    `gorm:"type:varchar(32);not null" json:"source_type"` // overtime
 	SourceMatchID  uint      `gorm:"default:0" json:"source_match_id"`
+	SourceMatchRef string    `gorm:"type:varchar(160);index" json:"source_match_ref"`
 	CreditMinutes  int       `gorm:"default:0" json:"credit_minutes"`
 	DebitMinutes   int       `gorm:"default:0" json:"debit_minutes"`
 	BalanceMinutes int       `gorm:"default:0" json:"balance_minutes"`
@@ -547,8 +592,9 @@ type CompensatoryLeaveLedger struct {
 type AnnualLeaveConsumeLog struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	UserID      string    `gorm:"type:varchar(64);not null;index" json:"user_id"`
-	GrantID     uint      `gorm:"not null;index" json:"grant_id"`   // 对应的发放记录
-	ApprovalRef string    `gorm:"type:varchar(128);uniqueIndex" json:"approval_ref"` // 审批ID，防重复消费
+	GrantID     uint      `gorm:"not null;index;uniqueIndex:idx_leave_consume_request_grant" json:"grant_id"` // 对应的发放记录
+	ApprovalRef string    `gorm:"type:varchar(128);index:idx_leave_consume_approval_ref" json:"approval_ref"` // 审批ID，重试时用于幂等
+	RequestRef  string    `gorm:"type:varchar(160);not null;uniqueIndex:idx_leave_consume_request_grant" json:"-"`
 	Days        float64   `gorm:"not null;default:0" json:"days"`
 	Remark      string    `gorm:"type:text" json:"remark"`
 	CreatedAt   time.Time `json:"created_at"`

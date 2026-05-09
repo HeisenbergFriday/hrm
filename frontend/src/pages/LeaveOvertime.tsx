@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import {
+  Alert,
   Button,
   Card,
   Col,
@@ -11,26 +12,33 @@ import {
   Row,
   Select,
   Space,
+  Spin,
   Statistic,
+  Steps,
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
-import { ClockCircleOutlined, GiftOutlined, MinusCircleOutlined, SearchOutlined, SyncOutlined } from '@ant-design/icons'
+import { ClockCircleOutlined, DeleteOutlined, GiftOutlined, MinusCircleOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import { leaveAPI, orgAPI, overtimeAPI } from '../services/api'
 
 const { Title } = Typography
-const { RangePicker } = DatePicker
 
 const formatWorkingYears = (value?: number) =>
   Number.isFinite(value) ? Number(value).toFixed(1) : '0.0'
 
 const formatDays = (value?: number) =>
   `${Number.isFinite(value) ? Number(value) : 0} 天`
+
+const formatDateTime = (value?: string) =>
+  value && dayjs(value).isValid() && !value.startsWith('0001-01-01')
+    ? dayjs(value).format('YYYY-MM-DD HH:mm')
+    : '-'
 
 const EmployeeSelect: React.FC<{
   value?: string
@@ -310,41 +318,256 @@ const GrantTab: React.FC = () => {
 
 const OvertimeTab: React.FC = () => {
   const [userID, setUserID] = useState('')
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([
-    dayjs().startOf('month'),
-    dayjs().endOf('month'),
-  ])
+  const [selectedMonth, setSelectedMonth] = useState(dayjs().startOf('month'))
   const [queryKey, setQueryKey] = useState<{ user_id: string; start_date: string; end_date: string } | null>(null)
 
-  const { data, isFetching } = useQuery({
+  const buildOvertimeQuery = () => ({
+    user_id: userID,
+    start_date: selectedMonth.startOf('month').format('YYYY-MM-DD'),
+    end_date: selectedMonth.endOf('month').format('YYYY-MM-DD'),
+  })
+
+  const { data, isFetching, refetch } = useQuery({
     queryKey: ['overtime-matches', queryKey],
     queryFn: () => overtimeAPI.getMatches(queryKey!),
     enabled: !!queryKey,
   })
 
+  const refreshOvertimeMatches = () => {
+    const next = buildOvertimeQuery()
+    if (
+      queryKey &&
+      queryKey.user_id === next.user_id &&
+      queryKey.start_date === next.start_date &&
+      queryKey.end_date === next.end_date
+    ) {
+      void refetch()
+      return
+    }
+    setQueryKey(next)
+  }
+
+  const clearRematchMutation = useMutation({
+    mutationFn: () =>
+      overtimeAPI.clearAndRematch({
+        user_id: userID || undefined,
+        start_date: selectedMonth.startOf('month').format('YYYY-MM-DD'),
+        end_date: selectedMonth.endOf('month').format('YYYY-MM-DD'),
+      }),
+    onSuccess: () => {
+      message.success('清空并重新匹配完成')
+      if (userID) {
+        refreshOvertimeMatches()
+      }
+    },
+    onError: (err: any) => message.error(err?.response?.data?.error || '清空重匹配失败'),
+  })
+
+  const deleteMatchesMutation = useMutation({
+    mutationFn: () =>
+      overtimeAPI.deleteMatches({
+        user_id: userID || undefined,
+        start_date: selectedMonth.startOf('month').format('YYYY-MM-DD'),
+        end_date: selectedMonth.endOf('month').format('YYYY-MM-DD'),
+      }),
+    onSuccess: (res: any) => {
+      message.success(res?.message || '删除完成')
+      if (userID) {
+        refreshOvertimeMatches()
+      }
+    },
+    onError: (err: any) => message.error(err?.response?.data?.error || '删除失败'),
+  })
+
+  const handleClearRematch = () => {
+    Modal.confirm({
+      title: '清空并重新匹配',
+      content: `将删除所选月份内该员工的匹配记录，然后重新执行匹配。确认？`,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: () => clearRematchMutation.mutateAsync(),
+    })
+  }
+
+  const handleDeleteMatches = () => {
+    Modal.confirm({
+      title: '删除匹配记录',
+      content: `将删除所选月份内该员工的匹配记录（不重新匹配）。确认？`,
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => deleteMatchesMutation.mutateAsync(),
+    })
+  }
+
   const runMatchMutation = useMutation({
     mutationFn: () =>
       overtimeAPI.runMatch({
-        start_date: dateRange[0].format('YYYY-MM-DD'),
-        end_date: dateRange[1].format('YYYY-MM-DD'),
+        user_id: userID || undefined,
+        start_date: selectedMonth.startOf('month').format('YYYY-MM-DD'),
+        end_date: selectedMonth.endOf('month').format('YYYY-MM-DD'),
       }),
     onSuccess: () => {
       message.success('加班匹配完成')
       if (userID) {
-        setQueryKey({
-          user_id: userID,
-          start_date: dateRange[0].format('YYYY-MM-DD'),
-          end_date: dateRange[1].format('YYYY-MM-DD'),
-        })
+        refreshOvertimeMatches()
       }
     },
     onError: () => message.error('匹配失败'),
   })
 
-  const statusColor: Record<string, string> = { matched: 'green', partial: 'orange', unmatched: 'red', rolled_back: 'default' }
-  const statusLabel: Record<string, string> = { matched: '完全匹配', partial: '部分匹配', unmatched: '未匹配', rolled_back: '已回滚' }
+  // ---- ManualLeave 同步向导 ----
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [wizardStep, setWizardStep] = useState(0)
+  const [previewReset, setPreviewReset] = useState<{ count: number; users: { user_id: string; name: string }[] } | null>(null)
+  const [resetResult, setResetResult] = useState<{ success: number; failed: number; errors: string[] } | null>(null)
+  const [previewResync, setPreviewResync] = useState<{ count: number; records: any[] } | null>(null)
+  const [resyncResult, setResyncResult] = useState<{ success: number; failed: number; errors: string[] } | null>(null)
+
+  const openWizard = () => {
+    setWizardStep(0)
+    setPreviewReset(null)
+    setResetResult(null)
+    setPreviewResync(null)
+    setResyncResult(null)
+    setWizardOpen(true)
+  }
+
+  const loadPreviewResetMut = useMutation({
+    mutationFn: () => overtimeAPI.resetManualLeave({ dry_run: true }),
+    onSuccess: (res: any) => setPreviewReset(res),
+    onError: (err: any) => message.error(err?.response?.data?.error || '预览失败'),
+  })
+
+  const execResetMut = useMutation({
+    mutationFn: () => overtimeAPI.resetManualLeave({ dry_run: false }),
+    onSuccess: (res: any) => {
+      setResetResult(res)
+      setWizardStep(2)
+      loadPreviewResyncMut.mutate()
+    },
+    onError: (err: any) => message.error(err?.response?.data?.error || '重置失败'),
+  })
+
+  const loadPreviewResyncMut = useMutation({
+    mutationFn: () => overtimeAPI.resyncOvertimeToDingTalk({ dry_run: true }),
+    onSuccess: (res: any) => setPreviewResync(res),
+    onError: (err: any) => message.error(err?.response?.data?.error || '预览失败'),
+  })
+
+  const execResyncMut = useMutation({
+    mutationFn: () => overtimeAPI.resyncOvertimeToDingTalk({ dry_run: false }),
+    onSuccess: (res: any) => {
+      setResyncResult(res)
+      setWizardStep(3)
+    },
+    onError: (err: any) => message.error(err?.response?.data?.error || '重放失败'),
+  })
+
+  // 向导自动加载 step0
+  const handleWizardOpen = () => {
+    openWizard()
+    loadPreviewResetMut.mutate()
+  }
+
+  const wizardFooter = () => {
+    if (wizardStep === 0) {
+      return [
+        <Button key="cancel" onClick={() => setWizardOpen(false)}>取消</Button>,
+        <Button
+          key="confirm"
+          type="primary"
+          danger
+          loading={execResetMut.isPending}
+          disabled={!previewReset || loadPreviewResetMut.isPending}
+          onClick={() => { setWizardStep(1); execResetMut.mutate() }}
+        >
+          确认重置 {previewReset ? previewReset.count : '…'} 名员工余额
+        </Button>,
+      ]
+    }
+    if (wizardStep === 1) return []
+    if (wizardStep === 2) {
+      return [
+        <Button key="cancel" onClick={() => setWizardOpen(false)}>取消</Button>,
+        <Button
+          key="confirm"
+          type="primary"
+          loading={execResyncMut.isPending}
+          disabled={!previewResync || loadPreviewResyncMut.isPending}
+          onClick={() => { setWizardStep(3); execResyncMut.mutate() }}
+        >
+          确认重放 {previewResync ? previewResync.count : '…'} 条记录
+        </Button>,
+      ]
+    }
+    return [
+      <Button key="done" type="primary" onClick={() => setWizardOpen(false)}>完成</Button>,
+    ]
+  }
+
+  const previewResetColumns = [
+    { title: '员工ID', dataIndex: 'user_id', key: 'user_id' },
+    { title: '姓名', dataIndex: 'name', key: 'name' },
+  ]
+  const previewResyncColumns = [
+    { title: '员工ID', dataIndex: 'user_id', key: 'user_id' },
+    { title: '加班日期', dataIndex: 'work_date', key: 'work_date' },
+    { title: '有效加班(分钟)', dataIndex: 'minutes', key: 'minutes' },
+    { title: '当前同步状态', dataIndex: 'status', key: 'status' },
+  ]
+
+  const statusColor: Record<string, string> = {
+    matched: 'green',
+    synced: 'blue',
+    no_clock_record: 'red',
+    insufficient_clock_record: 'orange',
+    invalid_clock_time: 'red',
+    zero_overtime: 'default',
+    local_balance_failed: 'red',
+    dingtalk_sync_failed: 'volcano',
+    rolled_back: 'default',
+  }
+  const statusLabel: Record<string, string> = {
+    matched: '已匹配',
+    synced: '已同步',
+    no_clock_record: '无打卡',
+    insufficient_clock_record: '打卡不足',
+    invalid_clock_time: '打卡异常',
+    zero_overtime: '无有效调休',
+    local_balance_failed: '本地余额失败',
+    dingtalk_sync_failed: '钉钉同步失败',
+    rolled_back: '已回滚',
+  }
+
+  const localBalanceLabel: Record<string, string> = {
+    success: '已入账',
+    failed: '入账失败',
+    skipped: '未启用',
+    pending: '待处理',
+  }
+  const localBalanceColor: Record<string, string> = {
+    success: 'green',
+    failed: 'red',
+    skipped: 'default',
+    pending: 'orange',
+  }
+  const dingtalkSyncLabel: Record<string, string> = {
+    success: '已同步',
+    failed: '同步失败',
+    skipped: '未启用',
+    pending: '待同步',
+  }
+  const dingtalkSyncColor: Record<string, string> = {
+    success: 'blue',
+    failed: 'red',
+    skipped: 'default',
+    pending: 'orange',
+  }
 
   const columns = [
+    { title: '员工', dataIndex: 'user_name', key: 'user_name', render: (value: string, record: any) => value || record.user_id },
+    { title: '加班日期', dataIndex: 'work_date', key: 'work_date' },
     { title: '审批ID', dataIndex: 'approval_id', key: 'approval_id' },
     {
       title: '状态',
@@ -352,37 +575,66 @@ const OvertimeTab: React.FC = () => {
       key: 'match_status',
       render: (value: string) => <Tag color={statusColor[value] || 'default'}>{statusLabel[value] || value}</Tag>,
     },
-    { title: '审批开始', dataIndex: 'approval_start_time', key: 'approval_start_time' },
-    { title: '审批结束', dataIndex: 'approval_end_time', key: 'approval_end_time' },
-    { title: '打卡时长(分钟)', dataIndex: 'matched_minutes', key: 'matched_minutes' },
-    { title: '有效加班(分钟)', dataIndex: 'qualified_minutes', key: 'qualified_minutes' },
-    { title: '匹配说明', dataIndex: 'match_reason', key: 'match_reason' },
+    { title: '提交时间', dataIndex: 'approval_start_time', key: 'approval_start_time', render: formatDateTime },
+    { title: '通过时间', dataIndex: 'approval_end_time', key: 'approval_end_time', render: formatDateTime },
+    { title: '审批耗时(分钟)', dataIndex: 'approval_duration_minutes', key: 'approval_duration_minutes' },
+    { title: '预计加班开始', dataIndex: 'overtime_start_time', key: 'overtime_start_time', render: formatDateTime },
+    { title: '预计加班结束', dataIndex: 'overtime_end_time', key: 'overtime_end_time', render: formatDateTime },
+    { title: '预计时长(分钟)', dataIndex: 'overtime_duration_minutes', key: 'overtime_duration_minutes' },
+    { title: '首次实际打卡', dataIndex: 'actual_first_clock_time', key: 'actual_first_clock_time', render: formatDateTime },
+    { title: '末次实际打卡', dataIndex: 'actual_last_clock_time', key: 'actual_last_clock_time', render: formatDateTime },
+    { title: '打卡跨度(分钟)', dataIndex: 'actual_clock_span_minutes', key: 'actual_clock_span_minutes' },
+    { title: '休息扣除(分钟)', dataIndex: 'break_deduct_minutes', key: 'break_deduct_minutes' },
+    { title: '最终调休(分钟)', dataIndex: 'effective_overtime_minutes', key: 'effective_overtime_minutes' },
+    {
+      title: '本地余额',
+      dataIndex: 'local_balance_status',
+      key: 'local_balance_status',
+      render: (value: string) => value ? <Tag color={localBalanceColor[value] || 'default'}>{localBalanceLabel[value] || value}</Tag> : '-',
+    },
+    {
+      title: '钉钉同步',
+      dataIndex: 'dingtalk_sync_status',
+      key: 'dingtalk_sync_status',
+      render: (value: string) => value ? <Tag color={dingtalkSyncColor[value] || 'default'}>{dingtalkSyncLabel[value] || value}</Tag> : '-',
+    },
+    {
+      title: '匹配说明',
+      dataIndex: 'match_reason',
+      key: 'match_reason',
+      render: (value: string) => value ? <Tooltip title={value}><span style={{ cursor: 'help' }}>{value.length > 30 ? value.slice(0, 30) + '…' : value}</span></Tooltip> : '-',
+    },
   ]
 
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
         <EmployeeSelect value={userID} onChange={(next) => setUserID(next ?? '')} />
-        <RangePicker
-          value={dateRange}
-          onChange={(next) => next && setDateRange(next as [dayjs.Dayjs, dayjs.Dayjs])}
+        <DatePicker
+          picker="month"
+          value={selectedMonth}
+          allowClear={false}
+          onChange={(next) => next && setSelectedMonth(next.startOf('month'))}
         />
         <Button
           type="primary"
           icon={<SearchOutlined />}
-          onClick={() =>
-            setQueryKey({
-              user_id: userID,
-              start_date: dateRange[0].format('YYYY-MM-DD'),
-              end_date: dateRange[1].format('YYYY-MM-DD'),
-            })
-          }
+          onClick={refreshOvertimeMatches}
           disabled={!userID}
         >
           查询
         </Button>
-        <Button icon={<SyncOutlined />} onClick={() => runMatchMutation.mutate()} loading={runMatchMutation.isPending}>
+        <Button icon={<SyncOutlined />} onClick={() => runMatchMutation.mutate()} loading={runMatchMutation.isPending} disabled={!userID}>
           执行加班匹配
+        </Button>
+        <Button icon={<ThunderboltOutlined />} onClick={handleWizardOpen}>
+          ManualLeave 同步
+        </Button>
+        <Button icon={<ReloadOutlined />} onClick={handleClearRematch} loading={clearRematchMutation.isPending} disabled={!userID} danger>
+          清空重匹配
+        </Button>
+        <Button icon={<DeleteOutlined />} onClick={handleDeleteMatches} loading={deleteMatchesMutation.isPending} disabled={!userID} danger>
+          删除记录
         </Button>
       </Space>
       <Table
@@ -390,8 +642,99 @@ const OvertimeTab: React.FC = () => {
         dataSource={(data as any)?.data || []}
         rowKey="id"
         loading={isFetching}
+        scroll={{ x: 1600 }}
         pagination={{ pageSize: 20 }}
       />
+
+      <Modal
+        title="ManualLeave 同步向导"
+        open={wizardOpen}
+        onCancel={() => setWizardOpen(false)}
+        footer={wizardFooter()}
+        width={720}
+        maskClosable={false}
+      >
+        <Steps
+          current={wizardStep}
+          items={[
+            { title: '预览员工' },
+            { title: '重置余额' },
+            { title: '预览记录' },
+            { title: '重放到钉钉' },
+          ]}
+          style={{ marginBottom: 24 }}
+        />
+
+        {wizardStep === 0 && (
+          <Spin spinning={loadPreviewResetMut.isPending}>
+            {previewReset && (
+              <>
+                <Alert
+                  type="warning"
+                  message={`将把以下 ${previewReset.count} 名员工的 ManualLeave 余额重置为 0`}
+                  style={{ marginBottom: 12 }}
+                />
+                <Table
+                  size="small"
+                  columns={previewResetColumns}
+                  dataSource={previewReset.users}
+                  rowKey="user_id"
+                  pagination={{ pageSize: 8 }}
+                />
+              </>
+            )}
+          </Spin>
+        )}
+
+        {wizardStep === 1 && (
+          <div style={{ textAlign: 'center', padding: '40px 0' }}>
+            <Spin spinning={execResetMut.isPending} tip="正在重置余额，请稍候…" />
+          </div>
+        )}
+
+        {wizardStep === 2 && (
+          <Spin spinning={loadPreviewResyncMut.isPending}>
+            {resetResult && (
+              <Alert
+                type={resetResult.failed > 0 ? 'warning' : 'success'}
+                message={`重置完成：成功 ${resetResult.success}，失败 ${resetResult.failed}`}
+                description={resetResult.errors.length > 0 ? resetResult.errors.join('；') : undefined}
+                style={{ marginBottom: 12 }}
+              />
+            )}
+            {previewResync && (
+              <>
+                <Alert
+                  type="info"
+                  message={`将把以下 ${previewResync.count} 条有效加班记录重放到钉钉`}
+                  style={{ marginBottom: 12 }}
+                />
+                <Table
+                  size="small"
+                  columns={previewResyncColumns}
+                  dataSource={previewResync.records}
+                  rowKey={(r: any) => `${r.user_id}-${r.work_date}`}
+                  pagination={{ pageSize: 8 }}
+                />
+              </>
+            )}
+          </Spin>
+        )}
+
+        {wizardStep === 3 && (
+          resyncResult ? (
+            <Alert
+              type={resyncResult.failed > 0 ? 'warning' : 'success'}
+              message={`重放完成：成功 ${resyncResult.success}，失败 ${resyncResult.failed}，合计 ${resyncResult.success + resyncResult.failed}`}
+              description={resyncResult.errors.length > 0 ? resyncResult.errors.join('；') : undefined}
+            />
+          ) : (
+            <div style={{ textAlign: 'center', padding: '40px 0' }}>
+              <Spin spinning tip="正在同步到钉钉，请稍候…" />
+            </div>
+          )
+        )}
+      </Modal>
     </div>
   )
 }

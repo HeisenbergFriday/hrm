@@ -212,12 +212,18 @@ func (s *AttendanceService) SaveRecord(record *database.Attendance) error {
 func (s *AttendanceService) SyncRecords(records []dingtalk.AttendanceRecord, userNameMap map[string]string) (int, error) {
 	count := 0
 	for _, r := range records {
+		if r.UserCheckTime == "" {
+			continue
+		}
+
 		checkType := "上班"
 		if r.CheckType == "OffDuty" {
 			checkType = "下班"
+		} else if r.CheckType != "" && r.CheckType != "OnDuty" {
+			checkType = r.CheckType
 		}
 
-		checkTime, err := time.Parse("2006-01-02 15:04:05", r.UserCheckTime)
+		checkTime, err := time.ParseInLocation("2006-01-02 15:04:05", r.UserCheckTime, time.Local)
 		if err != nil {
 			return count, fmt.Errorf("parse attendance time for user %s failed: %w", r.UserID, err)
 		}
@@ -229,8 +235,12 @@ func (s *AttendanceService) SyncRecords(records []dingtalk.AttendanceRecord, use
 			CheckType: checkType,
 			Location:  r.LocationResult,
 			Extension: map[string]interface{}{
-				"time_result":     r.TimeResult,
-				"location_result": r.LocationResult,
+				"time_result":       r.TimeResult,
+				"location_result":   r.LocationResult,
+				"sourceType":        r.SourceType,
+				"isLegal":           r.IsLegal,
+				"invalidRecordType": r.InvalidRecordType,
+				"invalidRecordMsg":  r.InvalidRecordMsg,
 			},
 		}
 		if r.TimeResult == "Late" || r.TimeResult == "Early" || r.TimeResult == "NotSigned" {

@@ -131,6 +131,41 @@ func (s *LeaveJobScheduler) SeedDefaultRules() {
 		Status:        "active",
 	})
 
+	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
+		RuleKey:       "overtime.allow_approve_clock_record",
+		RuleName:      "是否允许补卡审批作为有效打卡",
+		RuleValueJSON: `{"enabled": false}`,
+		Status:        "active",
+	})
+
+	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
+		RuleKey:       "overtime.rest_day_break_enabled",
+		RuleName:      "休息日加班休息扣除开关",
+		RuleValueJSON: `{"enabled": true}`,
+		Status:        "active",
+	})
+
+	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
+		RuleKey:       "overtime.rest_day_break_threshold_minutes",
+		RuleName:      "休息日加班休息扣除阈值",
+		RuleValueJSON: `{"minutes": 360}`,
+		Status:        "active",
+	})
+
+	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
+		RuleKey:       "overtime.rest_day_break_minutes",
+		RuleName:      "休息日加班休息扣除分钟",
+		RuleValueJSON: `{"minutes": 30}`,
+		Status:        "active",
+	})
+
+	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
+		RuleKey:       "overtime.process_code",
+		RuleName:      "钉钉加班审批流程代码",
+		RuleValueJSON: `{"code": "overtime"}`,
+		Status:        "active",
+	})
+
 	_ = leaveRuleRepo.Upsert(&database.LeaveRuleConfig{
 		RuleType:      "eligibility",
 		RuleKey:       "eligibility.retroactive_confirmation",

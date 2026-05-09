@@ -82,3 +82,30 @@ func TestAttendanceRuleEngineAggregateAttendanceMarksLateAndLeaveEarly(t *testin
 		t.Fatalf("expected combined status reason, got %q", day.StatusReason)
 	}
 }
+
+func TestAttendanceRuleEngineAggregateAttendanceIgnoresInvalidPunches(t *testing.T) {
+	engine := NewAttendanceRuleEngine(nil)
+	checkIn := time.Date(2026, 4, 23, 9, 0, 0, 0, time.Local)
+	invalidCheckOut := time.Date(2026, 4, 23, 18, 0, 0, 0, time.Local)
+
+	aggregated := engine.AggregateAttendance([]DailyAttendance{
+		{
+			Date:              "2026-04-23",
+			ShouldWork:        true,
+			ScheduledCheckIn:  "09:00",
+			ScheduledCheckOut: "18:00",
+			Status:            AttendanceStatusNormal,
+		},
+	}, []database.Attendance{
+		{UserID: "user-1", CheckType: "上班", CheckTime: checkIn, Extension: map[string]interface{}{"sourceType": "USER", "isLegal": "Y"}},
+		{UserID: "user-1", CheckType: "下班", CheckTime: invalidCheckOut, Extension: map[string]interface{}{"sourceType": "USER", "invalidRecordType": "SERIOUS_LATE"}},
+	})
+
+	day := aggregated[0]
+	if day.Status != AttendanceStatusAbsent {
+		t.Fatalf("expected invalid check-out to be ignored and day marked absent, got %q", day.Status)
+	}
+	if day.StatusReason != "missing_check_out" {
+		t.Fatalf("expected missing check_out after filtering invalid punch, got %q", day.StatusReason)
+	}
+}

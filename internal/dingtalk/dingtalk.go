@@ -61,6 +61,49 @@ func GetCorpID() string {
 	return corpID
 }
 
+func GetConfiguredAppHomeURL() string {
+	if homeURL := strings.TrimSpace(os.Getenv("DINGTALK_APP_HOME_URL")); homeURL != "" {
+		return strings.TrimRight(homeURL, "/")
+	}
+	if baseURL := strings.TrimSpace(os.Getenv("APP_BASE_URL")); baseURL != "" {
+		return strings.TrimRight(baseURL, "/")
+	}
+	if baseURL := strings.TrimSpace(os.Getenv("FRONTEND_BASE_URL")); baseURL != "" {
+		return strings.TrimRight(baseURL, "/")
+	}
+
+	return ""
+}
+
+func GetAppHomeURL() string {
+	if configured := GetConfiguredAppHomeURL(); configured != "" {
+		return configured
+	}
+
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		port = "8080"
+	}
+
+	return fmt.Sprintf("http://localhost:%s", port)
+}
+
+func GetConfiguredRedirectURI() string {
+	if redirectURI := strings.TrimSpace(os.Getenv("DINGTALK_REDIRECT_URI")); redirectURI != "" {
+		return redirectURI
+	}
+
+	return ""
+}
+
+func GetRedirectURI() string {
+	if configured := GetConfiguredRedirectURI(); configured != "" {
+		return configured
+	}
+
+	return GetAppHomeURL() + "/callback"
+}
+
 // ===================== Access Token =====================
 
 // GetAccessToken 鑾峰彇浼佷笟鍐呴儴搴旂敤鐨?access_token锛堝甫缂撳瓨锛?
@@ -102,11 +145,10 @@ func GetAccessToken() (string, error) {
 
 // GetQRLoginURL 鑾峰彇閽夐拤鎵爜鐧诲綍 URL
 func GetQRCode(state string) (string, error) {
-	redirectURI := os.Getenv("DINGTALK_REDIRECT_URI")
-	if redirectURI == "" {
-		redirectURI = "http://localhost:3000/callback"
-	}
+	return GetQRCodeWithRedirect(state, GetRedirectURI())
+}
 
+func GetQRCodeWithRedirect(state, redirectURI string) (string, error) {
 	loginURL := fmt.Sprintf(
 		"https://login.dingtalk.com/oauth2/auth?redirect_uri=%s&response_type=code&client_id=%s&scope=openid%%20corpid&state=%s&prompt=consent",
 		url.QueryEscape(redirectURI),
@@ -223,6 +265,42 @@ func GetUserDetailByUserID(userid string) (map[string]interface{}, error) {
 	}
 
 	return result, nil
+}
+
+func GetUserIDByUnionID(unionID string) (string, error) {
+	accessToken, err := GetAccessToken()
+	if err != nil {
+		return "", err
+	}
+
+	body := map[string]interface{}{
+		"unionid": unionID,
+	}
+	resp, err := postJSONOAPI(
+		fmt.Sprintf("https://oapi.dingtalk.com/topapi/user/getbyunionid?access_token=%s", accessToken),
+		body,
+	)
+	if err != nil {
+		return "", fmt.Errorf("get userid by unionid failed: %w", err)
+	}
+
+	errcode, _ := resp["errcode"].(float64)
+	if errcode != 0 {
+		errmsg, _ := resp["errmsg"].(string)
+		return "", fmt.Errorf("get userid by unionid failed: %s", errmsg)
+	}
+
+	result, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("unexpected getbyunionid result: %v", resp)
+	}
+
+	userid := getString(result, "userid")
+	if userid == "" {
+		return "", fmt.Errorf("missing userid in getbyunionid response")
+	}
+
+	return userid, nil
 }
 
 // ===================== 缁勭粐鏋舵瀯鍚屾 =====================
@@ -576,6 +654,10 @@ type VacationType struct {
 	LeaveName     string  `json:"leave_name"`
 	LeaveViewUnit string  `json:"leave_view_unit"`
 	HoursInPerDay float64 `json:"hours_in_per_day"`
+	LeaveType     int     `json:"leave_type"` // 0=调休(TURN), 1=普通假期
+	GrantType     int     `json:"grant_type"` // 0=自动, 1=手动
+	Source        string  `json:"source"`     // "inner"=后台手动创建, 其他=API创建
+	BizType       string  `json:"biz_type"`   // "general_leave"=普通假期, "lieu_leave"=调休
 }
 
 func ListVacationTypes(opUserID string) ([]VacationType, error) {
@@ -606,12 +688,19 @@ func ListVacationTypes(opUserID string) ([]VacationType, error) {
 		if !ok {
 			continue
 		}
-		result = append(result, VacationType{
+		vt := VacationType{
 			LeaveCode:     getString(m, "leave_code"),
 			LeaveName:     getString(m, "leave_name"),
 			LeaveViewUnit: getString(m, "leave_view_unit"),
 			HoursInPerDay: getFloat(m, "hours_in_per_day"),
-		})
+			LeaveType:     int(getFloat(m, "leave_type")),
+			GrantType:     int(getFloat(m, "grant_type")),
+			Source:        getString(m, "source"),
+			BizType:       getString(m, "biz_type"),
+		}
+		logrus.Debugf("[vacation-type] leaveCode=%s name=%s leaveType=%d grantType=%d unit=%s source=%s bizType=%s",
+			vt.LeaveCode, vt.LeaveName, vt.LeaveType, vt.GrantType, vt.LeaveViewUnit, vt.Source, vt.BizType)
+		result = append(result, vt)
 	}
 	return result, nil
 }
@@ -718,6 +807,287 @@ func UpdateAnnualLeaveQuota(userID string, year int, days float64, reason string
 	return fmt.Errorf("update annual leave quota failed: errcode=%.0f %s", errcode, dingTalkErrorMessage(resp, errcode))
 }
 
+func UpdateCompensatoryLeaveQuota(userID string, minutes int, workDate string, reason string) error {
+	if minutes <= 0 {
+		return nil
+	}
+	opUserID := strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID"))
+	if opUserID == "" {
+		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
+	}
+
+	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveType(opUserID)
+	if err != nil {
+		return err
+	}
+	if hoursPerDay <= 0 {
+		hoursPerDay = getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8)
+	}
+
+	// 验证leaveCode和userID
+	if leaveCode == "" {
+		return fmt.Errorf("leaveCode is empty")
+	}
+	if userID == "" {
+		return fmt.Errorf("userID is empty")
+	}
+
+	logrus.Infof("[comp-leave-sync] UpdateCompensatoryLeaveQuota userID=%s minutes=%d leaveCode=%s workDate=%s",
+		userID, minutes, leaveCode, workDate)
+
+	accessToken, err := GetAccessToken()
+	if err != nil {
+		return err
+	}
+
+	year := time.Now().Year()
+	if parsedWorkDate, err := time.ParseInLocation("2006-01-02", workDate, time.Local); err == nil {
+		year = parsedWorkDate.Year()
+	}
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.Local)
+	end := time.Date(year, 12, 31, 23, 59, 59, 0, time.Local)
+	hours := float64(minutes) / 60.0
+	addQuotaPerHour := int64(math.Round(hours * 100))
+
+	initErr := ensureVacationBalanceInitialized(accessToken, opUserID, userID, leaveCode, year, start, end)
+	if initErr != nil {
+		logrus.Warnf("[comp-leave-sync] initialize balance failed, trying batch update anyway: %v", initErr)
+	}
+
+	_, currentQuotaPerHour, err := getVacationQuotaByYear(accessToken, opUserID, userID, leaveCode, year)
+	if err != nil {
+		return fmt.Errorf("get current compensatory leave quota failed: %w", err)
+	}
+	targetQuotaPerHour := currentQuotaPerHour + addQuotaPerHour
+	targetQuotaPerDay := quotaHourToDay(targetQuotaPerHour, hoursPerDay)
+
+	logrus.Infof("[comp-leave-sync] current=%d add=%d target=%d (hour x100)", currentQuotaPerHour, addQuotaPerHour, targetQuotaPerHour)
+	requestID, updateErr := updateVacationQuotaOAPI(accessToken, opUserID, userID, leaveCode, year, targetQuotaPerDay, targetQuotaPerHour, start, end, reason)
+	if updateErr != nil {
+		return fmt.Errorf("batch update compensatory leave quota failed: %w", updateErr)
+	}
+
+	logrus.Infof("[comp-leave-sync] batch update success userID=%s workDate=%s minutes=%d requestID=%s",
+		userID, workDate, minutes, requestID)
+	return nil
+}
+
+func SetCompensatoryLeaveQuota(userID string, year int, totalMinutes int, reason string) error {
+	if totalMinutes < 0 {
+		return fmt.Errorf("totalMinutes cannot be negative")
+	}
+	opUserID := strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID"))
+	if opUserID == "" {
+		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
+	}
+	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveType(opUserID)
+	if err != nil {
+		return err
+	}
+	if hoursPerDay <= 0 {
+		hoursPerDay = getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8)
+	}
+	accessToken, err := GetAccessToken()
+	if err != nil {
+		return err
+	}
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.Local)
+	end := time.Date(year, 12, 31, 23, 59, 59, 0, time.Local)
+	if err := ensureVacationBalanceInitialized(accessToken, opUserID, userID, leaveCode, year, start, end); err != nil {
+		logrus.Warnf("[comp-leave-sync] initialize balance before absolute set failed: %v", err)
+	}
+	quotaPerHour := int64(math.Round(float64(totalMinutes) / 60.0 * 100))
+	quotaPerDay := quotaHourToDay(quotaPerHour, hoursPerDay)
+	_, err = updateVacationQuotaOAPI(accessToken, opUserID, userID, leaveCode, year, quotaPerDay, quotaPerHour, start, end, reason)
+	return err
+}
+
+func quotaHourToDay(quotaPerHour int64, hoursPerDay float64) int64 {
+	if hoursPerDay <= 0 {
+		hoursPerDay = 8
+	}
+	return int64(math.Round(float64(quotaPerHour) / hoursPerDay))
+}
+
+func ensureVacationBalanceInitialized(accessToken, opUserID, userID, leaveCode string, year int, start, end time.Time) error {
+	exists, _, err := getVacationQuotaByYear(accessToken, opUserID, userID, leaveCode, year)
+	if err == nil && exists {
+		return nil
+	}
+	if err != nil {
+		logrus.Warnf("[comp-leave-sync] query existing leave quota failed, initializing anyway: %v", err)
+	}
+
+	if err := initializeVacationBalance(accessToken, opUserID, userID, leaveCode); err == nil {
+		return nil
+	} else {
+		logrus.Warnf("[comp-leave-sync] v1 initialize balance failed, trying oapi init: %v", err)
+	}
+
+	return initVacationQuotaOAPI(accessToken, opUserID, userID, leaveCode, year, 0, 0, start, end, "init compensatory leave balance")
+}
+
+func initializeVacationBalance(accessToken, opUserID, userID, leaveCode string) error {
+	headers := map[string]string{"x-acs-dingtalk-access-token": accessToken}
+	initURL := fmt.Sprintf(
+		"https://api.dingtalk.com/v1.0/attendance/leaves/initializations/balances?opUserId=%s&userId=%s&leaveCode=%s",
+		url.QueryEscape(opUserID), url.QueryEscape(userID), url.QueryEscape(leaveCode),
+	)
+	resp, err := getJSON(initURL, headers)
+	if err != nil {
+		return err
+	}
+	return checkDingTalkV1Response(resp, "initialize leave balance")
+}
+
+func updateVacationQuotaOAPI(accessToken, opUserID, userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, start, end time.Time, reason string) (string, error) {
+	body := map[string]interface{}{
+		"op_userid": opUserID,
+		"leave_quotas": []map[string]interface{}{
+			{
+				"userid":             userID,
+				"leave_code":         leaveCode,
+				"quota_num_per_day":  quotaPerDay,
+				"quota_num_per_hour": quotaPerHour,
+				"quota_cycle":        strconv.Itoa(year),
+				"start_time":         start.UnixMilli(),
+				"end_time":           end.UnixMilli(),
+				"reason":             reason,
+			},
+		},
+	}
+	if bodyBytes, mErr := json.Marshal(body); mErr == nil {
+		logrus.Infof("[comp-leave-sync] POST /topapi/attendance/vacation/quota/update body=%s", string(bodyBytes))
+	}
+	resp, err := postJSONOAPI(
+		fmt.Sprintf("https://oapi.dingtalk.com/topapi/attendance/vacation/quota/update?access_token=%s", accessToken),
+		body,
+	)
+	if err != nil {
+		return "", err
+	}
+	if err := checkVacationQuotaOAPIResponse(resp, "update leave quota"); err != nil {
+		return "", err
+	}
+	return getString(resp, "request_id"), nil
+}
+
+func checkDingTalkV1Response(resp map[string]interface{}, action string) error {
+	if success, ok := resp["success"].(bool); ok && !success {
+		return fmt.Errorf("%s failed: %v", action, resp)
+	}
+	if code := strings.TrimSpace(getString(resp, "code")); code != "" && code != "0" {
+		if message := strings.TrimSpace(getString(resp, "message")); message != "" {
+			return fmt.Errorf("%s failed: code=%s message=%s", action, code, message)
+		}
+		return fmt.Errorf("%s failed: code=%s", action, code)
+	}
+	return nil
+}
+
+func checkVacationQuotaOAPIResponse(resp map[string]interface{}, action string) error {
+	if errcode, _ := resp["errcode"].(float64); errcode != 0 {
+		return fmt.Errorf("%s failed: %s", action, dingTalkErrorMessage(resp, errcode))
+	}
+	if success, ok := resp["success"].(bool); ok && !success {
+		return fmt.Errorf("%s failed: success=false", action)
+	}
+	items, ok := resp["result"].([]interface{})
+	if !ok {
+		return nil
+	}
+	for _, item := range items {
+		itemMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if reason := strings.TrimSpace(getString(itemMap, "reason")); reason != "" {
+			return fmt.Errorf("%s failed: %s", action, reason)
+		}
+	}
+	return nil
+}
+
+func getVacationQuotaByYear(accessToken, opUserID, userID, leaveCode string, year int) (bool, int64, error) {
+	body := map[string]interface{}{
+		"op_userid":  opUserID,
+		"userids":    userID,
+		"leave_code": leaveCode,
+		"offset":     0,
+		"size":       10,
+	}
+	resp, err := postJSONOAPI(
+		fmt.Sprintf("https://oapi.dingtalk.com/topapi/attendance/vacation/quota/list?access_token=%s", accessToken),
+		body,
+	)
+	if err != nil {
+		return false, 0, err
+	}
+	if errcode, _ := resp["errcode"].(float64); errcode != 0 {
+		return false, 0, fmt.Errorf("list vacation quota failed: %s", dingTalkErrorMessage(resp, errcode))
+	}
+	result, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		return false, 0, nil
+	}
+	quotas, ok := result["leave_quotas"].([]interface{})
+	if !ok {
+		return false, 0, nil
+	}
+	for _, item := range quotas {
+		quota, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if getString(quota, "quota_cycle") != strconv.Itoa(year) {
+			continue
+		}
+		return true, int64(getFloat(quota, "quota_num_per_hour")), nil
+	}
+	return false, 0, nil
+}
+
+// InitVacationQuota 通过 quota/init 接口初始化（重置）指定员工的假期配额。
+// quotaPerDay / quotaPerHour 单位均为 1/100（例如 0 = 0天，100 = 1天，800 = 1天×8小时）。
+// year 决定生效的配额周期（start_time / end_time 自动设为该年 1-1 到 12-31）。
+func InitVacationQuota(userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, reason string) error {
+	opUserID := strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID"))
+	if opUserID == "" {
+		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
+	}
+	accessToken, err := GetAccessToken()
+	if err != nil {
+		return err
+	}
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.Local)
+	end := time.Date(year, 12, 31, 23, 59, 59, 0, time.Local)
+	return initVacationQuotaOAPI(accessToken, opUserID, userID, leaveCode, year, quotaPerDay, quotaPerHour, start, end, reason)
+}
+
+func initVacationQuotaOAPI(accessToken, opUserID, userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, start, end time.Time, reason string) error {
+	body := map[string]interface{}{
+		"op_userid": opUserID,
+		"leave_quotas": map[string]interface{}{
+			"userid":             userID,
+			"leave_code":         leaveCode,
+			"quota_num_per_day":  quotaPerDay,
+			"quota_num_per_hour": quotaPerHour,
+			"quota_cycle":        strconv.Itoa(year),
+			"start_time":         start.UnixMilli(),
+			"end_time":           end.UnixMilli(),
+			"reason":             reason,
+		},
+	}
+	resp, err := postJSONOAPI(
+		fmt.Sprintf("https://oapi.dingtalk.com/topapi/attendance/vacation/quota/init?access_token=%s", accessToken),
+		body,
+	)
+	if err != nil {
+		return err
+	}
+	return checkVacationQuotaOAPIResponse(resp, "init leave quota")
+}
+
 type cachedLeaveType struct {
 	leaveCode   string
 	hoursPerDay float64
@@ -725,9 +1095,13 @@ type cachedLeaveType struct {
 }
 
 var (
-	annualLeaveTypeCache   cachedLeaveType
-	annualLeaveTypeCacheMu sync.Mutex
+	annualLeaveTypeCache         cachedLeaveType
+	annualLeaveTypeCacheMu       sync.Mutex
+	compensatoryLeaveTypeCache   cachedLeaveType
+	compensatoryLeaveTypeCacheMu sync.Mutex
 )
+
+const defaultCompensatoryLeaveCode = "fd5600a2-d0df-4d9f-8022-7e5f0833130c"
 
 func resolveAnnualLeaveType(opUserID string) (string, float64, error) {
 	if code := strings.TrimSpace(os.Getenv("DINGTALK_ANNUAL_LEAVE_CODE")); code != "" {
@@ -760,6 +1134,153 @@ func resolveAnnualLeaveType(opUserID string) (string, float64, error) {
 		}
 	}
 	return "", 0, fmt.Errorf("annual leave type %q not found in DingTalk; set DINGTALK_ANNUAL_LEAVE_CODE", leaveName)
+}
+
+func createCompensatoryLeaveType(opUserID, leaveName string) (string, error) {
+	return CreateCustomLeaveType(opUserID, leaveName, false)
+}
+
+func CreateCustomLeaveType(opUserID, leaveName string, freedomLeave bool) (string, error) {
+	accessToken, err := GetAccessToken()
+	if err != nil {
+		return "", err
+	}
+	hoursPerDay := getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8)
+	body := map[string]interface{}{
+		"op_userid":         opUserID,
+		"leave_name":        leaveName,
+		"leave_view_unit":   "hour",
+		"biz_type":          "general_leave",
+		"natural_day_leave": false,
+		"hours_in_per_day":  int64(math.Round(hoursPerDay * 100)),
+		"paid_leave":        false,
+		"freedom_leave":     freedomLeave,
+		"extras":            `{"validity_type":"absolute_time","validity_value":"12-31"}`,
+		"submit_time_rule": map[string]interface{}{
+			"enable_time_limit": false,
+		},
+		"leave_certificate": map[string]interface{}{
+			"enable": false,
+		},
+	}
+	resp, err := postJSONOAPI(
+		fmt.Sprintf("https://oapi.dingtalk.com/topapi/attendance/vacation/type/create?access_token=%s", accessToken),
+		body,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create leave type failed: %w", err)
+	}
+	if errcode, _ := resp["errcode"].(float64); errcode != 0 {
+		return "", fmt.Errorf("create leave type failed: %s", dingTalkErrorMessage(resp, errcode))
+	}
+	leaveCode := extractCreatedLeaveCode(resp)
+	if leaveCode == "" {
+		return "", fmt.Errorf("create leave type: missing leaveCode in response: %v", resp)
+	}
+	logrus.Infof("[leave-sync] created custom leave type: name=%s leaveCode=%s freedomLeave=%t", leaveName, leaveCode, freedomLeave)
+	return leaveCode, nil
+}
+
+func extractCreatedLeaveCode(resp map[string]interface{}) string {
+	if code := getString(resp, "leaveCode"); code != "" {
+		return code
+	}
+	if code := getString(resp, "leave_code"); code != "" {
+		return code
+	}
+	result, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if code := getString(result, "leaveCode"); code != "" {
+		return code
+	}
+	return getString(result, "leave_code")
+}
+
+func resolveCompensatoryLeaveType(opUserID string) (string, float64, error) {
+	if code := strings.TrimSpace(os.Getenv("DINGTALK_LIEU_LEAVE_CODE")); code != "" {
+		return code, getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8), nil
+	}
+	if code := strings.TrimSpace(os.Getenv("DINGTALK_COMPENSATORY_LEAVE_CODE")); code != "" {
+		return code, getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8), nil
+	}
+	if defaultCompensatoryLeaveCode != "" {
+		return defaultCompensatoryLeaveCode, getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8), nil
+	}
+
+	compensatoryLeaveTypeCacheMu.Lock()
+	defer compensatoryLeaveTypeCacheMu.Unlock()
+
+	if compensatoryLeaveTypeCache.leaveCode != "" && time.Now().Before(compensatoryLeaveTypeCache.expiry) {
+		return compensatoryLeaveTypeCache.leaveCode, compensatoryLeaveTypeCache.hoursPerDay, nil
+	}
+
+	leaveName := strings.TrimSpace(os.Getenv("DINGTALK_LIEU_LEAVE_NAME"))
+	if leaveName == "" {
+		leaveName = strings.TrimSpace(os.Getenv("DINGTALK_COMPENSATORY_LEAVE_NAME"))
+	}
+	if leaveName == "" {
+		leaveName = "手动发放"
+	}
+
+	types, err := ListVacationTypes(opUserID)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// 优先查找所有类型的假期，不限制source和bizType
+	hoursPerDay := getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8)
+	for _, item := range types {
+		if item.LeaveName == leaveName {
+			if item.HoursInPerDay > 0 {
+				hoursPerDay = item.HoursInPerDay
+			}
+			compensatoryLeaveTypeCache = cachedLeaveType{
+				leaveCode:   item.LeaveCode,
+				hoursPerDay: hoursPerDay,
+				expiry:      time.Now().Add(time.Hour),
+			}
+			logrus.Infof("[leave-sync] found existing compensatory leave type: name=%s leaveCode=%s source=%s bizType=%s", item.LeaveName, item.LeaveCode, item.Source, item.BizType)
+			return item.LeaveCode, hoursPerDay, nil
+		}
+	}
+
+	// 没有找到符合条件的假期类型，自动通过 API 创建一个
+	logrus.Infof("[leave-sync] no compensatory leave type found, creating one: name=%s", leaveName)
+	leaveCode, err := createCompensatoryLeaveType(opUserID, leaveName)
+	if err != nil {
+		// 如果创建失败，可能是因为已存在相同名称的假期类型
+		// 重新获取假期类型列表并查找已存在的假期类型
+		logrus.Warnf("[leave-sync] create leave type failed, trying to find existing one: %v", err)
+		types, err := ListVacationTypes(opUserID)
+		if err != nil {
+			return "", 0, fmt.Errorf("auto-create compensatory leave type %q failed and cannot find existing one: %w", leaveName, err)
+		}
+		// 再次查找所有类型的假期
+		for _, item := range types {
+			if item.LeaveName == leaveName {
+				if item.HoursInPerDay > 0 {
+					hoursPerDay = item.HoursInPerDay
+				}
+				compensatoryLeaveTypeCache = cachedLeaveType{
+					leaveCode:   item.LeaveCode,
+					hoursPerDay: hoursPerDay,
+					expiry:      time.Now().Add(time.Hour),
+				}
+				logrus.Infof("[leave-sync] found existing compensatory leave type after creation attempt: name=%s leaveCode=%s source=%s bizType=%s", item.LeaveName, item.LeaveCode, item.Source, item.BizType)
+				return item.LeaveCode, hoursPerDay, nil
+			}
+		}
+		return "", 0, fmt.Errorf("auto-create compensatory leave type %q failed: %w", leaveName, err)
+	}
+	compensatoryLeaveTypeCache = cachedLeaveType{
+		leaveCode:   leaveCode,
+		hoursPerDay: hoursPerDay,
+		expiry:      time.Now().Add(time.Hour),
+	}
+	logrus.Infof("[leave-sync] created new compensatory leave type: name=%s leaveCode=%s", leaveName, leaveCode)
+	return leaveCode, hoursPerDay, nil
 }
 
 func getEnvFloat(key string, fallback float64) float64 {
@@ -879,11 +1400,15 @@ func fetchDeptUsers(accessToken string, deptID int64) ([]UserInfo, error) {
 
 // AttendanceRecord 鑰冨嫟璁板綍
 type AttendanceRecord struct {
-	UserID         string `json:"userId"`
-	CheckType      string `json:"checkType"` // OnDuty / OffDuty
-	UserCheckTime  string `json:"userCheckTime"`
-	LocationResult string `json:"locationResult"` // Normal / Outside
-	TimeResult     string `json:"timeResult"`     // Normal / Late / Early
+	UserID            string `json:"userId"`
+	CheckType         string `json:"checkType"` // OnDuty / OffDuty
+	UserCheckTime     string `json:"userCheckTime"`
+	LocationResult    string `json:"locationResult"` // Normal / Outside
+	TimeResult        string `json:"timeResult"`     // Normal / Late / Early
+	SourceType        string `json:"sourceType"`
+	IsLegal           string `json:"isLegal"`
+	InvalidRecordType string `json:"invalidRecordType"`
+	InvalidRecordMsg  string `json:"invalidRecordMsg"`
 }
 
 // GetAttendance 鑾峰彇鑰冨嫟鏁版嵁
@@ -894,26 +1419,40 @@ func GetAttendance(userIDs []string, startDate, endDate string) ([]AttendanceRec
 	}
 
 	var allRecords []AttendanceRecord
+	start, err := time.Parse("2006-01-02", startDate)
+	if err != nil {
+		return nil, fmt.Errorf("invalid attendance start date %q: %w", startDate, err)
+	}
+	endDateTime, err := time.Parse("2006-01-02", endDate)
+	if err != nil {
+		return nil, fmt.Errorf("invalid attendance end date %q: %w", endDate, err)
+	}
+	if endDateTime.Before(start) {
+		return nil, fmt.Errorf("attendance end date %s is before start date %s", endDate, startDate)
+	}
 
-	// DingTalk allows at most 50 users per request.
-	for i := 0; i < len(userIDs); i += 50 {
-		end := i + 50
-		if end > len(userIDs) {
-			end = len(userIDs)
+	for windowStart := start; !windowStart.After(endDateTime); windowStart = windowStart.AddDate(0, 0, 7) {
+		windowEnd := windowStart.AddDate(0, 0, 6)
+		if windowEnd.After(endDateTime) {
+			windowEnd = endDateTime
 		}
-		batch := userIDs[i:end]
 
-		offset := 0
-		for {
+		// DingTalk listRecord allows at most 50 users per request and a 7-day date range.
+		for i := 0; i < len(userIDs); i += 50 {
+			batchEnd := i + 50
+			if batchEnd > len(userIDs) {
+				batchEnd = len(userIDs)
+			}
+			batch := userIDs[i:batchEnd]
+
 			body := map[string]interface{}{
-				"workDateFrom": startDate + " 00:00:00",
-				"workDateTo":   endDate + " 23:59:59",
-				"userIdList":   batch,
-				"offset":       offset,
-				"limit":        50,
+				"checkDateFrom": windowStart.Format("2006-01-02") + " 00:00:00",
+				"checkDateTo":   windowEnd.Format("2006-01-02") + " 23:59:59",
+				"userIds":       batch,
+				"isI18n":        false,
 			}
 			resp, err := postJSONOAPI(
-				fmt.Sprintf("https://oapi.dingtalk.com/attendance/list?access_token=%s", accessToken),
+				fmt.Sprintf("https://oapi.dingtalk.com/attendance/listRecord?access_token=%s", accessToken),
 				body,
 			)
 			if err != nil {
@@ -922,14 +1461,12 @@ func GetAttendance(userIDs []string, startDate, endDate string) ([]AttendanceRec
 
 			errcode, _ := resp["errcode"].(float64)
 			if errcode != 0 {
-				errmsg, _ := resp["errmsg"].(string)
-				logrus.Warnf("鑾峰彇鑰冨嫟璁板綍澶辫触: %s", errmsg)
-				break
+				return nil, fmt.Errorf("list attendance records failed: %s", dingTalkErrorMessage(resp, errcode))
 			}
 
 			recordList, ok := resp["recordresult"].([]interface{})
 			if !ok || len(recordList) == 0 {
-				break
+				continue
 			}
 
 			for _, item := range recordList {
@@ -937,26 +1474,66 @@ func GetAttendance(userIDs []string, startDate, endDate string) ([]AttendanceRec
 				if !ok {
 					continue
 				}
+				userID := getString(m, "userId")
+				if userID == "" {
+					userID = getString(m, "userid")
+				}
 				record := AttendanceRecord{
-					UserID:         getString(m, "userId"),
-					CheckType:      getString(m, "checkType"),
-					UserCheckTime:  getString(m, "userCheckTime"),
-					LocationResult: getString(m, "locationResult"),
-					TimeResult:     getString(m, "timeResult"),
+					UserID:            userID,
+					CheckType:         getString(m, "checkType"),
+					UserCheckTime:     formatDingTalkDateTime(m["userCheckTime"]),
+					LocationResult:    getString(m, "locationResult"),
+					TimeResult:        getString(m, "timeResult"),
+					SourceType:        getString(m, "sourceType"),
+					IsLegal:           getString(m, "isLegal"),
+					InvalidRecordType: getString(m, "invalidRecordType"),
+					InvalidRecordMsg:  getString(m, "invalidRecordMsg"),
 				}
 				allRecords = append(allRecords, record)
 			}
-
-			hasMore, _ := resp["hasMore"].(bool)
-			if !hasMore {
-				break
-			}
-			offset += 50
 		}
 	}
 
 	logrus.Infof("dingtalk sync attendance complete: %d", len(allRecords))
 	return allRecords, nil
+}
+
+func formatDingTalkDateTime(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return ""
+		}
+		if ts, err := strconv.ParseInt(v, 10, 64); err == nil && ts > 0 {
+			return formatUnixTime(ts)
+		}
+		return v
+	case float64:
+		if v <= 0 {
+			return ""
+		}
+		return formatUnixTime(int64(v))
+	case int64:
+		if v <= 0 {
+			return ""
+		}
+		return formatUnixTime(v)
+	case int:
+		if v <= 0 {
+			return ""
+		}
+		return formatUnixTime(int64(v))
+	default:
+		return ""
+	}
+}
+
+func formatUnixTime(ts int64) string {
+	if ts > 1_000_000_000_000 {
+		return time.UnixMilli(ts).In(time.Local).Format("2006-01-02 15:04:05")
+	}
+	return time.Unix(ts, 0).In(time.Local).Format("2006-01-02 15:04:05")
 }
 
 // ===================== 瀹℃壒鍚屾 =====================
@@ -1160,6 +1737,10 @@ func getJSON(url string, headers map[string]string) (map[string]interface{}, err
 	var result map[string]interface{}
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("JSON 瑙ｆ瀽澶辫触: %s", string(data))
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("DingTalk API HTTP %d: %s", resp.StatusCode, string(data))
 	}
 
 	return result, nil

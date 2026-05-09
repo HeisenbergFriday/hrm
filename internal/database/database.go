@@ -130,6 +130,7 @@ func migrate() error {
 		&AnnualLeaveGrant{},
 		&OvertimeRuleConfig{},
 		&OvertimeMatchResult{},
+		&OvertimeSyncHistory{},
 		&CompensatoryLeaveLedger{},
 	); err != nil {
 		return err
@@ -139,6 +140,15 @@ func migrate() error {
 	if err := DB.AutoMigrate(&AnnualLeaveConsumeLog{}); err != nil {
 		log.Printf("[migrate] AnnualLeaveConsumeLog 迁移失败（忽略）: %v", err)
 	}
+	if err := migrateAnnualLeaveConsumeLogSchema(); err != nil {
+		return err
+	}
+	if err := migrateOvertimeMatchSchema(); err != nil {
+		return err
+	}
+	if err := migrateAnnualLeaveGrantIndexes(); err != nil {
+		return err
+	}
 
 	// WeekScheduleRule 建唯一索引前先去重，避免历史重复数据导致迁移失败
 	deduplicateWeekScheduleRules()
@@ -146,6 +156,7 @@ func migrate() error {
 	if err := DB.AutoMigrate(
 		&User{},
 		&Department{},
+		&DepartmentChangeLog{},
 		&Attendance{},
 		&Approval{},
 		&ApprovalTemplate{},
@@ -202,6 +213,175 @@ func migrateAnnualLeaveGrantColumns() {
 			}
 		}
 	}
+}
+
+func migrateAnnualLeaveConsumeLogSchema() error {
+	if !DB.Migrator().HasTable(&AnnualLeaveConsumeLog{}) {
+		return nil
+	}
+	if !DB.Migrator().HasColumn(&AnnualLeaveConsumeLog{}, "RequestRef") {
+		if err := DB.Migrator().AddColumn(&AnnualLeaveConsumeLog{}, "RequestRef"); err != nil {
+			return err
+		}
+	}
+	if err := DB.Exec(`
+		UPDATE annual_leave_consume_logs
+		SET request_ref = CASE
+			WHEN approval_ref IS NULL OR approval_ref = '' THEN CONCAT('legacy:', id)
+			ELSE CONCAT('approval:', approval_ref)
+		END
+		WHERE request_ref IS NULL OR request_ref = ''
+	`).Error; err != nil {
+		return err
+	}
+	if oldIndex, err := findUniqueIndexByColumn("annual_leave_consume_logs", "approval_ref"); err != nil {
+		return err
+	} else if oldIndex != "" {
+		if err := DB.Migrator().DropIndex(&AnnualLeaveConsumeLog{}, oldIndex); err != nil {
+			return err
+		}
+	}
+	if !DB.Migrator().HasIndex(&AnnualLeaveConsumeLog{}, "idx_leave_consume_approval_ref") {
+		if err := DB.Exec("CREATE INDEX `idx_leave_consume_approval_ref` ON `annual_leave_consume_logs` (`approval_ref`)").Error; err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate key name") {
+			return err
+		}
+	}
+	if !DB.Migrator().HasIndex(&AnnualLeaveConsumeLog{}, "idx_leave_consume_request_grant") {
+		if err := DB.Exec("CREATE UNIQUE INDEX `idx_leave_consume_request_grant` ON `annual_leave_consume_logs` (`request_ref`, `grant_id`)").Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateAnnualLeaveGrantIndexes() error {
+	if !DB.Migrator().HasTable(&AnnualLeaveGrant{}) || DB.Migrator().HasIndex(&AnnualLeaveGrant{}, "idx_leave_grant_user_year_q_type") {
+		return nil
+	}
+	type duplicateGrant struct {
+		UserID    string
+		Year      int
+		Quarter   int
+		GrantType string
+		Count     int64
+	}
+	var duplicates []duplicateGrant
+	if err := DB.Raw(`
+		SELECT user_id, year, quarter, grant_type, COUNT(*) AS count
+		FROM annual_leave_grants
+		GROUP BY user_id, year, quarter, grant_type
+		HAVING COUNT(*) > 1
+		LIMIT 10
+	`).Scan(&duplicates).Error; err != nil {
+		return err
+	}
+	if len(duplicates) > 0 {
+		log.Printf("[migrate] 跳过创建 idx_leave_grant_user_year_q_type，发现重复年假发放记录: %+v", duplicates)
+		return nil
+	}
+	return DB.Exec("CREATE UNIQUE INDEX `idx_leave_grant_user_year_q_type` ON `annual_leave_grants` (`user_id`, `year`, `quarter`, `grant_type`)").Error
+}
+
+func migrateOvertimeMatchSchema() error {
+	if !DB.Migrator().HasTable(&OvertimeMatchResult{}) || !DB.Migrator().HasTable(&CompensatoryLeaveLedger{}) {
+		return nil
+	}
+	if !DB.Migrator().HasColumn(&OvertimeMatchResult{}, "MatchRef") {
+		if err := DB.Migrator().AddColumn(&OvertimeMatchResult{}, "MatchRef"); err != nil {
+			return err
+		}
+	}
+	if !DB.Migrator().HasColumn(&CompensatoryLeaveLedger{}, "SourceMatchRef") {
+		if err := DB.Migrator().AddColumn(&CompensatoryLeaveLedger{}, "SourceMatchRef"); err != nil {
+			return err
+		}
+	}
+	if err := DB.Exec(`
+		UPDATE overtime_match_results
+		SET match_ref = CONCAT('legacy:', id)
+		WHERE match_ref IS NULL OR match_ref = ''
+	`).Error; err != nil {
+		return err
+	}
+	if err := DB.Exec(`
+		UPDATE compensatory_leave_ledgers
+		SET source_match_ref = CASE
+			WHEN source_match_id > 0 THEN CONCAT('legacy:', source_match_id)
+			ELSE ''
+		END
+		WHERE source_match_ref IS NULL OR source_match_ref = ''
+	`).Error; err != nil {
+		return err
+	}
+	if DB.Migrator().HasTable(&OvertimeSyncHistory{}) {
+		if err := DB.Exec(`
+			INSERT INTO overtime_sync_histories (
+				user_id,
+				work_date,
+				approval_id,
+				approval_process_id,
+				effective_overtime_minutes,
+				sync_request_id,
+				sync_mode,
+				synced_at,
+				created_at,
+				updated_at
+			)
+			SELECT
+				user_id,
+				work_date,
+				approval_id,
+				approval_process_id,
+				effective_overtime_minutes,
+				CASE
+					WHEN dingtalk_sync_request_id IS NULL OR dingtalk_sync_request_id = '' THEN CONCAT('legacy-sync:', user_id, ':', work_date)
+					ELSE dingtalk_sync_request_id
+				END,
+				'backfill',
+				NOW(3),
+				NOW(3),
+				NOW(3)
+			FROM overtime_match_results
+			WHERE dingtalk_sync_status = 'success' AND effective_overtime_minutes > 0
+			ON DUPLICATE KEY UPDATE
+				approval_id = VALUES(approval_id),
+				approval_process_id = VALUES(approval_process_id),
+				effective_overtime_minutes = VALUES(effective_overtime_minutes),
+				sync_request_id = CASE
+					WHEN overtime_sync_histories.sync_request_id IS NULL OR overtime_sync_histories.sync_request_id = '' THEN VALUES(sync_request_id)
+					ELSE overtime_sync_histories.sync_request_id
+				END,
+				synced_at = COALESCE(overtime_sync_histories.synced_at, VALUES(synced_at)),
+				updated_at = NOW(3)
+		`).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func findUniqueIndexByColumn(tableName, columnName string) (string, error) {
+	type indexRow struct {
+		IndexName string
+	}
+	var rows []indexRow
+	if err := DB.Raw(`
+		SELECT DISTINCT INDEX_NAME
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = ?
+		  AND COLUMN_NAME = ?
+		  AND NON_UNIQUE = 0
+	`, tableName, columnName).Scan(&rows).Error; err != nil {
+		return "", err
+	}
+	for _, row := range rows {
+		name := strings.TrimSpace(row.IndexName)
+		if name != "" {
+			return name, nil
+		}
+	}
+	return "", nil
 }
 
 func migrateShiftCatalogSchema() error {

@@ -227,7 +227,7 @@ const DepartmentTree: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, width: '100%' }}>
             <span>{node.name}</span>
             <span style={{ color: '#8c8c8c', fontSize: 12 }}>
-              在职 {node.active_count} / 直属在职 {node.direct_active_count}
+              {node.active_count} 人{node.direct_active_count !== node.active_count ? ` (直属 ${node.direct_active_count})` : ''}
             </span>
           </div>
         ),
@@ -363,8 +363,8 @@ const DepartmentTree: React.FC = () => {
                     {selectedNode.name}
                   </Title>
                   <div style={{ marginTop: 16, color: '#8c8c8c' }}>
-                    总人数 {selectedNode.headcount}，直属人数 {selectedNode.direct_headcount}
-                    {selectedNode.children?.length ? `，下级部门 ${selectedNode.children.length} 个` : '，当前部门没有下级部门'}
+                    总人数 {selectedNode.headcount}（直属 {selectedNode.direct_headcount}）
+                    {selectedNode.children?.length ? `，下级部门 ${selectedNode.children.length} 个` : ''}
                   </div>
                   {overviewLoading ? (
                     <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
@@ -373,27 +373,26 @@ const DepartmentTree: React.FC = () => {
                   ) : (
                     <>
                       <div style={{ marginTop: 12, marginBottom: 8 }}>
-                        <Text type="secondary">统计口径：在职、试用期、计划转正预警默认含下级部门汇总。</Text>
+                        <Text type="secondary">统计口径：含下级部门汇总数据</Text>
                       </div>
                       <Row gutter={[12, 12]}>
-                        <Col span={12}>
+                        <Col span={8}>
                           <div style={statBoxStyle}>
-                            <Statistic title="直属在职" value={selectedNode.direct_active_count} />
+                            <Statistic
+                              title="在职人数"
+                              value={departmentOverview?.summary.active_employees ?? selectedNode.active_count}
+                              suffix={selectedNode.direct_active_count !== selectedNode.active_count ? `(直属 ${selectedNode.direct_active_count})` : ''}
+                            />
                           </div>
                         </Col>
-                        <Col span={12}>
+                        <Col span={8}>
                           <div style={statBoxStyle}>
-                            <Statistic title="汇总在职" value={departmentOverview?.summary.active_employees ?? selectedNode.active_count} />
+                            <Statistic title="试用期" value={departmentOverview?.summary.probation_employee_count ?? 0} />
                           </div>
                         </Col>
-                        <Col span={12}>
+                        <Col span={8}>
                           <div style={statBoxStyle}>
-                            <Statistic title="试用期人数" value={departmentOverview?.summary.probation_employee_count ?? 0} />
-                          </div>
-                        </Col>
-                        <Col span={12}>
-                          <div style={statBoxStyle}>
-                            <Statistic title="计划转正预警" value={departmentOverview?.summary.planned_regularization_count ?? 0} />
+                            <Statistic title="转正预警" value={departmentOverview?.summary.planned_regularization_count ?? 0} />
                           </div>
                         </Col>
                       </Row>

@@ -4,7 +4,6 @@ import (
 	"peopleops/internal/database"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type OvertimeMatchResultRepository struct {
@@ -24,28 +23,48 @@ func (r *OvertimeMatchResultRepository) FindByApprovalID(approvalID uint) (*data
 	return &result, nil
 }
 
+func (r *OvertimeMatchResultRepository) FindByUserAndWorkDate(userID, workDate string) (*database.OvertimeMatchResult, error) {
+	var result database.OvertimeMatchResult
+	err := r.db.Where("user_id = ? AND work_date = ?", userID, workDate).First(&result).Error
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 func (r *OvertimeMatchResultRepository) FindByUserDateRange(userID, startDate, endDate string) ([]database.OvertimeMatchResult, error) {
 	var results []database.OvertimeMatchResult
-	err := r.db.Where("user_id = ? AND DATE(approval_start_time) >= ? AND DATE(approval_start_time) <= ?", userID, startDate, endDate).
-		Order("approval_start_time asc").Find(&results).Error
+	err := r.db.Where("user_id = ? AND work_date >= ? AND work_date <= ?", userID, startDate, endDate).
+		Order("work_date asc").Find(&results).Error
 	return results, err
 }
 
 func (r *OvertimeMatchResultRepository) FindByDateRange(startDate, endDate string) ([]database.OvertimeMatchResult, error) {
 	var results []database.OvertimeMatchResult
-	err := r.db.Where("DATE(approval_start_time) >= ? AND DATE(approval_start_time) <= ?", startDate, endDate).
+	err := r.db.Where("work_date >= ? AND work_date <= ?", startDate, endDate).
 		Find(&results).Error
 	return results, err
 }
 
-func (r *OvertimeMatchResultRepository) Upsert(result *database.OvertimeMatchResult) error {
-	return r.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "approval_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"approval_status", "attendance_start_time", "attendance_end_time", "matched_minutes", "qualified_minutes", "match_status", "match_reason", "calc_version", "updated_at"}),
-	}).Create(result).Error
+func (r *OvertimeMatchResultRepository) Create(result *database.OvertimeMatchResult) error {
+	return r.db.Create(result).Error
 }
 
 func (r *OvertimeMatchResultRepository) UpdateStatus(id uint, status, reason string) error {
 	return r.db.Model(&database.OvertimeMatchResult{}).Where("id = ?", id).
 		Updates(map[string]interface{}{"match_status": status, "match_reason": reason}).Error
+}
+
+func (r *OvertimeMatchResultRepository) UpdateSyncStatus(id uint, syncStatus, syncRequestID, syncError string) error {
+	return r.db.Model(&database.OvertimeMatchResult{}).Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"dingtalk_sync_status":     syncStatus,
+			"dingtalk_sync_request_id": syncRequestID,
+			"dingtalk_sync_error":      syncError,
+		}).Error
+}
+
+func (r *OvertimeMatchResultRepository) UpdateLocalBalanceStatus(id uint, status string) error {
+	return r.db.Model(&database.OvertimeMatchResult{}).Where("id = ?", id).
+		Update("local_balance_status", status).Error
 }

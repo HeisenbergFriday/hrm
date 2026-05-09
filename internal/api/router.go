@@ -209,10 +209,17 @@ func SetupRouter() *gin.Engine {
 			{
 				overtime.GET("/matches", GetOvertimeMatches)
 				overtime.POST("/matches/run", RunOvertimeMatch)
+				overtime.POST("/matches/force", ForceOvertimeMatch)
+				overtime.POST("/matches/clear-rematch", ClearAndRematchOvertime)
+				overtime.POST("/matches/delete", DeleteOvertimeMatchRecords)
+				overtime.POST("/sync-and-match", SyncAndMatch)
+				overtime.POST("/reset-manual-leave", ResetManualLeave)
+				overtime.POST("/resync-overtime", ResyncOvertimeToDingTalk)
 			}
 			compTime := authRequired.Group("/comp-time")
 			{
 				compTime.GET("/balance", GetCompTimeBalance)
+				compTime.POST("/manual-grant", ManualGrantCompensatoryLeave)
 			}
 
 			// 员工下班时间配置
