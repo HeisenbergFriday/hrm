@@ -223,7 +223,8 @@ func (s *AttendanceService) SyncRecords(records []dingtalk.AttendanceRecord, use
 			checkType = r.CheckType
 		}
 
-		checkTime, err := time.ParseInLocation("2006-01-02 15:04:05", r.UserCheckTime, time.Local)
+		cst := time.FixedZone("CST", 8*3600)
+		checkTime, err := time.ParseInLocation("2006-01-02 15:04:05", r.UserCheckTime, cst)
 		if err != nil {
 			return count, fmt.Errorf("parse attendance time for user %s failed: %w", r.UserID, err)
 		}
