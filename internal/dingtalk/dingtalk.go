@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"peopleops/internal/database"
 	"strconv"
 	"strings"
 	"sync"
@@ -2754,24 +2755,10 @@ func ValidateScheduleItems(opUserID string, items []ScheduleItem, groupID int64)
 		return result
 	}
 
-	// 2. 收集考勤组中的员工
-	groupDetail, err := GetAttendanceGroup(opUserID, groupID)
-	if err != nil {
-		result.Valid = false
-		result.Message = "无法获取考勤组详情"
-		return result
-	}
-
-	// 提取考勤组中的员工ID
-	employeeIDs := make(map[string]bool)
-	if members, ok := groupDetail["userids"].(map[string]interface{}); ok {
-		if userIDs, ok := members["string"].([]interface{}); ok {
-			for _, uid := range userIDs {
-				if userID, ok := uid.(string); ok {
-					employeeIDs[userID] = true
-				}
-			}
-		}
+	employeeIDs := collectAttendanceGroupUserIDs(group)
+	shouldValidateMembers, skipReason := shouldValidateAttendanceGroupMembers(group, employeeIDs)
+	if !shouldValidateMembers {
+		logrus.Infof("skip attendance group member validation for group %d: %s", groupID, skipReason)
 	}
 
 	// 3. 提取考勤组中的班次
@@ -2781,7 +2768,7 @@ func ValidateScheduleItems(opUserID string, items []ScheduleItem, groupID int64)
 	now := time.Now()
 	for _, item := range items {
 		// 校验员工是否在考勤组中
-		if !employeeIDs[item.UserID] {
+		if shouldValidateMembers && !containsUserID(employeeIDs, item.UserID) {
 			result.Errors[item.UserID] = "员工不在考勤组中"
 			result.Valid = false
 			continue
@@ -2814,6 +2801,47 @@ func ValidateScheduleItems(opUserID string, items []ScheduleItem, groupID int64)
 	}
 
 	return result
+}
+
+func collectAttendanceGroupUserIDs(group map[string]interface{}) map[string]struct{} {
+	result := make(map[string]struct{})
+	members, ok := group["userids"].(map[string]interface{})
+	if !ok {
+		return result
+	}
+	userIDs, ok := members["string"].([]interface{})
+	if !ok {
+		return result
+	}
+	for _, uid := range userIDs {
+		userID, ok := uid.(string)
+		if !ok || strings.TrimSpace(userID) == "" {
+			continue
+		}
+		result[userID] = struct{}{}
+	}
+	return result
+}
+
+func shouldValidateAttendanceGroupMembers(group map[string]interface{}, memberIDs map[string]struct{}) (bool, string) {
+	if len(memberIDs) > 0 {
+		return true, ""
+	}
+
+	if memberCount := int64(getFloat(group, "member_count")); memberCount > 0 {
+		return false, fmt.Sprintf("member_count=%d but no explicit userids field", memberCount)
+	}
+
+	if addressList, ok := group["address_list"].([]interface{}); ok && len(addressList) > 0 {
+		return false, fmt.Sprintf("address_list has %d entries but no explicit userids field", len(addressList))
+	}
+
+	return true, ""
+}
+
+func containsUserID(userIDs map[string]struct{}, userID string) bool {
+	_, ok := userIDs[userID]
+	return ok
 }
 
 // containsShiftID 检查班次ID是否在集合中
@@ -2952,4 +2980,86 @@ func SetAttendanceSchedule(opUserID string, userID string, workDate string, shif
 		return err
 	}
 	return SetAttendanceScheduleWithGroup(opUserID, userID, workDate, shiftID, groupID)
+}
+
+// SendCorpMessageToUser 发送企业内部消息通知到指定用户
+func SendCorpMessageToUser(userID, title, content string) error {
+	if userID == "" {
+		return fmt.Errorf("userID is empty")
+	}
+	if !IsNotifiableUserID(userID) {
+		logrus.Infof("skip dingtalk message for non-dingtalk user %s", userID)
+		return nil
+	}
+	accessToken, err := GetAccessToken()
+	if err != nil {
+		return err
+	}
+	body := buildCorpMessagePayload(userID, title, content)
+	resp, err := postJSONOAPI(
+		fmt.Sprintf("https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend?access_token=%s", accessToken),
+		body,
+	)
+	if err != nil {
+		return err
+	}
+	errcode, _ := resp["errcode"].(float64)
+	if errcode != 0 {
+		return fmt.Errorf("send message failed: %s", dingTalkErrorMessage(resp, errcode))
+	}
+	logrus.Infof("dingtalk message sent to user %s: %s", userID, title)
+	return nil
+}
+
+func buildCorpMessagePayload(userID, title, content string) map[string]interface{} {
+	return map[string]interface{}{
+		"agent_id":    getDingTalkAgentID(),
+		"userid_list": strings.TrimSpace(userID),
+		"msg": map[string]interface{}{
+			"msgtype": "text",
+			"text": map[string]interface{}{
+				"content": formatCorpMessageContent(title, content),
+			},
+		},
+	}
+}
+
+func formatCorpMessageContent(title, content string) string {
+	trimmedTitle := strings.TrimSpace(title)
+	trimmedContent := strings.TrimSpace(content)
+
+	switch {
+	case trimmedTitle == "":
+		return trimmedContent
+	case trimmedContent == "":
+		return trimmedTitle
+	default:
+		return trimmedTitle + "\n\n" + trimmedContent
+	}
+}
+
+func IsNotifiableUserID(userID string) bool {
+	trimmed := strings.TrimSpace(userID)
+	if trimmed == "" || strings.EqualFold(trimmed, "admin") {
+		return false
+	}
+	if database.DB == nil {
+		return true
+	}
+
+	var count int64
+	err := database.DB.
+		Model(&database.User{}).
+		Joins("JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Where("users.deleted_at IS NULL").
+		Where("users.status = ?", "active").
+		Where("employee_profiles.profile_status = ?", "active").
+		Where("users.user_id = ?", trimmed).
+		Count(&count).Error
+	if err != nil {
+		logrus.Warnf("check dingtalk notifiable user failed for %s: %v", trimmed, err)
+		return false
+	}
+
+	return count > 0
 }
