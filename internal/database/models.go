@@ -8,20 +8,22 @@ import (
 
 // User 用户模型
 type User struct {
-	ID           uint                   `gorm:"primaryKey" json:"id"`
-	UserID       string                 `gorm:"type:varchar(64);unique;not null" json:"user_id"` // 钉钉用户ID
-	Name         string                 `gorm:"type:varchar(128);not null" json:"name"`
-	Email        string                 `gorm:"type:varchar(128);unique" json:"email"`
-	Mobile       string                 `gorm:"type:varchar(32);unique" json:"mobile"`
-	Password     string                 `gorm:"type:varchar(256)" json:"-"` // 密码哈希，JSON 不输出
-	DepartmentID string                 `gorm:"type:varchar(64);not null" json:"department_id"`
-	Position     string                 `gorm:"type:varchar(128)" json:"position"`
-	Avatar       string                 `gorm:"type:varchar(256)" json:"avatar"`
-	Status       string                 `gorm:"type:varchar(32);not null" json:"status"`
-	Extension    map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
-	CreatedAt    time.Time              `json:"created_at"`
-	UpdatedAt    time.Time              `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt         `gorm:"index" json:"-"`
+	ID            uint                   `gorm:"primaryKey" json:"id"`
+	UserID        string                 `gorm:"type:varchar(64);unique;not null" json:"user_id"` // 钉钉用户ID
+	Name          string                 `gorm:"type:varchar(128);not null" json:"name"`
+	Email         string                 `gorm:"type:varchar(128);unique" json:"email"`
+	Mobile        string                 `gorm:"type:varchar(32);unique" json:"mobile"`
+	Password      string                 `gorm:"type:varchar(256)" json:"-"` // 密码哈希，JSON 不输出
+	DepartmentID  string                 `gorm:"type:varchar(64);not null" json:"department_id"`
+	Position      string                 `gorm:"type:varchar(128)" json:"position"`
+	Avatar        string                 `gorm:"type:varchar(256)" json:"avatar"`
+	Status        string                 `gorm:"type:varchar(32);not null" json:"status"`
+	ManagerUserID string                 `gorm:"type:varchar(64);index" json:"manager_user_id"` // 直属主管钉钉 UserID
+	ManagerName   string                 `gorm:"type:varchar(128)" json:"manager_name"`         // 直属主管姓名快照
+	Extension     map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
+	CreatedAt     time.Time              `json:"created_at"`
+	UpdatedAt     time.Time              `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
 // Department 部门模型

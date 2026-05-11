@@ -54,6 +54,7 @@ import SyncLog from './pages/SyncLog'
 import WeekSchedule from './pages/WeekSchedule'
 import EmployeeShiftConfig from './pages/EmployeeShiftConfig'
 import LeaveOvertime from './pages/LeaveOvertime'
+import PerformanceOverview from './pages/PerformanceOverview'
 
 import { useAuthStore } from './store/authStore'
 
@@ -220,6 +221,9 @@ function App() {
               <Link to="/">首页</Link>
             </Menu.Item>
             <Menu.SubMenu key="organization" icon={<TeamOutlined />} title="组织管理">
+              <Menu.Item key="/organization" icon={<TeamOutlined />}>
+                <Link to="/organization">人才管理驾驶舱</Link>
+              </Menu.Item>
               <Menu.Item key="/department-tree" icon={<TeamOutlined />}>
                 <Link to="/department-tree">组织架构</Link>
               </Menu.Item>
@@ -291,6 +295,9 @@ function App() {
             <Menu.Item key="/leave-overtime" icon={<ScheduleOutlined />}>
               <Link to="/leave-overtime">年假与调休</Link>
             </Menu.Item>
+            <Menu.Item key="/performance-overview" icon={<BarChartOutlined />}>
+              <Link to="/performance-overview">绩效管理</Link>
+            </Menu.Item>
             <Menu.Item key="/setting" icon={<SettingOutlined />}>
               <Link to="/setting">系统设置</Link>
             </Menu.Item>
@@ -330,6 +337,7 @@ function App() {
               <Route path="/employee-flow" element={<EmployeeFlow />} />
               <Route path="/talent-analysis" element={<TalentAnalysis />} />
               <Route path="/leave-overtime" element={<LeaveOvertime />} />
+              <Route path="/performance-overview" element={<PerformanceOverview />} />
               <Route path="/permission" element={<Permission />} />
               <Route path="/log" element={<Log />} />
               <Route path="/setting" element={<Setting />} />

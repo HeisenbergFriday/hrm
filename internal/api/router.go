@@ -233,6 +233,59 @@ func SetupRouter() *gin.Engine {
 				shiftConfig.DELETE("/:user_id", DeleteShiftConfig)
 				shiftConfig.POST("/get-or-create-shift", GetOrCreateCustomShift)
 			}
+
+			performance := authRequired.Group("/performance")
+			{
+				performance.GET("/activities", GetPerformanceActivities)
+				performance.POST("/activities", CreatePerformanceActivity)
+				performance.GET("/activities/:activity_id", GetPerformanceActivity)
+				performance.PUT("/activities/:activity_id", UpdatePerformanceActivity)
+
+				// 活动状态流转
+				performance.POST("/activities/:activity_id/start", StartPerformanceActivity)
+				performance.POST("/activities/:activity_id/open-self-evaluation", OpenSelfEvaluation)
+				performance.POST("/activities/:activity_id/open-manager-evaluation", OpenManagerEvaluation)
+				performance.POST("/activities/:activity_id/confirm-results", ConfirmActivityResults)
+				performance.POST("/activities/:activity_id/archive", ArchivePerformanceActivity)
+
+				// 兼容旧接口
+				performance.POST("/activities/:activity_id/publish", PublishPerformanceActivity)
+				performance.POST("/activities/:activity_id/close", ClosePerformanceActivity)
+
+				performance.PUT("/activities/:activity_id/distribution-rules", PutDistributionRules)
+				performance.GET("/activities/:activity_id/distribution-rules", GetDistributionRules)
+				performance.GET("/activities/:activity_id/result-summary", GetPerformanceResultSummary)
+				performance.GET("/activities/:activity_id/distribution-check", GetPerformanceDistributionCheck)
+
+				performance.POST("/activities/:activity_id/refresh-participants", RefreshPerformanceParticipants)
+				performance.GET("/activities/:activity_id/participants", GetPerformanceParticipants)
+				performance.GET("/participants/:participant_id", GetParticipant)
+
+				// 评分（旧路径，兼容）
+				performance.POST("/participants/:participant_id/self-evaluation", SubmitSelfEvaluation)
+				performance.POST("/participants/:participant_id/manager-evaluation", SubmitManagerEvaluation)
+				// 评分（新路径，带钉钉审批同步）
+				performance.POST("/reviews/:participant_id/self-evaluation", SubmitReviewSelfEvaluation)
+				performance.POST("/reviews/:participant_id/manager-evaluation", SubmitReviewManagerEvaluation)
+				performance.POST("/activities/:activity_id/batch-manager-evaluations", BatchSubmitManagerEvaluation)
+
+				performance.POST("/participants/:participant_id/adjust-final-level", AdjustFinalLevel)
+				performance.POST("/participants/:participant_id/confirm-result", ConfirmResult)
+				performance.POST("/participants/:participant_id/trigger-interview", TriggerPerformanceInterview)
+
+				performance.GET("/participants/:participant_id/versions", GetParticipantVersions)
+				performance.GET("/participants/:participant_id/relationship-change-logs", GetParticipantRelationshipChangeLogs)
+				performance.GET("/activities/:activity_id/relationship-change-logs", GetActivityRelationshipChangeLogs)
+				performance.POST("/activities/:activity_id/batch-confirm-results", BatchConfirmResults)
+				performance.POST("/activities/:activity_id/send-self-eval-reminder", SendSelfEvalReminder)
+				performance.POST("/activities/:activity_id/send-manager-eval-reminder", SendManagerEvalReminder)
+
+				// 模板管理
+				performance.GET("/templates", GetPerformanceTemplates)
+				performance.POST("/templates", CreatePerformanceTemplate)
+				performance.GET("/templates/:id", GetPerformanceTemplate)
+				performance.PUT("/templates/:id", UpdatePerformanceTemplate)
+			}
 		}
 	}
 

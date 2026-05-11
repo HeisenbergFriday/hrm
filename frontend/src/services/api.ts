@@ -259,4 +259,415 @@ export const overtimeAPI = {
     api.post('/overtime/resync-overtime', data, { timeout: 300_000 }),
 }
 
+// ============= 绩效模块 API =============
+// 注意：后端当前无模板 CRUD，以下模板相关接口为前端本地管理，待后端实现后补充
+
+export type PerformanceActivityStatus = 'draft' | 'self_evaluation' | 'manager_evaluation' | 'result_confirmed' | 'archived'
+
+// 绩效模板（前端本地管理，后端暂无此实体）
+export interface PerformanceTemplate {
+  id: number
+  name: string
+  description: string
+  status: string
+  sections: PerformanceTemplateSection[]
+  created_at: string
+  updated_at: string
+}
+
+export interface PerformanceTemplateSection {
+  id: number
+  template_id: number
+  name: string
+  section_type: string
+  weight: number
+  sort_order: number
+  is_score_required: boolean
+  is_comment_required: boolean
+  items: PerformanceTemplateItem[]
+}
+
+export interface PerformanceTemplateItem {
+  id: number
+  section_id: number
+  name: string
+  description: string
+  max_score: number
+  weight: number
+  sort_order: number
+}
+
+// 绩效活动
+export interface PerformanceActivity {
+  id: number
+  name: string
+  cycle_type: string
+  start_date: string
+  end_date: string
+  template_id?: number
+  self_eval_start_at: string
+  self_eval_end_at: string
+  manager_eval_start_at: string
+  manager_eval_end_at: string
+  result_confirm_start_at: string
+  result_confirm_end_at: string
+  status: PerformanceActivityStatus
+  description?: string
+  created_at: string
+  updated_at: string
+  created_by: string
+  updated_by: string
+}
+
+// 绩效参与人状态
+export type PerformanceParticipantStatus = 'pending' | 'self_submitted' | 'manager_submitted' | 'result_confirmed' | 'inactive' | 'removed_from_scope'
+
+// 绩效参与人
+export interface PerformanceParticipant {
+  id: number
+  activity_id: number
+  employee_id: string
+  employee_name: string
+  department_id: string
+  department_name: string
+  position: string
+  level: string
+  employee_status: string
+  manager_id?: string
+  manager_name?: string
+  status: PerformanceParticipantStatus
+  self_score: number
+  self_level: string
+  self_summary: string
+  manager_score: number
+  manager_comment: string
+  suggested_level: string
+  final_level: string
+  adjust_reason: string
+  confirmed_at?: string
+  confirmed_by: string
+  created_at: string
+  updated_at: string
+}
+
+// 绩效活动列表响应
+export interface PerformanceActivityListResponse {
+  items: PerformanceActivity[]
+  total: number
+}
+
+// 绩效参与人列表响应
+export interface PerformanceParticipantListResponse {
+  items: PerformanceParticipant[]
+  total: number
+}
+
+// 强制分布规则
+export interface PerformanceDistributionRule {
+  id: number
+  activity_id: string
+  level: string
+  distribution_percent: number
+  description: string
+}
+
+// 绩效统计摘要
+export interface PerformanceResultSummary {
+  total_participants: number
+  self_submitted_count: number
+  manager_submitted_count: number
+  result_confirmed_count: number
+  level_distribution: Record<string, number>
+}
+
+// 强制分布检查结果
+export interface PerformanceDistributionCheck {
+  passed: boolean
+  total_count: number
+  exceeded_levels: { level: string; expected: number; actual: number; excess: number }[]
+  distribution: Record<string, {
+    expected_count: number
+    actual_count: number
+    expected_percent: number
+    actual_percent: number
+    progress: number
+    status: string
+  }>
+  warnings: string[]
+}
+
+// 刷新参与人结果
+export interface RefreshParticipantsResult {
+  added_count: number
+  updated_count: number
+  inactive_count: number
+}
+
+// 自评提交请求
+export interface SubmitSelfEvaluationRequest {
+  self_score: number
+  self_level: string
+  self_summary: string
+  self_attachments?: string[]
+}
+
+export interface SubmitReviewSelfEvaluationRequest {
+  self_content_json: {
+    content: string
+  }
+}
+
+// 主管评分项
+export interface EvaluationItem {
+  item_key: string
+  item_score: number
+  item_value: string
+}
+
+// 主管评分提交请求
+export interface SubmitManagerEvaluationRequest {
+  manager_score: number
+  suggested_level: string
+  manager_comment: string
+  evaluation_items?: EvaluationItem[]
+}
+
+export interface SubmitReviewManagerEvaluationRequest {
+  manager_score_json?: Record<string, number>
+  manager_comment: string
+  final_level: string
+  final_level_reason?: string
+}
+
+// 批量主管评分
+export interface BatchManagerEvaluationItem {
+  participant_id: number
+  manager_score: number
+  suggested_level: string
+  manager_comment: string
+  evaluation_items?: EvaluationItem[]
+}
+
+// 绩效版本记录
+export interface PerformanceReviewVersion {
+  id: number
+  participant_id: number
+  activity_id: string
+  review_type: 'self' | 'manager' | 'adjust' | 'confirm'
+  created_by: string
+  self_score: number
+  self_level: string
+  self_summary: string
+  self_attachments: string[]
+  manager_score: number
+  suggested_level: string
+  manager_comment: string
+  evaluation_items: EvaluationItem[]
+  final_level: string
+  adjust_reason: string
+  confirm_comment: string
+  confirmed_at: string
+  created_at: string
+  updated_at: string
+}
+
+// 创建绩效活动请求
+export interface CreatePerformanceActivityRequest {
+  name: string
+  cycle_type: string
+  start_date: string
+  end_date: string
+  self_eval_start_at: string
+  self_eval_end_at: string
+  manager_eval_start_at: string
+  manager_eval_end_at: string
+  result_confirm_start_at: string
+  result_confirm_end_at: string
+  status: PerformanceActivityStatus
+  description?: string
+}
+
+// 关系变更日志
+export interface RelationshipChangeLog {
+  id: number
+  activity_id: string
+  participant_id: number
+  change_type: string
+  field_name: string
+  old_value: string
+  new_value: string
+  changed_at: string
+  source: string
+  created_by: string
+}
+
+export const performanceAPI = {
+  // ===== 绩效模板 =====
+  getTemplates: () => api.get('/performance/templates'),
+  createTemplate: (data: { name: string; description: string; status: string; sections: any[] }) =>
+    api.post('/performance/templates', data),
+  getTemplate: (templateId: number) => api.get(`/performance/templates/${templateId}`),
+  updateTemplate: (templateId: number, data: { name: string; description: string; status: string; sections: any[] }) =>
+    api.put(`/performance/templates/${templateId}`, data),
+
+  // ===== 绩效活动 =====
+  getActivities: (params?: {
+    page?: number
+    page_size?: number
+    status?: string
+    keyword?: string
+    start_date?: string
+    end_date?: string
+  }) => api.get('/performance/activities', { params }),
+
+  createActivity: (data: {
+    name: string
+    cycle_type: string
+    start_date: string
+    end_date: string
+    self_eval_start_at: string
+    self_eval_end_at: string
+    manager_eval_start_at: string
+    manager_eval_end_at: string
+    result_confirm_start_at: string
+    result_confirm_end_at: string
+    status: string
+    description?: string
+  }) => api.post('/performance/activities', data),
+
+  getActivity: (activityId: number) =>
+    api.get(`/performance/activities/${activityId}`),
+
+  updateActivity: (activityId: number, data: {
+    name: string
+    cycle_type: string
+    start_date: string
+    end_date: string
+    self_eval_start_at: string
+    self_eval_end_at: string
+    manager_eval_start_at: string
+    manager_eval_end_at: string
+    result_confirm_start_at: string
+    result_confirm_end_at: string
+    status: string
+    description?: string
+  }) => api.put(`/performance/activities/${activityId}`, data),
+
+  // 活动状态流转
+  startActivity: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/start`),
+
+  openSelfEvaluation: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-self-evaluation`),
+
+  openManagerEvaluation: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-manager-evaluation`),
+
+  confirmResults: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/confirm-results`),
+
+  archiveActivity: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/archive`),
+
+  // 兼容旧接口
+  publishActivity: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/publish`),
+  closeActivity: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/close`),
+
+  // ===== 绩效参与人 =====
+  getParticipants: (activityId: number, params?: {
+    page?: number
+    page_size?: number
+    department_id?: string
+    manager_id?: string
+    status?: string
+    employee_keyword?: string
+  }) => api.get(`/performance/activities/${activityId}/participants`, { params }),
+
+  refreshParticipants: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/refresh-participants`),
+
+  getParticipant: (participantId: number) =>
+    api.get(`/performance/participants/${participantId}`),
+
+  // ===== 自评 =====
+  submitSelfEvaluation: (participantId: number, data: {
+    self_score: number
+    self_level: string
+    self_summary: string
+    self_attachments?: string[]
+  }) => api.post(`/performance/participants/${participantId}/self-evaluation`, data),
+
+  submitReviewSelfEvaluation: (participantId: number, data: SubmitReviewSelfEvaluationRequest) =>
+    api.post(`/performance/reviews/${participantId}/self-evaluation`, data),
+
+  // ===== 主管评分 =====
+  submitManagerEvaluation: (participantId: number, data: {
+    manager_score: number
+    suggested_level: string
+    manager_comment: string
+    evaluation_items?: { item_key: string; item_score: number; item_value: string }[]
+  }) => api.post(`/performance/participants/${participantId}/manager-evaluation`, data),
+
+  submitReviewManagerEvaluation: (participantId: number, data: SubmitReviewManagerEvaluationRequest) =>
+    api.post(`/performance/reviews/${participantId}/manager-evaluation`, data),
+
+  batchSubmitManagerEvaluations: (activityId: number, evaluations: {
+    participant_id: number
+    manager_score: number
+    suggested_level: string
+    manager_comment: string
+    evaluation_items?: { item_key: string; item_score: number; item_value: string }[]
+  }[]) => api.post(`/performance/activities/${activityId}/batch-manager-evaluations`, { evaluations }),
+
+  // ===== 批量确认结果 =====
+  batchConfirmResults: (activityId: number, participantIds: number[]) =>
+    api.post(`/performance/activities/${activityId}/batch-confirm-results`, { participant_ids: participantIds }),
+
+  // ===== 钉钉待办/提醒 =====
+  sendSelfEvalReminder: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/send-self-eval-reminder`),
+
+  sendManagerEvalReminder: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/send-manager-eval-reminder`),
+
+  // ===== 绩效面谈 =====
+  triggerPerformanceInterview: (participantId: number, interviewType: 'required' | 'optional') =>
+    api.post(`/performance/participants/${participantId}/trigger-interview`, { interview_type: interviewType }),
+
+  // ===== 调整最终等级 =====
+  adjustFinalLevel: (participantId: number, finalLevel: string, reason: string) =>
+    api.post(`/performance/participants/${participantId}/adjust-final-level`, { final_level: finalLevel, reason }),
+
+  // ===== 确认结果 =====
+  confirmResult: (participantId: number, confirmComment?: string) =>
+    api.post(`/performance/participants/${participantId}/confirm-result`, { confirm_comment: confirmComment }),
+
+  // ===== 版本记录 =====
+  getParticipantVersions: (participantId: number) =>
+    api.get(`/performance/participants/${participantId}/versions`),
+
+  // ===== 关系变更日志 =====
+  getParticipantRelationshipChangeLogs: (participantId: number) =>
+    api.get(`/performance/participants/${participantId}/relationship-change-logs`),
+
+  getActivityRelationshipChangeLogs: (activityId: number) =>
+    api.get(`/performance/activities/${activityId}/relationship-change-logs`),
+
+  // ===== 强制分布规则 =====
+  getDistributionRules: (activityId: number) =>
+    api.get(`/performance/activities/${activityId}/distribution-rules`),
+
+  putDistributionRules: (activityId: number, rules: { level: string; distribution_percent: number; description: string }[]) =>
+    api.put(`/performance/activities/${activityId}/distribution-rules`, { rules }),
+
+  // ===== 统计和强制分布 =====
+  getResultSummary: (activityId: number) =>
+    api.get(`/performance/activities/${activityId}/result-summary`),
+
+  getDistributionCheck: (activityId: number) =>
+    api.get(`/performance/activities/${activityId}/distribution-check`),
+}
+
 export default api
