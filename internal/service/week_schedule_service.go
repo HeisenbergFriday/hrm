@@ -426,19 +426,8 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 			}
 
 			// 解析该用户的有效班次（自定义下班时间 > 用户规则 > 部门规则 > 公司规则 > 默认）
-			effectiveShiftID := normalShiftID
-			if sid, ok := customShiftMap[user.UserID]; ok {
-				effectiveShiftID = sid
-			} else if sid, ok := userShiftMap[user.UserID]; ok {
-				effectiveShiftID = sid
-			} else if sid, ok := deptShiftMap[user.DepartmentID]; ok {
-				effectiveShiftID = sid
-			} else if companyShiftID > 0 {
-				effectiveShiftID = companyShiftID
-			}
 			assignment := resolveEffectiveShiftAssignment(normalShiftID, user.UserID, user.DepartmentID, customShiftMap, userShiftMap, deptShiftMap, companyShiftID)
-			effectiveShiftID = assignment.ShiftID
-			needsWeekdaySync := assignment.Source != "default"
+			effectiveShiftID := assignment.ShiftID
 
 			for d := 0; d < 7; d++ {
 				day := weekStart.AddDate(0, 0, d)
@@ -453,17 +442,14 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 						// 法定节假日休息回落给钉钉考勤组默认规则，不做显式覆盖。
 						continue
 					}
-					shiftID := effectiveShiftID
-					items = append(items, dingtalk.ScheduleItem{UserID: user.UserID, WorkDate: dayStr, ShiftID: shiftID})
+					// 调休补班日：按有效班次推送
+					items = append(items, dingtalk.ScheduleItem{UserID: user.UserID, WorkDate: dayStr, ShiftID: effectiveShiftID})
 					syncedUsers[user.UserID] = true
 					continue
 				}
 
-				// 周一至周五：仅同步有自定义下班时间的员工（其余人走钉钉考勤组默认班次，无需重复写入）
+				// 周一至周五：全员显式推送有效班次（含默认班次员工，确保钉钉日历可见）
 				if d < 5 {
-					if !needsWeekdaySync {
-						continue
-					}
 					items = append(items, dingtalk.ScheduleItem{UserID: user.UserID, WorkDate: dayStr, ShiftID: effectiveShiftID})
 					syncedUsers[user.UserID] = true
 					continue
@@ -471,14 +457,19 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 
 				// 周六：大小周逻辑
 				if d == 5 {
-					if weekType != "small" {
-						// 大周周六休息同样回落给钉钉默认规则，不做显式覆盖。
-						continue
+					if weekType == "small" {
+						items = append(items, dingtalk.ScheduleItem{UserID: user.UserID, WorkDate: dayStr, ShiftID: effectiveShiftID})
+					} else {
+						// 大周周六休息，显式写入以保证全周作息可见
+						items = append(items, dingtalk.ScheduleItem{UserID: user.UserID, WorkDate: dayStr, ShiftID: 0})
 					}
-					shiftID := effectiveShiftID
-					items = append(items, dingtalk.ScheduleItem{UserID: user.UserID, WorkDate: dayStr, ShiftID: shiftID})
 					syncedUsers[user.UserID] = true
+					continue
 				}
+
+				// 周日：全员推休息
+				items = append(items, dingtalk.ScheduleItem{UserID: user.UserID, WorkDate: dayStr, ShiftID: 0})
+				syncedUsers[user.UserID] = true
 			}
 		}
 	}
