@@ -519,10 +519,9 @@ const PerformanceOverview: React.FC = () => {
       <div style={{ marginBottom: 16 }}>
         <Space align="center" size={12} wrap style={{ marginBottom: 8 }}>
           <Title level={4} style={{ margin: 0 }}>绩效管理</Title>
-          <Tag color="blue">Phase 1 - 联调中</Tag>
         </Space>
         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          绩效活动管理与评分工作台，已接入后端 API。
+          绩效活动管理与评分工作台。
         </Paragraph>
       </div>
 
