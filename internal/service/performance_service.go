@@ -817,6 +817,7 @@ func (s *PerformanceService) CreateTemplate(req struct {
 
 	var sections []database.PerformanceTemplateSection
 	var items []database.PerformanceTemplateItem
+	var sectionItemCounts []int
 	for _, sec := range req.Sections {
 		section := database.PerformanceTemplateSection{
 			Name:              strings.TrimSpace(sec.Name),
@@ -837,9 +838,10 @@ func (s *PerformanceService) CreateTemplate(req struct {
 			}
 			items = append(items, item)
 		}
+		sectionItemCounts = append(sectionItemCounts, len(sec.Items))
 	}
 
-	if err := s.templateRepo.Create(template, sections, items); err != nil {
+	if err := s.templateRepo.Create(template, sections, items, sectionItemCounts); err != nil {
 		return nil, err
 	}
 
@@ -941,6 +943,7 @@ func (s *PerformanceService) UpdateTemplate(templateID uint, req struct {
 
 	var sections []database.PerformanceTemplateSection
 	var items []database.PerformanceTemplateItem
+	var sectionItemCounts []int
 
 	if structuralChange {
 		if strings.TrimSpace(req.Name) == "" {
@@ -1001,10 +1004,11 @@ func (s *PerformanceService) UpdateTemplate(templateID uint, req struct {
 				}
 				items = append(items, item)
 			}
+			sectionItemCounts = append(sectionItemCounts, len(sec.Items))
 		}
 	}
 
-	if err := s.templateRepo.Update(template, sections, items, structuralChange); err != nil {
+	if err := s.templateRepo.Update(template, sections, items, structuralChange, sectionItemCounts); err != nil {
 		return nil, err
 	}
 
