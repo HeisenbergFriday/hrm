@@ -410,26 +410,28 @@ func NewPerformanceTemplateRepository(db *gorm.DB) *PerformanceTemplateRepositor
 	return &PerformanceTemplateRepository{db: db}
 }
 
-func (r *PerformanceTemplateRepository) Create(template *database.PerformanceTemplate, sections []database.PerformanceTemplateSection, items []database.PerformanceTemplateItem) error {
+func (r *PerformanceTemplateRepository) Create(template *database.PerformanceTemplate, sections []database.PerformanceTemplateSection, items []database.PerformanceTemplateItem, sectionItemCounts []int) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(template).Error; err != nil {
 			return err
 		}
-		processed := make([]bool, len(items))
+		itemOffset := 0
 		for i := range sections {
 			sections[i].TemplateID = template.ID
 			if err := tx.Create(&sections[i]).Error; err != nil {
 				return err
 			}
-			for j := range items {
-				if !processed[j] && items[j].SectionID == 0 {
-					items[j].SectionID = sections[i].ID
-					processed[j] = true
-					if err := tx.Create(&items[j]).Error; err != nil {
-						return err
-					}
+			count := 0
+			if i < len(sectionItemCounts) {
+				count = sectionItemCounts[i]
+			}
+			for j := itemOffset; j < itemOffset+count && j < len(items); j++ {
+				items[j].SectionID = sections[i].ID
+				if err := tx.Create(&items[j]).Error; err != nil {
+					return err
 				}
 			}
+			itemOffset += count
 		}
 		return nil
 	})
@@ -480,7 +482,7 @@ func (r *PerformanceTemplateRepository) FindAll(page, pageSize int, status strin
 	return items, total, nil
 }
 
-func (r *PerformanceTemplateRepository) Update(template *database.PerformanceTemplate, sections []database.PerformanceTemplateSection, items []database.PerformanceTemplateItem, structuralChange bool) error {
+func (r *PerformanceTemplateRepository) Update(template *database.PerformanceTemplate, sections []database.PerformanceTemplateSection, items []database.PerformanceTemplateItem, structuralChange bool, sectionItemCounts []int) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(template).Error; err != nil {
 			return err
@@ -493,21 +495,23 @@ func (r *PerformanceTemplateRepository) Update(template *database.PerformanceTem
 			if err := tx.Where("template_id = ?", template.ID).Delete(&database.PerformanceTemplateSection{}).Error; err != nil {
 				return err
 			}
-			processed := make([]bool, len(items))
+			itemOffset := 0
 			for i := range sections {
 				sections[i].TemplateID = template.ID
 				if err := tx.Create(&sections[i]).Error; err != nil {
 					return err
 				}
-				for j := range items {
-					if !processed[j] && items[j].SectionID == 0 {
-						items[j].SectionID = sections[i].ID
-						processed[j] = true
-						if err := tx.Create(&items[j]).Error; err != nil {
-							return err
-						}
+				count := 0
+				if i < len(sectionItemCounts) {
+					count = sectionItemCounts[i]
+				}
+				for j := itemOffset; j < itemOffset+count && j < len(items); j++ {
+					items[j].SectionID = sections[i].ID
+					if err := tx.Create(&items[j]).Error; err != nil {
+						return err
 					}
 				}
+				itemOffset += count
 			}
 		}
 		return nil
