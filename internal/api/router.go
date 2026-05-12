@@ -215,6 +215,10 @@ func SetupRouter() *gin.Engine {
 				overtime.POST("/sync-and-match", SyncAndMatch)
 				overtime.POST("/reset-manual-leave", ResetManualLeave)
 				overtime.POST("/resync-overtime", ResyncOvertimeToDingTalk)
+				overtime.POST("/supplementary/submit", SubmitSupplementaryClockIn)
+				overtime.POST("/supplementary/approve", ApproveSupplementaryClockIn)
+				overtime.GET("/supplementary/list", GetSupplementaryRequests)
+				overtime.POST("/supplementary/sync-dingtalk", SyncSupplementaryFromDingTalk)
 			}
 			compTime := authRequired.Group("/comp-time")
 			{

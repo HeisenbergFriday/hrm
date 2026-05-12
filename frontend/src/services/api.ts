@@ -257,6 +257,12 @@ export const overtimeAPI = {
     api.post('/overtime/reset-manual-leave', data, { timeout: 300_000 }),
   resyncOvertimeToDingTalk: (data: { dry_run: boolean; user_id?: string; start_date?: string; end_date?: string }) =>
     api.post('/overtime/resync-overtime', data, { timeout: 300_000 }),
+  submitSupplementary: (data: { match_result_id: number; clock_in: string; clock_out: string; reason?: string }) =>
+    api.post('/overtime/supplementary/submit', data),
+  approveSupplementary: (data: { request_id: number; approved: boolean; rejected_reason?: string }) =>
+    api.post('/overtime/supplementary/approve', data),
+  getSupplementaryList: (params: { user_id?: string; start_date?: string; end_date?: string }) =>
+    api.get('/overtime/supplementary/list', { params }),
 }
 
 // ============= 绩效模块 API =============

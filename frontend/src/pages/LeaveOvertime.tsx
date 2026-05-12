@@ -320,6 +320,9 @@ const OvertimeTab: React.FC = () => {
   const [userID, setUserID] = useState('')
   const [selectedMonth, setSelectedMonth] = useState(dayjs().startOf('month'))
   const [queryKey, setQueryKey] = useState<{ user_id: string; start_date: string; end_date: string } | null>(null)
+  const [suppModalOpen, setSuppModalOpen] = useState(false)
+  const [suppMatchRecord, setSuppMatchRecord] = useState<any>(null)
+  const [suppForm] = Form.useForm()
 
   const buildOvertimeQuery = () => ({
     user_id: userID,
@@ -378,6 +381,36 @@ const OvertimeTab: React.FC = () => {
     },
     onError: (err: any) => message.error(err?.response?.data?.error || '删除失败'),
   })
+
+  const submitSuppMutation = useMutation({
+    mutationFn: (data: { match_result_id: number; clock_in: string; clock_out: string; reason?: string }) =>
+      overtimeAPI.submitSupplementary(data),
+    onSuccess: (res: any) => {
+      message.success(res?.message || '补卡申请已提交')
+      setSuppModalOpen(false)
+      suppForm.resetFields()
+      refreshOvertimeMatches()
+    },
+    onError: (err: any) => message.error(err?.response?.data?.error || '提交补卡申请失败'),
+  })
+
+  const handleOpenSuppModal = (record: any) => {
+    setSuppMatchRecord(record)
+    suppForm.resetFields()
+    setSuppModalOpen(true)
+  }
+
+  const handleSubmitSupp = async () => {
+    try {
+      const values = await suppForm.validateFields()
+      await submitSuppMutation.mutateAsync({
+        match_result_id: suppMatchRecord.id,
+        clock_in: values.clock_in.format('YYYY-MM-DD HH:mm'),
+        clock_out: values.clock_out.format('YYYY-MM-DD HH:mm'),
+        reason: values.reason,
+      })
+    } catch {}
+  }
 
   const handleClearRematch = () => {
     Modal.confirm({
@@ -573,7 +606,14 @@ const OvertimeTab: React.FC = () => {
       title: '状态',
       dataIndex: 'match_status',
       key: 'match_status',
-      render: (value: string) => <Tag color={statusColor[value] || 'default'}>{statusLabel[value] || value}</Tag>,
+      render: (value: string, record: any) => (
+        <Space size={4}>
+          <Tag color={statusColor[value] || 'default'}>{statusLabel[value] || value}</Tag>
+          {(value === 'no_clock_record' || value === 'insufficient_clock_record') && (
+            <Button size="small" type="link" onClick={() => handleOpenSuppModal(record)}>补卡</Button>
+          )}
+        </Space>
+      ),
     },
     { title: '提交时间', dataIndex: 'approval_start_time', key: 'approval_start_time', render: formatDateTime },
     { title: '通过时间', dataIndex: 'approval_end_time', key: 'approval_end_time', render: formatDateTime },
@@ -734,6 +774,35 @@ const OvertimeTab: React.FC = () => {
             </div>
           )
         )}
+      </Modal>
+
+      <Modal
+        title="提交补卡申请"
+        open={suppModalOpen}
+        onCancel={() => setSuppModalOpen(false)}
+        onOk={handleSubmitSupp}
+        confirmLoading={submitSuppMutation.isPending}
+        okText="提交"
+        cancelText="取消"
+      >
+        {suppMatchRecord && (
+          <Alert
+            type="info"
+            message={`${suppMatchRecord.user_name || suppMatchRecord.user_id} - ${suppMatchRecord.work_date} 加班审批${suppMatchRecord.approval_id}`}
+            style={{ marginBottom: 16 }}
+          />
+        )}
+        <Form form={suppForm} layout="vertical">
+          <Form.Item name="clock_in" label="补卡上班时间" rules={[{ required: true, message: '请选择补卡上班时间' }]}>
+            <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="选择上班打卡时间" />
+          </Form.Item>
+          <Form.Item name="clock_out" label="补卡下班时间" rules={[{ required: true, message: '请选择补卡下班时间' }]}>
+            <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="选择下班打卡时间" />
+          </Form.Item>
+          <Form.Item name="reason" label="补卡原因">
+            <Input.TextArea rows={3} placeholder="请输入补卡原因（选填）" />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   )
