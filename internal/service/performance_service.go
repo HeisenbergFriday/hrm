@@ -400,7 +400,7 @@ func (s *PerformanceService) SetDistributionRules(activityID string, req []struc
 			ActivityID:          activityID,
 			Level:               strings.TrimSpace(r.Level),
 			DistributionPercent: int(r.DistributionPercent),
-			Description:         req[0].Description,
+			Description:         r.Description,
 			CreatedBy:           "system",
 			UpdatedBy:           "system",
 		})
@@ -531,7 +531,9 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 						return err
 					}
 					for _, log := range changeLogs {
-						tx.Create(&log)
+						if err := tx.Create(&log).Error; err != nil {
+							return err
+						}
 					}
 					result.UpdatedCount++
 				}
@@ -573,7 +575,7 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 				p.UpdatedBy = "system"
 				tx.Save(p)
 
-				tx.Create(&database.PerformanceRelationshipChangeLog{
+				if err := tx.Create(&database.PerformanceRelationshipChangeLog{
 					ActivityID:    activityID,
 					ParticipantID: p.ID,
 					ChangeType:    "status_changed",
@@ -583,7 +585,9 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 					ChangedAt:     now,
 					Source:        "refresh_participants",
 					CreatedBy:     "system",
-				})
+				}).Error; err != nil {
+					return err
+				}
 				result.InactiveCount++
 			}
 		}

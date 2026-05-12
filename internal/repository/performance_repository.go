@@ -250,7 +250,7 @@ func (r *PerformanceReviewVersionRepository) BatchCreateManagerEvaluationVersion
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		for _, e := range evaluations {
 			var p database.PerformanceParticipant
-			if err := tx.Where("id = ? AND activity_id = ? AND deleted_at IS NULL", e.ParticipantID, activityID).First(&p).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND activity_id = ? AND deleted_at IS NULL", e.ParticipantID, activityID).First(&p).Error; err != nil {
 				return err
 			}
 			v := database.PerformanceReviewVersion{
