@@ -966,8 +966,11 @@ func SubmitReviewManagerEvaluation(c *gin.Context) {
 func notifyEmployeeOnManagerEval(participantID, finalLevel, comment string) error {
 	svc := service.NewPerformanceService(database.DB)
 	participant, err := svc.GetParticipant(participantID)
-	if err != nil || participant == nil {
+	if err != nil {
 		return err
+	}
+	if participant == nil {
+		return fmt.Errorf("participant %s not found", participantID)
 	}
 	return dingtalk.SendCorpMessageToUser(participant.EmployeeID,
 		fmt.Sprintf("【绩效提醒】您的评分结果已出具"),
