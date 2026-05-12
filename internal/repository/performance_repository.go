@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type PerformanceActivityRepository struct{ db *gorm.DB }
@@ -77,17 +78,18 @@ func NewPerformanceDistributionRuleRepository(db *gorm.DB) *PerformanceDistribut
 }
 
 func (r *PerformanceDistributionRuleRepository) ReplaceForActivity(activityID string, rules []database.PerformanceDistributionRule) error {
-	// MVP: 先软删再插入
-	if err := r.db.Where("activity_id = ?", activityID).Delete(&database.PerformanceDistributionRule{}).Error; err != nil {
-		return err
-	}
-	if len(rules) == 0 {
-		return nil
-	}
-	for i := range rules {
-		rules[i].ActivityID = activityID
-	}
-	return r.db.Create(&rules).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("activity_id = ?", activityID).Delete(&database.PerformanceDistributionRule{}).Error; err != nil {
+			return err
+		}
+		if len(rules) == 0 {
+			return nil
+		}
+		for i := range rules {
+			rules[i].ActivityID = activityID
+		}
+		return tx.Create(&rules).Error
+	})
 }
 
 func (r *PerformanceDistributionRuleRepository) ListByActivity(activityID string) ([]database.PerformanceDistributionRule, error) {
@@ -154,33 +156,37 @@ func NewPerformanceReviewVersionRepository(db *gorm.DB) *PerformanceReviewVersio
 }
 
 func (r *PerformanceReviewVersionRepository) CreateSelfEvaluationVersion(participantID string, score float64, level, summary string, attachments []string, userID string) (*database.PerformanceReviewVersion, error) {
-	p, err := r.getParticipantLocked(participantID)
+	var version *database.PerformanceReviewVersion
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var p database.PerformanceParticipant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
+			return err
+		}
+
+		version = &database.PerformanceReviewVersion{
+			ParticipantID:       p.ID,
+			ActivityID:          p.ActivityID,
+			ReviewType:          "self",
+			SelfScore:           score,
+			SelfLevel:           level,
+			SelfSummary:         summary,
+			SelfAttachmentsJSON: attachments,
+			SuggestedLevel:      p.SuggestedLevel,
+			FinalLevel:          p.FinalLevel,
+			CreatedBy:           userID,
+		}
+		if err := tx.Create(version).Error; err != nil {
+			return err
+		}
+
+		p.SelfScore = score
+		p.SelfLevel = level
+		p.SelfSummary = summary
+		p.Status = nextParticipantStatusAfterSelfEvaluation(p.Status)
+		p.UpdatedBy = userID
+		return tx.Save(p).Error
+	})
 	if err != nil {
-		return nil, err
-	}
-
-	version := &database.PerformanceReviewVersion{
-		ParticipantID:       p.ID,
-		ActivityID:          p.ActivityID,
-		ReviewType:          "self",
-		SelfScore:           score,
-		SelfLevel:           level,
-		SelfSummary:         summary,
-		SelfAttachmentsJSON: attachments,
-		SuggestedLevel:      p.SuggestedLevel,
-		FinalLevel:          p.FinalLevel,
-		CreatedBy:           userID,
-	}
-	if err := r.db.Create(version).Error; err != nil {
-		return nil, err
-	}
-
-	p.SelfScore = score
-	p.SelfLevel = level
-	p.SelfSummary = summary
-	p.Status = nextParticipantStatusAfterSelfEvaluation(p.Status)
-	p.UpdatedBy = userID
-	if err := r.db.Save(p).Error; err != nil {
 		return nil, err
 	}
 	return version, nil
@@ -191,35 +197,39 @@ func (r *PerformanceReviewVersionRepository) CreateManagerEvaluationVersion(part
 	ItemScore float64
 	ItemValue string
 }, userID string) (*database.PerformanceReviewVersion, error) {
-	p, err := r.getParticipantLocked(participantID)
+	var version *database.PerformanceReviewVersion
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var p database.PerformanceParticipant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
+			return err
+		}
+
+		version = &database.PerformanceReviewVersion{
+			ParticipantID:       p.ID,
+			ActivityID:          p.ActivityID,
+			ReviewType:          "manager",
+			ManagerScore:        score,
+			SuggestedLevel:      suggestedLevel,
+			ManagerComment:      comment,
+			EvaluationItemsJSON: items,
+			FinalLevel:          p.FinalLevel,
+			CreatedBy:           userID,
+		}
+		if err := tx.Create(version).Error; err != nil {
+			return err
+		}
+
+		p.ManagerScore = score
+		p.SuggestedLevel = suggestedLevel
+		p.ManagerComment = comment
+		p.Status = nextParticipantStatusAfterManagerEvaluation(p.Status)
+		p.UpdatedBy = userID
+		if p.FinalLevel == "" {
+			p.FinalLevel = suggestedLevel
+		}
+		return tx.Save(p).Error
+	})
 	if err != nil {
-		return nil, err
-	}
-
-	version := &database.PerformanceReviewVersion{
-		ParticipantID:       p.ID,
-		ActivityID:          p.ActivityID,
-		ReviewType:          "manager",
-		ManagerScore:        score,
-		SuggestedLevel:      suggestedLevel,
-		ManagerComment:      comment,
-		EvaluationItemsJSON: items,
-		FinalLevel:          p.FinalLevel,
-		CreatedBy:           userID,
-	}
-	if err := r.db.Create(version).Error; err != nil {
-		return nil, err
-	}
-
-	p.ManagerScore = score
-	p.SuggestedLevel = suggestedLevel
-	p.ManagerComment = comment
-	p.Status = nextParticipantStatusAfterManagerEvaluation(p.Status)
-	p.UpdatedBy = userID
-	if p.FinalLevel == "" {
-		p.FinalLevel = suggestedLevel
-	}
-	if err := r.db.Save(p).Error; err != nil {
 		return nil, err
 	}
 	return version, nil
@@ -278,53 +288,61 @@ func (r *PerformanceReviewVersionRepository) BatchCreateManagerEvaluationVersion
 }
 
 func (r *PerformanceReviewVersionRepository) AdjustFinalLevel(participantID, finalLevel, reason, userID string) (*database.PerformanceReviewVersion, error) {
-	p, err := r.getParticipantLocked(participantID)
+	var version *database.PerformanceReviewVersion
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var p database.PerformanceParticipant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
+			return err
+		}
+		version = &database.PerformanceReviewVersion{
+			ParticipantID: p.ID,
+			ActivityID:    p.ActivityID,
+			ReviewType:    "adjust_final_level",
+			FinalLevel:    finalLevel,
+			AdjustReason:  reason,
+			CreatedBy:     userID,
+		}
+		if err := tx.Create(version).Error; err != nil {
+			return err
+		}
+		p.FinalLevel = finalLevel
+		p.AdjustReason = reason
+		p.UpdatedBy = userID
+		return tx.Save(p).Error
+	})
 	if err != nil {
-		return nil, err
-	}
-	version := &database.PerformanceReviewVersion{
-		ParticipantID: p.ID,
-		ActivityID:    p.ActivityID,
-		ReviewType:    "adjust_final_level",
-		FinalLevel:    finalLevel,
-		AdjustReason:  reason,
-		CreatedBy:     userID,
-	}
-	if err := r.db.Create(version).Error; err != nil {
-		return nil, err
-	}
-	p.FinalLevel = finalLevel
-	p.AdjustReason = reason
-	p.UpdatedBy = userID
-	if err := r.db.Save(p).Error; err != nil {
 		return nil, err
 	}
 	return version, nil
 }
 
 func (r *PerformanceReviewVersionRepository) ConfirmResult(participantID, confirmComment, userID string) (*database.PerformanceReviewVersion, error) {
-	p, err := r.getParticipantLocked(participantID)
+	var version *database.PerformanceReviewVersion
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var p database.PerformanceParticipant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
+			return err
+		}
+		version = &database.PerformanceReviewVersion{
+			ParticipantID:  p.ID,
+			ActivityID:     p.ActivityID,
+			ReviewType:     "confirm_result",
+			FinalLevel:     p.FinalLevel,
+			ConfirmComment: confirmComment,
+			CreatedBy:      userID,
+		}
+		confirmedAt := timeNow()
+		version.ConfirmedAt = &confirmedAt
+		if err := tx.Create(version).Error; err != nil {
+			return err
+		}
+		p.Status = "result_confirmed"
+		p.ConfirmedAt = version.ConfirmedAt
+		p.ConfirmedBy = userID
+		p.UpdatedBy = userID
+		return tx.Save(p).Error
+	})
 	if err != nil {
-		return nil, err
-	}
-	version := &database.PerformanceReviewVersion{
-		ParticipantID:  p.ID,
-		ActivityID:     p.ActivityID,
-		ReviewType:     "confirm_result",
-		FinalLevel:     p.FinalLevel,
-		ConfirmComment: confirmComment,
-		CreatedBy:      userID,
-	}
-	confirmedAt := timeNow()
-	version.ConfirmedAt = &confirmedAt
-	if err := r.db.Create(version).Error; err != nil {
-		return nil, err
-	}
-	p.Status = "result_confirmed"
-	p.ConfirmedAt = version.ConfirmedAt
-	p.ConfirmedBy = userID
-	p.UpdatedBy = userID
-	if err := r.db.Save(p).Error; err != nil {
 		return nil, err
 	}
 	return version, nil
@@ -340,7 +358,7 @@ func (r *PerformanceReviewVersionRepository) ListByParticipant(participantID str
 
 func (r *PerformanceReviewVersionRepository) getParticipantLocked(participantID string) (*database.PerformanceParticipant, error) {
 	var p database.PerformanceParticipant
-	if err := r.db.Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
+	if err := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -397,14 +415,16 @@ func (r *PerformanceTemplateRepository) Create(template *database.PerformanceTem
 		if err := tx.Create(template).Error; err != nil {
 			return err
 		}
+		processed := make([]bool, len(items))
 		for i := range sections {
 			sections[i].TemplateID = template.ID
 			if err := tx.Create(&sections[i]).Error; err != nil {
 				return err
 			}
 			for j := range items {
-				if items[j].SectionID == 0 {
+				if !processed[j] && items[j].SectionID == 0 {
 					items[j].SectionID = sections[i].ID
+					processed[j] = true
 					if err := tx.Create(&items[j]).Error; err != nil {
 						return err
 					}
@@ -466,25 +486,23 @@ func (r *PerformanceTemplateRepository) Update(template *database.PerformanceTem
 			return err
 		}
 		if structuralChange {
+			// 先删 items（通过子查询），再删 sections，避免孤儿数据
+			if err := tx.Where("section_id IN (SELECT id FROM performance_template_sections WHERE template_id = ?)", template.ID).Delete(&database.PerformanceTemplateItem{}).Error; err != nil {
+				return err
+			}
 			if err := tx.Where("template_id = ?", template.ID).Delete(&database.PerformanceTemplateSection{}).Error; err != nil {
 				return err
 			}
-			if len(sections) > 0 {
-				var sectionIDs []uint
-				if err := tx.Model(&database.PerformanceTemplateSection{}).Where("template_id = ?", template.ID).Pluck("id", &sectionIDs).Error; err == nil && len(sectionIDs) > 0 {
-					if err := tx.Where("section_id IN ?", sectionIDs).Delete(&database.PerformanceTemplateItem{}).Error; err != nil {
-						return err
-					}
-				}
-			}
+			processed := make([]bool, len(items))
 			for i := range sections {
 				sections[i].TemplateID = template.ID
 				if err := tx.Create(&sections[i]).Error; err != nil {
 					return err
 				}
 				for j := range items {
-					if items[j].SectionID == 0 {
+					if !processed[j] && items[j].SectionID == 0 {
 						items[j].SectionID = sections[i].ID
+						processed[j] = true
 						if err := tx.Create(&items[j]).Error; err != nil {
 							return err
 						}

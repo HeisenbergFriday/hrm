@@ -13,6 +13,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type PerformanceService struct {
@@ -389,7 +390,7 @@ func (s *PerformanceService) SetDistributionRules(activityID string, req []struc
 		seen[level] = struct{}{}
 		total += r.DistributionPercent
 	}
-	if int64(total) != 100 {
+	if total < 99.99 || total > 100.01 {
 		return nil, errors.New("distribution_percent 总和必须等于 100")
 	}
 
@@ -450,139 +451,147 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 		deptMap[d.DepartmentID] = d
 	}
 
-	// 4. 获取现有参与人
+	// 4. 获取现有参与人（在事务内重新查询并加锁）
 	var existingParticipants []database.PerformanceParticipant
 	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL", activityID).Find(&existingParticipants).Error; err != nil {
 		return nil, err
 	}
-	existingMap := make(map[string]*database.PerformanceParticipant)
-	for i := range existingParticipants {
-		existingMap[existingParticipants[i].EmployeeID] = &existingParticipants[i]
-	}
 
-	// 5. 刷新参与人
-	now := time.Now()
-	for _, user := range users {
-		dept, hasDept := deptMap[user.DepartmentID]
-		deptName := ""
-		if hasDept {
-			deptName = dept.Name
+	// 5-6. 在事务内执行写操作，防止并发重复创建
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var txParticipants []database.PerformanceParticipant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("activity_id = ? AND deleted_at IS NULL", activityID).Find(&txParticipants).Error; err != nil {
+			return err
+		}
+		existingMap := make(map[string]*database.PerformanceParticipant)
+		for i := range txParticipants {
+			existingMap[txParticipants[i].EmployeeID] = &txParticipants[i]
 		}
 
-		existing, exists := existingMap[user.UserID]
-		if exists {
-			// 已存在，检查是否需要更新组织关系
-			changed := false
-			var changeLogs []database.PerformanceRelationshipChangeLog
+		now := time.Now()
+		for _, user := range users {
+			dept, hasDept := deptMap[user.DepartmentID]
+			deptName := ""
+			if hasDept {
+				deptName = dept.Name
+			}
 
-			if existing.DepartmentID != user.DepartmentID {
-				changeLogs = append(changeLogs, database.PerformanceRelationshipChangeLog{
+			existing, exists := existingMap[user.UserID]
+			if exists {
+				changed := false
+				var changeLogs []database.PerformanceRelationshipChangeLog
+
+				if existing.DepartmentID != user.DepartmentID {
+					changeLogs = append(changeLogs, database.PerformanceRelationshipChangeLog{
+						ActivityID:    activityID,
+						ParticipantID: existing.ID,
+						ChangeType:    "department_changed",
+						FieldName:     "department_id",
+						OldValue:      existing.DepartmentID,
+						NewValue:      user.DepartmentID,
+						ChangedAt:     now,
+						Source:        "refresh_participants",
+						CreatedBy:     "system",
+					})
+					existing.DepartmentID = user.DepartmentID
+					existing.DepartmentName = deptName
+					changed = true
+				}
+
+				oldManagerID := ""
+				if existing.ManagerID != nil {
+					oldManagerID = *existing.ManagerID
+				}
+				newManagerID, managerName := resolveManagerInfo(user)
+				if oldManagerID != newManagerID {
+					changeLogs = append(changeLogs, database.PerformanceRelationshipChangeLog{
+						ActivityID:    activityID,
+						ParticipantID: existing.ID,
+						ChangeType:    "manager_changed",
+						FieldName:     "manager_id",
+						OldValue:      oldManagerID,
+						NewValue:      newManagerID,
+						ChangedAt:     now,
+						Source:        "refresh_participants",
+						CreatedBy:     "system",
+					})
+					if newManagerID == "" {
+						existing.ManagerID = nil
+						existing.ManagerName = nil
+					} else {
+						existing.ManagerID = &newManagerID
+						existing.ManagerName = &managerName
+					}
+					changed = true
+				}
+
+				if changed {
+					existing.UpdatedBy = "system"
+					if err := tx.Save(existing).Error; err != nil {
+						return err
+					}
+					for _, log := range changeLogs {
+						tx.Create(&log)
+					}
+					result.UpdatedCount++
+				}
+			} else {
+				participant := database.PerformanceParticipant{
+					ActivityID:     activityID,
+					EmployeeID:     user.UserID,
+					EmployeeName:   user.Name,
+					DepartmentID:   user.DepartmentID,
+					DepartmentName: deptName,
+					Position:       user.Position,
+					EmployeeStatus: user.Status,
+					Status:         "pending",
+					CreatedBy:      "system",
+					UpdatedBy:      "system",
+				}
+				managerUserID, managerName := resolveManagerInfo(user)
+				if managerUserID != "" {
+					participant.ManagerID = &managerUserID
+					participant.ManagerName = &managerName
+				}
+				if err := tx.Create(&participant).Error; err != nil {
+					return err
+				}
+				result.AddedCount++
+			}
+		}
+
+		// 标记已离职员工
+		activeUserIDs := make(map[string]bool)
+		for _, u := range users {
+			activeUserIDs[u.UserID] = true
+		}
+		for i := range txParticipants {
+			p := &txParticipants[i]
+			if !activeUserIDs[p.EmployeeID] && p.EmployeeStatus == "active" {
+				p.EmployeeStatus = "inactive"
+				p.Status = "removed_from_scope"
+				p.UpdatedBy = "system"
+				tx.Save(p)
+
+				tx.Create(&database.PerformanceRelationshipChangeLog{
 					ActivityID:    activityID,
-					ParticipantID: existing.ID,
-					ChangeType:    "department_changed",
-					FieldName:     "department_id",
-					OldValue:      existing.DepartmentID,
-					NewValue:      user.DepartmentID,
+					ParticipantID: p.ID,
+					ChangeType:    "status_changed",
+					FieldName:     "employee_status",
+					OldValue:      "active",
+					NewValue:      "inactive",
 					ChangedAt:     now,
 					Source:        "refresh_participants",
 					CreatedBy:     "system",
 				})
-				existing.DepartmentID = user.DepartmentID
-				existing.DepartmentName = deptName
-				changed = true
+				result.InactiveCount++
 			}
-
-			oldManagerID := ""
-			if existing.ManagerID != nil {
-				oldManagerID = *existing.ManagerID
-			}
-			newManagerID, managerName := resolveManagerInfo(user)
-			if oldManagerID != newManagerID {
-				changeLogs = append(changeLogs, database.PerformanceRelationshipChangeLog{
-					ActivityID:    activityID,
-					ParticipantID: existing.ID,
-					ChangeType:    "manager_changed",
-					FieldName:     "manager_id",
-					OldValue:      oldManagerID,
-					NewValue:      newManagerID,
-					ChangedAt:     now,
-					Source:        "refresh_participants",
-					CreatedBy:     "system",
-				})
-				if newManagerID == "" {
-					existing.ManagerID = nil
-					existing.ManagerName = nil
-				} else {
-					existing.ManagerID = &newManagerID
-					existing.ManagerName = &managerName
-				}
-				changed = true
-			}
-
-			if changed {
-				existing.UpdatedBy = "system"
-				if err := s.db.Save(existing).Error; err != nil {
-					return nil, err
-				}
-				// 写入变更日志
-				for _, log := range changeLogs {
-					s.db.Create(&log)
-				}
-				result.UpdatedCount++
-			}
-		} else {
-			// 新增参与人
-			participant := database.PerformanceParticipant{
-				ActivityID:     activityID,
-				EmployeeID:     user.UserID,
-				EmployeeName:   user.Name,
-				DepartmentID:   user.DepartmentID,
-				DepartmentName: deptName,
-				Position:       user.Position,
-				EmployeeStatus: user.Status,
-				Status:         "pending",
-				CreatedBy:      "system",
-				UpdatedBy:      "system",
-			}
-			managerUserID, managerName := resolveManagerInfo(user)
-			if managerUserID != "" {
-				participant.ManagerID = &managerUserID
-				participant.ManagerName = &managerName
-			}
-			if err := s.db.Create(&participant).Error; err != nil {
-				return nil, err
-			}
-			result.AddedCount++
 		}
-	}
 
-	// 6. 标记已离职员工
-	activeUserIDs := make(map[string]bool)
-	for _, u := range users {
-		activeUserIDs[u.UserID] = true
-	}
-	for _, p := range existingParticipants {
-		if !activeUserIDs[p.EmployeeID] && p.EmployeeStatus == "active" {
-			// 员工已离职或停用
-			p.EmployeeStatus = "inactive"
-			p.Status = "removed_from_scope"
-			p.UpdatedBy = "system"
-			s.db.Save(&p)
-
-			// 记录变更日志
-			s.db.Create(&database.PerformanceRelationshipChangeLog{
-				ActivityID:    activityID,
-				ParticipantID: p.ID,
-				ChangeType:    "status_changed",
-				FieldName:     "employee_status",
-				OldValue:      "active",
-				NewValue:      "inactive",
-				ChangedAt:     now,
-				Source:        "refresh_participants",
-				CreatedBy:     "system",
-			})
-			result.InactiveCount++
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return result, nil
@@ -1043,29 +1052,31 @@ func (s *PerformanceService) BatchConfirmResults(activityID string, participantI
 }
 
 func (s *PerformanceService) confirmResultByID(participantID uint, userID string) error {
-	p, err := s.participantR.GetByID(strconv.FormatUint(uint64(participantID), 10))
-	if err != nil {
-		return err
-	}
-	now := time.Now()
-	p.Status = "result_confirmed"
-	p.ConfirmedAt = &now
-	p.ConfirmedBy = userID
-	p.UpdatedBy = userID
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var p database.PerformanceParticipant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
+			return err
+		}
+		now := time.Now()
+		p.Status = "result_confirmed"
+		p.ConfirmedAt = &now
+		p.ConfirmedBy = userID
+		p.UpdatedBy = userID
 
-	version := &database.PerformanceReviewVersion{
-		ParticipantID:  p.ID,
-		ActivityID:     p.ActivityID,
-		ReviewType:     "confirm_result",
-		FinalLevel:     p.FinalLevel,
-		ConfirmComment: "",
-		ConfirmedAt:    &now,
-		CreatedBy:      userID,
-	}
-	if err := s.db.Create(version).Error; err != nil {
-		return err
-	}
-	return s.db.Save(p).Error
+		version := &database.PerformanceReviewVersion{
+			ParticipantID:  p.ID,
+			ActivityID:     p.ActivityID,
+			ReviewType:     "confirm_result",
+			FinalLevel:     p.FinalLevel,
+			ConfirmComment: "",
+			ConfirmedAt:    &now,
+			CreatedBy:      userID,
+		}
+		if err := tx.Create(version).Error; err != nil {
+			return err
+		}
+		return tx.Save(p).Error
+	})
 }
 
 // SendSelfEvalReminders 发送自评提醒给未提交的参与者
@@ -1119,9 +1130,9 @@ func (s *PerformanceService) SendManagerEvalReminders(activityID string) error {
 	}
 
 	var succeeded, failed int
-	for managerID := range managerCounts {
+	for managerID, count := range managerCounts {
 		title := "绩效评分提醒"
-		content := fmt.Sprintf("您有%d位员工的绩效待评分，请尽快完成。", len(participants))
+		content := fmt.Sprintf("您有%d位员工的绩效待评分，请尽快完成。", count)
 		if err := dingtalk.SendCorpMessageToUser(managerID, title, content); err != nil {
 			logrus.Warnf("send manager eval reminder to %s failed: %v", managerID, err)
 			failed++
