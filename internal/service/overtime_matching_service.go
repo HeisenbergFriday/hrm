@@ -21,6 +21,7 @@ type OvertimeMatchingService struct {
 	matchRepo  *repository.OvertimeMatchResultRepository
 	ledgerRepo *repository.CompensatoryLeaveLedgerRepository
 	ruleRepo   *repository.OvertimeRuleConfigRepository
+	suppRepo   *repository.SupplementaryRequestRepository
 	rematch    *overtimeRematchSession
 }
 
@@ -30,6 +31,7 @@ func NewOvertimeMatchingService(db *gorm.DB) *OvertimeMatchingService {
 		matchRepo:  repository.NewOvertimeMatchResultRepository(db),
 		ledgerRepo: repository.NewCompensatoryLeaveLedgerRepository(db),
 		ruleRepo:   repository.NewOvertimeRuleConfigRepository(db),
+		suppRepo:   repository.NewSupplementaryRequestRepository(db),
 	}
 }
 
@@ -209,7 +211,11 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 			msg = fmt.Sprintf("审批已通过；加班窗口[%s~%s]内无有效打卡（窗口外有%d条有效打卡）；本次加班视为无效，未生成调休",
 				approvalStart.Format("15:04"), approvalEnd.Format("15:04"), len(validAttendances))
 		}
-		return s.saveMatchResult(&approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "no_clock_record", msg)
+		if err := s.saveMatchResult(&approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "no_clock_record", msg); err != nil {
+			return err
+		}
+		_ = s.createSupplementaryRequestIfNotExists(approval.ApplicantID, approvalDate, approval.ID)
+		return nil
 	}
 
 	if len(overtimeWindowAttendances) < 2 {
@@ -217,10 +223,14 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 		if len(overtimeWindowAttendances) == 1 {
 			clockInfo = fmt.Sprintf("（仅1条：%s）", overtimeWindowAttendances[0].CheckTime.Format("15:04"))
 		}
-		return s.saveMatchResult(&approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "insufficient_clock_record",
+		if err := s.saveMatchResult(&approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "insufficient_clock_record",
 			fmt.Sprintf("审批已通过；加班窗口[%s~%s]内有效打卡仅%d次%s（不足2次）；无法计算打卡时长，本次加班视为无效，未生成调休",
-				approvalStart.Format("15:04"), approvalEnd.Format("15:04"), len(overtimeWindowAttendances), clockInfo))
-	}
+					approvalStart.Format("15:04"), approvalEnd.Format("15:04"), len(overtimeWindowAttendances), clockInfo)); err != nil {
+				return err
+			}
+			_ = s.createSupplementaryRequestIfNotExists(approval.ApplicantID, approvalDate, approval.ID)
+			return nil
+			}
 
 	// 取最早和最晚的打卡时间
 	checkin := overtimeWindowAttendances[0].CheckTime
@@ -269,6 +279,12 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 			approvalStart.Format("15:04"), approvalEnd.Format("15:04"),
 			checkin.Format("15:04"), checkout.Format("15:04"),
 			actualClockSpanMinutes, breakDeductMinutes, rawEffectiveMinutes, effectiveOvertimeMinutes, effectiveOvertimeMinutes)
+	}
+	if rawEffectiveMinutes > effectiveOvertimeMinutes && effectiveOvertimeMinutes > 0 {
+		reason = fmt.Sprintf("加班窗口[%s~%s]；打卡 %s~%s；实际打卡%d分钟，扣除休息%d分钟，有效%d分钟超出封顶上限，已截断为%d分钟",
+			approvalStart.Format("15:04"), approvalEnd.Format("15:04"),
+			checkin.Format("15:04"), checkout.Format("15:04"),
+			actualClockSpanMinutes, breakDeductMinutes, rawEffectiveMinutes, effectiveOvertimeMinutes)
 	}
 	if effectiveOvertimeMinutes == 0 {
 		status = "zero_overtime"
@@ -715,6 +731,21 @@ func (s *OvertimeMatchingService) applyOvertimeRules(minutes int) int {
 	if minutes < minThreshold {
 		return minThreshold
 	}
+
+	// 封顶上限（单次加班最多折算 N 分钟调休）
+	maxCap := 480
+	cfgCap, err := s.ruleRepo.FindByKey("overtime.max_compensatory_minutes")
+	if err == nil {
+		var v map[string]interface{}
+		if parseJSON(cfgCap.RuleValueJSON, &v) == nil {
+			if val, ok := v["minutes"].(float64); ok {
+				maxCap = int(val)
+			}
+		}
+	}
+	if minutes > maxCap {
+		return maxCap
+	}
 	return minutes
 }
 
@@ -1158,4 +1189,134 @@ func (s *OvertimeMatchingService) markOvertimeYearSyncFailed(scope overtimeSyncS
 			"dingtalk_sync_error":  syncErr.Error(),
 			"match_status":         "dingtalk_sync_failed",
 		}).Error
+}
+
+// createSupplementaryRequestIfNotExists 为无打卡记录的加班匹配创建补卡申请记录
+func (s *OvertimeMatchingService) createSupplementaryRequestIfNotExists(userID, workDate string, approvalID uint) error {
+	match, err := s.matchRepo.FindByUserAndWorkDate(userID, workDate)
+	if err != nil {
+		return err
+	}
+	existing, err := s.suppRepo.FindPendingByMatchResultID(match.ID)
+	if err == nil && existing != nil {
+		return nil
+	}
+	req := &database.OvertimeSupplementaryRequest{
+		MatchResultID: match.ID,
+		UserID:        userID,
+		WorkDate:      workDate,
+		ApprovalID:    approvalID,
+		Status:        "pending",
+	}
+	return s.suppRepo.Create(req)
+}
+
+// ApproveSupplementaryRequest 审批通过补卡申请，使用补卡时间重新匹配加班
+func (s *OvertimeMatchingService) ApproveSupplementaryRequest(requestID uint, clockIn, clockOut time.Time, approvedBy string) error {
+	suppReq, err := s.suppRepo.FindByID(requestID)
+	if err != nil {
+		return fmt.Errorf("补卡申请不存在: %w", err)
+	}
+	if suppReq.Status != "pending" {
+		return fmt.Errorf("补卡申请状态为%s，无法审批", suppReq.Status)
+	}
+
+	// 更新补卡申请状态为已通过
+	if err := s.suppRepo.Approve(requestID, approvedBy, clockIn, clockOut); err != nil {
+		return fmt.Errorf("更新补卡申请状态失败: %w", err)
+	}
+
+	// 查找关联的匹配记录
+	var match database.OvertimeMatchResult
+	if err := s.db.First(&match, suppReq.MatchResultID).Error; err != nil {
+		return fmt.Errorf("匹配记录不存在: %w", err)
+	}
+
+	// 获取加班审批信息
+	var approval database.Approval
+	if err := s.db.First(&approval, match.ApprovalID).Error; err != nil {
+		return fmt.Errorf("审批记录不存在: %w", err)
+	}
+
+	approvalStart, approvalEnd := s.extractApprovalTimeWindow(&approval)
+	if approvalStart.IsZero() || approvalEnd.IsZero() {
+		return fmt.Errorf("审批时间窗口解析失败")
+	}
+
+	// 使用补卡时间计算有效调休
+	actualDuration := clockOut.Sub(clockIn)
+	actualClockSpanMinutes := int(actualDuration.Minutes())
+	if actualClockSpanMinutes <= 0 {
+		return fmt.Errorf("补卡时间异常：结束时间需晚于开始时间")
+	}
+
+	breakDeductMinutes := s.calculateBreakDeduction(actualClockSpanMinutes)
+	rawEffectiveMinutes := actualClockSpanMinutes - breakDeductMinutes
+	if rawEffectiveMinutes < 0 {
+		rawEffectiveMinutes = 0
+	}
+	effectiveOvertimeMinutes := s.applyOvertimeRules(rawEffectiveMinutes)
+
+	// 删除旧的匹配记录（物理删除以避免唯一索引冲突）
+	if err := s.db.Unscoped().Delete(&match).Error; err != nil {
+		return fmt.Errorf("删除旧匹配记录失败: %w", err)
+	}
+
+	// 回滚旧的调休台账
+	if match.EffectiveOvertimeMinutes > 0 && !strings.EqualFold(strings.TrimSpace(match.MatchStatus), "rolled_back") {
+		compSvc := NewCompensatoryLeaveService(s.db)
+		_ = compSvc.RollbackCredit(match.ID)
+	}
+
+	// 保存新的匹配结果
+	status := "matched"
+	reason := fmt.Sprintf("补卡审批通过；补卡 %s~%s；实际打卡%d分钟，扣除休息%d分钟，有效调休%d分钟",
+		clockIn.Format("15:04"), clockOut.Format("15:04"),
+		actualClockSpanMinutes, breakDeductMinutes, effectiveOvertimeMinutes)
+
+	if effectiveOvertimeMinutes == 0 {
+		status = "zero_overtime"
+		reason = fmt.Sprintf("补卡审批通过；补卡 %s~%s；实际打卡%d分钟，扣除休息%d分钟，扣除后为0，未生成调休",
+			clockIn.Format("15:04"), clockOut.Format("15:04"),
+			actualClockSpanMinutes, breakDeductMinutes)
+	}
+
+	if err := s.saveMatchResult(&approval, approvalStart, approvalEnd, &clockIn, &clockOut, actualClockSpanMinutes, breakDeductMinutes, effectiveOvertimeMinutes, status, reason); err != nil {
+		return fmt.Errorf("保存匹配结果失败: %w", err)
+	}
+
+	// 生成调休台账
+	if effectiveOvertimeMinutes > 0 {
+		newMatch, err := s.matchRepo.FindByUserAndWorkDate(match.UserID, match.WorkDate)
+		if err != nil {
+			return fmt.Errorf("查找新匹配记录失败: %w", err)
+		}
+		compSvc := NewCompensatoryLeaveService(s.db)
+		if err := compSvc.CreditFromOvertime(newMatch.ID); err != nil {
+			_ = s.matchRepo.UpdateLocalBalanceStatus(newMatch.ID, "failed")
+			_ = s.matchRepo.UpdateStatus(newMatch.ID, "local_balance_failed", "本系统调休余额增加失败："+err.Error())
+			return nil
+		}
+		_ = s.matchRepo.UpdateLocalBalanceStatus(newMatch.ID, "success")
+		_ = s.syncOvertimeToDingTalk(newMatch)
+	}
+
+	return nil
+}
+
+// RejectSupplementaryRequest 拒绝补卡申请
+func (s *OvertimeMatchingService) RejectSupplementaryRequest(requestID uint, rejectedReason string) error {
+	suppReq, err := s.suppRepo.FindByID(requestID)
+	if err != nil {
+		return fmt.Errorf("补卡申请不存在: %w", err)
+	}
+	if suppReq.Status != "pending" {
+		return fmt.Errorf("补卡申请状态为%s，无法操作", suppReq.Status)
+	}
+	return s.suppRepo.Reject(requestID, rejectedReason)
+}
+
+// GetSupplementaryRequests 获取补卡申请列表
+func (s *OvertimeMatchingService) GetSupplementaryRequests(userID, startDate, endDate string) ([]database.OvertimeSupplementaryRequest, error) {
+	return s.suppRepo.FindByUserID(userID, startDate, endDate)
 }

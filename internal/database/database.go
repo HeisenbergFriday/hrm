@@ -82,7 +82,15 @@ func Init() error {
 	seed()
 	log.Println("种子数据填充完成")
 
+	// 绩效表已随主库 migrate() 一并迁移，无需独立数据源
+	log.Println("绩效模块使用主库")
+
 	return nil
+}
+
+// GetPerformanceDB 获取绩效模块的数据源（统一使用主库）
+func GetPerformanceDB() *gorm.DB {
+	return DB
 }
 
 // createDatabase 创建数据库
@@ -132,6 +140,7 @@ func migrate() error {
 		&OvertimeRuleConfig{},
 		&OvertimeMatchResult{},
 		&OvertimeSyncHistory{},
+		&OvertimeSupplementaryRequest{},
 		&CompensatoryLeaveLedger{},
 	); err != nil {
 		return err

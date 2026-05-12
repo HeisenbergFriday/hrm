@@ -166,6 +166,13 @@ func (s *LeaveJobScheduler) SeedDefaultRules() {
 		Status:        "active",
 	})
 
+	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
+		RuleKey:       "overtime.max_compensatory_minutes",
+		RuleName:      "单次加班调休上限（分钟）",
+		RuleValueJSON: `{"minutes": 480}`,
+		Status:        "active",
+	})
+
 	_ = leaveRuleRepo.Upsert(&database.LeaveRuleConfig{
 		RuleType:      "eligibility",
 		RuleKey:       "eligibility.retroactive_confirmation",

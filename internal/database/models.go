@@ -572,6 +572,25 @@ type OvertimeSyncHistory struct {
 	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
+// OvertimeSupplementaryRequest 加班补卡申请
+type OvertimeSupplementaryRequest struct {
+	ID                    uint       `gorm:"primaryKey" json:"id"`
+	MatchResultID         uint       `gorm:"not null;index" json:"match_result_id"`
+	UserID                string     `gorm:"type:varchar(64);not null;index" json:"user_id"`
+	WorkDate              string     `gorm:"type:varchar(32);not null" json:"work_date"`
+	ApprovalID            uint       `gorm:"default:0;index" json:"approval_id"`
+	SupplementaryClockIn  time.Time  `json:"supplementary_clock_in"`
+	SupplementaryClockOut time.Time  `json:"supplementary_clock_out"`
+	SupplementaryReason   string     `gorm:"type:text" json:"supplementary_reason"`
+	Status                string     `gorm:"type:varchar(32);not null;default:pending" json:"status"` // pending/approved/rejected
+	DingtalkProcessID     string     `gorm:"type:varchar(64)" json:"dingtalk_process_id"`
+	ApprovedBy            string     `gorm:"type:varchar(64)" json:"approved_by"`
+	ApprovedAt            *time.Time `json:"approved_at"`
+	RejectedReason        string     `gorm:"type:text" json:"rejected_reason"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
+}
+
 // CompensatoryLeaveLedger 调休余额台账
 type CompensatoryLeaveLedger struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
