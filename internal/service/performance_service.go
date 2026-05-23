@@ -44,6 +44,22 @@ func NewPerformanceService(db *gorm.DB) *PerformanceService {
 	}
 }
 
+func (s *PerformanceService) displayNameForUser(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+
+	var user database.User
+	if err := s.db.Where("id = ?", value).First(&user).Error; err == nil && strings.TrimSpace(user.Name) != "" {
+		return strings.TrimSpace(user.Name)
+	}
+	if err := s.db.Where("user_id = ?", value).First(&user).Error; err == nil && strings.TrimSpace(user.Name) != "" {
+		return strings.TrimSpace(user.Name)
+	}
+	return value
+}
+
 type CreateActivityRequest struct {
 	Name                   string
 	CycleType              string
@@ -392,7 +408,6 @@ var participantStageStatuses = map[string]map[string]struct{}{
 		"result_confirmed":  {},
 	},
 	"hr_confirmation": {
-		"manager_confirmed": {},
 		"hr_confirmed":     {},
 		"locked":           {},
 		"result_confirmed": {},
@@ -831,6 +846,45 @@ func (s *PerformanceService) GetParticipant(participantID string) (*database.Per
 	return s.participantR.GetByID(participantID)
 }
 
+func (s *PerformanceService) HydrateParticipantTargetConfirmers(participant *database.PerformanceParticipant) {
+	if participant == nil || participant.ID == 0 || strings.TrimSpace(participant.ActivityID) == "" {
+		return
+	}
+
+	logs, err := s.approvalRepo.FindByParticipant(participant.ID, participant.ActivityID)
+	if err != nil {
+		return
+	}
+	for _, log := range logs {
+		name := strings.TrimSpace(log.ApproverName)
+		if name == "" {
+			name = s.displayNameForUser(log.ApproverID)
+		}
+		if name == "" {
+			name = s.displayNameForUser(log.CreatedBy)
+		}
+
+		switch log.Action {
+		case "submit":
+			if participant.EmployeeTargetConfirmedAt == nil && !log.CreatedAt.IsZero() {
+				confirmedAt := log.CreatedAt
+				participant.EmployeeTargetConfirmedAt = &confirmedAt
+			}
+			if strings.TrimSpace(participant.EmployeeTargetConfirmedBy) == "" {
+				participant.EmployeeTargetConfirmedBy = name
+			}
+		case "approve":
+			if participant.ManagerTargetConfirmedAt == nil && !log.CreatedAt.IsZero() {
+				confirmedAt := log.CreatedAt
+				participant.ManagerTargetConfirmedAt = &confirmedAt
+			}
+			if strings.TrimSpace(participant.ManagerTargetConfirmedBy) == "" {
+				participant.ManagerTargetConfirmedBy = name
+			}
+		}
+	}
+}
+
 func (s *PerformanceService) GetRealtimeDistributionCheck(activityID string) ([]TeamQuotaStatus, error) {
 	participants, _, err := s.participantR.FindAll(activityID, 1, 5000, "", "", "", "")
 	if err != nil {
@@ -1064,7 +1118,15 @@ func (s *PerformanceService) OpenManagerEvaluation(activityID, userID string) er
 	if err := s.ensureParticipantStageComplete(activityID, "self_evaluation"); err != nil {
 		return err
 	}
-	return s.actRepo.UpdateStatus(activityID, "manager_evaluation", userID)
+	if err := s.actRepo.UpdateStatus(activityID, "manager_evaluation", userID); err != nil {
+		return err
+	}
+	go func() {
+		if err := s.SendManagerEvalReminders(activityID); err != nil {
+			logrus.Warnf("send manager evaluation reminders after opening manager evaluation failed: %v", err)
+		}
+	}()
+	return nil
 }
 
 // ConfirmResults 兼容旧接口：主管评分完成后进入员工确认阶段
@@ -1189,10 +1251,11 @@ func (s *PerformanceService) LockActivity(activityID, userID string) error {
 		now := time.Now()
 		for i := range participants {
 			p := &participants[i]
+			wasLocked := p.Status == "locked"
 			p.Status = "locked"
 			p.UpdatedBy = userID
-			if !p.IsLocked {
-				p.IsLocked = true
+			p.IsLocked = true
+			if !wasLocked {
 				p.LockedAt = &now
 				p.LockedBy = userID
 			}
@@ -1229,7 +1292,7 @@ func (s *PerformanceService) ensureParticipantStageComplete(activityID, stage st
 			continue
 		}
 		activeCount++
-		if !participantCompletedStage(participant.Status, stage) {
+		if !participantCompletedStage(participant.Status, stage) || !participantHasStageEvidence(participant, stage) {
 			incompleteCount++
 		}
 	}
@@ -1241,6 +1304,22 @@ func (s *PerformanceService) ensureParticipantStageComplete(activityID, stage st
 		return fmt.Errorf("仍有 %d 名参与人未完成当前阶段，无法推进", incompleteCount)
 	}
 	return nil
+}
+
+func participantHasStageEvidence(participant database.PerformanceParticipant, stage string) bool {
+	if participant.Status == "locked" || participant.Status == "result_confirmed" {
+		return true
+	}
+	switch stage {
+	case "employee_confirmation":
+		return participant.Status != "employee_confirmed" || participant.EmployeeConfirmedAt != nil
+	case "manager_confirmation":
+		return participant.Status != "manager_confirmed" || participant.ManagerConfirmedAt != nil
+	case "hr_confirmation":
+		return participant.Status != "hr_confirmed" || participant.HRConfirmedAt != nil
+	default:
+		return true
+	}
 }
 
 func ignoredParticipantStatusList() []string {
@@ -1525,9 +1604,12 @@ func (s *PerformanceService) confirmResultByID(participantID uint, userID string
 			return err
 		}
 		now := time.Now()
-		p.Status = "result_confirmed"
+		p.Status = "locked"
 		p.ConfirmedAt = &now
 		p.ConfirmedBy = userID
+		p.IsLocked = true
+		p.LockedAt = &now
+		p.LockedBy = userID
 		p.UpdatedBy = userID
 
 		version := &database.PerformanceReviewVersion{
@@ -1933,18 +2015,30 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 	}
 
 	// 更新所有目标记录的审批状态
+	now := time.Now()
+	displayName := s.displayNameForUser(userID)
+
 	if err := s.db.Model(&database.PerformanceGoalRecord{}).
 		Where("participant_id = ? AND activity_id = ?", participantID, participant.ActivityID).
 		Update("approval_status", targetStatus).Error; err != nil {
 		return err
 	}
 	if participantStatus != "" {
+		participantUpdates := map[string]interface{}{
+			"status":     participantStatus,
+			"updated_by": userID,
+		}
+		switch action {
+		case "submit":
+			participantUpdates["employee_target_confirmed_at"] = now
+			participantUpdates["employee_target_confirmed_by"] = displayName
+		case "approve":
+			participantUpdates["manager_target_confirmed_at"] = now
+			participantUpdates["manager_target_confirmed_by"] = displayName
+		}
 		if err := s.db.Model(&database.PerformanceParticipant{}).
 			Where("id = ? AND deleted_at IS NULL", participantID).
-			Updates(map[string]interface{}{
-				"status":     participantStatus,
-				"updated_by": userID,
-			}).Error; err != nil {
+			Updates(participantUpdates).Error; err != nil {
 			return err
 		}
 	}
@@ -1956,6 +2050,7 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 		Action:        action,
 		Comment:       comment,
 		ApproverID:    userID,
+		ApproverName:  displayName,
 		Version:       1,
 		CreatedBy:     userID,
 	}
@@ -2411,16 +2506,120 @@ func (s *PerformanceService) GetHRConfirmDeadlineStatus(activityID string) (map[
 	}
 
 	status := map[string]interface{}{
-		"deadline":      activity.HRConfirmDeadline,
-		"pending_count": len(pending),
-		"overdue":       false,
+		"deadline":       activity.HRConfirmDeadline,
+		"pending_count":  len(pending),
+		"overdue":        false,
+		"can_force_lock": false,
 	}
 	if activity.HRConfirmDeadline != "" {
 		if deadlineTime, parseErr := time.Parse("2006-01-02", activity.HRConfirmDeadline); parseErr == nil {
 			status["overdue"] = time.Now().After(deadlineTime.Add(24 * time.Hour))
 		}
 	}
+	status["can_force_lock"] = activity.Status == "hr_confirmation" && status["overdue"].(bool) && len(pending) > 0
 	return status, nil
+}
+
+func (s *PerformanceService) ForceLockOverdueHRConfirmation(activityID, userID string) (map[string]interface{}, error) {
+	activity, err := s.actRepo.GetByID(activityID)
+	if err != nil {
+		return nil, errors.New("活动不存在")
+	}
+	if activity.Status == "locked" {
+		return map[string]interface{}{
+			"force_locked_count":   0,
+			"locked_count":         0,
+			"already_locked_count": 0,
+			"total_count":          0,
+		}, nil
+	}
+	if activity.Status != "hr_confirmation" {
+		return nil, errors.New("状态冲突：只有 HR 确认阶段可以执行逾期强制锁定")
+	}
+
+	deadline := strings.TrimSpace(activity.HRConfirmDeadline)
+	if deadline == "" {
+		return nil, errors.New("未设置 HR 确认截止日期，无法执行逾期强制锁定")
+	}
+	deadlineTime, parseErr := time.Parse("2006-01-02", deadline)
+	if parseErr != nil {
+		return nil, errors.New("HR 确认截止日期格式错误")
+	}
+	if !time.Now().After(deadlineTime.Add(24 * time.Hour)) {
+		return nil, errors.New("HR 确认截止日期尚未逾期，无法执行强制锁定")
+	}
+
+	var result map[string]interface{}
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var participants []database.PerformanceParticipant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList()).
+			Order("id ASC").
+			Find(&participants).Error; err != nil {
+			return err
+		}
+		if len(participants) == 0 {
+			return errors.New("活动没有可参与员工，无法锁定")
+		}
+
+		incompleteCount := 0
+		for _, participant := range participants {
+			switch participant.Status {
+			case "manager_confirmed", "hr_confirmed", "locked", "result_confirmed":
+			default:
+				incompleteCount++
+			}
+		}
+		if incompleteCount > 0 {
+			return fmt.Errorf("仍有 %d 名参与人未完成主管确认或 HR 确认，无法逾期强制锁定", incompleteCount)
+		}
+
+		now := time.Now()
+		reason := fmt.Sprintf("HR 确认逾期强制锁定，截止日期：%s", deadline)
+		forceLockedCount := 0
+		lockedCount := 0
+		alreadyLockedCount := 0
+		for i := range participants {
+			p := &participants[i]
+			wasLocked := p.Status == "locked"
+			if p.Status == "manager_confirmed" {
+				p.ForceLocked = true
+				p.ForceLockedReason = reason
+				forceLockedCount++
+			} else if p.Status == "locked" {
+				alreadyLockedCount++
+			}
+			if !wasLocked {
+				lockedCount++
+			}
+			p.Status = "locked"
+			p.IsLocked = true
+			if !wasLocked {
+				p.LockedAt = &now
+				p.LockedBy = userID
+			}
+			p.UpdatedBy = userID
+			if err := tx.Save(p).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&database.PerformanceActivity{}).
+			Where("id = ?", activityID).
+			Updates(map[string]interface{}{"status": "locked", "updated_by": userID}).Error; err != nil {
+			return err
+		}
+		result = map[string]interface{}{
+			"force_locked_count":   forceLockedCount,
+			"locked_count":         lockedCount,
+			"already_locked_count": alreadyLockedCount,
+			"total_count":          len(participants),
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *PerformanceService) SendHRConfirmReminders(activityID string) error {

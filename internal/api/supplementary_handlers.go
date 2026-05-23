@@ -93,7 +93,7 @@ func ApproveSupplementaryClockIn(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "补卡申请不存在"})
 			return
 		}
-		approvedBy := c.GetString("user_id")
+		approvedBy := currentOperatorID(c)
 		if err := svc.ApproveSupplementaryRequest(req.RequestID, suppReq.SupplementaryClockIn, suppReq.SupplementaryClockOut, approvedBy); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "审批失败: " + err.Error()})
 			return

@@ -482,9 +482,12 @@ func (r *PerformanceReviewVersionRepository) ConfirmResult(participantID, confir
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
-		p.Status = "result_confirmed"
+		p.Status = "locked"
 		p.ConfirmedAt = version.ConfirmedAt
 		p.ConfirmedBy = userID
+		p.IsLocked = true
+		p.LockedAt = version.ConfirmedAt
+		p.LockedBy = userID
 		p.UpdatedBy = userID
 		return tx.Save(p).Error
 	})

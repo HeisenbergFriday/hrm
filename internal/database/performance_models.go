@@ -201,6 +201,13 @@ type PerformanceParticipant struct {
 	HRConfirmedAt       *time.Time `json:"hr_confirmed_at"`
 	HRConfirmedBy       string     `gorm:"type:varchar(64)" json:"hr_confirmed_by"`
 
+	EmployeeTargetConfirmedAt *time.Time `json:"employee_target_confirmed_at"`
+	EmployeeTargetConfirmedBy string     `gorm:"type:varchar(64)" json:"employee_target_confirmed_by"`
+	ManagerTargetConfirmedAt  *time.Time `json:"manager_target_confirmed_at"`
+	ManagerTargetConfirmedBy  string     `gorm:"type:varchar(64)" json:"manager_target_confirmed_by"`
+	HRTargetConfirmedAt       *time.Time `json:"hr_target_confirmed_at"`
+	HRTargetConfirmedBy       string     `gorm:"type:varchar(64)" json:"hr_target_confirmed_by"`
+
 	// 锁定
 	IsLocked          bool       `gorm:"default:false" json:"is_locked"`
 	LockedAt          *time.Time `json:"locked_at"`
