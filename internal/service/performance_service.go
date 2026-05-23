@@ -109,7 +109,7 @@ func firstNonEmptyString(extension map[string]interface{}, keys ...string) strin
 	return ""
 }
 
-func (s *PerformanceService) CreateActivity(req CreateActivityRequest) (*database.PerformanceActivity, error) {
+func (s *PerformanceService) CreateActivity(req CreateActivityRequest, createdBy string) (*database.PerformanceActivity, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, errors.New("name 不能为空")
 	}
@@ -146,7 +146,7 @@ func (s *PerformanceService) CreateActivity(req CreateActivityRequest) (*databas
 		TargetEmployeeIDs:      req.TargetEmployeeIDs,
 		Description:            req.Description,
 		EnableBonusScore:       req.EnableBonusScore,
-		CreatedBy:              "system",
+		CreatedBy:              createdBy,
 	}
 
 	if err := s.actRepo.Create(activity); err != nil {
@@ -155,7 +155,7 @@ func (s *PerformanceService) CreateActivity(req CreateActivityRequest) (*databas
 	return activity, nil
 }
 
-func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivityRequest) (*database.PerformanceActivity, error) {
+func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivityRequest, updatedBy string) (*database.PerformanceActivity, error) {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return nil, err
@@ -192,7 +192,7 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 	activity.TargetEmployeeIDs = req.TargetEmployeeIDs
 	activity.Description = req.Description
 	activity.EnableBonusScore = req.EnableBonusScore
-	activity.UpdatedBy = "system"
+	activity.UpdatedBy = updatedBy
 
 	if err := s.actRepo.Update(activity); err != nil {
 		return nil, err
@@ -204,7 +204,7 @@ func (s *PerformanceService) GetActivity(activityID string) (*database.Performan
 	return s.actRepo.GetByID(activityID)
 }
 
-func (s *PerformanceService) PublishActivity(activityID string) error {
+func (s *PerformanceService) PublishActivity(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return err
@@ -218,16 +218,16 @@ func (s *PerformanceService) PublishActivity(activityID string) error {
 		return errors.New("状态冲突：无法从当前状态 publish 到自评阶段")
 	}
 	if activity.Status == "target_setting" {
-		return s.OpenSelfEvaluation(activityID)
+		return s.OpenSelfEvaluation(activityID, userID)
 	}
 	if activity.Status != "draft" {
 		return errors.New("状态冲突：无法从当前状态 publish 到自评阶段")
 	}
 
-	return s.actRepo.UpdateStatus(activityID, "self_evaluation", "system")
+	return s.actRepo.UpdateStatus(activityID, "self_evaluation", userID)
 }
 
-func (s *PerformanceService) CloseActivity(activityID string) error {
+func (s *PerformanceService) CloseActivity(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return err
@@ -238,7 +238,7 @@ func (s *PerformanceService) CloseActivity(activityID string) error {
 		return nil
 	}
 	if activity.Status == "result_confirmed" || activity.Status == "locked" {
-		return s.actRepo.UpdateStatus(activityID, "archived", "system")
+		return s.actRepo.UpdateStatus(activityID, "archived", userID)
 	}
 	if activity.Status == "draft" || activity.Status == "target_setting" || activity.Status == "self_evaluation" || activity.Status == "manager_evaluation" || activity.Status == "employee_confirmation" || activity.Status == "manager_confirmation" || activity.Status == "hr_confirmation" {
 		return errors.New("状态冲突：无法从当前状态 close 到归档")
@@ -506,7 +506,7 @@ func (s *PerformanceService) SetDistributionRules(activityID string, req []struc
 	Level               string
 	DistributionPercent float64
 	Description         string
-}) ([]database.PerformanceDistributionRule, error) {
+}, userID string) ([]database.PerformanceDistributionRule, error) {
 	if len(req) == 0 {
 		return nil, errors.New("rules 不能为空")
 	}
@@ -534,8 +534,8 @@ func (s *PerformanceService) SetDistributionRules(activityID string, req []struc
 			Level:               strings.TrimSpace(r.Level),
 			DistributionPercent: int(r.DistributionPercent),
 			Description:         r.Description,
-			CreatedBy:           "system",
-			UpdatedBy:           "system",
+			CreatedBy:           userID,
+			UpdatedBy:           userID,
 		})
 	}
 
@@ -560,7 +560,7 @@ type RefreshResult struct {
 	InactiveCount int `json:"inactive_count"`
 }
 
-func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshResult, error) {
+func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*RefreshResult, error) {
 	result := &RefreshResult{}
 
 	// 1. 获取活动信息
@@ -629,7 +629,7 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 						NewValue:      user.Status,
 						ChangedAt:     now,
 						Source:        "refresh_participants",
-						CreatedBy:     "system",
+						CreatedBy:     userID,
 					})
 					existing.EmployeeStatus = user.Status
 					if existing.Status == "removed_from_scope" || existing.Status == "inactive" {
@@ -648,7 +648,7 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 						NewValue:      user.DepartmentID,
 						ChangedAt:     now,
 						Source:        "refresh_participants",
-						CreatedBy:     "system",
+						CreatedBy:     userID,
 					})
 					existing.DepartmentID = user.DepartmentID
 					existing.DepartmentName = deptName
@@ -670,7 +670,7 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 						NewValue:      newManagerID,
 						ChangedAt:     now,
 						Source:        "refresh_participants",
-						CreatedBy:     "system",
+						CreatedBy:     userID,
 					})
 					if newManagerID == "" {
 						existing.ManagerID = nil
@@ -683,7 +683,7 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 				}
 
 				if changed {
-					existing.UpdatedBy = "system"
+					existing.UpdatedBy = userID
 					if err := tx.Save(existing).Error; err != nil {
 						return err
 					}
@@ -704,8 +704,8 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 					Position:       user.Position,
 					EmployeeStatus: user.Status,
 					Status:         "pending",
-					CreatedBy:      "system",
-					UpdatedBy:      "system",
+					CreatedBy:      userID,
+					UpdatedBy:      userID,
 				}
 				managerUserID, managerName := resolveManagerInfo(user)
 				if managerUserID != "" {
@@ -744,7 +744,7 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 				oldEmployeeStatus := p.EmployeeStatus
 				p.EmployeeStatus = newEmployeeStatus
 				p.Status = "removed_from_scope"
-				p.UpdatedBy = "system"
+				p.UpdatedBy = userID
 				tx.Save(p)
 
 				if err := tx.Create(&database.PerformanceRelationshipChangeLog{
@@ -756,7 +756,7 @@ func (s *PerformanceService) RefreshParticipants(activityID string) (*RefreshRes
 					NewValue:      fmt.Sprintf("%s/%s", p.Status, p.EmployeeStatus),
 					ChangedAt:     now,
 					Source:        "refresh_participants",
-					CreatedBy:     "system",
+					CreatedBy:     userID,
 				}).Error; err != nil {
 					return err
 				}
@@ -941,8 +941,8 @@ func (s *PerformanceService) SubmitSelfEvaluation(participantID string, req stru
 	SelfLevel       string
 	SelfSummary     string
 	SelfAttachments []string
-}) (*database.PerformanceReviewVersion, error) {
-	return s.versionRepo.CreateSelfEvaluationVersion(participantID, req.SelfScore, req.SelfLevel, req.SelfSummary, req.SelfAttachments, "system")
+}, userID string) (*database.PerformanceReviewVersion, error) {
+	return s.versionRepo.CreateSelfEvaluationVersion(participantID, req.SelfScore, req.SelfLevel, req.SelfSummary, req.SelfAttachments, userID)
 }
 
 func (s *PerformanceService) SubmitManagerEvaluation(participantID string, req struct {
@@ -954,8 +954,8 @@ func (s *PerformanceService) SubmitManagerEvaluation(participantID string, req s
 		ItemScore float64
 		ItemValue string
 	}
-}) (*database.PerformanceReviewVersion, error) {
-	return s.versionRepo.CreateManagerEvaluationVersion(participantID, req.ManagerScore, req.SuggestedLevel, req.ManagerComment, req.EvaluationItems, "system")
+}, userID string) (*database.PerformanceReviewVersion, error) {
+	return s.versionRepo.CreateManagerEvaluationVersion(participantID, req.ManagerScore, req.SuggestedLevel, req.ManagerComment, req.EvaluationItems, userID)
 }
 
 func (s *PerformanceService) BatchSubmitManagerEvaluations(activityID string, evaluations []struct {
@@ -968,12 +968,12 @@ func (s *PerformanceService) BatchSubmitManagerEvaluations(activityID string, ev
 		ItemScore float64
 		ItemValue string
 	}
-}) ([]database.PerformanceReviewVersion, error) {
-	return s.versionRepo.BatchCreateManagerEvaluationVersions(activityID, evaluations, "system")
+}, userID string) ([]database.PerformanceReviewVersion, error) {
+	return s.versionRepo.BatchCreateManagerEvaluationVersions(activityID, evaluations, userID)
 }
 
-func (s *PerformanceService) AdjustFinalLevel(participantID string, finalLevel, reason string) (*database.PerformanceReviewVersion, error) {
-	return s.versionRepo.AdjustFinalLevel(participantID, finalLevel, reason, "system")
+func (s *PerformanceService) AdjustFinalLevel(participantID string, finalLevel, reason, userID string) (*database.PerformanceReviewVersion, error) {
+	return s.versionRepo.AdjustFinalLevel(participantID, finalLevel, reason, userID)
 }
 
 // PerformanceLevelByScore 根据分数计算绩效等级
@@ -993,8 +993,8 @@ func PerformanceLevelByScore(score float64) string {
 	return "D"
 }
 
-func (s *PerformanceService) ConfirmResult(participantID string, confirmComment string) (*database.PerformanceReviewVersion, error) {
-	return s.versionRepo.ConfirmResult(participantID, confirmComment, "system")
+func (s *PerformanceService) ConfirmResult(participantID string, confirmComment, userID string) (*database.PerformanceReviewVersion, error) {
+	return s.versionRepo.ConfirmResult(participantID, confirmComment, userID)
 }
 
 func (s *PerformanceService) GetParticipantVersions(participantID string) ([]database.PerformanceReviewVersion, error) {
@@ -1010,7 +1010,7 @@ func (s *PerformanceService) GetActivityRelationshipChangeLogs(activityID string
 }
 
 // StartActivity 启动绩效活动（draft -> target_setting）
-func (s *PerformanceService) StartActivity(activityID string) error {
+func (s *PerformanceService) StartActivity(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
@@ -1021,7 +1021,7 @@ func (s *PerformanceService) StartActivity(activityID string) error {
 	if activity.Status != "draft" {
 		return errors.New("状态冲突：只有 draft 活动可以启动目标设定")
 	}
-	if _, err := s.RefreshParticipants(activityID); err != nil {
+	if _, err := s.RefreshParticipants(activityID, userID); err != nil {
 		return err
 	}
 	total, err := s.countActiveParticipants(activityID)
@@ -1031,11 +1031,11 @@ func (s *PerformanceService) StartActivity(activityID string) error {
 	if total == 0 {
 		return errors.New("活动范围内没有可参与员工，无法启动")
 	}
-	return s.actRepo.UpdateStatus(activityID, "target_setting", "system")
+	return s.actRepo.UpdateStatus(activityID, "target_setting", userID)
 }
 
 // OpenSelfEvaluation 开启自评阶段（target_setting -> self_evaluation）
-func (s *PerformanceService) OpenSelfEvaluation(activityID string) error {
+func (s *PerformanceService) OpenSelfEvaluation(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
@@ -1049,11 +1049,11 @@ func (s *PerformanceService) OpenSelfEvaluation(activityID string) error {
 	if err := s.ensureParticipantStageComplete(activityID, "target_setting"); err != nil {
 		return err
 	}
-	return s.actRepo.UpdateStatus(activityID, "self_evaluation", "system")
+	return s.actRepo.UpdateStatus(activityID, "self_evaluation", userID)
 }
 
 // OpenManagerEvaluation 开启主管评分阶段（self_evaluation -> manager_evaluation）
-func (s *PerformanceService) OpenManagerEvaluation(activityID string) error {
+func (s *PerformanceService) OpenManagerEvaluation(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
@@ -1064,16 +1064,16 @@ func (s *PerformanceService) OpenManagerEvaluation(activityID string) error {
 	if err := s.ensureParticipantStageComplete(activityID, "self_evaluation"); err != nil {
 		return err
 	}
-	return s.actRepo.UpdateStatus(activityID, "manager_evaluation", "system")
+	return s.actRepo.UpdateStatus(activityID, "manager_evaluation", userID)
 }
 
 // ConfirmResults 兼容旧接口：主管评分完成后进入员工确认阶段
-func (s *PerformanceService) ConfirmResults(activityID string) error {
-	return s.OpenEmployeeConfirmation(activityID)
+func (s *PerformanceService) ConfirmResults(activityID, userID string) error {
+	return s.OpenEmployeeConfirmation(activityID, userID)
 }
 
 // ArchiveActivity 归档活动（locked/result_confirmed -> archived）
-func (s *PerformanceService) ArchiveActivity(activityID string) error {
+func (s *PerformanceService) ArchiveActivity(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
@@ -1084,11 +1084,11 @@ func (s *PerformanceService) ArchiveActivity(activityID string) error {
 	if activity.Status != "locked" && activity.Status != "result_confirmed" {
 		return errors.New("状态冲突：只有已锁定或旧版结果已确认的活动可以归档")
 	}
-	return s.actRepo.UpdateStatus(activityID, "archived", "system")
+	return s.actRepo.UpdateStatus(activityID, "archived", userID)
 }
 
 // OpenTargetSetting 开启目标设定阶段（draft -> target_setting）
-func (s *PerformanceService) OpenTargetSetting(activityID string) error {
+func (s *PerformanceService) OpenTargetSetting(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
@@ -1099,7 +1099,7 @@ func (s *PerformanceService) OpenTargetSetting(activityID string) error {
 	if activity.Status != "draft" {
 		return errors.New("状态冲突：只有 draft 活动可以开启目标设定")
 	}
-	if _, err := s.RefreshParticipants(activityID); err != nil {
+	if _, err := s.RefreshParticipants(activityID, userID); err != nil {
 		return err
 	}
 	total, err := s.countActiveParticipants(activityID)
@@ -1109,11 +1109,11 @@ func (s *PerformanceService) OpenTargetSetting(activityID string) error {
 	if total == 0 {
 		return errors.New("活动范围内没有可参与员工，无法开启目标设定")
 	}
-	return s.actRepo.UpdateStatus(activityID, "target_setting", "system")
+	return s.actRepo.UpdateStatus(activityID, "target_setting", userID)
 }
 
 // OpenEmployeeConfirmation 开启员工确认阶段（manager_evaluation -> employee_confirmation）
-func (s *PerformanceService) OpenEmployeeConfirmation(activityID string) error {
+func (s *PerformanceService) OpenEmployeeConfirmation(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
@@ -1131,11 +1131,11 @@ func (s *PerformanceService) OpenEmployeeConfirmation(activityID string) error {
 	if !check.Passed {
 		return errors.New("强制分布不合规，无法开启员工确认")
 	}
-	return s.actRepo.UpdateStatus(activityID, "employee_confirmation", "system")
+	return s.actRepo.UpdateStatus(activityID, "employee_confirmation", userID)
 }
 
 // OpenManagerConfirmation 开启主管确认阶段（employee_confirmation -> manager_confirmation）
-func (s *PerformanceService) OpenManagerConfirmation(activityID string) error {
+func (s *PerformanceService) OpenManagerConfirmation(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
@@ -1146,11 +1146,11 @@ func (s *PerformanceService) OpenManagerConfirmation(activityID string) error {
 	if err := s.ensureParticipantStageComplete(activityID, "employee_confirmation"); err != nil {
 		return err
 	}
-	return s.actRepo.UpdateStatus(activityID, "manager_confirmation", "system")
+	return s.actRepo.UpdateStatus(activityID, "manager_confirmation", userID)
 }
 
 // OpenHRConfirmation 开启HR确认阶段（manager_confirmation -> hr_confirmation）
-func (s *PerformanceService) OpenHRConfirmation(activityID string) error {
+func (s *PerformanceService) OpenHRConfirmation(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
@@ -1161,11 +1161,11 @@ func (s *PerformanceService) OpenHRConfirmation(activityID string) error {
 	if err := s.ensureParticipantStageComplete(activityID, "manager_confirmation"); err != nil {
 		return err
 	}
-	return s.actRepo.UpdateStatus(activityID, "hr_confirmation", "system")
+	return s.actRepo.UpdateStatus(activityID, "hr_confirmation", userID)
 }
 
 // LockActivity 锁定活动（hr_confirmation -> locked）
-func (s *PerformanceService) LockActivity(activityID string) error {
+func (s *PerformanceService) LockActivity(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
@@ -1190,11 +1190,11 @@ func (s *PerformanceService) LockActivity(activityID string) error {
 		for i := range participants {
 			p := &participants[i]
 			p.Status = "locked"
-			p.UpdatedBy = "system"
+			p.UpdatedBy = userID
 			if !p.IsLocked {
 				p.IsLocked = true
 				p.LockedAt = &now
-				p.LockedBy = "system"
+				p.LockedBy = userID
 			}
 			if err := tx.Save(p).Error; err != nil {
 				return err
@@ -1202,7 +1202,7 @@ func (s *PerformanceService) LockActivity(activityID string) error {
 		}
 		return tx.Model(&database.PerformanceActivity{}).
 			Where("id = ?", activityID).
-			Updates(map[string]interface{}{"status": "locked", "updated_by": "system"}).Error
+			Updates(map[string]interface{}{"status": "locked", "updated_by": userID}).Error
 	})
 }
 
