@@ -353,6 +353,12 @@ export interface PerformanceParticipant {
   manager_confirmed_by?: string
   hr_confirmed_at?: string
   hr_confirmed_by?: string
+  employee_target_confirmed_at?: string
+  employee_target_confirmed_by?: string
+  manager_target_confirmed_at?: string
+  manager_target_confirmed_by?: string
+  hr_target_confirmed_at?: string
+  hr_target_confirmed_by?: string
   // 锁定
   is_locked?: boolean
   locked_at?: string
@@ -364,6 +370,7 @@ export interface PerformanceParticipant {
   confirmed_by: string
   created_at: string
   updated_at: string
+  updated_by?: string
 }
 
 // 绩效活动列表响应
@@ -627,6 +634,14 @@ export interface PerformanceHRDeadlineStatus {
   deadline?: string
   pending_count: number
   overdue: boolean
+  can_force_lock?: boolean
+}
+
+export interface PerformanceHRForceLockResult {
+  force_locked_count: number
+  locked_count: number
+  already_locked_count: number
+  total_count: number
 }
 
 export interface PerformanceTemplatePayload {
@@ -751,6 +766,9 @@ export const performanceAPI = {
 
   lockActivity: (activityId: number) =>
     api.post(`/performance/activities/${activityId}/lock`),
+
+  forceLockOverdueHR: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/force-lock-overdue-hr`),
 
   // 兼容旧接口
   publishActivity: (activityId: number) =>

@@ -13,6 +13,8 @@ import {
   PerformanceActivity,
   PerformanceParticipant,
   PerformanceDistributionRule,
+  PerformanceHRDeadlineStatus,
+  PerformanceIndicatorLibrary,
   userAPI,
 } from '../services/api'
 import PerformanceActivityEditor from '../components/PerformanceActivityEditor'
@@ -20,6 +22,10 @@ import { BarChartOutlined, PlusOutlined } from '@ant-design/icons'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
+
+type RejectGoalFormValues = {
+  comment: string
+}
 
 function normalizeIDArray(value?: string[] | string): string[] {
   if (Array.isArray(value)) return value.filter(Boolean)
@@ -134,6 +140,8 @@ const PerformanceOverview: React.FC = () => {
   const [departments, setDepartments] = useState<any[]>([])
   const [users, setUsers] = useState<any[]>([])
   const [scopeOptionsLoading, setScopeOptionsLoading] = useState(false)
+  const [indicatorLibraries, setIndicatorLibraries] = useState<PerformanceIndicatorLibrary[]>([])
+  const [indicatorLibrariesLoading, setIndicatorLibrariesLoading] = useState(false)
 
   // 活动详情抽屉
   const [detailDrawerVisible, setDetailDrawerVisible] = useState(false)
@@ -145,11 +153,13 @@ const PerformanceOverview: React.FC = () => {
   const [summary, setSummary] = useState<any>(null)
   const [distributionCheck, setDistributionCheck] = useState<any>(null)
   const [distributionRules, setDistributionRules] = useState<PerformanceDistributionRule[]>([])
+  const [hrDeadlineStatus, setHrDeadlineStatus] = useState<PerformanceHRDeadlineStatus | null>(null)
 
   // 评分弹窗
   // 强制分布弹窗
   const [distributionModalVisible, setDistributionModalVisible] = useState(false)
   const [distributionForm] = Form.useForm()
+  const [rejectGoalForm] = Form.useForm<RejectGoalFormValues>()
 
   // 批量评分相关
   const [batchEvalModalVisible, setBatchEvalModalVisible] = useState(false)
@@ -207,6 +217,23 @@ const PerformanceOverview: React.FC = () => {
     }
   }, [])
 
+  const loadIndicatorLibraries = useCallback(async () => {
+    setIndicatorLibrariesLoading(true)
+    try {
+      const res: any = await performanceAPI.getIndicatorLibraries({
+        page: 1,
+        page_size: 1000,
+        status: 'active',
+      })
+      setIndicatorLibraries(getListFromResponse(res, ['items', 'libraries']))
+    } catch {
+      setIndicatorLibraries([])
+      message.error('指标库选项加载失败')
+    } finally {
+      setIndicatorLibrariesLoading(false)
+    }
+  }, [])
+
   // 首次加载活动列表
   React.useEffect(() => {
     loadActivities()
@@ -219,6 +246,7 @@ const PerformanceOverview: React.FC = () => {
     setParticipantsLoading(true)
     setSummaryLoading(true)
     setDistributionCheckLoading(true)
+    setHrDeadlineStatus(null)
 
     // 使用 Promise.allSettled 避免单个接口失败阻塞整个流程
     const results = await Promise.allSettled([
@@ -226,6 +254,7 @@ const PerformanceOverview: React.FC = () => {
       performanceAPI.getResultSummary(activity.id),
       performanceAPI.getDistributionCheck(activity.id),
       performanceAPI.getDistributionRules(activity.id),
+      performanceAPI.getHRConfirmDeadlineStatus(activity.id),
     ])
 
     // 处理参与人
@@ -268,6 +297,14 @@ const PerformanceOverview: React.FC = () => {
       setDistributionRules(rData?.rules || [])
     } else {
       setDistributionRules([])
+    }
+
+    const hrDeadlineResult = results[4]
+    if (hrDeadlineResult.status === 'fulfilled') {
+      const res = hrDeadlineResult.value as any
+      setHrDeadlineStatus((res?.data || res) as PerformanceHRDeadlineStatus)
+    } else {
+      setHrDeadlineStatus(null)
     }
   }
 
@@ -364,6 +401,7 @@ const PerformanceOverview: React.FC = () => {
         'open-manager-confirmation': performanceAPI.openManagerConfirmation,
         'open-hr-confirmation': performanceAPI.openHRConfirmation,
         lock: performanceAPI.lockActivity,
+        'force-lock-overdue-hr': performanceAPI.forceLockOverdueHR,
       }
       const apiFn = apiMap[action]
       if (!apiFn) return
@@ -385,6 +423,17 @@ const PerformanceOverview: React.FC = () => {
   }
 
   // 保存强制分布规则
+  const handleForceLockOverdueHR = (activity: PerformanceActivity) => {
+    Modal.confirm({
+      title: '逾期强制锁定',
+      content: '将把已完成主管确认但未完成 HR 确认的参与人标记为逾期强制锁定，并锁定活动。此操作会冻结绩效结果。',
+      okText: '确认强制锁定',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => handleActivityAction('force-lock-overdue-hr', activity),
+    })
+  }
+
   const handleSaveDistribution = async () => {
     if (!currentActivity) return
     try {
@@ -409,10 +458,43 @@ const PerformanceOverview: React.FC = () => {
     }
   }
 
+  const handleRejectGoalRecords = (record: PerformanceParticipant) => {
+    rejectGoalForm.resetFields()
+    Modal.confirm({
+      title: '驳回目标',
+      content: (
+        <Form form={rejectGoalForm} layout="vertical" preserve={false}>
+          <Form.Item
+            name="comment"
+            label="驳回原因"
+            rules={[{ required: true, message: '请输入驳回原因' }]}
+          >
+            <TextArea rows={3} placeholder="请说明需要员工调整的内容" />
+          </Form.Item>
+        </Form>
+      ),
+      okText: '确认驳回',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        const values = await rejectGoalForm.validateFields()
+        try {
+          await performanceAPI.rejectGoalRecords(record.id, { comment: values.comment })
+          message.success('目标已驳回')
+          if (currentActivity) loadActivityDetail(currentActivity)
+        } catch (err: any) {
+          message.error(err?.response?.data?.message || '驳回失败')
+          throw err
+        }
+      },
+    })
+  }
+
   // 打开活动表单
   const openActivityModal = (activity?: PerformanceActivity) => {
     setEditingActivity(activity || null)
     loadScopeOptions()
+    loadIndicatorLibraries()
     if (activity) {
       form.setFieldsValue({
         name: activity.name,
@@ -574,7 +656,7 @@ const PerformanceOverview: React.FC = () => {
       }
     },
     {
-      title: '操作', key: 'actions', fixed: 'right', width: 120,
+      title: '操作', key: 'actions', fixed: 'right', width: 150,
       render: (_, record: PerformanceParticipant) => {
         const activityId = currentActivity?.id
         const isArchived = ['archived', 'locked'].includes(currentActivity?.status || '')
@@ -619,6 +701,21 @@ const PerformanceOverview: React.FC = () => {
             >结果</Button>
           )
         }
+        if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed') {
+          links.push(
+            <Button key="hr-confirm" size="small" type="link" style={{ ...linkStyle, color: '#722ed1' }}
+              onClick={async () => {
+                try {
+                  await performanceAPI.confirmHRResult(record.id)
+                  message.success('HR确认成功')
+                  if (currentActivity) loadActivityDetail(currentActivity)
+                } catch (err: any) {
+                  message.error(err?.response?.data?.message || 'HR确认失败')
+                }
+              }}
+            >HR确认</Button>
+          )
+        }
         if (record.status === 'target_pending_approval') {
           links.push(
             <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: '#1677ff' }}
@@ -632,6 +729,11 @@ const PerformanceOverview: React.FC = () => {
                 }
               }}
             >通过</Button>
+          )
+          links.push(
+            <Button key="reject" size="small" type="link" danger style={linkStyle}
+              onClick={() => handleRejectGoalRecords(record)}
+            >驳回</Button>
           )
         }
 
@@ -696,8 +798,8 @@ const PerformanceOverview: React.FC = () => {
             editing={Boolean(editingActivity)}
             form={form}
             saving={activitySaving}
-            indicatorLibraries={[]}
-            indicatorLibrariesLoading={false}
+            indicatorLibraries={indicatorLibraries}
+            indicatorLibrariesLoading={indicatorLibrariesLoading}
             departmentOptions={departments.flatMap(department => {
               const option = getDepartmentOption(department)
               return option ? [option] : []
@@ -763,7 +865,7 @@ const PerformanceOverview: React.FC = () => {
         placement="right"
         width={1000}
         open={detailDrawerVisible}
-        onClose={() => { setDetailDrawerVisible(false); setCurrentActivity(null); setParticipants([]); setSummary(null); setDistributionCheck(null); setDistributionRules([]); }}
+        onClose={() => { setDetailDrawerVisible(false); setCurrentActivity(null); setParticipants([]); setSummary(null); setDistributionCheck(null); setDistributionRules([]); setHrDeadlineStatus(null); }}
         styles={{ footer: { paddingTop: 12 } }}
       >
         {currentActivity && (
@@ -821,7 +923,13 @@ const PerformanceOverview: React.FC = () => {
                 <Button type="primary" size="small" onClick={() => handleActivityAction('open-hr-confirmation', currentActivity)}>开启HR确认</Button>
               )}
               {currentActivity.status === 'hr_confirmation' && (
-                <Button type="primary" danger size="small" onClick={() => handleActivityAction('lock', currentActivity)}>锁定活动</Button>
+                <>
+                  <Button size="small" onClick={async () => { try { await performanceAPI.sendHRConfirmReminder(currentActivity.id); message.success('已发送HR确认提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒HR确认</Button>
+                  {hrDeadlineStatus?.can_force_lock && (
+                    <Button danger size="small" onClick={() => handleForceLockOverdueHR(currentActivity)}>逾期强制锁定</Button>
+                  )}
+                  <Button type="primary" danger size="small" onClick={() => handleActivityAction('lock', currentActivity)}>锁定活动</Button>
+                </>
               )}
               {currentActivity.status === 'locked' && (
                 <Button size="small" onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
@@ -835,6 +943,15 @@ const PerformanceOverview: React.FC = () => {
             </div>
 
             <Divider style={{ margin: '8px 0 10px' }} orientationMargin={0}>统计摘要</Divider>
+            {currentActivity.status === 'hr_confirmation' && hrDeadlineStatus && (
+              <Alert
+                type={hrDeadlineStatus.overdue ? 'warning' : 'info'}
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={`HR确认截止：${hrDeadlineStatus.deadline || '未设置'}，待确认 ${hrDeadlineStatus.pending_count || 0} 人${hrDeadlineStatus.overdue ? '，已逾期' : ''}`}
+              />
+            )}
+
             <Spin spinning={summaryLoading}>
               {summary ? (
                 <div style={{ display: 'flex', gap: 0, marginBottom: 10, borderRadius: 8, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
