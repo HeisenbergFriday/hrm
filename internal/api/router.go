@@ -252,6 +252,13 @@ func SetupRouter() *gin.Engine {
 				performance.POST("/activities/:activity_id/confirm-results", ConfirmActivityResults)
 				performance.POST("/activities/:activity_id/archive", ArchivePerformanceActivity)
 
+				// 新增状态流转（9状态流）
+				performance.POST("/activities/:activity_id/open-target-setting", OpenTargetSettingHandler)
+				performance.POST("/activities/:activity_id/open-employee-confirmation", OpenEmployeeConfirmationHandler)
+				performance.POST("/activities/:activity_id/open-manager-confirmation", OpenManagerConfirmationHandler)
+				performance.POST("/activities/:activity_id/open-hr-confirmation", OpenHRConfirmationHandler)
+				performance.POST("/activities/:activity_id/lock", LockPerformanceActivityHandler)
+
 				// 兼容旧接口
 				performance.POST("/activities/:activity_id/publish", PublishPerformanceActivity)
 				performance.POST("/activities/:activity_id/close", ClosePerformanceActivity)
@@ -260,6 +267,7 @@ func SetupRouter() *gin.Engine {
 				performance.GET("/activities/:activity_id/distribution-rules", GetDistributionRules)
 				performance.GET("/activities/:activity_id/result-summary", GetPerformanceResultSummary)
 				performance.GET("/activities/:activity_id/distribution-check", GetPerformanceDistributionCheck)
+				performance.GET("/activities/:activity_id/realtime-distribution-check", GetRealtimeDistributionCheck)
 
 				performance.POST("/activities/:activity_id/refresh-participants", RefreshPerformanceParticipants)
 				performance.GET("/activities/:activity_id/participants", GetPerformanceParticipants)
@@ -271,24 +279,67 @@ func SetupRouter() *gin.Engine {
 				// 评分（新路径，带钉钉审批同步）
 				performance.POST("/reviews/:participant_id/self-evaluation", SubmitReviewSelfEvaluation)
 				performance.POST("/reviews/:participant_id/manager-evaluation", SubmitReviewManagerEvaluation)
+				performance.POST("/goal-reviews/:participant_id/self-evaluation", SubmitGoalSelfEvaluationHandler)
+				performance.POST("/goal-reviews/:participant_id/manager-evaluation", SubmitGoalManagerEvaluationHandler)
+				performance.POST("/goal-reviews/:participant_id/bonus-penalty", SetBonusPenaltyScoreHandler)
 				performance.POST("/activities/:activity_id/batch-manager-evaluations", BatchSubmitManagerEvaluation)
 
 				performance.POST("/participants/:participant_id/adjust-final-level", AdjustFinalLevel)
 				performance.POST("/participants/:participant_id/confirm-result", ConfirmResult)
+				// 三级确认流程
+				performance.POST("/participants/:participant_id/confirm-employee", ConfirmEmployeeResultHandler)
+				performance.POST("/participants/:participant_id/confirm-manager", ConfirmManagerResultHandler)
+				performance.POST("/participants/:participant_id/confirm-hr", ConfirmHRResultHandler)
 				performance.POST("/participants/:participant_id/trigger-interview", TriggerPerformanceInterview)
 
 				performance.GET("/participants/:participant_id/versions", GetParticipantVersions)
 				performance.GET("/participants/:participant_id/relationship-change-logs", GetParticipantRelationshipChangeLogs)
 				performance.GET("/activities/:activity_id/relationship-change-logs", GetActivityRelationshipChangeLogs)
 				performance.POST("/activities/:activity_id/batch-confirm-results", BatchConfirmResults)
+				performance.POST("/activities/:activity_id/batch-confirm", BatchConfirmResults)
 				performance.POST("/activities/:activity_id/send-self-eval-reminder", SendSelfEvalReminder)
 				performance.POST("/activities/:activity_id/send-manager-eval-reminder", SendManagerEvalReminder)
+				performance.POST("/activities/:activity_id/send-hr-confirm-reminder", SendHRConfirmReminder)
+				performance.PUT("/activities/:activity_id/finance", SetCompanyFinanceHandler)
+				performance.GET("/activities/:activity_id/finance", GetCompanyFinanceHandler)
+				performance.GET("/activities/:activity_id/pending-hr-confirm", GetPendingHRConfirmHandler)
+				performance.PUT("/activities/:activity_id/hr-confirm-deadline", SetHRConfirmDeadlineHandler)
+				performance.GET("/activities/:activity_id/hr-confirm-deadline-status", GetHRConfirmDeadlineStatusHandler)
 
-				// 模板管理
+				// 指标库管理
+				performance.GET("/indicator-libraries", GetIndicatorLibraries)
+				performance.POST("/indicator-libraries", CreateIndicatorLibrary)
+				performance.GET("/indicator-libraries/:id", GetIndicatorLibrary)
+				performance.PUT("/indicator-libraries/:id", UpdateIndicatorLibrary)
+				performance.POST("/indicator-libraries/:id/archive", ArchiveIndicatorLibrary)
+				performance.GET("/indicator-libraries/department/:department_id", GetIndicatorLibrariesByDepartment)
+				performance.POST("/indicator-libraries/inherit", InheritIndicatorLibrary)
+
+				// 指标项管理
+				performance.GET("/indicator-items", GetIndicatorItems)
+				performance.POST("/indicator-items", CreateIndicatorItem)
+				performance.PUT("/indicator-items/:id", UpdateIndicatorItem)
+				performance.DELETE("/indicator-items/:id", DeleteIndicatorItem)
+				performance.GET("/indicator-items/search", SearchIndicatorItems)
+
+				// 模板管理（兼容旧接口）
 				performance.GET("/templates", GetPerformanceTemplates)
 				performance.POST("/templates", CreatePerformanceTemplate)
 				performance.GET("/templates/:id", GetPerformanceTemplate)
 				performance.PUT("/templates/:id", UpdatePerformanceTemplate)
+
+				// 目标记录管理
+				performance.GET("/goal-records/:participant_id", GetGoalRecords)
+				performance.POST("/goal-records/:participant_id", BatchSaveGoalRecords)
+				performance.POST("/goal-records/:participant_id/submit", SubmitGoalApprovalHandler)
+				performance.POST("/goal-records/:participant_id/approve", ApproveGoalRecords)
+				performance.POST("/goal-records/:participant_id/reject", RejectGoalRecords)
+				performance.GET("/goal-records/:participant_id/manager-goals", GetManagerGoals)
+				performance.GET("/goal-records/:participant_id/suggestions", GetGoalSuggestions)
+				performance.POST("/activities/:activity_id/batch-assign-goals", BatchAssignGoals)
+
+				// 加减分
+				performance.POST("/participants/:participant_id/bonus-penalty", SetBonusPenaltyScoreHandler)
 			}
 		}
 	}

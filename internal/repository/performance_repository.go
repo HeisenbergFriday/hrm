@@ -100,6 +100,139 @@ func (r *PerformanceDistributionRuleRepository) ListByActivity(activityID string
 	return rules, nil
 }
 
+type PerformanceTemplateRepository struct{ db *gorm.DB }
+
+func NewPerformanceTemplateRepository(db *gorm.DB) *PerformanceTemplateRepository {
+	return &PerformanceTemplateRepository{db: db}
+}
+
+func (r *PerformanceTemplateRepository) Create(template *database.PerformanceTemplate, sections []database.PerformanceTemplateSection, items []database.PerformanceTemplateItem, sectionItemCounts []int) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(template).Error; err != nil {
+			return err
+		}
+
+		itemOffset := 0
+		for i := range sections {
+			sections[i].TemplateID = template.ID
+			if err := tx.Create(&sections[i]).Error; err != nil {
+				return err
+			}
+
+			count := 0
+			if i < len(sectionItemCounts) {
+				count = sectionItemCounts[i]
+			}
+			for j := itemOffset; j < itemOffset+count && j < len(items); j++ {
+				items[j].SectionID = sections[i].ID
+				if err := tx.Create(&items[j]).Error; err != nil {
+					return err
+				}
+			}
+			itemOffset += count
+		}
+		return nil
+	})
+}
+
+func (r *PerformanceTemplateRepository) GetByID(templateID uint) (*database.PerformanceTemplate, []database.PerformanceTemplateSection, []database.PerformanceTemplateItem, error) {
+	var template database.PerformanceTemplate
+	if err := r.db.Where("id = ? AND deleted_at IS NULL", templateID).First(&template).Error; err != nil {
+		return nil, nil, nil, err
+	}
+
+	var sections []database.PerformanceTemplateSection
+	if err := r.db.Where("template_id = ? AND deleted_at IS NULL", templateID).Order("sort_order ASC").Find(&sections).Error; err != nil {
+		return nil, nil, nil, err
+	}
+
+	var items []database.PerformanceTemplateItem
+	if len(sections) > 0 {
+		sectionIDs := make([]uint, len(sections))
+		for i, section := range sections {
+			sectionIDs[i] = section.ID
+		}
+		if err := r.db.Where("section_id IN ? AND deleted_at IS NULL", sectionIDs).Order("sort_order ASC").Find(&items).Error; err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	return &template, sections, items, nil
+}
+
+func (r *PerformanceTemplateRepository) FindAll(page, pageSize int, status string) ([]database.PerformanceTemplate, int64, error) {
+	var items []database.PerformanceTemplate
+	var total int64
+
+	query := r.db.Model(&database.PerformanceTemplate{}).Where("deleted_at IS NULL")
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	offset := (page - 1) * pageSize
+	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
+func (r *PerformanceTemplateRepository) Update(template *database.PerformanceTemplate, sections []database.PerformanceTemplateSection, items []database.PerformanceTemplateItem, structuralChange bool, sectionItemCounts []int) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(template).Error; err != nil {
+			return err
+		}
+		if !structuralChange {
+			return nil
+		}
+
+		if err := tx.Where("section_id IN (SELECT id FROM performance_template_sections WHERE template_id = ?)", template.ID).Delete(&database.PerformanceTemplateItem{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("template_id = ?", template.ID).Delete(&database.PerformanceTemplateSection{}).Error; err != nil {
+			return err
+		}
+
+		itemOffset := 0
+		for i := range sections {
+			sections[i].TemplateID = template.ID
+			if err := tx.Create(&sections[i]).Error; err != nil {
+				return err
+			}
+
+			count := 0
+			if i < len(sectionItemCounts) {
+				count = sectionItemCounts[i]
+			}
+			for j := itemOffset; j < itemOffset+count && j < len(items); j++ {
+				items[j].SectionID = sections[i].ID
+				if err := tx.Create(&items[j]).Error; err != nil {
+					return err
+				}
+			}
+			itemOffset += count
+		}
+		return nil
+	})
+}
+
+func (r *PerformanceTemplateRepository) IsReferencedByActivity(templateID uint) (bool, error) {
+	if !r.db.Migrator().HasColumn(&database.PerformanceActivity{}, "template_id") {
+		return false, nil
+	}
+	var count int64
+	if err := r.db.Table("performance_activities").Where("template_id = ? AND deleted_at IS NULL", templateID).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 type PerformanceParticipantRepository struct{ db *gorm.DB }
 
 func NewPerformanceParticipantRepository(db *gorm.DB) *PerformanceParticipantRepository {
@@ -119,6 +252,9 @@ func (r *PerformanceParticipantRepository) FindAll(activityID string, page, page
 	var total int64
 
 	query := r.db.Model(&database.PerformanceParticipant{}).Where("activity_id = ? AND deleted_at IS NULL", activityID)
+	if status == "" {
+		query = query.Where("status NOT IN ?", []string{"inactive", "removed_from_scope"})
+	}
 	if departmentID != "" {
 		query = query.Where("department_id = ?", departmentID)
 	}
@@ -147,6 +283,16 @@ func (r *PerformanceParticipantRepository) FindAll(activityID string, page, page
 		return nil, 0, err
 	}
 	return items, total, nil
+}
+
+func (r *PerformanceParticipantRepository) CountByActivityAndStatus(activityID string, status string) (int64, error) {
+	var count int64
+	if err := r.db.Model(&database.PerformanceParticipant{}).
+		Where("activity_id = ? AND status = ? AND deleted_at IS NULL", activityID, status).
+		Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 type PerformanceReviewVersionRepository struct{ db *gorm.DB }
@@ -402,126 +548,4 @@ func nextParticipantStatusAfterManagerEvaluation(current string) string {
 		return current
 	}
 	return "manager_submitted"
-}
-
-type PerformanceTemplateRepository struct{ db *gorm.DB }
-
-func NewPerformanceTemplateRepository(db *gorm.DB) *PerformanceTemplateRepository {
-	return &PerformanceTemplateRepository{db: db}
-}
-
-func (r *PerformanceTemplateRepository) Create(template *database.PerformanceTemplate, sections []database.PerformanceTemplateSection, items []database.PerformanceTemplateItem, sectionItemCounts []int) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(template).Error; err != nil {
-			return err
-		}
-		itemOffset := 0
-		for i := range sections {
-			sections[i].TemplateID = template.ID
-			if err := tx.Create(&sections[i]).Error; err != nil {
-				return err
-			}
-			count := 0
-			if i < len(sectionItemCounts) {
-				count = sectionItemCounts[i]
-			}
-			for j := itemOffset; j < itemOffset+count && j < len(items); j++ {
-				items[j].SectionID = sections[i].ID
-				if err := tx.Create(&items[j]).Error; err != nil {
-					return err
-				}
-			}
-			itemOffset += count
-		}
-		return nil
-	})
-}
-
-func (r *PerformanceTemplateRepository) GetByID(templateID uint) (*database.PerformanceTemplate, []database.PerformanceTemplateSection, []database.PerformanceTemplateItem, error) {
-	var template database.PerformanceTemplate
-	if err := r.db.Where("id = ? AND deleted_at IS NULL", templateID).First(&template).Error; err != nil {
-		return nil, nil, nil, err
-	}
-	var sections []database.PerformanceTemplateSection
-	if err := r.db.Where("template_id = ? AND deleted_at IS NULL", templateID).Order("sort_order ASC").Find(&sections).Error; err != nil {
-		return nil, nil, nil, err
-	}
-	var items []database.PerformanceTemplateItem
-	if len(sections) > 0 {
-		sectionIDs := make([]uint, len(sections))
-		for i, s := range sections {
-			sectionIDs[i] = s.ID
-		}
-		if err := r.db.Where("section_id IN ? AND deleted_at IS NULL", sectionIDs).Order("sort_order ASC").Find(&items).Error; err != nil {
-			return nil, nil, nil, err
-		}
-	}
-	return &template, sections, items, nil
-}
-
-func (r *PerformanceTemplateRepository) FindAll(page, pageSize int, status string) ([]database.PerformanceTemplate, int64, error) {
-	var items []database.PerformanceTemplate
-	var total int64
-	query := r.db.Model(&database.PerformanceTemplate{}).Where("deleted_at IS NULL")
-	if status != "" {
-		query = query.Where("status = ?", status)
-	}
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 10
-	}
-	offset := (page - 1) * pageSize
-	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
-		return nil, 0, err
-	}
-	return items, total, nil
-}
-
-func (r *PerformanceTemplateRepository) Update(template *database.PerformanceTemplate, sections []database.PerformanceTemplateSection, items []database.PerformanceTemplateItem, structuralChange bool, sectionItemCounts []int) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Save(template).Error; err != nil {
-			return err
-		}
-		if structuralChange {
-			// 先删 items（通过子查询），再删 sections，避免孤儿数据
-			if err := tx.Where("section_id IN (SELECT id FROM performance_template_sections WHERE template_id = ?)", template.ID).Delete(&database.PerformanceTemplateItem{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("template_id = ?", template.ID).Delete(&database.PerformanceTemplateSection{}).Error; err != nil {
-				return err
-			}
-			itemOffset := 0
-			for i := range sections {
-				sections[i].TemplateID = template.ID
-				if err := tx.Create(&sections[i]).Error; err != nil {
-					return err
-				}
-				count := 0
-				if i < len(sectionItemCounts) {
-					count = sectionItemCounts[i]
-				}
-				for j := itemOffset; j < itemOffset+count && j < len(items); j++ {
-					items[j].SectionID = sections[i].ID
-					if err := tx.Create(&items[j]).Error; err != nil {
-						return err
-					}
-				}
-				itemOffset += count
-			}
-		}
-		return nil
-	})
-}
-
-func (r *PerformanceTemplateRepository) IsReferencedByActivity(templateID uint) (bool, error) {
-	var count int64
-	if err := r.db.Model(&database.PerformanceActivity{}).Where("template_id = ? AND deleted_at IS NULL", templateID).Count(&count).Error; err != nil {
-		return false, err
-	}
-	return count > 0, nil
 }

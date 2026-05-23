@@ -173,7 +173,7 @@ export const weekScheduleAPI = {
   createShift: (data: { name: string; check_in_time: string; check_out_time: string }) =>
     api.post('/week-schedule/shifts', data),
 
-  getCalendar: (params: { weeks?: number; user_id?: string; department_id?: string }) =>
+  getCalendar: (params: { weeks?: number; user_id?: string; department_id?: string; start_date?: string }) =>
     api.get('/week-schedule/calendar', { params }),
 
   setOverride: (data: Record<string, unknown>) => api.post('/week-schedule/overrides', data),
@@ -268,40 +268,7 @@ export const overtimeAPI = {
 // ============= 绩效模块 API =============
 // 注意：后端当前无模板 CRUD，以下模板相关接口为前端本地管理，待后端实现后补充
 
-export type PerformanceActivityStatus = 'draft' | 'self_evaluation' | 'manager_evaluation' | 'result_confirmed' | 'archived'
-
-// 绩效模板（前端本地管理，后端暂无此实体）
-export interface PerformanceTemplate {
-  id: number
-  name: string
-  description: string
-  status: string
-  sections: PerformanceTemplateSection[]
-  created_at: string
-  updated_at: string
-}
-
-export interface PerformanceTemplateSection {
-  id: number
-  template_id: number
-  name: string
-  section_type: string
-  weight: number
-  sort_order: number
-  is_score_required: boolean
-  is_comment_required: boolean
-  items: PerformanceTemplateItem[]
-}
-
-export interface PerformanceTemplateItem {
-  id: number
-  section_id: number
-  name: string
-  description: string
-  max_score: number
-  weight: number
-  sort_order: number
-}
+export type PerformanceActivityStatus = 'draft' | 'target_setting' | 'self_evaluation' | 'manager_evaluation' | 'employee_confirmation' | 'manager_confirmation' | 'hr_confirmation' | 'locked' | 'result_confirmed' | 'archived'
 
 // 绩效活动
 export interface PerformanceActivity {
@@ -310,15 +277,27 @@ export interface PerformanceActivity {
   cycle_type: string
   start_date: string
   end_date: string
-  template_id?: number
+  indicator_library_id?: number
+  target_set_start_at?: string
+  target_set_end_at?: string
   self_eval_start_at: string
   self_eval_end_at: string
   manager_eval_start_at: string
   manager_eval_end_at: string
   result_confirm_start_at: string
   result_confirm_end_at: string
+  employee_confirm_start_at?: string
+  employee_confirm_end_at?: string
+  manager_confirm_start_at?: string
+  manager_confirm_end_at?: string
+  hr_confirm_start_at?: string
+  hr_confirm_end_at?: string
+  hr_confirm_deadline?: string
   status: PerformanceActivityStatus
   description?: string
+  target_department_ids?: string[]
+  target_employee_ids?: string[]
+  enable_bonus_score?: boolean
   created_at: string
   updated_at: string
   created_by: string
@@ -326,7 +305,7 @@ export interface PerformanceActivity {
 }
 
 // 绩效参与人状态
-export type PerformanceParticipantStatus = 'pending' | 'self_submitted' | 'manager_submitted' | 'result_confirmed' | 'inactive' | 'removed_from_scope'
+export type PerformanceParticipantStatus = 'pending' | 'target_pending_approval' | 'target_rejected' | 'target_set' | 'self_submitted' | 'manager_submitted' | 'result_confirmed' | 'inactive' | 'removed_from_scope' | 'employee_confirmed' | 'manager_confirmed' | 'hr_confirmed' | 'locked'
 
 // 绩效参与人
 export interface PerformanceParticipant {
@@ -350,6 +329,37 @@ export interface PerformanceParticipant {
   suggested_level: string
   final_level: string
   adjust_reason: string
+  // 评价文本
+  self_evaluation_comment?: string
+  manager_evaluation_comment?: string
+  // 拆分评价字段
+  self_evaluation_good?: string
+  self_evaluation_improvement?: string
+  manager_evaluation_good?: string
+  manager_evaluation_improvement?: string
+  // 系统计算总分
+  total_self_score?: number
+  total_manager_score?: number
+  // 附加项
+  bonus_score?: number
+  penalty_score?: number
+  adjusted_score?: number
+  // 收支系数
+  revenue_coefficient?: number
+  // 三级确认
+  employee_confirmed_at?: string
+  employee_confirmed_by?: string
+  manager_confirmed_at?: string
+  manager_confirmed_by?: string
+  hr_confirmed_at?: string
+  hr_confirmed_by?: string
+  // 锁定
+  is_locked?: boolean
+  locked_at?: string
+  locked_by?: string
+  force_locked?: boolean
+  force_locked_reason?: string
+  // 兼容旧接口
   confirmed_at?: string
   confirmed_by: string
   created_at: string
@@ -402,6 +412,86 @@ export interface PerformanceDistributionCheck {
   warnings: string[]
 }
 
+// 绩效指标库
+export interface PerformanceIndicatorLibrary {
+  id: number
+  department_id: string
+  department_name: string
+  parent_library_id?: number
+  name: string
+  description: string
+  default_cycle: string
+  status: string
+  created_at: string
+  updated_at: string
+  created_by: string
+  updated_by: string
+}
+
+// 绩效指标项
+export interface PerformanceIndicatorItem {
+  id: number
+  library_id: number
+  parent_indicator_id?: number
+  section_type?: string
+  name: string
+  description: string
+  indicator_type: string
+  keywords?: string[]
+  cycle: string
+  default_weight: number
+  red_line_value: string
+  target_value: string
+  challenge_value: string
+  scoring_rule?: string
+  weight?: number
+  is_default?: boolean
+  is_inherited: boolean
+  is_customized: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+// 绩效目标记录
+export interface PerformanceGoalRecord {
+  id: number
+  activity_id: string
+  participant_id: number
+  indicator_item_id?: number
+  section_type: 'quantitative' | 'key_action' | 'bonus_penalty'
+  item_name: string
+  item_definition: string
+  weight: number
+  red_line_value: string
+  target_value: string
+  challenge_value: string
+  scoring_rule: string
+  actual_result: string
+  attachments: string[]
+  self_score: number
+  manager_score: number
+  bonus_score: number
+  is_from_superior: boolean
+  approval_status: string
+  visibility_scope: string
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+// 团队配额状态
+export interface TeamQuotaStatus {
+  manager_id: string
+  manager_name: string
+  total: number
+  levels: Record<string, {
+    current: number
+    max: number
+    percent: number
+  }>
+}
+
 // 刷新参与人结果
 export interface RefreshParticipantsResult {
   added_count: number
@@ -443,6 +533,7 @@ export interface SubmitReviewManagerEvaluationRequest {
   manager_comment: string
   final_level: string
   final_level_reason?: string
+  bonus_score?: number
 }
 
 // 批量主管评分
@@ -483,14 +574,27 @@ export interface CreatePerformanceActivityRequest {
   cycle_type: string
   start_date: string
   end_date: string
+  target_set_start_at?: string
+  target_set_end_at?: string
   self_eval_start_at: string
   self_eval_end_at: string
   manager_eval_start_at: string
   manager_eval_end_at: string
   result_confirm_start_at: string
   result_confirm_end_at: string
+  employee_confirm_start_at?: string
+  employee_confirm_end_at?: string
+  manager_confirm_start_at?: string
+  manager_confirm_end_at?: string
+  hr_confirm_start_at?: string
+  hr_confirm_end_at?: string
+  hr_confirm_deadline?: string
   status: PerformanceActivityStatus
+  target_department_ids?: string[]
+  target_employee_ids?: string[]
+  indicator_library_id?: number
   description?: string
+  enable_bonus_score?: boolean
 }
 
 // 关系变更日志
@@ -507,15 +611,46 @@ export interface RelationshipChangeLog {
   created_by: string
 }
 
-export const performanceAPI = {
-  // ===== 绩效模板 =====
-  getTemplates: () => api.get('/performance/templates'),
-  createTemplate: (data: { name: string; description: string; status: string; sections: any[] }) =>
-    api.post('/performance/templates', data),
-  getTemplate: (templateId: number) => api.get(`/performance/templates/${templateId}`),
-  updateTemplate: (templateId: number, data: { name: string; description: string; status: string; sections: any[] }) =>
-    api.put(`/performance/templates/${templateId}`, data),
+export interface PerformanceCompanyFinance {
+  id: number
+  activity_id: string
+  revenue_sign: 'revenue_gt_expense' | 'expense_gt_revenue' | 'equal' | string
+  description?: string
+  remark?: string
+  set_by?: string
+  set_at?: string
+  created_at?: string
+  updated_at?: string
+}
 
+export interface PerformanceHRDeadlineStatus {
+  deadline?: string
+  pending_count: number
+  overdue: boolean
+}
+
+export interface PerformanceTemplatePayload {
+  name: string
+  description?: string
+  status?: string
+  sections?: {
+    name: string
+    section_type: string
+    weight: number
+    sort_order?: number
+    is_score_required?: boolean
+    is_comment_required?: boolean
+    items: {
+      name: string
+      description?: string
+      max_score: number
+      weight: number
+      sort_order?: number
+    }[]
+  }[]
+}
+
+export const performanceAPI = {
   // ===== 绩效活动 =====
   getActivities: (params?: {
     page?: number
@@ -531,14 +666,27 @@ export const performanceAPI = {
     cycle_type: string
     start_date: string
     end_date: string
+    target_set_start_at?: string
+    target_set_end_at?: string
     self_eval_start_at: string
     self_eval_end_at: string
     manager_eval_start_at: string
     manager_eval_end_at: string
     result_confirm_start_at: string
     result_confirm_end_at: string
+    employee_confirm_start_at?: string
+    employee_confirm_end_at?: string
+    manager_confirm_start_at?: string
+    manager_confirm_end_at?: string
+    hr_confirm_start_at?: string
+    hr_confirm_end_at?: string
+    hr_confirm_deadline?: string
     status: string
+    target_department_ids?: string[]
+    target_employee_ids?: string[]
+    indicator_library_id?: number
     description?: string
+    enable_bonus_score?: boolean
   }) => api.post('/performance/activities', data),
 
   getActivity: (activityId: number) =>
@@ -549,14 +697,27 @@ export const performanceAPI = {
     cycle_type: string
     start_date: string
     end_date: string
+    target_set_start_at?: string
+    target_set_end_at?: string
     self_eval_start_at: string
     self_eval_end_at: string
     manager_eval_start_at: string
     manager_eval_end_at: string
     result_confirm_start_at: string
     result_confirm_end_at: string
+    employee_confirm_start_at?: string
+    employee_confirm_end_at?: string
+    manager_confirm_start_at?: string
+    manager_confirm_end_at?: string
+    hr_confirm_start_at?: string
+    hr_confirm_end_at?: string
+    hr_confirm_deadline?: string
     status: string
+    target_department_ids?: string[]
+    target_employee_ids?: string[]
+    indicator_library_id?: number
     description?: string
+    enable_bonus_score?: boolean
   }) => api.put(`/performance/activities/${activityId}`, data),
 
   // 活动状态流转
@@ -574,6 +735,22 @@ export const performanceAPI = {
 
   archiveActivity: (activityId: number) =>
     api.post(`/performance/activities/${activityId}/archive`),
+
+  // 新增状态流转（9状态流）
+  openTargetSetting: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-target-setting`),
+
+  openEmployeeConfirmation: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-employee-confirmation`),
+
+  openManagerConfirmation: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-manager-confirmation`),
+
+  openHRConfirmation: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-hr-confirmation`),
+
+  lockActivity: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/lock`),
 
   // 兼容旧接口
   publishActivity: (activityId: number) =>
@@ -638,6 +815,28 @@ export const performanceAPI = {
   sendManagerEvalReminder: (activityId: number) =>
     api.post(`/performance/activities/${activityId}/send-manager-eval-reminder`),
 
+  sendHRConfirmReminder: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/send-hr-confirm-reminder`),
+
+  // ===== HR 收支与确认管理 =====
+  setCompanyFinance: (activityId: number, data: {
+    revenue_sign: 'revenue_gt_expense' | 'expense_gt_revenue' | 'equal' | string
+    description?: string
+    remark?: string
+  }) => api.put(`/performance/activities/${activityId}/finance`, data),
+
+  getCompanyFinance: (activityId: number) =>
+    api.get(`/performance/activities/${activityId}/finance`),
+
+  getPendingHRConfirm: (activityId: number) =>
+    api.get(`/performance/activities/${activityId}/pending-hr-confirm`),
+
+  setHRConfirmDeadline: (activityId: number, deadline: string) =>
+    api.put(`/performance/activities/${activityId}/hr-confirm-deadline`, { deadline }),
+
+  getHRConfirmDeadlineStatus: (activityId: number) =>
+    api.get(`/performance/activities/${activityId}/hr-confirm-deadline-status`),
+
   // ===== 绩效面谈 =====
   triggerPerformanceInterview: (participantId: number, interviewType: 'required' | 'optional') =>
     api.post(`/performance/participants/${participantId}/trigger-interview`, { interview_type: interviewType }),
@@ -653,6 +852,44 @@ export const performanceAPI = {
   // ===== 版本记录 =====
   getParticipantVersions: (participantId: number) =>
     api.get(`/performance/participants/${participantId}/versions`),
+
+  // ===== 目标记录 =====
+  getGoalRecords: (participantId: number) =>
+    api.get(`/performance/goal-records/${participantId}`),
+
+  // ===== 新版评分（基于目标指标） =====
+  submitGoalSelfEvaluation: (participantId: number, data: {
+    items: { record_id: number; actual_result: string; self_score: number }[]
+    bonus_items?: { record_id: number; self_score: number }[]
+    evaluation_good: string
+    evaluation_improvement: string
+  }) => api.post(`/performance/goal-reviews/${participantId}/self-evaluation`, data),
+
+  submitGoalManagerEvaluation: (participantId: number, data: {
+    items: { record_id: number; manager_score: number }[]
+    bonus_items?: { record_id: number; manager_score: number }[]
+    suggested_level: string
+    evaluation_good: string
+    evaluation_improvement: string
+  }) => api.post(`/performance/goal-reviews/${participantId}/manager-evaluation`, data),
+
+  // ===== 实时分布检查 =====
+  getRealtimeDistributionCheck: (activityId: number) =>
+    api.get(`/performance/activities/${activityId}/realtime-distribution-check`),
+
+  // ===== 附加项设置 =====
+  setBonusPenaltyScore: (participantId: number, bonusScore: number, penaltyScore: number) =>
+    api.post(`/performance/participants/${participantId}/bonus-penalty`, { bonus_score: bonusScore, penalty_score: penaltyScore }),
+
+  // ===== 三级确认 =====
+  confirmEmployeeResult: (participantId: number) =>
+    api.post(`/performance/participants/${participantId}/confirm-employee`),
+
+  confirmManagerResult: (participantId: number) =>
+    api.post(`/performance/participants/${participantId}/confirm-manager`),
+
+  confirmHRResult: (participantId: number) =>
+    api.post(`/performance/participants/${participantId}/confirm-hr`),
 
   // ===== 关系变更日志 =====
   getParticipantRelationshipChangeLogs: (participantId: number) =>
@@ -674,6 +911,159 @@ export const performanceAPI = {
 
   getDistributionCheck: (activityId: number) =>
     api.get(`/performance/activities/${activityId}/distribution-check`),
+
+  // ===== 模板管理（兼容旧接口） =====
+  getTemplates: (params?: { page?: number; page_size?: number; status?: string }) =>
+    api.get('/performance/templates', { params }),
+
+  createTemplate: (data: PerformanceTemplatePayload) =>
+    api.post('/performance/templates', data),
+
+  getTemplate: (templateId: number) =>
+    api.get(`/performance/templates/${templateId}`),
+
+  updateTemplate: (templateId: number, data: PerformanceTemplatePayload) =>
+    api.put(`/performance/templates/${templateId}`, data),
+
+  // ===== 指标库管理 =====
+  getIndicatorLibraries: (params?: {
+    page?: number
+    page_size?: number
+    department_id?: string
+    keyword?: string
+    status?: string
+  }) => api.get('/performance/indicator-libraries', { params }),
+
+  createIndicatorLibrary: (data: {
+    department_id: string
+    department_name: string
+    name: string
+    description?: string
+    default_cycle?: string
+    items?: {
+      section_type: string
+      name: string
+      description?: string
+      weight?: number
+      red_line_value?: string
+      target_value?: string
+      challenge_value?: string
+      scoring_rule?: string
+      is_default?: boolean
+      sort_order?: number
+    }[]
+  }) => api.post('/performance/indicator-libraries', data),
+
+  getIndicatorLibrary: (libraryId: number) =>
+    api.get(`/performance/indicator-libraries/${libraryId}`),
+
+  updateIndicatorLibrary: (libraryId: number, data: {
+    name?: string
+    description?: string
+    department_name?: string
+    default_cycle?: string
+  }) => api.put(`/performance/indicator-libraries/${libraryId}`, data),
+
+  archiveIndicatorLibrary: (libraryId: number) =>
+    api.post(`/performance/indicator-libraries/${libraryId}/archive`),
+
+  getIndicatorLibrariesByDepartment: (departmentId: string) =>
+    api.get(`/performance/indicator-libraries/department/${departmentId}`),
+
+  inheritIndicatorLibrary: (data: {
+    parent_library_id: number
+    target_department_id: string
+    target_department_name: string
+  }) => api.post('/performance/indicator-libraries/inherit', data),
+
+  // ===== 指标项管理 =====
+  getIndicatorItems: (libraryId: number, sectionType?: string) =>
+    api.get('/performance/indicator-items', { params: { library_id: libraryId, section_type: sectionType } }),
+
+  createIndicatorItem: (data: {
+    library_id: number
+    section_type: string
+    name: string
+    description?: string
+    indicator_type?: string
+    keywords?: string[]
+    calculation_method?: string
+    data_source?: string
+    cycle?: string
+    default_weight?: number
+    weight?: number
+    red_line_value?: string
+    target_value?: string
+    challenge_value?: string
+    scoring_rule?: string
+    is_default?: boolean
+    sort_order?: number
+  }) => api.post('/performance/indicator-items', data),
+
+  updateIndicatorItem: (itemId: number, data: {
+    name?: string
+    description?: string
+    weight?: number
+    is_default?: boolean
+    sort_order?: number
+  }) => api.put(`/performance/indicator-items/${itemId}`, data),
+
+  deleteIndicatorItem: (itemId: number) =>
+    api.delete(`/performance/indicator-items/${itemId}`),
+
+  searchIndicatorItems: (params: {
+    keyword?: string
+    library_ids?: number[]
+  }) => api.get('/performance/indicator-items/search', { params }),
+
+  // ===== 目标记录管理（目标设定阶段） =====
+  batchSaveGoalRecords: (participantId: number, data: {
+    items: {
+      id?: number
+      section_type: string
+      item_name: string
+      item_definition?: string
+      weight: number
+      red_line_value?: string
+      target_value?: string
+      challenge_value?: string
+      scoring_rule?: string
+      actual_result?: string
+      self_score?: number
+      manager_score?: number
+      attachments?: string[]
+      sort_order?: number
+    }[]
+  }) => api.post(`/performance/goal-records/${participantId}`, data),
+
+  submitGoalApproval: (participantId: number, data?: { comment?: string }) =>
+    api.post(`/performance/goal-records/${participantId}/submit`, data || {}),
+
+  approveGoalRecords: (participantId: number, data?: { comment?: string }) =>
+    api.post(`/performance/goal-records/${participantId}/approve`, data || {}),
+
+  rejectGoalRecords: (participantId: number, data: { comment: string }) =>
+    api.post(`/performance/goal-records/${participantId}/reject`, data),
+
+  getManagerGoals: (participantId: number) =>
+    api.get(`/performance/goal-records/${participantId}/manager-goals`),
+
+  getGoalSuggestions: (participantId: number) =>
+    api.get(`/performance/goal-records/${participantId}/suggestions`),
+
+  batchAssignGoals: (activityId: number, data: {
+    participant_ids: number[]
+    items: {
+      section_type: string
+      item_name: string
+      item_definition?: string
+      weight: number
+      red_line_value?: string
+      target_value?: string
+      challenge_value?: string
+      scoring_rule?: string
+    }[]
+  }) => api.post(`/performance/activities/${activityId}/batch-assign-goals`, data),
 }
 
 export default api

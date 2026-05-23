@@ -260,13 +260,21 @@ func (s *WeekScheduleService) GetWeekType(userID, departmentID, date string) (st
 }
 
 // GetWeekCalendar 获取未来N周的大小周日历（含节假日）
-func (s *WeekScheduleService) GetWeekCalendar(userID, departmentID string, weeks int) ([]WeekInfo, error) {
+func (s *WeekScheduleService) GetWeekCalendar(userID, departmentID string, weeks int, startDateStr string) ([]WeekInfo, error) {
 	if weeks <= 0 {
 		weeks = 8
 	}
 
-	now := time.Now()
-	monday := getMonday(now)
+	var monday time.Time
+	if startDateStr != "" {
+		parsed, err := time.Parse("2006-01-02", startDateStr)
+		if err != nil {
+			return nil, fmt.Errorf("无效的起始日期: %s", startDateStr)
+		}
+		monday = getMonday(parsed)
+	} else {
+		monday = getMonday(time.Now())
+	}
 
 	// 预加载整个时间范围的节假日
 	startDate := monday.Format("2006-01-02")

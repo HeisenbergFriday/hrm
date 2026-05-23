@@ -52,6 +52,11 @@ const DataPermission = lazy(() => import('./pages/DataPermission'))
 const SyncJobs = lazy(() => import('./pages/SyncJobs'))
 const AuditLogs = lazy(() => import('./pages/AuditLogs'))
 const PerformanceOverview = lazy(() => import('./pages/PerformanceOverview'))
+const PerformanceIndicatorLibrary = lazy(() => import('./pages/PerformanceIndicatorLibrary'))
+const PerformanceResultView = lazy(() => import('./pages/PerformanceResultView'))
+const PerformanceSelfEval = lazy(() => import('./pages/PerformanceSelfEval'))
+const PerformanceManagerEval = lazy(() => import('./pages/PerformanceManagerEval'))
+const PerformanceGoalSetting = lazy(() => import('./pages/PerformanceGoalSetting'))
 const Permission = lazy(() => import('./pages/Permission'))
 const Log = lazy(() => import('./pages/Log'))
 const Setting = lazy(() => import('./pages/Setting'))
@@ -59,6 +64,16 @@ const Setting = lazy(() => import('./pages/Setting'))
 import { useAuthStore } from './store/authStore'
 
 const { Header, Sider, Content } = Layout
+
+const appTheme = {
+  token: {
+    colorPrimary: '#4338ca',
+    colorPrimaryHover: '#6366f1',
+    colorPrimaryActive: '#3730a3',
+    borderRadius: 8,
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif",
+  },
+}
 
 const authPaths = ['/login', '/callback', '/login-error']
 
@@ -103,7 +118,13 @@ function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const { isLoggedIn, user, login, logout } = useAuthStore()
-  const selectedMenuKey = location.pathname.startsWith('/employees/') ? '/employees' : location.pathname
+  const selectedMenuKey = location.pathname.startsWith('/employees/')
+    ? '/employees'
+    : location.pathname.startsWith('/performance/')
+      ? location.pathname.includes('/indicator-library')
+        ? '/performance-indicator-library'
+        : '/performance-overview'
+      : location.pathname
 
   const {
     token: { colorBgContainer, borderRadiusLG },
@@ -228,7 +249,7 @@ function App() {
           >
             人事管理系统
           </div>
-          <Menu theme="dark" mode="inline" selectedKeys={[selectedMenuKey]} defaultOpenKeys={['organization']}>
+          <Menu theme="dark" mode="inline" selectedKeys={[selectedMenuKey]} defaultOpenKeys={location.pathname.startsWith('/performance/') ? ['performance'] : ['organization']}>
             <Menu.Item key="/" icon={<UserOutlined />}>
               <Link to="/">首页</Link>
             </Menu.Item>
@@ -307,9 +328,14 @@ function App() {
             <Menu.Item key="/leave-overtime" icon={<ScheduleOutlined />}>
               <Link to="/leave-overtime">年假与调休</Link>
             </Menu.Item>
-            <Menu.Item key="/performance-overview" icon={<BarChartOutlined />}>
-              <Link to="/performance-overview">绩效管理</Link>
-            </Menu.Item>
+            <Menu.SubMenu key="performance" icon={<BarChartOutlined />} title="绩效管理">
+              <Menu.Item key="/performance-overview">
+                <Link to="/performance-overview">绩效活动</Link>
+              </Menu.Item>
+              <Menu.Item key="/performance-indicator-library">
+                <Link to="/performance-indicator-library">指标库管理</Link>
+              </Menu.Item>
+            </Menu.SubMenu>
             <Menu.Item key="/setting" icon={<SettingOutlined />}>
               <Link to="/setting">系统设置</Link>
             </Menu.Item>
@@ -351,6 +377,11 @@ function App() {
                 <Route path="/talent-analysis" element={<TalentAnalysis />} />
                 <Route path="/leave-overtime" element={<LeaveOvertime />} />
                 <Route path="/performance-overview" element={<PerformanceOverview />} />
+                <Route path="/performance-indicator-library" element={<PerformanceIndicatorLibrary />} />
+                <Route path="/performance-result/:activityId/:participantId" element={<PerformanceResultView />} />
+                <Route path="/performance-self-eval/:activityId/:participantId" element={<PerformanceSelfEval />} />
+                <Route path="/performance-manager-eval/:activityId/:participantId" element={<PerformanceManagerEval />} />
+                <Route path="/performance-goal-setting/:activityId/:participantId" element={<PerformanceGoalSetting />} />
                 <Route path="/permission" element={<Permission />} />
                 <Route path="/log" element={<Log />} />
                 <Route path="/setting" element={<Setting />} />

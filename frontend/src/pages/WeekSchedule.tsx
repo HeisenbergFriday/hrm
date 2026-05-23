@@ -27,6 +27,7 @@ import type { TableColumnsType } from 'antd'
 import { CalendarOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { departmentAPI, shiftConfigAPI, userAPI, weekScheduleAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
 
 const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -186,12 +187,12 @@ function getWeekTypeMeta(weekType: WeekType) {
 }
 
 function getStatusTag(status: string) {
-  if (status === 'active') return <Tag color="success">生效中</Tag>
-  if (status === 'inactive') return <Tag>已停用</Tag>
-  if (status === 'success') return <Tag color="success">成功</Tag>
-  if (status === 'partial') return <Tag color="warning">部分成功</Tag>
-  if (status === 'failed') return <Tag color="error">失败</Tag>
-  return <Tag>{status}</Tag>
+  if (status === 'active') return <Tag color="success" style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>生效中</Tag>
+  if (status === 'inactive') return <Tag style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>已停用</Tag>
+  if (status === 'success') return <Tag color="success" style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>成功</Tag>
+  if (status === 'partial') return <Tag color="warning" style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>部分成功</Tag>
+  if (status === 'failed') return <Tag color="error" style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>失败</Tag>
+  return <Tag style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>{status}</Tag>
 }
 
 function getSyncTypeLabel(syncType: string) {
@@ -278,6 +279,7 @@ export default function WeekSchedule() {
   const [selectedUserId, setSelectedUserId] = useState('')
   const [syncWeeks, setSyncWeeks] = useState(4)
   const [holidayYear, setHolidayYear] = useState(dayjs().year())
+  const [selectedMonth, setSelectedMonth] = useState<Dayjs | null>(dayjs())
 
   const [ruleModalOpen, setRuleModalOpen] = useState(false)
   const [overrideModalOpen, setOverrideModalOpen] = useState(false)
@@ -334,14 +336,21 @@ export default function WeekSchedule() {
   const selectedUser = users.find((item) => item.user_id === selectedUserId) ?? null
 
   const calendarParams = useMemo(() => {
+    const today = dayjs()
+    const target = selectedMonth || today
+    const monthStart = target.startOf('month')
+    const startDate = monthStart.format('YYYY-MM-DD')
+    const monthDiff = Math.max(0, target.diff(today, 'month'))
+    const weeksNeeded = Math.max(8, monthDiff * 5 + 8)
+    const params: Record<string, any> = { weeks: weeksNeeded, start_date: startDate }
     if (calendarScopeType === 'department') {
-      return { weeks: 8, department_id: selectedDepartmentId }
+      params.department_id = selectedDepartmentId
+    } else if (calendarScopeType === 'user') {
+      params.user_id = selectedUserId
+      params.department_id = selectedUser?.department_id || ''
     }
-    if (calendarScopeType === 'user') {
-      return { weeks: 8, user_id: selectedUserId, department_id: selectedUser?.department_id || '' }
-    }
-    return { weeks: 8 }
-  }, [calendarScopeType, selectedDepartmentId, selectedUserId, selectedUser?.department_id])
+    return params
+  }, [calendarScopeType, selectedDepartmentId, selectedUserId, selectedUser?.department_id, selectedMonth])
 
   const canQueryCalendar =
     calendarScopeType === 'company' ||
@@ -349,7 +358,7 @@ export default function WeekSchedule() {
     (calendarScopeType === 'user' && Boolean(selectedUserId))
 
   const calendarQuery = useQuery({
-    queryKey: ['week-schedule', 'calendar', calendarScopeType, selectedDepartmentId, selectedUserId],
+    queryKey: ['week-schedule', 'calendar', calendarScopeType, selectedDepartmentId, selectedUserId, calendarParams.weeks],
     queryFn: () => weekScheduleAPI.getCalendar(calendarParams),
     enabled: canQueryCalendar,
     retry: false,
@@ -364,6 +373,12 @@ export default function WeekSchedule() {
   const calendarItems = getItems<WeekCalendarItem>(calendarQuery.data)
   const holidayRecords = getItems<HolidayRecord>(holidaysQuery.data)
   const monthCalendarSections = useMemo(() => buildMonthCalendarSections(calendarItems), [calendarItems])
+
+  const filteredMonthSections = useMemo(() => {
+    if (!selectedMonth) return monthCalendarSections
+    const monthKey = selectedMonth.format('YYYY-MM')
+    return monthCalendarSections.filter((section) => section.month === monthKey)
+  }, [monthCalendarSections, selectedMonth])
 
   const shiftConfigQuery = useQuery({
     queryKey: ['week-schedule', 'user-shift-config', selectedUserId],
@@ -629,7 +644,7 @@ export default function WeekSchedule() {
       render: (_, record) => (
         <Space direction="vertical" size={2}>
           <Space>
-            <Tag color="blue">{getScopeLabel(record.scope_type)}</Tag>
+            <Tag color="blue" style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>{getScopeLabel(record.scope_type)}</Tag>
             <Text strong>{record.scope_name || '未命名范围'}</Text>
           </Space>
           <Text type="secondary">{record.scope_id || '全公司'}</Text>
@@ -671,11 +686,11 @@ export default function WeekSchedule() {
       width: 140,
       render: (_, record) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEditRuleModal(record)}>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEditRuleModal(record)} style={{ borderRadius: 8, fontWeight: 600 }}>
             编辑
           </Button>
           <Popconfirm title="确定删除这条规则？" onConfirm={() => deleteRuleMutation.mutate(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />}>
+            <Button size="small" danger icon={<DeleteOutlined />} style={{ borderRadius: 8, fontWeight: 600 }}>
               删除
             </Button>
           </Popconfirm>
@@ -698,7 +713,7 @@ export default function WeekSchedule() {
       title: '类型',
       dataIndex: 'type',
       width: 140,
-      render: (value: HolidayType) => <Tag color={value === 'holiday' ? 'red' : 'gold'}>{value === 'holiday' ? '放假' : '调休上班'}</Tag>,
+      render: (value: HolidayType) => <Tag color={value === 'holiday' ? 'red' : 'gold'} style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>{value === 'holiday' ? '放假' : '调休上班'}</Tag>,
     },
     {
       title: '操作',
@@ -706,7 +721,7 @@ export default function WeekSchedule() {
       width: 100,
       render: (_, record) => (
         <Popconfirm title="确定删除这条节假日记录？" onConfirm={() => deleteHolidayMutation.mutate(record.id)}>
-          <Button size="small" danger icon={<DeleteOutlined />}>
+          <Button size="small" danger icon={<DeleteOutlined />} style={{ borderRadius: 8, fontWeight: 600 }}>
             删除
           </Button>
         </Popconfirm>
@@ -718,8 +733,8 @@ export default function WeekSchedule() {
     {
       title: '时间',
       dataIndex: 'created_at',
-      width: 180,
-      render: (value) => dayjs(value).format('YYYY-MM-DD HH:mm'),
+      width: 110,
+      render: (value) => dayjs(value).format('MM-DD HH:mm'),
     },
     {
       title: '同步方向',
@@ -728,56 +743,35 @@ export default function WeekSchedule() {
       render: (value) => getSyncTypeLabel(value),
     },
     {
-      title: '影响人数',
+      title: '人数',
       dataIndex: 'user_count',
-      width: 100,
+      width: 50,
     },
     {
       title: '状态',
       dataIndex: 'status',
-      width: 100,
+      width: 80,
       render: (value) => getStatusTag(value),
     },
     {
       title: '说明',
       dataIndex: 'message',
+      ellipsis: true,
     },
   ]
 
   const ruleScope = Form.useWatch('scope_type', ruleForm) ?? 'company'
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card>
-        <Space direction="vertical" size={8}>
-          <Title level={3} style={{ margin: 0 }}>
-            大小周与节假日管理
-          </Title>
-          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            日历已改成按月表格展示。工作日、休息日、节假日和大小周状态都会在同一张月度表里展示，点击任意周行可以手动覆盖该周为大周或小周。
-          </Paragraph>
-        </Space>
-      </Card>
-
+    <PageContainer
+      title="大小周与节假日管理"
+      subtitle="日历已改成按月表格展示。工作日、休息日、节假日和大小周状态都会在同一张月度表里展示，点击任意周行可以手动覆盖该周为大周或小周。"
+      icon={<CalendarOutlined />}
+    >
       <Card
-        title="查询与同步"
-        extra={
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={() => invalidateAll()}>
-              刷新
-            </Button>
-            <Button loading={syncHolidayMutation.isPending} onClick={() => syncHolidayMutation.mutate()}>
-              同步节假日
-            </Button>
-            <Button loading={syncFromMutation.isPending} onClick={() => syncFromMutation.mutate()}>
-              从钉钉拉取
-            </Button>
-            <InputNumber min={1} max={12} value={syncWeeks} onChange={(value) => setSyncWeeks(Number(value) || 4)} />
-            <Button type="primary" icon={<SyncOutlined />} loading={syncToMutation.isPending} onClick={() => syncToMutation.mutate()}>
-              推送到钉钉
-            </Button>
-          </Space>
-        }
+        title="查询范围"
+        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
+        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
       >
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={8}>
@@ -831,7 +825,33 @@ export default function WeekSchedule() {
 
       <Card
         title="大小周日历"
-        extra={<Text type="secondary">当前范围：{currentScopeName || '未选择'}</Text>}
+        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
+        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+        extra={
+          <Space wrap>
+            <Button icon={<ReloadOutlined />} onClick={() => invalidateAll()} style={{ borderRadius: 8, fontWeight: 600 }}>
+              刷新
+            </Button>
+            <Button loading={syncHolidayMutation.isPending} onClick={() => syncHolidayMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
+              同步节假日
+            </Button>
+            <Button loading={syncFromMutation.isPending} onClick={() => syncFromMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
+              从钉钉拉取
+            </Button>
+            <InputNumber min={1} max={12} value={syncWeeks} onChange={(value) => setSyncWeeks(Number(value) || 4)} style={{ width: 60 }} />
+            <Button type="primary" icon={<SyncOutlined />} loading={syncToMutation.isPending} onClick={() => syncToMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
+              推送到钉钉
+            </Button>
+            <Text type="secondary">当前：{currentScopeName || '未选择'}</Text>
+            <DatePicker
+              picker="month"
+              value={selectedMonth}
+              onChange={(date) => setSelectedMonth(date || dayjs())}
+              allowClear={false}
+              style={{ width: 140 }}
+            />
+          </Space>
+        }
       >
         {!canQueryCalendar ? (
           <Alert type="info" showIcon message={calendarScopeType === 'department' ? '请选择部门后再查看日历' : '请选择员工后再查看日历'} />
@@ -842,7 +862,9 @@ export default function WeekSchedule() {
         ) : calendarQuery.isError ? (
           <Alert type="error" showIcon message="日历加载失败" description={getErrorMessage(calendarQuery.error, '请稍后重试')} />
         ) : monthCalendarSections.length === 0 ? (
-          <Empty description="暂无可展示的周次安排" />
+          <Empty description="暂无可展示的周次安排" imageStyle={{ height: 80 }} />
+        ) : filteredMonthSections.length === 0 ? (
+          <Empty description={`${selectedMonth?.format('YYYY年M月') || '该月份'}暂无周次安排`} imageStyle={{ height: 80 }} />
         ) : (
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <Alert
@@ -852,7 +874,7 @@ export default function WeekSchedule() {
               description="黄色表示工作日，白色表示休息日，红色表示法定节假日或特殊休假，灰色表示非当前月份日期。右侧“大小周”列会同时展示单双休、周六状态和本周节假日摘要。"
             />
 
-            {monthCalendarSections.map((section) => (
+            {filteredMonthSections.map((section) => (
               <Card
                 key={section.month}
                 title={`${dayjs(`${section.month}-01`).format('YYYY年M月')}作息时间表`}
@@ -981,15 +1003,17 @@ export default function WeekSchedule() {
         )}
       </Card>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={14}>
+      <Row gutter={[24, 24]}>
+        <Col xs={24} xxl={12}>
           <Card
             title="规则管理"
+            style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
+            styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
             extra={
               <Space>
-                <Button onClick={() => shiftsQuery.refetch()}>刷新班次</Button>
-                <Button onClick={() => setShiftModalOpen(true)}>新增班次</Button>
-                <Button type="primary" icon={<PlusOutlined />} onClick={openCreateRuleModal}>
+                <Button onClick={() => shiftsQuery.refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>刷新班次</Button>
+                <Button onClick={() => setShiftModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>新增班次</Button>
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreateRuleModal} style={{ borderRadius: 8, fontWeight: 600 }}>
                   新增规则
                 </Button>
               </Space>
@@ -1005,12 +1029,14 @@ export default function WeekSchedule() {
           </Card>
         </Col>
 
-        <Col xs={24} xl={10}>
+        <Col xs={24} xxl={12}>
           <Card
             title="钉钉同步"
+            style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
+            styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
             extra={
               <Space>
-                <Button icon={<ReloadOutlined />} onClick={() => logsQuery.refetch()}>
+                <Button icon={<ReloadOutlined />} onClick={() => logsQuery.refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>
                   刷新
                 </Button>
               </Space>
@@ -1030,11 +1056,13 @@ export default function WeekSchedule() {
 
       <Card
         title="节假日管理"
+        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
+        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
         extra={
           <Space>
             <DatePicker picker="year" value={dayjs(`${holidayYear}-01-01`)} onChange={(value) => setHolidayYear(value?.year() || dayjs().year())} />
-            <Button onClick={() => setHolidayImportModalOpen(true)}>批量导入</Button>
-            <Button type="primary" onClick={() => setHolidayModalOpen(true)}>
+            <Button onClick={() => setHolidayImportModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>批量导入</Button>
+            <Button type="primary" onClick={() => setHolidayModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>
               新增节假日
             </Button>
           </Space>
@@ -1237,6 +1265,6 @@ export default function WeekSchedule() {
           </Row>
         </Form>
       </Modal>
-    </Space>
+    </PageContainer>
   )
 }
