@@ -18,14 +18,6 @@ const SECTION_LABEL: Record<string, string> = {
   bonus_penalty: '附加考核项'
 }
 
-const LEVEL_DEFINITIONS = [
-  { level: 'S（100分以上）', label: '杰出', description: '整体绩效持续超过期望，工作业绩非常突出，团队标杆，具有重大贡献。绩效系数为1.2' },
-  { level: 'A（90-99分）', label: '优秀', description: '整体绩效经常超过预期，工作业绩突出，团队积极榜样，具有较大贡献。绩效系数为1.1' },
-  { level: 'B（80-89分）', label: '良好', description: '整体绩效符合期望，达成大部分或所有既定目标，需积极思考，追求进步。绩效系数为1' },
-  { level: 'C（60-79分）', label: '待改进', description: '整体绩效略低期望，达成小部分既定目标，结果勉强接受，需积极整改，快速提升。绩效系数为0.8' },
-  { level: 'D（60分以下）', label: '不合格', description: '整体绩效明显低于期望，结果不可接受，工作能力不胜任当前岗位要求。绩效系数为0.4' }
-]
-
 function formatScore(value?: number) {
   if (value === undefined || value === null) return '-'
   return Number(value).toFixed(0)
@@ -46,6 +38,29 @@ function formatDate(value?: string) {
   return value.substring(0, 10)
 }
 
+function formatSignature(name?: string, date?: string) {
+  const normalizedName = name?.trim()
+  const normalizedDate = formatDate(date)
+
+  if (!normalizedName && normalizedDate === '-') return '-'
+  return [normalizedName || '-', normalizedDate].filter(part => part && part !== '-').join(' ')
+}
+
+function formatPeriod(startDate?: string, endDate?: string) {
+  if (!startDate || !endDate) return '-'
+
+  const start = startDate.substring(0, 10)
+  const end = endDate.substring(0, 10)
+  const [startYear, startMonth] = start.split('-')
+  const [endYear, endMonth] = end.split('-')
+
+  if (startYear && startMonth && startYear === endYear && startMonth === endMonth) {
+    return `${startYear}年${Number(startMonth)}月`
+  }
+
+  return `${start} 至 ${end}`
+}
+
 function getWeightedScore(record: PerformanceGoalRecord, scoreType: 'self' | 'manager') {
   const score = scoreType === 'self' ? record.self_score : record.manager_score
   return (score || 0) * (record.weight || 0)
@@ -64,26 +79,145 @@ interface ArchiveSheetProps {
 
 const ArchivePerformanceSheet: React.FC<ArchiveSheetProps> = ({ activity, participant, records }) => {
   const mainRecords = records.filter(record => record.section_type !== 'bonus_penalty')
+  const quantitativeRecords = mainRecords
+    .filter(record => record.section_type === 'quantitative')
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id)
+  const keyActionRecords = mainRecords
+    .filter(record => record.section_type === 'key_action')
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id)
   const selfEvaluationGood = participant?.self_evaluation_good || ''
   const selfEvaluationImprovement = participant?.self_evaluation_improvement || ''
   const managerEvaluationGood = participant?.manager_evaluation_good || ''
   const managerEvaluationImprovement = participant?.manager_evaluation_improvement || ''
   const totalWeight = mainRecords.reduce((sum, record) => sum + (record.weight || 0), 0)
-  const totalSelfScore = participant?.total_self_score || participant?.self_score || mainRecords.reduce((sum, record) => sum + getWeightedScore(record, 'self'), 0)
-  const totalManagerScore = participant?.total_manager_score || participant?.manager_score || mainRecords.reduce((sum, record) => sum + getWeightedScore(record, 'manager'), 0)
-  const period = activity?.start_date && activity?.end_date ? `${activity.start_date} 至 ${activity.end_date}` : '-'
+  const totalSelfScore = participant?.total_self_score ?? participant?.self_score ?? mainRecords.reduce((sum, record) => sum + getWeightedScore(record, 'self'), 0)
+  const totalManagerScore = participant?.total_manager_score ?? participant?.manager_score ?? mainRecords.reduce((sum, record) => sum + getWeightedScore(record, 'manager'), 0)
+  const period = formatPeriod(activity?.start_date, activity?.end_date)
+  const archiveTitle = activity?.name?.includes('绩效考核表')
+    ? activity.name
+    : period !== '-'
+      ? `${period}${participant?.department_name || ''}绩效考核表`
+      : activity?.name || '个人绩效考核表'
+  const participantExtra = participant as any
+  const employeeResultSignature = formatSignature(
+    participant?.employee_confirmed_by || participant?.employee_name,
+    participant?.employee_confirmed_at || participant?.confirmed_at
+  )
+  const managerResultSignature = formatSignature(
+    participant?.manager_confirmed_by || participant?.manager_name,
+    participant?.manager_confirmed_at
+  )
+  const hrResultSignature = formatSignature(
+    participant?.hr_confirmed_by,
+    participant?.hr_confirmed_at
+  )
+  const employeeTargetSignature = formatSignature(
+    participantExtra?.employee_target_confirmed_by || participant?.employee_confirmed_by || participant?.employee_name,
+    participantExtra?.employee_target_confirmed_at || participant?.employee_confirmed_at || participant?.confirmed_at
+  )
+  const managerTargetSignature = formatSignature(
+    participantExtra?.manager_target_confirmed_by || participant?.manager_confirmed_by || participant?.manager_name,
+    participantExtra?.manager_target_confirmed_at || participant?.manager_confirmed_at
+  )
+  const hrTargetSignature = formatSignature(
+    participantExtra?.hr_target_confirmed_by || participant?.hr_confirmed_by,
+    participantExtra?.hr_target_confirmed_at || participant?.hr_confirmed_at
+  )
+  const levelConfirmSignature = formatSignature(
+    participant?.manager_confirmed_by || participant?.manager_name || participant?.hr_confirmed_by,
+    participant?.manager_confirmed_at || participant?.hr_confirmed_at
+  )
+
+  const getKeyActionCriteria = (record: PerformanceGoalRecord) => {
+    const values = [record.target_value, record.scoring_rule].filter(Boolean)
+    const uniqueValues = values.filter((value, index) => values.indexOf(value) === index)
+    return uniqueValues.length > 0 ? uniqueValues.join('\n') : '-'
+  }
+
+  const renderSectionRows = (
+    sectionRecords: PerformanceGoalRecord[],
+    label: React.ReactNode,
+    mode: 'quantitative' | 'key_action'
+  ) => {
+    const rowCount = Math.max(sectionRecords.length, 1)
+
+    if (sectionRecords.length === 0) {
+      return (
+        <tr className="archive-data-row">
+          <td className="archive-category-cell">{label}</td>
+          <td>-</td>
+          <td className="archive-text-cell">-</td>
+          <td>-</td>
+          {mode === 'quantitative' ? (
+            <>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+            </>
+          ) : (
+            <td colSpan={4}>-</td>
+          )}
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+        </tr>
+      )
+    }
+
+    return sectionRecords.map((record, index) => (
+      <tr key={record.id} className="archive-data-row">
+        {index === 0 && (
+          <td rowSpan={rowCount} className="archive-category-cell">{label}</td>
+        )}
+        <td>{record.item_name || '-'}</td>
+        <td className="archive-text-cell">{record.item_definition || '-'}</td>
+        <td>{formatWeight(record.weight)}</td>
+        {mode === 'quantitative' ? (
+          <>
+            <td>{record.red_line_value || '-'}</td>
+            <td>{record.target_value || '-'}</td>
+            <td>{record.challenge_value || '-'}</td>
+            <td className="archive-text-cell">{record.scoring_rule || '-'}</td>
+          </>
+        ) : (
+          <td colSpan={4} className="archive-text-cell">{getKeyActionCriteria(record)}</td>
+        )}
+        <td className="archive-text-cell">{record.actual_result || '-'}</td>
+        <td>{formatScore(record.self_score)}</td>
+        <td>{formatScore(record.manager_score)}</td>
+      </tr>
+    ))
+  }
 
   return (
     <div id="performance-archive-sheet" className="performance-archive-sheet">
-      <table className="archive-table archive-header-table">
+      <table className="archive-table archive-excel-table">
+        <colgroup>
+          <col style={{ width: '5.5%' }} />
+          <col style={{ width: '11%' }} />
+          <col style={{ width: '22.5%' }} />
+          <col style={{ width: '5%' }} />
+          <col style={{ width: '7.2%' }} />
+          <col style={{ width: '7.2%' }} />
+          <col style={{ width: '7.2%' }} />
+          <col style={{ width: '17.5%' }} />
+          <col style={{ width: '8%' }} />
+          <col style={{ width: '4.5%' }} />
+          <col style={{ width: '4.4%' }} />
+        </colgroup>
         <tbody>
-          <tr>
-            <td className="archive-logo-cell" colSpan={2}>小铁 自助台球</td>
-            <td className="archive-title-cell" colSpan={8}>{activity?.name || '个人绩效考核表'}</td>
+          <tr className="archive-top-row">
+            <td className="archive-logo-cell" colSpan={2}>
+              <span className="archive-logo-mark" />
+              <span className="archive-logo-main">小铁</span>
+              <span className="archive-logo-sub">自助台球</span>
+            </td>
+            <td className="archive-title-cell" colSpan={9}>{archiveTitle}</td>
           </tr>
-          <tr>
+          <tr className="archive-info-head">
             <th rowSpan={2} colSpan={2}>基础信息</th>
-            <th>姓名</th>
+            <th colSpan={2}>姓名</th>
             <th>一级部门</th>
             <th>二级部门</th>
             <th>三级部门</th>
@@ -92,8 +226,8 @@ const ArchivePerformanceSheet: React.FC<ArchiveSheetProps> = ({ activity, partic
             <th>直属上级</th>
             <th>考核周期</th>
           </tr>
-          <tr>
-            <td>{participant?.employee_name || '-'}</td>
+          <tr className="archive-info-value">
+            <td colSpan={2}>{participant?.employee_name || '-'}</td>
             <td>{participant?.department_name || '-'}</td>
             <td>-</td>
             <td>-</td>
@@ -102,49 +236,53 @@ const ArchivePerformanceSheet: React.FC<ArchiveSheetProps> = ({ activity, partic
             <td>{participant?.manager_name || '-'}</td>
             <td>{period}</td>
           </tr>
-        </tbody>
-      </table>
 
-      <table className="archive-table">
-        <thead>
-          <tr>
-            <th colSpan={10}>PARTB: 个人绩效（员工绩效）</th>
+          <tr className="archive-section-row">
+            <th colSpan={11}>PARTB: 个人绩效（员工绩效）</th>
           </tr>
-          <tr>
-            <th style={{ width: '8%' }}>类别</th>
-            <th style={{ width: '12%' }}>指标名称/重点计划</th>
-            <th style={{ width: '20%' }}>指标定义及口径说明</th>
-            <th style={{ width: '7%' }}>权重</th>
-            <th style={{ width: '7%' }}>红线值</th>
-            <th style={{ width: '7%' }}>目标值</th>
-            <th style={{ width: '7%' }}>挑战值</th>
-            <th style={{ width: '14%' }}>考核标准</th>
-            <th style={{ width: '12%' }}>实际达成结果</th>
-            <th style={{ width: '6%' }}>自评/上级</th>
+          <tr className="archive-main-head">
+            <th rowSpan={2}>类别</th>
+            <th rowSpan={2}>指标名称/重点计划</th>
+            <th rowSpan={2}>
+              指标定义及口径说明
+              <div className="archive-head-note">（明确的指标范围和计算公式）</div>
+            </th>
+            <th rowSpan={2}>
+              权重
+              <div className="archive-head-note">（5%的倍数且单项不低于10%）</div>
+            </th>
+            <th colSpan={3}>定量/定性目标</th>
+            <th rowSpan={2}>
+              考核标准
+              <div className="archive-head-note">（定量分段设置，上限120分；定性按达成度/质量分级，上限100分）</div>
+            </th>
+            <th rowSpan={2}>实际达成结果</th>
+            <th rowSpan={2}>自评得分</th>
+            <th rowSpan={2}>上级评分<br /><span className="archive-head-note">（上限120分）</span></th>
           </tr>
-        </thead>
-        <tbody>
-          {mainRecords.length > 0 ? mainRecords.map(record => (
-            <tr key={record.id}>
-              <td>{SECTION_LABEL[record.section_type] || record.section_type}</td>
-              <td>{record.item_name || '-'}</td>
-              <td className="archive-text-cell">{record.item_definition || '-'}</td>
-              <td>{formatWeight(record.weight)}</td>
-              <td>{record.red_line_value || '-'}</td>
-              <td>{record.target_value || '-'}</td>
-              <td>{record.challenge_value || '-'}</td>
-              <td className="archive-text-cell">{record.scoring_rule || '-'}</td>
-              <td className="archive-text-cell">{record.actual_result || '-'}</td>
-              <td>
-                <div>自评 {formatScore(record.self_score)}</div>
-                <div>上级 {formatScore(record.manager_score)}</div>
-              </td>
-            </tr>
-          )) : (
-            <tr>
-              <td colSpan={10}>暂无指标明细</td>
-            </tr>
+          <tr className="archive-main-subhead">
+            <th>红线值</th>
+            <th>目标值</th>
+            <th>挑战值</th>
+          </tr>
+
+          {renderSectionRows(
+            quantitativeRecords,
+            <>
+              <div>量化指标</div>
+              <div className="archive-category-note">（2-5项，权重<br />70%）</div>
+            </>,
+            'quantitative'
           )}
+          {renderSectionRows(
+            keyActionRecords,
+            <>
+              <div>关键行动</div>
+              <div className="archive-category-note">（3-5项，权重<br />30%）</div>
+            </>,
+            'key_action'
+          )}
+
           <tr className="archive-total-row">
             <td colSpan={3}>合计</td>
             <td>{formatWeight(totalWeight)}</td>
@@ -153,68 +291,58 @@ const ArchivePerformanceSheet: React.FC<ArchiveSheetProps> = ({ activity, partic
             <td>-</td>
             <td>-</td>
             <td>-</td>
-            <td>
-              <div>自评 {formatDecimal(totalSelfScore)}</div>
-              <div>上级 {formatDecimal(totalManagerScore)}</div>
-            </td>
+            <td>{formatDecimal(totalSelfScore)}</td>
+            <td>{formatDecimal(totalManagerScore)}</td>
           </tr>
-          <tr>
+          <tr className="archive-review-head">
             <th colSpan={5}>做得好的地方</th>
-            <th colSpan={5}>需要提高改进的地方</th>
+            <th colSpan={6}>需要提高改进的地方</th>
           </tr>
-          <tr>
-            <td colSpan={5} className="archive-evaluation-cell">
-              <div className="archive-evaluation-title">员工自我评价</div>
-              <div>{selfEvaluationGood || '1、\n2、'}</div>
+          <tr className="archive-review-row">
+            <td colSpan={2} className="archive-evaluation-title">员工自我评价</td>
+            <td colSpan={3} className="archive-evaluation-cell">
+              {selfEvaluationGood || ''}
             </td>
-            <td colSpan={5} className="archive-evaluation-cell">
-              <div className="archive-evaluation-title">员工自我评价</div>
-              <div>{selfEvaluationImprovement || '1、\n2、'}</div>
-            </td>
-          </tr>
-          <tr>
-            <td colSpan={5} className="archive-evaluation-cell">
-              <div className="archive-evaluation-title">上级总体评价</div>
-              <div>{managerEvaluationGood || '1、\n2、'}</div>
-            </td>
-            <td colSpan={5} className="archive-evaluation-cell">
-              <div className="archive-evaluation-title">上级总体评价</div>
-              <div>{managerEvaluationImprovement || '1、\n2、'}</div>
+            <td colSpan={2} className="archive-evaluation-title">员工自我评价</td>
+            <td colSpan={4} className="archive-evaluation-cell">
+              {selfEvaluationImprovement || ''}
             </td>
           </tr>
-        </tbody>
-      </table>
+          <tr className="archive-review-row">
+            <td colSpan={2} className="archive-evaluation-title">上级总体评价</td>
+            <td colSpan={3} className="archive-evaluation-cell">
+              {managerEvaluationGood || ''}
+            </td>
+            <td colSpan={2} className="archive-evaluation-title">上级总体评价</td>
+            <td colSpan={4} className="archive-evaluation-cell">
+              {managerEvaluationImprovement || ''}
+            </td>
+          </tr>
 
-      <table className="archive-table archive-footer-table">
-        <tbody>
-          <tr>
-            <th colSpan={10}>员工绩效等级（S A B C D）</th>
+          <tr className="archive-section-row">
+            <th colSpan={11}>员工绩效等级（S A B C D）</th>
           </tr>
-          <tr>
-            <td colSpan={3}>个人绩效评定结果/等级</td>
-            <td colSpan={2} className="archive-level-cell">{participant?.final_level || participant?.suggested_level || '-'}</td>
-            <td colSpan={2}>绩效面谈进度</td>
-            <td colSpan={3}>{participant?.final_level === 'C' || participant?.final_level === 'D' ? '需完成绩效面谈' : '按需绩效面谈'}</td>
+          <tr className="archive-level-label-row">
+            <td colSpan={4}>个人绩效评定结果/等级</td>
+            <td colSpan={4}>绩效面谈进度</td>
+            <td colSpan={3}>个人价值观等级(季度评)</td>
           </tr>
-          <tr>
-            <td colSpan={3}>个人绩效目标确认签名/日期：</td>
-            <td colSpan={2}>{participant?.employee_name || '-'}　{formatDate(participant?.employee_confirmed_at)}</td>
-            <td colSpan={3}>个人绩效结果确认签名/日期：</td>
-            <td colSpan={2}>{participant?.employee_name || '-'}　{formatDate(participant?.employee_confirmed_at)}</td>
+          <tr className="archive-level-value-row">
+            <td colSpan={4} className="archive-level-cell">{participant?.final_level || participant?.suggested_level || '-'}</td>
+            <td colSpan={4}>{participant?.final_level === 'C' || participant?.final_level === 'D' ? '需完成绩效面谈' : '按需绩效面谈'}</td>
+            <td colSpan={3} />
           </tr>
-          <tr>
-            <td colSpan={5}>人力确认签名/日期：{participant?.hr_confirmed_by || '-'}　{formatDate(participant?.hr_confirmed_at)}</td>
-            <td colSpan={5}>绩效等级确认：{participant?.manager_confirmed_by || participant?.manager_name || '-'}　{formatDate(participant?.manager_confirmed_at)}</td>
+          <tr className="archive-sign-row">
+            <td colSpan={3} className="archive-sign-cell">个人绩效目标确认签名/日期：{employeeTargetSignature}</td>
+            <td colSpan={3} className="archive-sign-cell">上级绩效目标确认签名/日期：{managerTargetSignature}</td>
+            <td colSpan={2} className="archive-sign-cell">个人绩效结果确认签名/日期：{employeeResultSignature}</td>
+            <td colSpan={3} className="archive-sign-cell">上级绩效结果确认签名/日期：{managerResultSignature}</td>
           </tr>
-          <tr>
-            <td colSpan={5} className="archive-note-cell">
-              注：绩效结果可用于归档、复核、面谈与后续绩效沟通。若员工对结果有异议，应按公司流程发起申诉或线下复核。
-            </td>
-            <td colSpan={5} className="archive-note-cell">
-              <strong>绩效评定定义如下：</strong>
-              {LEVEL_DEFINITIONS.map(item => (
-                <div key={item.level}><strong>{item.level}：{item.label}</strong>：{item.description}</div>
-              ))}
+          <tr className="archive-sign-row archive-sign-final-row">
+            <td colSpan={4} className="archive-sign-confirm">人力确认签名/日期：{hrTargetSignature}</td>
+            <td colSpan={4} className="archive-sign-confirm">人力结果确认签名/日期：{hrResultSignature}</td>
+            <td colSpan={3} className="archive-sign-confirm">
+              绩效等级确认：{levelConfirmSignature}
             </td>
           </tr>
         </tbody>
@@ -230,75 +358,171 @@ const archiveStyles = `
 .performance-page .performance-archive-card {
   margin-top: 24px;
 }
+.performance-page .performance-archive-card .ant-card-body {
+  overflow-x: auto;
+}
 .performance-archive-sheet {
   background: #fff;
   color: #000;
-  font-family: Arial, "Microsoft YaHei", sans-serif;
+  font-family: SimSun, "Microsoft YaHei", Arial, sans-serif;
   font-size: 12px;
-  overflow-x: auto;
+  min-width: 1560px;
+  overflow-x: visible;
 }
 .archive-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
+  border: 2px solid #000;
 }
 .archive-table th,
 .archive-table td {
   border: 1px solid #000;
-  padding: 7px 6px;
+  padding: 3px 4px;
   text-align: center;
   vertical-align: middle;
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.35;
+  line-height: 1.2;
 }
-.archive-table th,
-.archive-title-cell,
-.archive-logo-cell,
-.archive-total-row,
-.archive-footer-table th {
-  background: #ffc21f;
+.archive-table th {
   font-weight: 700;
 }
-.archive-header-table th,
-.archive-header-table td {
+.archive-top-row td {
+  height: 28px;
+  border-top: 3px solid #2b64ff;
+}
+.archive-logo-cell {
+  background: #fff;
+  text-align: left !important;
+  font-family: "Microsoft YaHei", SimHei, Arial, sans-serif;
+  font-weight: 700;
+  white-space: nowrap !important;
+}
+.archive-logo-mark {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  vertical-align: middle;
+  border: 2px solid #2b64ff;
+  border-top-color: #f5cc17;
+  border-radius: 50%;
+}
+.archive-logo-main {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: middle;
+  font-size: 22px;
+  font-style: italic;
+  line-height: 1;
+}
+.archive-logo-sub {
+  display: inline-block;
+  vertical-align: middle;
+  font-size: 14px;
+}
+.archive-title-cell {
+  background: #fff;
+  font-family: SimHei, "Microsoft YaHei", Arial, sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+}
+.archive-info-head th,
+.archive-info-value td,
+.archive-main-head th,
+.archive-main-subhead th,
+.archive-level-label-row td,
+.archive-level-value-row td {
   background: #fff2cc;
 }
-.archive-header-table .archive-title-cell,
-.archive-header-table .archive-logo-cell {
-  background: #fff;
-  font-size: 16px;
+.archive-info-head th,
+.archive-info-value td {
+  height: 32px;
 }
-.archive-header-table .archive-logo-cell {
-  text-align: left;
+.archive-section-row th,
+.archive-review-head th {
+  background: #ffc000;
+  height: 28px;
   font-weight: 700;
+}
+.archive-main-head th {
+  height: 50px;
+}
+.archive-main-subhead th {
+  height: 28px;
+}
+.archive-head-note {
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.15;
 }
 .archive-text-cell {
   text-align: left !important;
+  vertical-align: top !important;
+}
+.archive-data-row td {
+  height: 44px;
+  min-height: 44px;
+}
+.archive-category-cell {
+  background: #fff;
+  font-weight: 700;
+}
+.archive-category-note {
+  margin-top: 4px;
+  font-weight: 400;
+  line-height: 1.25;
+}
+.archive-total-row td {
+  background: #fff2cc;
+  height: 30px;
+  font-weight: 700;
+}
+.archive-review-head th {
+  background: #fff2cc;
+  height: 30px;
+}
+.archive-review-row td {
+  height: 30px;
 }
 .archive-evaluation-cell {
-  height: 56px;
   text-align: left !important;
   color: #d00;
+  vertical-align: top !important;
 }
 .archive-evaluation-title {
   color: #000;
   font-weight: 700;
-  margin-bottom: 4px;
+}
+.archive-level-label-row td,
+.archive-level-value-row td {
+  height: 40px;
+  font-weight: 700;
 }
 .archive-level-cell {
   color: #d00;
   font-weight: 700;
 }
-.archive-note-cell {
-  height: 150px;
+.archive-sign-row td {
+  height: 44px;
+  background: #fff;
   text-align: left !important;
-  vertical-align: top !important;
+  font-weight: 700;
+}
+.archive-sign-final-row td {
+  color: #f00;
+  text-align: center !important;
+}
+.archive-sign-cell,
+.archive-sign-confirm {
+  padding-left: 4px !important;
 }
 @media print {
   @page {
     size: A4 landscape;
-    margin: 8mm;
+    margin: 6mm;
   }
   body * {
     visibility: hidden !important;
@@ -312,12 +536,25 @@ const archiveStyles = `
     left: 0;
     top: 0;
     width: 100%;
+    min-width: 0;
     overflow: visible;
-    font-size: 10px;
+    font-size: 9px;
   }
   .archive-table th,
   .archive-table td {
-    padding: 4px;
+    padding: 2px 3px;
+  }
+  .archive-logo-main {
+    font-size: 18px;
+  }
+  .archive-logo-sub {
+    font-size: 11px;
+  }
+  .archive-title-cell {
+    font-size: 14px;
+  }
+  .archive-head-note {
+    font-size: 8px;
   }
 }
 `

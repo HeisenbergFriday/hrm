@@ -15,6 +15,14 @@ import (
 	"gorm.io/gorm"
 )
 
+func currentOperatorID(c *gin.Context) string {
+	userID := strings.TrimSpace(c.GetString("userID"))
+	if userID != "" {
+		return userID
+	}
+	return "system"
+}
+
 func GetPerformanceActivities(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
@@ -93,7 +101,7 @@ func CreatePerformanceActivity(c *gin.Context) {
 		IndicatorLibraryID:     req.IndicatorLibraryID,
 		Description:            req.Description,
 		EnableBonusScore:       req.EnableBonusScore,
-	})
+	}, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -174,7 +182,7 @@ func UpdatePerformanceActivity(c *gin.Context) {
 		IndicatorLibraryID:     req.IndicatorLibraryID,
 		Description:            req.Description,
 		EnableBonusScore:       req.EnableBonusScore,
-	})
+	}, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -186,7 +194,7 @@ func PublishPerformanceActivity(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	shouldNotify := shouldNotifyOnSelfEvaluationOpen(svc, activityID)
-	if err := svc.PublishActivity(activityID); err != nil {
+	if err := svc.PublishActivity(activityID, currentOperatorID(c)); err != nil {
 		msg := err.Error()
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: msg, Data: nil})
 		return
@@ -198,7 +206,7 @@ func PublishPerformanceActivity(c *gin.Context) {
 func ClosePerformanceActivity(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.CloseActivity(activityID); err != nil {
+	if err := svc.CloseActivity(activityID, currentOperatorID(c)); err != nil {
 		msg := err.Error()
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: msg, Data: nil})
 		return
@@ -235,7 +243,7 @@ func PutDistributionRules(c *gin.Context) {
 		rules[i].Description = r.Description
 	}
 
-	result, err := svc.SetDistributionRules(activityID, rules)
+	result, err := svc.SetDistributionRules(activityID, rules, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -268,7 +276,7 @@ func GetRealtimeDistributionCheck(c *gin.Context) {
 func RefreshPerformanceParticipants(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	result, err := svc.RefreshParticipants(activityID)
+	result, err := svc.RefreshParticipants(activityID, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -333,7 +341,7 @@ func SubmitSelfEvaluation(c *gin.Context) {
 		SelfLevel:       req.SelfLevel,
 		SelfSummary:     req.SelfSummary,
 		SelfAttachments: req.SelfAttachments,
-	})
+	}, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -386,7 +394,7 @@ func SubmitManagerEvaluation(c *gin.Context) {
 		SuggestedLevel:  req.SuggestedLevel,
 		ManagerComment:  req.ManagerComment,
 		EvaluationItems: evalItems,
-	})
+	}, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -459,7 +467,7 @@ func BatchSubmitManagerEvaluation(c *gin.Context) {
 		}
 	}
 
-	versions, err := svc.BatchSubmitManagerEvaluations(activityID, evaluations)
+	versions, err := svc.BatchSubmitManagerEvaluations(activityID, evaluations, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -479,7 +487,7 @@ func AdjustFinalLevel(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
-	version, err := svc.AdjustFinalLevel(participantID, req.FinalLevel, req.Reason)
+	version, err := svc.AdjustFinalLevel(participantID, req.FinalLevel, req.Reason, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -498,12 +506,26 @@ func ConfirmResult(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
-	version, err := svc.ConfirmResult(participantID, req.ConfirmComment)
+	version, err := svc.ConfirmResult(participantID, req.ConfirmComment, currentOperatorName(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"version": version}})
+}
+
+func currentOperatorName(c *gin.Context) string {
+	userName := strings.TrimSpace(c.GetString("userName"))
+	if userName != "" {
+		return userName
+	}
+
+	userID := strings.TrimSpace(c.GetString("userID"))
+	if userID != "" {
+		return userID
+	}
+
+	return "system"
 }
 
 func ConfirmEmployeeResultHandler(c *gin.Context) {
@@ -514,7 +536,7 @@ func ConfirmEmployeeResultHandler(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.ConfirmEmployeeResult(uint(participantID), "system"); err != nil {
+	if err := svc.ConfirmEmployeeResult(uint(participantID), currentOperatorName(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -529,7 +551,7 @@ func ConfirmManagerResultHandler(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.ConfirmManagerResult(uint(participantID), "system"); err != nil {
+	if err := svc.ConfirmManagerResult(uint(participantID), currentOperatorName(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -544,7 +566,7 @@ func ConfirmHRResultHandler(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.ConfirmHRResult(uint(participantID), "system"); err != nil {
+	if err := svc.ConfirmHRResult(uint(participantID), currentOperatorName(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -587,7 +609,7 @@ func GetActivityRelationshipChangeLogs(c *gin.Context) {
 func StartPerformanceActivity(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.StartActivity(activityID); err != nil {
+	if err := svc.StartActivity(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -597,7 +619,7 @@ func StartPerformanceActivity(c *gin.Context) {
 func OpenSelfEvaluation(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.OpenSelfEvaluation(activityID); err != nil {
+	if err := svc.OpenSelfEvaluation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -608,7 +630,7 @@ func OpenSelfEvaluation(c *gin.Context) {
 func OpenManagerEvaluation(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.OpenManagerEvaluation(activityID); err != nil {
+	if err := svc.OpenManagerEvaluation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -618,7 +640,7 @@ func OpenManagerEvaluation(c *gin.Context) {
 func ConfirmActivityResults(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.ConfirmResults(activityID); err != nil {
+	if err := svc.ConfirmResults(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -628,7 +650,7 @@ func ConfirmActivityResults(c *gin.Context) {
 func ArchivePerformanceActivity(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.ArchiveActivity(activityID); err != nil {
+	if err := svc.ArchiveActivity(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -638,7 +660,7 @@ func ArchivePerformanceActivity(c *gin.Context) {
 func OpenTargetSettingHandler(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.OpenTargetSetting(activityID); err != nil {
+	if err := svc.OpenTargetSetting(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -648,7 +670,7 @@ func OpenTargetSettingHandler(c *gin.Context) {
 func OpenEmployeeConfirmationHandler(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.OpenEmployeeConfirmation(activityID); err != nil {
+	if err := svc.OpenEmployeeConfirmation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -658,7 +680,7 @@ func OpenEmployeeConfirmationHandler(c *gin.Context) {
 func OpenManagerConfirmationHandler(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.OpenManagerConfirmation(activityID); err != nil {
+	if err := svc.OpenManagerConfirmation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -668,7 +690,7 @@ func OpenManagerConfirmationHandler(c *gin.Context) {
 func OpenHRConfirmationHandler(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.OpenHRConfirmation(activityID); err != nil {
+	if err := svc.OpenHRConfirmation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -678,7 +700,7 @@ func OpenHRConfirmationHandler(c *gin.Context) {
 func LockPerformanceActivityHandler(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
-	if err := svc.LockActivity(activityID); err != nil {
+	if err := svc.LockActivity(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
@@ -696,7 +718,7 @@ func BatchConfirmResults(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
-	results, err := svc.BatchConfirmResults(activityID, req.ParticipantIDs)
+	results, err := svc.BatchConfirmResults(activityID, req.ParticipantIDs, currentOperatorName(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1933,8 +1955,8 @@ func SetBonusPenaltyScoreHandler(c *gin.Context) {
 	}
 
 	var req struct {
-		BonusScore   float64 `json:"bonus_score" binding:"required"`
-		PenaltyScore float64 `json:"penalty_score" binding:"required"`
+		BonusScore   float64 `json:"bonus_score"`
+		PenaltyScore float64 `json:"penalty_score"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: gin.H{"error": err.Error()}})
