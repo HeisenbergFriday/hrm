@@ -22,12 +22,12 @@ import {
   Typography,
   message,
 } from 'antd'
-import { ClockCircleOutlined, DeleteOutlined, GiftOutlined, MinusCircleOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ClockCircleOutlined, DeleteOutlined, GiftOutlined, MinusCircleOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, ThunderboltOutlined, CalendarOutlined } from '@ant-design/icons'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import { leaveAPI, orgAPI, overtimeAPI } from '../services/api'
 
-const { Title } = Typography
+const { Title, Text } = Typography
 
 const formatWorkingYears = (value?: number) =>
   Number.isFinite(value) ? Number(value).toFixed(1) : '0.0'
@@ -97,17 +97,17 @@ const EligibilityTab: React.FC = () => {
   const columns = [
     { title: '季度', dataIndex: 'quarter', key: 'quarter', render: (q: number) => `Q${q}` },
     {
-      title: '是否有资格',
-      dataIndex: 'is_eligible',
-      key: 'is_eligible',
-      render: (value: boolean) => <Tag color={value ? 'green' : 'red'}>{value ? '有资格' : '无资格'}</Tag>,
+      title: '是否有资格', dataIndex: 'is_eligible', key: 'is_eligible',
+      render: (value: boolean) => (
+        <Tag color={value ? 'success' : 'error'} style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>
+          {value ? '有资格' : '无资格'}
+        </Tag>
+      ),
     },
     { title: '入职日期', dataIndex: 'entry_date', key: 'entry_date' },
     { title: '转正日期', dataIndex: 'confirmation_date', key: 'confirmation_date' },
     {
-      title: '追溯来源季度',
-      dataIndex: 'retroactive_source_quarter',
-      key: 'retroactive_source_quarter',
+      title: '追溯来源季度', dataIndex: 'retroactive_source_quarter', key: 'retroactive_source_quarter',
       render: (value: number) => (value ? `Q${value}` : '-'),
     },
     { title: '计算原因', dataIndex: 'calc_reason', key: 'calc_reason' },
@@ -124,30 +124,14 @@ const EligibilityTab: React.FC = () => {
           max={2030}
           style={{ width: 100 }}
         />
-        <Button
-          type="primary"
-          icon={<SearchOutlined />}
-          onClick={() => setQueryKey({ user_id: userID, year })}
-          disabled={!userID}
-        >
+        <Button type="primary" icon={<SearchOutlined />} onClick={() => setQueryKey({ user_id: userID, year })} disabled={!userID}>
           查询
         </Button>
-        <Button
-          icon={<SyncOutlined />}
-          onClick={() => recalcMutation.mutate()}
-          loading={recalcMutation.isPending}
-          disabled={!userID}
-        >
+        <Button icon={<SyncOutlined />} onClick={() => recalcMutation.mutate()} loading={recalcMutation.isPending} disabled={!userID}>
           重算资格
         </Button>
       </Space>
-      <Table
-        columns={columns}
-        dataSource={(data as any)?.data || []}
-        rowKey="quarter"
-        loading={isFetching}
-        pagination={false}
-      />
+      <Table columns={columns} dataSource={(data as any)?.data || []} rowKey="quarter" loading={isFetching} pagination={false} />
     </div>
   )
 }
@@ -219,10 +203,8 @@ const GrantTab: React.FC = () => {
   const columns = [
     { title: '季度', dataIndex: 'quarter', key: 'quarter', render: (q: number) => `Q${q}` },
     {
-      title: '类型',
-      dataIndex: 'grant_type',
-      key: 'grant_type',
-      render: (value: string) => <Tag color={typeColor[value] || 'default'}>{typeLabel[value] || value}</Tag>,
+      title: '类型', dataIndex: 'grant_type', key: 'grant_type',
+      render: (value: string) => <Tag color={typeColor[value] || 'default'} style={{ borderRadius: 6, fontWeight: 500 }}>{typeLabel[value] || value}</Tag>,
     },
     { title: '工龄(年)', dataIndex: 'working_years', key: 'working_years', render: (value?: number) => formatWorkingYears(value) },
     { title: '基础天数', dataIndex: 'base_days', key: 'base_days', render: (value?: number) => formatDays(value) },
@@ -231,11 +213,9 @@ const GrantTab: React.FC = () => {
     { title: '剩余', dataIndex: 'remaining_days', key: 'remaining_days', render: (value?: number) => formatDays(value) },
     { title: '备注', dataIndex: 'remark', key: 'remark' },
     {
-      title: '钉钉同步',
-      dataIndex: 'dingtalk_sync_status',
-      key: 'dingtalk_sync_status',
+      title: '钉钉同步', dataIndex: 'dingtalk_sync_status', key: 'dingtalk_sync_status',
       render: (value: string) => (
-        <Tag color={syncStatusColor[value] || 'default'}>{syncStatusLabel[value] || value || '-'}</Tag>
+        <Tag color={syncStatusColor[value] || 'default'} style={{ borderRadius: 6, fontWeight: 500 }}>{syncStatusLabel[value] || value || '-'}</Tag>
       ),
     },
   ]
@@ -244,47 +224,19 @@ const GrantTab: React.FC = () => {
     <div>
       <Space style={{ marginBottom: 16 }}>
         <EmployeeSelect value={userID} onChange={(next) => setUserID(next ?? '')} />
-        <InputNumber
-          value={year}
-          onChange={(next) => setYear(next ?? dayjs().year())}
-          min={2020}
-          max={2030}
-          style={{ width: 100 }}
-        />
-        <Button
-          type="primary"
-          icon={<SearchOutlined />}
-          onClick={() => setQueryKey({ user_id: userID, year })}
-          disabled={!userID}
-        >
+        <InputNumber value={year} onChange={(next) => setYear(next ?? dayjs().year())} min={2020} max={2030} style={{ width: 100 }} />
+        <Button type="primary" icon={<SearchOutlined />} onClick={() => setQueryKey({ user_id: userID, year })} disabled={!userID}>
           查询
         </Button>
-        <Button icon={<GiftOutlined />} onClick={() => setBatchModalOpen(true)}>
-          手动发放季度年假
-        </Button>
-        <Button
-          icon={<SyncOutlined />}
-          onClick={() => regrantMutation.mutate()}
-          loading={regrantMutation.isPending}
-          disabled={!userID}
-        >
+        <Button icon={<GiftOutlined />} onClick={() => setBatchModalOpen(true)}>手动发放季度年假</Button>
+        <Button icon={<SyncOutlined />} onClick={() => regrantMutation.mutate()} loading={regrantMutation.isPending} disabled={!userID}>
           追溯补发
         </Button>
-        <Button
-          icon={<SyncOutlined />}
-          onClick={handleSyncToDingTalk}
-          loading={syncMutation.isPending}
-        >
+        <Button icon={<SyncOutlined />} onClick={handleSyncToDingTalk} loading={syncMutation.isPending}>
           同步到钉钉
         </Button>
       </Space>
-      <Table
-        columns={columns}
-        dataSource={(data as any)?.data || []}
-        rowKey="id"
-        loading={isFetching}
-        pagination={false}
-      />
+      <Table columns={columns} dataSource={(data as any)?.data || []} rowKey="id" loading={isFetching} pagination={false} />
       <Modal
         title="手动发放季度年假"
         open={batchModalOpen}
@@ -304,9 +256,7 @@ const GrantTab: React.FC = () => {
           <Form.Item name="quarter" label="季度" rules={[{ required: true }]}>
             <Select>
               {[1, 2, 3, 4].map((quarter) => (
-                <Select.Option key={quarter} value={quarter}>
-                  Q{quarter}
-                </Select.Option>
+                <Select.Option key={quarter} value={quarter}>Q{quarter}</Select.Option>
               ))}
             </Select>
           </Form.Item>
@@ -359,9 +309,7 @@ const OvertimeTab: React.FC = () => {
       }),
     onSuccess: () => {
       message.success('清空并重新匹配完成')
-      if (userID) {
-        refreshOvertimeMatches()
-      }
+      if (userID) refreshOvertimeMatches()
     },
     onError: (err: any) => message.error(err?.response?.data?.error || '清空重匹配失败'),
   })
@@ -375,9 +323,7 @@ const OvertimeTab: React.FC = () => {
       }),
     onSuccess: (res: any) => {
       message.success(res?.message || '删除完成')
-      if (userID) {
-        refreshOvertimeMatches()
-      }
+      if (userID) refreshOvertimeMatches()
     },
     onError: (err: any) => message.error(err?.response?.data?.error || '删除失败'),
   })
@@ -442,9 +388,7 @@ const OvertimeTab: React.FC = () => {
       }),
     onSuccess: () => {
       message.success('加班匹配完成')
-      if (userID) {
-        refreshOvertimeMatches()
-      }
+      if (userID) refreshOvertimeMatches()
     },
     onError: () => message.error('匹配失败'),
   })
@@ -497,7 +441,6 @@ const OvertimeTab: React.FC = () => {
     onError: (err: any) => message.error(err?.response?.data?.error || '重放失败'),
   })
 
-  // 向导自动加载 step0
   const handleWizardOpen = () => {
     openWizard()
     loadPreviewResetMut.mutate()
@@ -551,64 +494,30 @@ const OvertimeTab: React.FC = () => {
   ]
 
   const statusColor: Record<string, string> = {
-    matched: 'green',
-    synced: 'blue',
-    no_clock_record: 'red',
-    insufficient_clock_record: 'orange',
-    invalid_clock_time: 'red',
-    zero_overtime: 'default',
-    local_balance_failed: 'red',
-    dingtalk_sync_failed: 'volcano',
-    rolled_back: 'default',
+    matched: 'green', synced: 'blue', no_clock_record: 'red', insufficient_clock_record: 'orange',
+    invalid_clock_time: 'red', zero_overtime: 'default', local_balance_failed: 'red',
+    dingtalk_sync_failed: 'volcano', rolled_back: 'default',
   }
   const statusLabel: Record<string, string> = {
-    matched: '已匹配',
-    synced: '已同步',
-    no_clock_record: '无打卡',
-    insufficient_clock_record: '打卡不足',
-    invalid_clock_time: '打卡异常',
-    zero_overtime: '无有效调休',
-    local_balance_failed: '本地余额失败',
-    dingtalk_sync_failed: '钉钉同步失败',
-    rolled_back: '已回滚',
+    matched: '已匹配', synced: '已同步', no_clock_record: '无打卡', insufficient_clock_record: '打卡不足',
+    invalid_clock_time: '打卡异常', zero_overtime: '无有效调休', local_balance_failed: '本地余额失败',
+    dingtalk_sync_failed: '钉钉同步失败', rolled_back: '已回滚',
   }
 
-  const localBalanceLabel: Record<string, string> = {
-    success: '已入账',
-    failed: '入账失败',
-    skipped: '未启用',
-    pending: '待处理',
-  }
-  const localBalanceColor: Record<string, string> = {
-    success: 'green',
-    failed: 'red',
-    skipped: 'default',
-    pending: 'orange',
-  }
-  const dingtalkSyncLabel: Record<string, string> = {
-    success: '已同步',
-    failed: '同步失败',
-    skipped: '未启用',
-    pending: '待同步',
-  }
-  const dingtalkSyncColor: Record<string, string> = {
-    success: 'blue',
-    failed: 'red',
-    skipped: 'default',
-    pending: 'orange',
-  }
+  const localBalanceLabel: Record<string, string> = { success: '已入账', failed: '入账失败', skipped: '未启用', pending: '待处理' }
+  const localBalanceColor: Record<string, string> = { success: 'green', failed: 'red', skipped: 'default', pending: 'orange' }
+  const dingtalkSyncLabel: Record<string, string> = { success: '已同步', failed: '同步失败', skipped: '未启用', pending: '待同步' }
+  const dingtalkSyncColor: Record<string, string> = { success: 'blue', failed: 'red', skipped: 'default', pending: 'orange' }
 
   const columns = [
     { title: '员工', dataIndex: 'user_name', key: 'user_name', render: (value: string, record: any) => value || record.user_id },
     { title: '加班日期', dataIndex: 'work_date', key: 'work_date' },
     { title: '审批ID', dataIndex: 'approval_id', key: 'approval_id' },
     {
-      title: '状态',
-      dataIndex: 'match_status',
-      key: 'match_status',
+      title: '状态', dataIndex: 'match_status', key: 'match_status',
       render: (value: string, record: any) => (
         <Space size={4}>
-          <Tag color={statusColor[value] || 'default'}>{statusLabel[value] || value}</Tag>
+          <Tag color={statusColor[value] || 'default'} style={{ borderRadius: 6, fontWeight: 500 }}>{statusLabel[value] || value}</Tag>
           {(value === 'no_clock_record' || value === 'insufficient_clock_record') && (
             <Button size="small" type="link" onClick={() => handleOpenSuppModal(record)}>补卡</Button>
           )}
@@ -627,64 +536,31 @@ const OvertimeTab: React.FC = () => {
     { title: '休息扣除(分钟)', dataIndex: 'break_deduct_minutes', key: 'break_deduct_minutes' },
     { title: '最终调休(分钟)', dataIndex: 'effective_overtime_minutes', key: 'effective_overtime_minutes' },
     {
-      title: '本地余额',
-      dataIndex: 'local_balance_status',
-      key: 'local_balance_status',
-      render: (value: string) => value ? <Tag color={localBalanceColor[value] || 'default'}>{localBalanceLabel[value] || value}</Tag> : '-',
+      title: '本地余额', dataIndex: 'local_balance_status', key: 'local_balance_status',
+      render: (value: string) => value ? <Tag color={localBalanceColor[value] || 'default'} style={{ borderRadius: 6 }}>{localBalanceLabel[value] || value}</Tag> : '-',
     },
     {
-      title: '钉钉同步',
-      dataIndex: 'dingtalk_sync_status',
-      key: 'dingtalk_sync_status',
-      render: (value: string) => value ? <Tag color={dingtalkSyncColor[value] || 'default'}>{dingtalkSyncLabel[value] || value}</Tag> : '-',
+      title: '钉钉同步', dataIndex: 'dingtalk_sync_status', key: 'dingtalk_sync_status',
+      render: (value: string) => value ? <Tag color={dingtalkSyncColor[value] || 'default'} style={{ borderRadius: 6 }}>{dingtalkSyncLabel[value] || value}</Tag> : '-',
     },
     {
-      title: '匹配说明',
-      dataIndex: 'match_reason',
-      key: 'match_reason',
+      title: '匹配说明', dataIndex: 'match_reason', key: 'match_reason',
       render: (value: string) => value ? <Tooltip title={value}><span style={{ cursor: 'help' }}>{value.length > 30 ? value.slice(0, 30) + '…' : value}</span></Tooltip> : '-',
     },
   ]
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }}>
+      <Space style={{ marginBottom: 16 }} wrap>
         <EmployeeSelect value={userID} onChange={(next) => setUserID(next ?? '')} />
-        <DatePicker
-          picker="month"
-          value={selectedMonth}
-          allowClear={false}
-          onChange={(next) => next && setSelectedMonth(next.startOf('month'))}
-        />
-        <Button
-          type="primary"
-          icon={<SearchOutlined />}
-          onClick={refreshOvertimeMatches}
-          disabled={!userID}
-        >
-          查询
-        </Button>
-        <Button icon={<SyncOutlined />} onClick={() => runMatchMutation.mutate()} loading={runMatchMutation.isPending} disabled={!userID}>
-          执行加班匹配
-        </Button>
-        <Button icon={<ThunderboltOutlined />} onClick={handleWizardOpen}>
-          ManualLeave 同步
-        </Button>
-        <Button icon={<ReloadOutlined />} onClick={handleClearRematch} loading={clearRematchMutation.isPending} disabled={!userID} danger>
-          清空重匹配
-        </Button>
-        <Button icon={<DeleteOutlined />} onClick={handleDeleteMatches} loading={deleteMatchesMutation.isPending} disabled={!userID} danger>
-          删除记录
-        </Button>
+        <DatePicker picker="month" value={selectedMonth} allowClear={false} onChange={(next) => next && setSelectedMonth(next.startOf('month'))} />
+        <Button type="primary" icon={<SearchOutlined />} onClick={refreshOvertimeMatches} disabled={!userID}>查询</Button>
+        <Button icon={<SyncOutlined />} onClick={() => runMatchMutation.mutate()} loading={runMatchMutation.isPending} disabled={!userID}>执行加班匹配</Button>
+        <Button icon={<ThunderboltOutlined />} onClick={handleWizardOpen}>ManualLeave 同步</Button>
+        <Button icon={<ReloadOutlined />} onClick={handleClearRematch} loading={clearRematchMutation.isPending} disabled={!userID} danger>清空重匹配</Button>
+        <Button icon={<DeleteOutlined />} onClick={handleDeleteMatches} loading={deleteMatchesMutation.isPending} disabled={!userID} danger>删除记录</Button>
       </Space>
-      <Table
-        columns={columns}
-        dataSource={(data as any)?.data || []}
-        rowKey="id"
-        loading={isFetching}
-        scroll={{ x: 1600 }}
-        pagination={{ pageSize: 20 }}
-      />
+      <Table columns={columns} dataSource={(data as any)?.data || []} rowKey="id" loading={isFetching} scroll={{ x: 1600 }} pagination={{ pageSize: 20, showSizeChanger: false }} />
 
       <Modal
         title="ManualLeave 同步向导"
@@ -696,42 +572,24 @@ const OvertimeTab: React.FC = () => {
       >
         <Steps
           current={wizardStep}
-          items={[
-            { title: '预览员工' },
-            { title: '重置余额' },
-            { title: '预览记录' },
-            { title: '重放到钉钉' },
-          ]}
+          items={[{ title: '预览员工' }, { title: '重置余额' }, { title: '预览记录' }, { title: '重放到钉钉' }]}
           style={{ marginBottom: 24 }}
         />
-
         {wizardStep === 0 && (
           <Spin spinning={loadPreviewResetMut.isPending}>
             {previewReset && (
               <>
-                <Alert
-                  type="warning"
-                  message={`将把以下 ${previewReset.count} 名员工的 ManualLeave 余额重置为 0`}
-                  style={{ marginBottom: 12 }}
-                />
-                <Table
-                  size="small"
-                  columns={previewResetColumns}
-                  dataSource={previewReset.users}
-                  rowKey="user_id"
-                  pagination={{ pageSize: 8 }}
-                />
+                <Alert type="warning" message={`将把以下 ${previewReset.count} 名员工的 ManualLeave 余额重置为 0`} style={{ marginBottom: 12 }} />
+                <Table size="small" columns={previewResetColumns} dataSource={previewReset.users} rowKey="user_id" pagination={{ pageSize: 8 }} />
               </>
             )}
           </Spin>
         )}
-
         {wizardStep === 1 && (
           <div style={{ textAlign: 'center', padding: '40px 0' }}>
             <Spin spinning={execResetMut.isPending} tip="正在重置余额，请稍候…" />
           </div>
         )}
-
         {wizardStep === 2 && (
           <Spin spinning={loadPreviewResyncMut.isPending}>
             {resetResult && (
@@ -744,23 +602,12 @@ const OvertimeTab: React.FC = () => {
             )}
             {previewResync && (
               <>
-                <Alert
-                  type="info"
-                  message={`将把以下 ${previewResync.count} 条有效加班记录重放到钉钉`}
-                  style={{ marginBottom: 12 }}
-                />
-                <Table
-                  size="small"
-                  columns={previewResyncColumns}
-                  dataSource={previewResync.records}
-                  rowKey={(r: any) => `${r.user_id}-${r.work_date}`}
-                  pagination={{ pageSize: 8 }}
-                />
+                <Alert type="info" message={`将把以下 ${previewResync.count} 条有效加班记录重放到钉钉`} style={{ marginBottom: 12 }} />
+                <Table size="small" columns={previewResyncColumns} dataSource={previewResync.records} rowKey={(r: any) => `${r.user_id}-${r.work_date}`} pagination={{ pageSize: 8 }} />
               </>
             )}
           </Spin>
         )}
-
         {wizardStep === 3 && (
           resyncResult ? (
             <Alert
@@ -824,40 +671,35 @@ const CompBalanceTab: React.FC = () => {
     <div>
       <Space style={{ marginBottom: 24 }}>
         <EmployeeSelect value={userID} onChange={(next) => setUserID(next ?? '')} />
-        <Button
-          type="primary"
-          icon={<SearchOutlined />}
-          onClick={() => setQueryUserID(userID)}
-          disabled={!userID}
-          loading={isFetching}
-        >
+        <Button type="primary" icon={<SearchOutlined />} onClick={() => setQueryUserID(userID)} disabled={!userID} loading={isFetching}>
           查询
         </Button>
       </Space>
       {balance && (
-        <Row gutter={32}>
+        <Row gutter={[32, 20]}>
           <Col>
-            <Statistic
-              title="累计调休(分钟)"
-              value={balance.total_credit_minutes ?? 0}
-              prefix={<ClockCircleOutlined />}
-              valueStyle={{ color: '#3f8600' }}
-            />
+            <div style={{ background: '#f0fdf4', borderRadius: 12, padding: '18px 24px', border: '1px solid #bbf7d0' }}>
+              <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: 500 }}>累计调休</Text>
+              <div style={{ fontSize: 28, fontWeight: 700, color: '#15803d', marginTop: 4 }}>
+                {balance.total_credit_minutes ?? 0} <span style={{ fontSize: 14, fontWeight: 500 }}>分钟</span>
+              </div>
+            </div>
           </Col>
           <Col>
-            <Statistic
-              title="已用调休(分钟)"
-              value={balance.total_debit_minutes ?? 0}
-              valueStyle={{ color: '#cf1322' }}
-            />
+            <div style={{ background: '#fef2f2', borderRadius: 12, padding: '18px 24px', border: '1px solid #fecaca' }}>
+              <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: 500 }}>已用调休</Text>
+              <div style={{ fontSize: 28, fontWeight: 700, color: '#dc2626', marginTop: 4 }}>
+                {balance.total_debit_minutes ?? 0} <span style={{ fontSize: 14, fontWeight: 500 }}>分钟</span>
+              </div>
+            </div>
           </Col>
           <Col>
-            <Statistic
-              title="剩余调休(分钟)"
-              value={balance.balance_minutes ?? 0}
-              suffix={`（约 ${((balance.balance_minutes ?? 0) / 60).toFixed(1)} 小时）`}
-              valueStyle={{ color: '#1677ff' }}
-            />
+            <div style={{ background: '#eef2ff', borderRadius: 12, padding: '18px 24px', border: '1px solid #c7d2fe' }}>
+              <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: 500 }}>剩余调休</Text>
+              <div style={{ fontSize: 28, fontWeight: 700, color: '#4338ca', marginTop: 4 }}>
+                {balance.balance_minutes ?? 0} <span style={{ fontSize: 14, fontWeight: 500 }}>分钟（约 {((balance.balance_minutes ?? 0) / 60).toFixed(1)} 小时）</span>
+              </div>
+            </div>
           </Col>
         </Row>
       )}
@@ -898,12 +740,13 @@ const ConsumeTab: React.FC = () => {
     <div>
       <Row gutter={24}>
         <Col span={10}>
-          <Card size="small" title="手动录入年假消费">
-            <Form
-              form={form}
-              layout="vertical"
-              onFinish={(values) => consumeMutation.mutate(values)}
-            >
+          <Card
+            size="small"
+            title={<span style={{ fontWeight: 600, fontSize: 14, color: '#1e1b4b' }}>手动录入年假消费</span>}
+            style={{ borderRadius: 12, border: '1px solid #e5e7eb' }}
+            styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+          >
+            <Form form={form} layout="vertical" onFinish={(values) => consumeMutation.mutate(values)}>
               <Form.Item name="user_id" label="员工" rules={[{ required: true, message: '请选择员工' }]}>
                 <EmployeeSelect />
               </Form.Item>
@@ -916,39 +759,26 @@ const ConsumeTab: React.FC = () => {
               <Form.Item name="remark" label="备注">
                 <Input placeholder="如：2025年春节年假" />
               </Form.Item>
-              <Button
-                type="primary"
-                htmlType="submit"
-                icon={<MinusCircleOutlined />}
-                loading={consumeMutation.isPending}
-                block
-              >
+              <Button type="primary" htmlType="submit" icon={<MinusCircleOutlined />} loading={consumeMutation.isPending} block>
                 确认消费
               </Button>
             </Form>
           </Card>
         </Col>
         <Col span={14}>
-          <Card size="small" title="消费记录查询">
+          <Card
+            size="small"
+            title={<span style={{ fontWeight: 600, fontSize: 14, color: '#1e1b4b' }}>消费记录查询</span>}
+            style={{ borderRadius: 12, border: '1px solid #e5e7eb' }}
+            styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+          >
             <Space style={{ marginBottom: 12 }}>
               <EmployeeSelect value={logUserID} onChange={(v) => setLogUserID(v ?? '')} />
-              <Button
-                type="primary"
-                icon={<SearchOutlined />}
-                onClick={() => setLogQueryKey(logUserID)}
-                disabled={!logUserID}
-              >
+              <Button type="primary" icon={<SearchOutlined />} onClick={() => setLogQueryKey(logUserID)} disabled={!logUserID}>
                 查询
               </Button>
             </Space>
-            <Table
-              columns={logColumns}
-              dataSource={(logData as any)?.data || []}
-              rowKey="id"
-              loading={logFetching}
-              pagination={{ pageSize: 10 }}
-              size="small"
-            />
+            <Table columns={logColumns} dataSource={(logData as any)?.data || []} rowKey="id" loading={logFetching} pagination={{ pageSize: 10, showSizeChanger: false }} size="small" />
           </Card>
         </Col>
       </Row>
@@ -966,9 +796,20 @@ const LeaveOvertime: React.FC = () => {
   ]
 
   return (
-    <div>
-      <Title level={4}>年假与调休</Title>
-      <Card>
+    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+      <div style={{ marginBottom: 20 }}>
+        <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+          <CalendarOutlined style={{ marginRight: 10, color: '#4338ca' }} />
+          年假与调休
+        </h2>
+        <Text style={{ color: '#6b7280', fontSize: 13.5 }}>
+          管理年假资格、发放、消费及加班调休匹配
+        </Text>
+      </div>
+      <Card
+        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
+        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+      >
         <Tabs items={tabs} />
       </Card>
     </div>

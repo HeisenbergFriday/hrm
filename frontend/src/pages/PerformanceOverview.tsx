@@ -332,6 +332,19 @@ const PerformanceOverview: React.FC = () => {
     }
   }
 
+  const refreshParticipants = async (activityId: number) => {
+    setParticipantsLoading(true)
+    try {
+      const res: any = await performanceAPI.getParticipants(activityId, { page: 1, page_size: 200 })
+      const pData = res?.data || res
+      setParticipants(pData?.items || [])
+    } catch {
+      setParticipants([])
+    } finally {
+      setParticipantsLoading(false)
+    }
+  }
+
   const closeActivityEditor = () => {
     setActivityModalVisible(false)
     setEditingActivity(null)
@@ -1138,7 +1151,7 @@ const PerformanceOverview: React.FC = () => {
             setBatchEvalModalVisible(false)
             batchEvalForm.resetFields()
             setBatchEvalScore(0)
-            loadParticipants(currentActivity.id)
+            refreshParticipants(currentActivity.id)
           } catch (err: any) {
             if (err.errorFields) return
             message.error(err?.response?.data?.message || '批量评分失败')

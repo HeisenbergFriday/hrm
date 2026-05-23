@@ -3,7 +3,7 @@ import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input
 import { KeyOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 
-const { Title } = Typography
+const { Text } = Typography
 
 // 模拟API调用
 const fetchRoles = async () => {
@@ -98,37 +98,39 @@ const Permission: React.FC = () => {
   const columns = [
     { title: '角色名称', dataIndex: 'name', key: 'name' },
     { title: '描述', dataIndex: 'description', key: 'description' },
-    { 
-      title: '操作', 
+    {
+      title: '操作',
       key: 'action',
       render: (_: any, record: any) => (
         <>
-          <Button icon={<EditOutlined />} size="small" onClick={() => handleEditRole(record)} />
-          <Button icon={<DeleteOutlined />} size="small" danger />
+          <Button icon={<EditOutlined />} size="small" onClick={() => handleEditRole(record)} style={{ borderRadius: 8, fontWeight: 600 }} />
+          <Button icon={<DeleteOutlined />} size="small" danger style={{ borderRadius: 8, fontWeight: 600 }} />
         </>
       )
     },
   ]
 
   return (
-    <div>
-      <Title level={4}>权限管理</Title>
-      <Card>
+    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+        <KeyOutlined style={{ color: '#4338ca', marginRight: 8 }} />权限管理
+      </h2>
+      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>管理角色与权限分配</Text>
+      <Card style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>
         <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Button type="primary" icon={<PlusOutlined />}>
+          <Button type="primary" icon={<PlusOutlined />} style={{ borderRadius: 8, fontWeight: 600 }}>
             创建角色
           </Button>
         </div>
 
         {rolesLoading ? (
-          <div className="loading-container">
-            <Spin size="small" />
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+            <Spin size="large" />
           </div>
         ) : rolesError ? (
-          <div className="error-container">
-            <Alert message="加载失败" type="error" showIcon />
-            <Button className="retry-button" onClick={() => refetchRoles()}>重试</Button>
-          </div>
+          <Alert message="加载失败" type="error" showIcon
+            action={<Button size="small" onClick={() => refetchRoles()} style={{ borderRadius: 8, fontWeight: 600 }}>重试</Button>}
+          />
         ) : roles?.length ? (
           <Table
             columns={columns}
@@ -137,7 +139,7 @@ const Permission: React.FC = () => {
           />
         ) : (
           <div className="empty-container">
-            <Empty description="暂无角色数据" />
+            <Empty description="暂无角色数据" imageStyle={{ height: 80 }} />
           </div>
         )}
       </Card>
@@ -168,7 +170,7 @@ const Permission: React.FC = () => {
             ) : permissionsError ? (
               <div className="error-container">
                 <Alert message="加载失败" type="error" showIcon />
-                <Button className="retry-button" onClick={() => refetchPermissions()}>重试</Button>
+                <Button className="retry-button" onClick={() => refetchPermissions()} style={{ borderRadius: 8, fontWeight: 600 }}>重试</Button>
               </div>
             ) : permissions?.length ? (
               <Tree
@@ -178,7 +180,7 @@ const Permission: React.FC = () => {
               />
             ) : (
               <div className="empty-container">
-                <Empty description="暂无权限数据" />
+                <Empty description="暂无权限数据" imageStyle={{ height: 80 }} />
               </div>
             )}
           </Form.Item>
