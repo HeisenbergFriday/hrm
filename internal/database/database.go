@@ -67,6 +67,7 @@ func Init() error {
 
 	// 先独立补列，与 migrate() 成败无关，防止 main.go 吞错误后列仍缺失
 	migrateAnnualLeaveGrantColumns()
+	migrateUserManagerColumns()
 
 	// 自动迁移表结构
 	log.Println("开始迁移表结构...")
@@ -81,7 +82,15 @@ func Init() error {
 	seed()
 	log.Println("种子数据填充完成")
 
+	// 绩效表已随主库 migrate() 一并迁移，无需独立数据源
+	log.Println("绩效模块使用主库")
+
 	return nil
+}
+
+// GetPerformanceDB 获取绩效模块的数据源（统一使用主库）
+func GetPerformanceDB() *gorm.DB {
+	return DB
 }
 
 // createDatabase 创建数据库
@@ -131,6 +140,7 @@ func migrate() error {
 		&OvertimeRuleConfig{},
 		&OvertimeMatchResult{},
 		&OvertimeSyncHistory{},
+		&OvertimeSupplementaryRequest{},
 		&CompensatoryLeaveLedger{},
 	); err != nil {
 		return err
@@ -180,11 +190,31 @@ func migrate() error {
 		&WeekScheduleRule{},
 		&WeekScheduleOverride{},
 		&WeekScheduleSyncLog{},
+		&PerformanceTemplate{},
+		&PerformanceTemplateSection{},
+		&PerformanceTemplateItem{},
+		&PerformanceLevelRule{},
+		&PerformanceLevelRuleItem{},
+		&PerformanceActivity{},
+		&PerformanceDistributionRule{},
+		&PerformanceDistributionException{},
+		&PerformanceParticipant{},
+		&PerformanceReview{},
+		&PerformanceReviewVersion{},
+		&PerformanceRelationshipChangeLog{},
+		&PerformanceGoalRecord{},
+		&PerformanceGoalApprovalLog{},
+		&PerformanceCompanyFinance{},
+		&PerformanceIndicatorLibrary{},
+		&PerformanceIndicatorItem{},
 	); err != nil {
 		return err
 	}
 
 	if err := migrateShiftCatalogSchema(); err != nil {
+		return err
+	}
+	if err := migratePerformanceReviewVersionSchema(); err != nil {
 		return err
 	}
 
@@ -211,6 +241,66 @@ func migrateAnnualLeaveGrantColumns() {
 			if err := DB.Exec(c.ddl).Error; err != nil {
 				log.Printf("[migrate] 添加列 %s 失败: %v", c.name, err)
 			}
+		}
+	}
+}
+
+func migratePerformanceReviewVersionSchema() error {
+	if !DB.Migrator().HasTable(&PerformanceReviewVersion{}) {
+		return nil
+	}
+
+	var isNullable string
+	if err := DB.Raw(`
+		SELECT IS_NULLABLE
+		FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'performance_review_versions'
+		  AND COLUMN_NAME = 'confirmed_at'
+	`).Scan(&isNullable).Error; err != nil {
+		return err
+	}
+
+	if strings.EqualFold(strings.TrimSpace(isNullable), "NO") {
+		if err := DB.Exec("ALTER TABLE performance_review_versions MODIFY COLUMN confirmed_at datetime(3) NULL").Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func migrateUserManagerColumns() {
+	if !DB.Migrator().HasTable(&User{}) {
+		return
+	}
+	type col struct {
+		name string
+		ddl  string
+	}
+	cols := []col{
+		{"manager_user_id", "ALTER TABLE users ADD COLUMN manager_user_id varchar(64)"},
+		{"manager_name", "ALTER TABLE users ADD COLUMN manager_name varchar(128)"},
+	}
+	for _, c := range cols {
+		var count int64
+		DB.Raw("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME=?", c.name).Scan(&count)
+		if count == 0 {
+			if err := DB.Exec(c.ddl).Error; err != nil {
+				log.Printf("[migrate] 添加列 %s 失败: %v", c.name, err)
+			} else {
+				log.Printf("[migrate] 成功添加列 users.%s", c.name)
+			}
+		}
+	}
+	// 添加索引
+	var idxCount int64
+	DB.Raw("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND INDEX_NAME='idx_users_manager_user_id'").Scan(&idxCount)
+	if idxCount == 0 {
+		if err := DB.Exec("CREATE INDEX idx_users_manager_user_id ON users(manager_user_id)").Error; err != nil {
+			log.Printf("[migrate] 添加索引 idx_users_manager_user_id 失败: %v", err)
+		} else {
+			log.Printf("[migrate] 成功添加索引 idx_users_manager_user_id")
 		}
 	}
 }

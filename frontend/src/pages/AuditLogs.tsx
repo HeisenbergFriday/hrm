@@ -2,12 +2,11 @@ import React, { useState } from 'react'
 import { Card, Typography, Table, Spin, Empty, Alert, Button, DatePicker, Input, Select } from 'antd'
 import { HistoryOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
-import { auditAPI } from '../services/api'
+import { auditAPI, userAPI } from '../services/api'
 import dayjs from 'dayjs'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { RangePicker } = DatePicker
-const { Option } = Select
 
 interface AuditLog {
   id: string
@@ -38,6 +37,14 @@ const AuditLogs: React.FC = () => {
   const { data: logsData, isLoading, isError, refetch, error } = useQuery({
     queryKey: ['audit-logs', queryParams],
     queryFn: () => auditAPI.getLogs(queryParams),
+  })
+
+  const { data: usersData } = useQuery({
+    queryKey: ['users-list-audit'],
+    queryFn: async () => {
+      const res = await userAPI.getUsers({ page: 1, page_size: 200 })
+      return res.data?.data?.users || []
+    },
   })
 
   const columns = [
@@ -84,9 +91,12 @@ const AuditLogs: React.FC = () => {
   ]
 
   return (
-    <div>
-      <Title level={4}>审计日志</Title>
-      <Card>
+    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+        <HistoryOutlined style={{ color: '#4338ca', marginRight: 8 }} />审计日志
+      </h2>
+      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>查看系统操作审计记录</Text>
+      <Card style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>
         <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
           <RangePicker onChange={setDateRange} />
           <Input
@@ -100,16 +110,15 @@ const AuditLogs: React.FC = () => {
             placeholder="操作人"
             style={{ width: 150 }}
             allowClear
+            showSearch
+            optionFilterProp="label"
             onChange={setUserID}
-          >
-            <Option value="user123">张三</Option>
-            <Option value="user456">李四</Option>
-            <Option value="user789">王五</Option>
-          </Select>
-          <Button type="primary" onClick={() => refetch()}>
+            options={(usersData || []).map((u: any) => ({ label: u.name || u.username, value: u.id }))}
+          />
+          <Button type="primary" onClick={() => refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>
             查询
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading}>
+          <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading} style={{ borderRadius: 8, fontWeight: 600 }}>
             刷新
           </Button>
         </div>
@@ -126,7 +135,7 @@ const AuditLogs: React.FC = () => {
               type="error"
               showIcon
               action={
-                <Button size="small" onClick={() => refetch()}>
+                <Button size="small" onClick={() => refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>
                   重试
                 </Button>
               }
@@ -143,7 +152,7 @@ const AuditLogs: React.FC = () => {
               total: logsData.data.total,
               showSizeChanger: true,
               showQuickJumper: true,
-              showTotal: (total: number) => `共 ${total} 条记录`,
+              showTotal: (v: number) => <span style={{ color: '#6b7280' }}>共 {v} 条</span>,
               onChange: (newPage, newPageSize) => {
                 setPage(newPage)
                 setPageSize(newPageSize)
@@ -151,7 +160,7 @@ const AuditLogs: React.FC = () => {
             }}
           />
         ) : (
-          <Empty description="暂无审计日志" />
+          <Empty description="暂无审计日志" imageStyle={{ height: 80 }} />
         )}
       </Card>
     </div>

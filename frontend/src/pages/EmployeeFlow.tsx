@@ -1,14 +1,40 @@
-import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Descriptions, Tag, Divider } from 'antd'
-import { UserAddOutlined, SwapOutlined, UserDeleteOutlined, ReloadOutlined, PlusOutlined, TableOutlined } from '@ant-design/icons'
-import { useQuery, useMutation } from '@tanstack/react-query'
-import { employeeAPI, departmentAPI } from '../services/api'
+import React, { useMemo, useState } from 'react'
+import type { Dayjs } from 'dayjs'
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  DatePicker,
+  Descriptions,
+  Form,
+  Input,
+  Modal,
+  Row,
+  Select,
+  Spin,
+  Table,
+  Tabs,
+  Tag,
+  Typography,
+  message,
+} from 'antd'
+import { PlusOutlined, ReloadOutlined, SwapOutlined, UserAddOutlined, UserDeleteOutlined } from '@ant-design/icons'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { departmentAPI, employeeAPI } from '../services/api'
 
-const { Title, Text } = Typography
-const { Option } = Select
+const { Title, Paragraph, Text } = Typography
+const { TextArea } = Input
 
-interface Transfer {
-  id: string
+type FlowTabKey = 'onboarding' | 'transfer' | 'resignation'
+
+interface DepartmentItem {
+  department_id: string
+  name: string
+}
+
+interface TransferRecord {
+  id: number | string
   transfer_id: string
   user_id: string
   user_name: string
@@ -19,18 +45,15 @@ interface Transfer {
   new_department_name: string
   new_position: string
   transfer_date: string
-  reason: string
-  status: string
-  approver_id: string
-  approver_name: string
-  approval_time: string
-  approval_comment: string
-  created_at: string
-  updated_at: string
+  reason?: string
+  status?: string
+  approver_name?: string
+  approval_time?: string
+  approval_comment?: string
 }
 
-interface Resignation {
-  id: string
+interface ResignationRecord {
+  id: number | string
   resignation_id: string
   user_id: string
   user_name: string
@@ -39,274 +62,299 @@ interface Resignation {
   position: string
   resign_date: string
   last_working_day: string
-  resign_reason: string
-  status: string
-  approver_id: string
-  approver_name: string
-  approval_time: string
-  approval_comment: string
-  exit_process: any
-  created_at: string
-  updated_at: string
+  resign_reason?: string
+  status?: string
+  approver_name?: string
+  approval_time?: string
+  approval_comment?: string
 }
 
-interface Onboarding {
-  id: string
+interface OnboardingRecord {
+  id: number | string
   onboarding_id: string
   employee_id: string
   name: string
-  gender: string
-  birth_date: string
-  id_card_number: string
-  mobile: string
-  email: string
+  gender?: string
+  birth_date?: string
+  id_card_number?: string
+  mobile?: string
+  email?: string
   department_id: string
   department_name: string
   position: string
   entry_date: string
   employment_type: string
-  probation_end_date: string
-  emergency_contact: string
-  emergency_phone: string
-  education: string
-  graduate_school: string
-  major: string
-  onboarding_process: any
-  status: string
-  created_at: string
-  updated_at: string
+  probation_end_date?: string
+  emergency_contact?: string
+  emergency_phone?: string
+  education?: string
+  graduate_school?: string
+  major?: string
+  status?: string
 }
 
-interface LifecycleLedgerItem {
-  id: number
+interface DetailState {
+  type: FlowTabKey
+  record: TransferRecord | ResignationRecord | OnboardingRecord
+}
+
+interface TransferFormValues {
   user_id: string
   user_name: string
-  employee_id: string
-  department_id: string
-  department_name: string
-  position: string
-  user_status: string
-  profile_status: string
-  employment_type: string
-  entry_date: string
-  planned_regular_date: string
-  actual_regular_date: string
-  latest_transfer_date: string
-  latest_transfer_status: string
-  latest_transfer_old_department: string
-  latest_transfer_old_position: string
-  latest_transfer_new_department: string
-  latest_transfer_new_position: string
-  latest_resign_date: string
-  latest_resignation_status: string
-  latest_last_working_day: string
-  latest_resign_reason: string
-  latest_onboarding_status: string
-  // 阶段 3B 新增字段
-  is_candidate: boolean
-  onboarding_id: string
-  onboarding_status_display: string
+  old_department_id: string
+  old_position: string
+  new_department_id: string
+  new_position: string
+  transfer_date: Dayjs | null
+  reason?: string
 }
 
+interface ResignationFormValues {
+  user_id: string
+  user_name: string
+  department_id: string
+  position: string
+  resign_date: Dayjs | null
+  last_working_day: Dayjs | null
+  resign_reason?: string
+}
+
+interface OnboardingFormValues {
+  employee_id: string
+  name: string
+  gender?: string
+  birth_date?: Dayjs | null
+  id_card_number?: string
+  mobile?: string
+  email?: string
+  department_id: string
+  position: string
+  entry_date: Dayjs | null
+  employment_type: string
+  probation_end_date?: Dayjs | null
+  emergency_contact?: string
+  emergency_phone?: string
+  education?: string
+  graduate_school?: string
+  major?: string
+}
+
+type FlowFormValues = TransferFormValues & ResignationFormValues & OnboardingFormValues
+
+const trimText = (value?: string) => (typeof value === 'string' ? value.trim() : '')
+const formatDate = (value?: Dayjs | null) => (value ? value.format('YYYY-MM-DD') : '')
+
+const renderStatusTag = (value?: string) => {
+  const statusMap: Record<string, { color: string; label: string }> = {
+    pending: { color: 'blue', label: '待处理' },
+    approved: { color: 'green', label: '已批准' },
+    rejected: { color: 'red', label: '已驳回' },
+    processing: { color: 'orange', label: '处理中' },
+    completed: { color: 'green', label: '已完成' },
+  }
+  const matched = statusMap[value || '']
+  if (!matched) {
+    return <Tag>{value || '未设置'}</Tag>
+  }
+  return <Tag color={matched.color}>{matched.label}</Tag>
+}
+
+const employmentTypeOptions = ['全职', '兼职', '实习']
+const educationOptions = ['高中', '大专', '本科', '硕士', '博士']
+
 const EmployeeFlow: React.FC = () => {
-  const [activeTab, setActiveTab] = useState('transfer')
-  const [modalVisible, setModalVisible] = useState(false)
-  const [form] = Form.useForm()
-  const [currentItem, setCurrentItem] = useState<any>(null)
-  const [ledgerKeyword, setLedgerKeyword] = useState('')
-  const [ledgerDepartmentID, setLedgerDepartmentID] = useState<string>()
-  const [ledgerStatus, setLedgerStatus] = useState<string>()
-  const [ledgerPage, setLedgerPage] = useState(1)
-  const [ledgerPageSize, setLedgerPageSize] = useState(10)
+  const [activeTab, setActiveTab] = useState<FlowTabKey>('onboarding')
+  const [createModalOpen, setCreateModalOpen] = useState(false)
+  const [detailState, setDetailState] = useState<DetailState | null>(null)
+  const [form] = Form.useForm<FlowFormValues>()
 
-  const { data: departmentsData } = useQuery({
-    queryKey: ['departments'],
+  const departmentsQuery = useQuery({
+    queryKey: ['employee-flow-departments'],
     queryFn: () => departmentAPI.getDepartments(),
+    staleTime: 60_000,
   })
-  const departments: { department_id: string; name: string }[] = departmentsData?.data?.departments || []
-  const deptNameMap = Object.fromEntries(departments.map((d) => [d.department_id, d.name]))
 
-  // 转岗
-  const { data: transfersData, isLoading: transfersLoading, refetch: refetchTransfers } = useQuery({
-    queryKey: ['employee-transfers'],
-    queryFn: () => employeeAPI.getTransfers(),
+  const transfersQuery = useQuery({
+    queryKey: ['employee-flow-transfers'],
+    queryFn: () => employeeAPI.getTransfers({ page: 1, page_size: 1000 }),
+    enabled: activeTab === 'transfer',
   })
+
+  const resignationsQuery = useQuery({
+    queryKey: ['employee-flow-resignations'],
+    queryFn: () => employeeAPI.getResignations({ page: 1, page_size: 1000 }),
+    enabled: activeTab === 'resignation',
+  })
+
+  const onboardingsQuery = useQuery({
+    queryKey: ['employee-flow-onboardings'],
+    queryFn: () => employeeAPI.getOnboardings({ page: 1, page_size: 1000 }),
+    enabled: activeTab === 'onboarding',
+  })
+
+  const departments = (departmentsQuery.data?.data?.departments ?? []) as DepartmentItem[]
+  const departmentNameMap = useMemo(() => {
+    const result: Record<string, string> = {}
+    departments.forEach((department) => {
+      result[department.department_id] = department.name
+    })
+    return result
+  }, [departments])
+
+  const departmentOptions = useMemo(
+    () =>
+      departments.map((department) => ({
+        label: department.name,
+        value: department.department_id,
+      })),
+    [departments],
+  )
+
+  const refetchCurrentList = () => {
+    if (activeTab === 'transfer') {
+      void transfersQuery.refetch()
+      return
+    }
+    if (activeTab === 'resignation') {
+      void resignationsQuery.refetch()
+      return
+    }
+    void onboardingsQuery.refetch()
+  }
+
+  const resetModalState = () => {
+    setCreateModalOpen(false)
+    form.resetFields()
+  }
 
   const createTransferMutation = useMutation({
-    mutationFn: (data: any) => employeeAPI.createTransfer(data),
+    mutationFn: (payload: Record<string, string>) => employeeAPI.createTransfer(payload),
     onSuccess: () => {
-      message.success('转岗申请创建成功')
-      setModalVisible(false)
-      form.resetFields()
-      refetchTransfers()
+      message.success('调岗记录创建成功')
+      resetModalState()
+      void transfersQuery.refetch()
     },
     onError: () => {
-      message.error('转岗申请创建失败')
+      message.error('调岗记录创建失败')
     },
-  })
-
-  // 离职
-  const { data: resignationsData, isLoading: resignationsLoading, refetch: refetchResignations } = useQuery({
-    queryKey: ['employee-resignations'],
-    queryFn: () => employeeAPI.getResignations(),
   })
 
   const createResignationMutation = useMutation({
-    mutationFn: (data: any) => employeeAPI.createResignation(data),
+    mutationFn: (payload: Record<string, string>) => employeeAPI.createResignation(payload),
     onSuccess: () => {
-      message.success('离职申请创建成功')
-      setModalVisible(false)
-      form.resetFields()
-      refetchResignations()
+      message.success('离职记录创建成功')
+      resetModalState()
+      void resignationsQuery.refetch()
     },
     onError: () => {
-      message.error('离职申请创建失败')
+      message.error('离职记录创建失败')
     },
-  })
-
-  // 入职
-  const { data: onboardingData, isLoading: onboardingLoading, refetch: refetchOnboarding } = useQuery({
-    queryKey: ['employee-onboardings'],
-    queryFn: () => employeeAPI.getOnboardings(),
-  })
-
-  const { data: ledgerData, isLoading: ledgerLoading, refetch: refetchLedger } = useQuery({
-    queryKey: ['employee-lifecycle-ledger', ledgerPage, ledgerPageSize, ledgerDepartmentID, ledgerStatus, ledgerKeyword],
-    queryFn: () =>
-      employeeAPI.getLifecycleLedger({
-        page: ledgerPage,
-        page_size: ledgerPageSize,
-        department_id: ledgerDepartmentID,
-        status: ledgerStatus,
-        keyword: ledgerKeyword,
-      }),
   })
 
   const createOnboardingMutation = useMutation({
-    mutationFn: (data: any) => employeeAPI.createOnboarding(data),
+    mutationFn: (payload: Record<string, string>) => employeeAPI.createOnboarding(payload),
     onSuccess: () => {
-      message.success('入职申请创建成功')
-      setModalVisible(false)
-      form.resetFields()
-      refetchOnboarding()
+      message.success('入职记录创建成功')
+      resetModalState()
+      void onboardingsQuery.refetch()
     },
     onError: () => {
-      message.error('入职申请创建失败')
+      message.error('入职记录创建失败')
     },
   })
 
-  const handleCreate = () => {
-    form.validateFields().then((values) => {
-      if (activeTab === 'transfer') {
-        createTransferMutation.mutate(values)
-      } else if (activeTab === 'resignation') {
-        createResignationMutation.mutate(values)
-      } else if (activeTab === 'onboarding') {
-        createOnboardingMutation.mutate(values)
-      }
-    })
-  }
+  const buildTransferPayload = (values: TransferFormValues) => ({
+    user_id: trimText(values.user_id),
+    user_name: trimText(values.user_name),
+    old_department_id: values.old_department_id,
+    old_department_name: departmentNameMap[values.old_department_id] || values.old_department_id,
+    old_position: trimText(values.old_position),
+    new_department_id: values.new_department_id,
+    new_department_name: departmentNameMap[values.new_department_id] || values.new_department_id,
+    new_position: trimText(values.new_position),
+    transfer_date: formatDate(values.transfer_date),
+    reason: trimText(values.reason),
+  })
 
-  const handleView = (item: any) => {
-    setCurrentItem(item)
+  const buildResignationPayload = (values: ResignationFormValues) => ({
+    user_id: trimText(values.user_id),
+    user_name: trimText(values.user_name),
+    department_id: values.department_id,
+    department_name: departmentNameMap[values.department_id] || values.department_id,
+    position: trimText(values.position),
+    resign_date: formatDate(values.resign_date),
+    last_working_day: formatDate(values.last_working_day),
+    resign_reason: trimText(values.resign_reason),
+  })
+
+  const buildOnboardingPayload = (values: OnboardingFormValues) => ({
+    employee_id: trimText(values.employee_id),
+    name: trimText(values.name),
+    gender: trimText(values.gender),
+    birth_date: formatDate(values.birth_date),
+    id_card_number: trimText(values.id_card_number),
+    mobile: trimText(values.mobile),
+    email: trimText(values.email),
+    department_id: values.department_id,
+    department_name: departmentNameMap[values.department_id] || values.department_id,
+    position: trimText(values.position),
+    entry_date: formatDate(values.entry_date),
+    employment_type: trimText(values.employment_type),
+    probation_end_date: formatDate(values.probation_end_date),
+    emergency_contact: trimText(values.emergency_contact),
+    emergency_phone: trimText(values.emergency_phone),
+    education: trimText(values.education),
+    graduate_school: trimText(values.graduate_school),
+    major: trimText(values.major),
+  })
+
+  const handleCreate = async () => {
+    const values = await form.validateFields()
+    if (activeTab === 'transfer') {
+      createTransferMutation.mutate(buildTransferPayload(values))
+      return
+    }
+    if (activeTab === 'resignation') {
+      createResignationMutation.mutate(buildResignationPayload(values))
+      return
+    }
+    createOnboardingMutation.mutate(buildOnboardingPayload(values))
   }
 
   const handleTabChange = (key: string) => {
-    setActiveTab(key)
-    setCurrentItem(null)
-    setModalVisible(false)
-  }
-
-  const getStatusTag = (status: string) => {
-    switch (status) {
-      case 'pending':
-        return <Tag color="blue">待审批</Tag>
-      case 'approved':
-        return <Tag color="green">已批准</Tag>
-      case 'rejected':
-        return <Tag color="red">已拒绝</Tag>
-      case 'processing':
-        return <Tag color="orange">处理中</Tag>
-      case 'completed':
-        return <Tag color="green">已完成</Tag>
-      default:
-        return <Tag>{status}</Tag>
-    }
-  }
-
-  const getEmploymentStatusTag = (item: LifecycleLedgerItem) => {
-    // 阶段 3B：候选入职人员状态展示
-    if (item.is_candidate) {
-      const colorMap: Record<string, string> = {
-        '候选入职': 'blue',
-        '入职处理中': 'orange',
-        '入职已完成/待建档': 'purple',
-      }
-      return <Tag color={colorMap[item.onboarding_status_display] || 'default'}>{item.onboarding_status_display}</Tag>
-    }
-
-    if (item.latest_resignation_status) {
-      return getStatusTag(item.latest_resignation_status)
-    }
-    if (item.user_status === 'inactive' || item.profile_status === 'inactive') {
-      return <Tag color="default">离职/停用</Tag>
-    }
-    return <Tag color="green">在职</Tag>
-  }
-
-  // 阶段 3B：试用期和转正提醒
-  const getProbationAlert = (plannedRegularDate: string, actualRegularDate: string) => {
-    if (actualRegularDate) {
-      return <Tag color="green" style={{ fontSize: 12 }}>已转正</Tag>
-    }
-    if (!plannedRegularDate) return null
-
-    const today = new Date()
-    const endDate = new Date(plannedRegularDate)
-    const daysLeft = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-
-    if (daysLeft < 0) {
-      return <Tag color="error" style={{ fontSize: 12 }}>转正逾期 {Math.abs(daysLeft)} 天</Tag>
-    }
-    if (daysLeft <= 30) {
-      return <Tag color="warning" style={{ fontSize: 12 }}>{daysLeft} 天后转正</Tag>
-    }
-    return null
+    setActiveTab(key as FlowTabKey)
+    setDetailState(null)
+    resetModalState()
   }
 
   const transferColumns = [
     {
-      title: '转岗编号',
+      title: '调岗单号',
       dataIndex: 'transfer_id',
       key: 'transfer_id',
     },
     {
-      title: '员工姓名',
-      dataIndex: 'user_name',
-      key: 'user_name',
+      title: '员工',
+      key: 'employee',
+      render: (_: unknown, record: TransferRecord) => (
+        <div>
+          <Text strong>{record.user_name}</Text>
+          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{record.user_id}</div>
+        </div>
+      ),
     },
     {
-      title: '原部门/职位',
+      title: '原部门 / 岗位',
       key: 'old_info',
-      render: (_, record: Transfer) => (
-        <div>
-          <div>{record.old_department_name}</div>
-          <div style={{ fontSize: 12, color: '#666' }}>{record.old_position}</div>
-        </div>
-      ),
+      render: (_: unknown, record: TransferRecord) => `${record.old_department_name || '-'} / ${record.old_position || '-'}`,
     },
     {
-      title: '新部门/职位',
+      title: '新部门 / 岗位',
       key: 'new_info',
-      render: (_, record: Transfer) => (
-        <div>
-          <div>{record.new_department_name}</div>
-          <div style={{ fontSize: 12, color: '#666' }}>{record.new_position}</div>
-        </div>
-      ),
+      render: (_: unknown, record: TransferRecord) => `${record.new_department_name || '-'} / ${record.new_position || '-'}`,
     },
     {
-      title: '转岗日期',
+      title: '调岗日期',
       dataIndex: 'transfer_date',
       key: 'transfer_date',
     },
@@ -314,13 +362,13 @@ const EmployeeFlow: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string) => getStatusTag(status),
+      render: (value?: string) => renderStatusTag(value),
     },
     {
       title: '操作',
       key: 'action',
-      render: (_: any, record: Transfer) => (
-        <Button type="link" onClick={() => handleView(record)}>
+      render: (_: unknown, record: TransferRecord) => (
+        <Button type="link" onClick={() => setDetailState({ type: 'transfer', record })}>
           查看
         </Button>
       ),
@@ -329,24 +377,24 @@ const EmployeeFlow: React.FC = () => {
 
   const resignationColumns = [
     {
-      title: '离职编号',
+      title: '离职单号',
       dataIndex: 'resignation_id',
       key: 'resignation_id',
     },
     {
-      title: '员工姓名',
-      dataIndex: 'user_name',
-      key: 'user_name',
-    },
-    {
-      title: '部门/职位',
-      key: 'dept_info',
-      render: (_, record: Resignation) => (
+      title: '员工',
+      key: 'employee',
+      render: (_: unknown, record: ResignationRecord) => (
         <div>
-          <div>{record.department_name}</div>
-          <div style={{ fontSize: 12, color: '#666' }}>{record.position}</div>
+          <Text strong>{record.user_name}</Text>
+          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{record.user_id}</div>
         </div>
       ),
+    },
+    {
+      title: '部门 / 岗位',
+      key: 'department',
+      render: (_: unknown, record: ResignationRecord) => `${record.department_name || '-'} / ${record.position || '-'}`,
     },
     {
       title: '离职日期',
@@ -362,13 +410,13 @@ const EmployeeFlow: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string) => getStatusTag(status),
+      render: (value?: string) => renderStatusTag(value),
     },
     {
       title: '操作',
       key: 'action',
-      render: (_: any, record: Resignation) => (
-        <Button type="link" onClick={() => handleView(record)}>
+      render: (_: unknown, record: ResignationRecord) => (
+        <Button type="link" onClick={() => setDetailState({ type: 'resignation', record })}>
           查看
         </Button>
       ),
@@ -377,29 +425,24 @@ const EmployeeFlow: React.FC = () => {
 
   const onboardingColumns = [
     {
-      title: '入职编号',
+      title: '入职单号',
       dataIndex: 'onboarding_id',
       key: 'onboarding_id',
     },
     {
-      title: '员工姓名',
-      dataIndex: 'name',
-      key: 'name',
-    },
-    {
-      title: '工号',
-      dataIndex: 'employee_id',
-      key: 'employee_id',
-    },
-    {
-      title: '部门/职位',
-      key: 'dept_info',
-      render: (_, record: Onboarding) => (
+      title: '员工',
+      key: 'employee',
+      render: (_: unknown, record: OnboardingRecord) => (
         <div>
-          <div>{record.department_name}</div>
-          <div style={{ fontSize: 12, color: '#666' }}>{record.position}</div>
+          <Text strong>{record.name}</Text>
+          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{record.employee_id}</div>
         </div>
       ),
+    },
+    {
+      title: '部门 / 岗位',
+      key: 'department',
+      render: (_: unknown, record: OnboardingRecord) => `${record.department_name || '-'} / ${record.position || '-'}`,
     },
     {
       title: '入职日期',
@@ -407,726 +450,503 @@ const EmployeeFlow: React.FC = () => {
       key: 'entry_date',
     },
     {
+      title: '用工类型',
+      dataIndex: 'employment_type',
+      key: 'employment_type',
+      render: (value?: string) => value || '-',
+    },
+    {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string) => getStatusTag(status),
+      render: (value?: string) => renderStatusTag(value),
     },
     {
       title: '操作',
       key: 'action',
-      render: (_: any, record: Onboarding) => (
-        <Button type="link" onClick={() => handleView(record)}>
+      render: (_: unknown, record: OnboardingRecord) => (
+        <Button type="link" onClick={() => setDetailState({ type: 'onboarding', record })}>
           查看
         </Button>
       ),
     },
   ]
 
-  const ledgerColumns = [
-    {
-      title: 'Employee',
-      key: 'employee',
-      render: (_: unknown, record: LifecycleLedgerItem) => (
-        <div>
-          <div>{record.user_name || '-'}</div>
-          <div style={{ fontSize: 12, color: '#666' }}>
-            {record.employee_id || record.user_id || '-'}
-            {record.is_candidate && <Tag color="blue" style={{ marginLeft: 4, fontSize: 11 }}>候选</Tag>}
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: 'Dept / Position',
-      key: 'organization',
-      render: (_: unknown, record: LifecycleLedgerItem) => (
-        <div>
-          <div>{record.department_name || record.department_id || '-'}</div>
-          <div style={{ fontSize: 12, color: '#666' }}>{record.position || '-'}</div>
-        </div>
-      ),
-    },
-    {
-      title: 'Employment Type',
-      dataIndex: 'employment_type',
-      key: 'employment_type',
-      render: (value: string) => value || '-',
-    },
-    {
-      title: 'Entry Date',
-      dataIndex: 'entry_date',
-      key: 'entry_date',
-      render: (value: string) => value || '-',
-    },
-    {
-      title: 'Planned Regular',
-      key: 'planned_regular',
-      render: (_: unknown, record: LifecycleLedgerItem) => (
-        <div>
-          <div>{record.planned_regular_date || '-'}</div>
-          {getProbationAlert(record.planned_regular_date, record.actual_regular_date)}
-        </div>
-      ),
-    },
-    {
-      title: 'Actual Regular',
-      dataIndex: 'actual_regular_date',
-      key: 'actual_regular_date',
-      render: (value: string) => value || '-',
-    },
-    {
-      title: 'Latest Transfer',
-      key: 'latest_transfer',
-      render: (_: unknown, record: LifecycleLedgerItem) => {
-        if (!record.latest_transfer_date) {
-          return '-'
-        }
+  const renderListContent = () => {
+    if (activeTab === 'transfer') {
+      if (transfersQuery.isLoading) {
         return (
-          <div>
-            <div>{record.latest_transfer_date}</div>
-            <div style={{ fontSize: 12, color: '#666' }}>
-              {`${record.latest_transfer_old_department || '-'} / ${record.latest_transfer_old_position || '-'} -> ${record.latest_transfer_new_department || '-'} / ${record.latest_transfer_new_position || '-'}`}
-            </div>
-            <div style={{ marginTop: 4 }}>{record.latest_transfer_status ? getStatusTag(record.latest_transfer_status) : null}</div>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+            <Spin size="large" />
           </div>
         )
-      },
-    },
-    {
-      title: 'Status',
-      key: 'employment_status',
-      render: (_: unknown, record: LifecycleLedgerItem) => (
-        <div>
-          <div>{getEmploymentStatusTag(record)}</div>
-          {record.latest_resign_date ? (
-            <div style={{ fontSize: 12, color: '#666' }}>{`Resign date: ${record.latest_resign_date}`}</div>
-          ) : null}
-          {!record.latest_resign_date && (record.user_status === 'inactive' || record.profile_status === 'inactive') ? (
-            <div style={{ fontSize: 12, color: '#666' }}>Inactive with no resignation record</div>
-          ) : null}
-        </div>
-      ),
-    },
-    {
-      title: '操作',
-      key: 'action',
-      render: (_: unknown, record: LifecycleLedgerItem) => {
-        if (record.is_candidate) {
-          return (
-            <Button
-              type="link"
-              size="small"
-              onClick={() => {
-                setActiveTab('onboarding')
-                // 切换到入职管理 Tab
-              }}
-            >
-              查看入职流程
-            </Button>
-          )
-        }
-        return null
-      },
-    },
-  ]
-
-  const renderDetail = () => {
-    if (!currentItem) return null
-
-    if (activeTab === 'transfer') {
-      const item = currentItem as Transfer
+      }
+      if (transfersQuery.isError) {
+        return (
+          <Alert
+            type="error"
+            showIcon
+            message="调岗记录加载失败"
+            action={
+              <Button size="small" onClick={() => void transfersQuery.refetch()}>
+                重试
+              </Button>
+            }
+          />
+        )
+      }
       return (
-        <Card title="转岗详情">
-          <Descriptions column={2} bordered>
-            <Descriptions.Item label="转岗编号" span={1}>{item.transfer_id}</Descriptions.Item>
-            <Descriptions.Item label="员工姓名" span={1}>{item.user_name}</Descriptions.Item>
-            <Descriptions.Item label="原部门" span={1}>{item.old_department_name}</Descriptions.Item>
-            <Descriptions.Item label="原职位" span={1}>{item.old_position}</Descriptions.Item>
-            <Descriptions.Item label="新部门" span={1}>{item.new_department_name}</Descriptions.Item>
-            <Descriptions.Item label="新职位" span={1}>{item.new_position}</Descriptions.Item>
-            <Descriptions.Item label="转岗日期" span={1}>{item.transfer_date}</Descriptions.Item>
-            <Descriptions.Item label="状态" span={1}>{getStatusTag(item.status)}</Descriptions.Item>
-            <Descriptions.Item label="转岗原因" span={2}>{item.reason}</Descriptions.Item>
-            {item.status !== 'pending' && (
-              <>
-                <Descriptions.Item label="审批人" span={1}>{item.approver_name}</Descriptions.Item>
-                <Descriptions.Item label="审批时间" span={1}>{item.approval_time}</Descriptions.Item>
-                <Descriptions.Item label="审批意见" span={2}>{item.approval_comment}</Descriptions.Item>
-              </>
-            )}
-          </Descriptions>
-        </Card>
-      )
-    } else if (activeTab === 'resignation') {
-      const item = currentItem as Resignation
-      return (
-        <Card title="离职详情">
-          <Descriptions column={2} bordered>
-            <Descriptions.Item label="离职编号" span={1}>{item.resignation_id}</Descriptions.Item>
-            <Descriptions.Item label="员工姓名" span={1}>{item.user_name}</Descriptions.Item>
-            <Descriptions.Item label="部门" span={1}>{item.department_name}</Descriptions.Item>
-            <Descriptions.Item label="职位" span={1}>{item.position}</Descriptions.Item>
-            <Descriptions.Item label="离职日期" span={1}>{item.resign_date}</Descriptions.Item>
-            <Descriptions.Item label="最后工作日" span={1}>{item.last_working_day}</Descriptions.Item>
-            <Descriptions.Item label="状态" span={1}>{getStatusTag(item.status)}</Descriptions.Item>
-            <Descriptions.Item label="离职原因" span={2}>{item.resign_reason}</Descriptions.Item>
-            {item.status !== 'pending' && (
-              <>
-                <Descriptions.Item label="审批人" span={1}>{item.approver_name}</Descriptions.Item>
-                <Descriptions.Item label="审批时间" span={1}>{item.approval_time}</Descriptions.Item>
-                <Descriptions.Item label="审批意见" span={2}>{item.approval_comment}</Descriptions.Item>
-              </>
-            )}
-          </Descriptions>
-          <Divider orientation="left">离职手续</Divider>
-          {item.exit_process?.items?.map((process: any, index: number) => (
-            <div key={index} style={{ marginBottom: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text>{process.name}</Text>
-                <Tag color={process.status === 'completed' ? 'green' : 'blue'}>
-                  {process.status === 'completed' ? '已完成' : '待处理'}
-                </Tag>
-              </div>
-            </div>
-          ))}
-        </Card>
-      )
-    } else if (activeTab === 'onboarding') {
-      const item = currentItem as Onboarding
-      return (
-        <Card
-          title="入职详情"
-          extra={
-            <Button
-              type="link"
-              onClick={() => {
-                setActiveTab('ledger')
-                setLedgerKeyword(item.employee_id || item.name)
-                setCurrentItem(null)
-              }}
-            >
-              查看台账
-            </Button>
-          }
-        >
-          <Descriptions column={2} bordered>
-            <Descriptions.Item label="入职编号" span={1}>{item.onboarding_id}</Descriptions.Item>
-            <Descriptions.Item label="员工姓名" span={1}>{item.name}</Descriptions.Item>
-            <Descriptions.Item label="工号" span={1}>{item.employee_id}</Descriptions.Item>
-            <Descriptions.Item label="性别" span={1}>{item.gender}</Descriptions.Item>
-            <Descriptions.Item label="部门" span={1}>{item.department_name}</Descriptions.Item>
-            <Descriptions.Item label="职位" span={1}>{item.position}</Descriptions.Item>
-            <Descriptions.Item label="入职日期" span={1}>{item.entry_date}</Descriptions.Item>
-            <Descriptions.Item label="雇佣类型" span={1}>{item.employment_type}</Descriptions.Item>
-            <Descriptions.Item label="试用期结束日期" span={1}>{item.probation_end_date}</Descriptions.Item>
-            <Descriptions.Item label="状态" span={1}>{getStatusTag(item.status)}</Descriptions.Item>
-            <Descriptions.Item label="联系电话" span={1}>{item.mobile}</Descriptions.Item>
-            <Descriptions.Item label="邮箱" span={1}>{item.email}</Descriptions.Item>
-            <Descriptions.Item label="紧急联系人" span={1}>{item.emergency_contact}</Descriptions.Item>
-            <Descriptions.Item label="紧急联系电话" span={1}>{item.emergency_phone}</Descriptions.Item>
-            <Descriptions.Item label="学历" span={1}>{item.education}</Descriptions.Item>
-            <Descriptions.Item label="毕业院校" span={1}>{item.graduate_school}</Descriptions.Item>
-            <Descriptions.Item label="专业" span={2}>{item.major}</Descriptions.Item>
-          </Descriptions>
-          <Divider orientation="left">入职流程</Divider>
-          {item.onboarding_process?.items?.map((process: any, index: number) => (
-            <div key={index} style={{ marginBottom: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text>{process.name}</Text>
-                <Tag color={
-                  process.status === 'completed' ? 'green' : 
-                  process.status === 'in_progress' ? 'orange' : 'blue'
-                }>
-                  {process.status === 'completed' ? '已完成' : 
-                   process.status === 'in_progress' ? '处理中' : '待处理'}
-                </Tag>
-              </div>
-            </div>
-          ))}
-        </Card>
+        <Table<TransferRecord>
+          rowKey="id"
+          columns={transferColumns}
+          dataSource={(transfersQuery.data?.data?.items ?? []) as TransferRecord[]}
+          locale={{ emptyText: '暂无调岗记录' }}
+          pagination={false}
+        />
       )
     }
-    return null
+
+    if (activeTab === 'resignation') {
+      if (resignationsQuery.isLoading) {
+        return (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+            <Spin size="large" />
+          </div>
+        )
+      }
+      if (resignationsQuery.isError) {
+        return (
+          <Alert
+            type="error"
+            showIcon
+            message="离职记录加载失败"
+            action={
+              <Button size="small" onClick={() => void resignationsQuery.refetch()}>
+                重试
+              </Button>
+            }
+          />
+        )
+      }
+      return (
+        <Table<ResignationRecord>
+          rowKey="id"
+          columns={resignationColumns}
+          dataSource={(resignationsQuery.data?.data?.items ?? []) as ResignationRecord[]}
+          locale={{ emptyText: '暂无离职记录' }}
+          pagination={false}
+        />
+      )
+    }
+
+    if (onboardingsQuery.isLoading) {
+      return (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+          <Spin size="large" />
+        </div>
+      )
+    }
+    if (onboardingsQuery.isError) {
+      return (
+        <Alert
+          type="error"
+          showIcon
+          message="入职记录加载失败"
+          action={
+            <Button size="small" onClick={() => void onboardingsQuery.refetch()}>
+              重试
+            </Button>
+          }
+        />
+      )
+    }
+    return (
+      <Table<OnboardingRecord>
+        rowKey="id"
+        columns={onboardingColumns}
+        dataSource={(onboardingsQuery.data?.data?.items ?? []) as OnboardingRecord[]}
+        locale={{ emptyText: '暂无入职记录' }}
+        pagination={false}
+      />
+    )
+  }
+
+  const renderDetailContent = () => {
+    if (!detailState) {
+      return null
+    }
+
+    if (detailState.type === 'transfer') {
+      const record = detailState.record as TransferRecord
+      return (
+        <Descriptions column={2} bordered size="small">
+          <Descriptions.Item label="调岗单号">{record.transfer_id}</Descriptions.Item>
+          <Descriptions.Item label="状态">{renderStatusTag(record.status)}</Descriptions.Item>
+          <Descriptions.Item label="员工姓名">{record.user_name}</Descriptions.Item>
+          <Descriptions.Item label="员工 ID">{record.user_id}</Descriptions.Item>
+          <Descriptions.Item label="原部门">{record.old_department_name || '-'}</Descriptions.Item>
+          <Descriptions.Item label="原岗位">{record.old_position || '-'}</Descriptions.Item>
+          <Descriptions.Item label="新部门">{record.new_department_name || '-'}</Descriptions.Item>
+          <Descriptions.Item label="新岗位">{record.new_position || '-'}</Descriptions.Item>
+          <Descriptions.Item label="调岗日期">{record.transfer_date || '-'}</Descriptions.Item>
+          <Descriptions.Item label="审批人">{record.approver_name || '-'}</Descriptions.Item>
+          <Descriptions.Item label="审批时间" span={2}>
+            {record.approval_time || '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="原因" span={2}>
+            {record.reason || '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="审批意见" span={2}>
+            {record.approval_comment || '-'}
+          </Descriptions.Item>
+        </Descriptions>
+      )
+    }
+
+    if (detailState.type === 'resignation') {
+      const record = detailState.record as ResignationRecord
+      return (
+        <Descriptions column={2} bordered size="small">
+          <Descriptions.Item label="离职单号">{record.resignation_id}</Descriptions.Item>
+          <Descriptions.Item label="状态">{renderStatusTag(record.status)}</Descriptions.Item>
+          <Descriptions.Item label="员工姓名">{record.user_name}</Descriptions.Item>
+          <Descriptions.Item label="员工 ID">{record.user_id}</Descriptions.Item>
+          <Descriptions.Item label="部门">{record.department_name || '-'}</Descriptions.Item>
+          <Descriptions.Item label="岗位">{record.position || '-'}</Descriptions.Item>
+          <Descriptions.Item label="离职日期">{record.resign_date || '-'}</Descriptions.Item>
+          <Descriptions.Item label="最后工作日">{record.last_working_day || '-'}</Descriptions.Item>
+          <Descriptions.Item label="审批人">{record.approver_name || '-'}</Descriptions.Item>
+          <Descriptions.Item label="审批时间">{record.approval_time || '-'}</Descriptions.Item>
+          <Descriptions.Item label="离职原因" span={2}>
+            {record.resign_reason || '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="审批意见" span={2}>
+            {record.approval_comment || '-'}
+          </Descriptions.Item>
+        </Descriptions>
+      )
+    }
+
+    const record = detailState.record as OnboardingRecord
+    return (
+      <Descriptions column={2} bordered size="small">
+        <Descriptions.Item label="入职单号">{record.onboarding_id}</Descriptions.Item>
+        <Descriptions.Item label="状态">{renderStatusTag(record.status)}</Descriptions.Item>
+        <Descriptions.Item label="员工姓名">{record.name}</Descriptions.Item>
+        <Descriptions.Item label="档案工号">{record.employee_id}</Descriptions.Item>
+        <Descriptions.Item label="部门">{record.department_name || '-'}</Descriptions.Item>
+        <Descriptions.Item label="岗位">{record.position || '-'}</Descriptions.Item>
+        <Descriptions.Item label="入职日期">{record.entry_date || '-'}</Descriptions.Item>
+        <Descriptions.Item label="用工类型">{record.employment_type || '-'}</Descriptions.Item>
+        <Descriptions.Item label="试用期结束日期">{record.probation_end_date || '-'}</Descriptions.Item>
+        <Descriptions.Item label="性别">{record.gender || '-'}</Descriptions.Item>
+        <Descriptions.Item label="手机号">{record.mobile || '-'}</Descriptions.Item>
+        <Descriptions.Item label="邮箱">{record.email || '-'}</Descriptions.Item>
+        <Descriptions.Item label="紧急联系人">{record.emergency_contact || '-'}</Descriptions.Item>
+        <Descriptions.Item label="紧急联系电话">{record.emergency_phone || '-'}</Descriptions.Item>
+        <Descriptions.Item label="学历">{record.education || '-'}</Descriptions.Item>
+        <Descriptions.Item label="毕业院校">{record.graduate_school || '-'}</Descriptions.Item>
+        <Descriptions.Item label="专业" span={2}>
+          {record.major || '-'}
+        </Descriptions.Item>
+      </Descriptions>
+    )
+  }
+
+  const createTitleMap: Record<FlowTabKey, string> = {
+    onboarding: '新建入职记录',
+    transfer: '新建调岗记录',
+    resignation: '新建离职记录',
   }
 
   return (
     <div>
-      <Title level={4}>入转调离管理</Title>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div>
+          <Title level={4} style={{ marginBottom: 4 }}>
+            入转调离
+          </Title>
+          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+            本页只保留查询与新建。状态、审批人、审批时间、审批意见以及流程结果字段仅用于展示，不会进入创建 payload。
+          </Paragraph>
+        </div>
+      </div>
+
+      <Alert
+        style={{ marginBottom: 16 }}
+        type="info"
+        showIcon
+        message="入职 / 调岗 / 离职均不提供编辑和删除。创建 payload 只提交各自台账 struct 的字段；不会提交 status、approver_id、approver_name、approval_time、approval_comment、onboarding_process、exit_process。"
+      />
+
       <Tabs activeKey={activeTab} onChange={handleTabChange}>
-        <Tabs.TabPane tab="台账" key="ledger" icon={<TableOutlined />}>
-          <Card
-            extra={
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Input.Search
-                  allowClear
-                  placeholder="搜索姓名 / 工号 / 员工 ID"
-                  style={{ width: 260 }}
-                  onSearch={(value) => {
-                    setLedgerPage(1)
-                    setLedgerKeyword(value.trim())
-                  }}
-                />
-                <Select
-                  allowClear
-                  placeholder="按部门筛选"
-                  style={{ width: 220 }}
-                  value={ledgerDepartmentID}
-                  onChange={(value) => {
-                    setLedgerPage(1)
-                    setLedgerDepartmentID(value)
-                  }}
-                  options={departments.map((department) => ({
-                    label: department.name,
-                    value: department.department_id,
-                  }))}
-                />
-                <Select
-                  allowClear
-                  placeholder="按状态筛选"
-                  style={{ width: 180 }}
-                  value={ledgerStatus}
-                  onChange={(value) => {
-                    setLedgerPage(1)
-                    setLedgerStatus(value)
-                  }}
-                  options={[
-                    { label: '在职', value: 'active' },
-                    { label: '离职/停用', value: 'inactive' },
-                    { label: '候选入职', value: 'candidate' },
-                  ]}
-                />
-                <Button icon={<ReloadOutlined />} onClick={() => refetchLedger()} loading={ledgerLoading}>
-                  刷新
-                </Button>
-              </div>
-            }
-          >
-            <div style={{ marginBottom: 16 }}>
-              <Text type="secondary">
-                当前台账口径：以 `users` 作为当前员工基表，入职/转正优先取员工档案；员工档案缺失时，入职日期和用工类型回退到最近一条入职记录。调岗、离职仅展示最近一次记录。阶段 3B：合并候选入职人员（未建档的 onboarding 记录）。
-              </Text>
-            </div>
-            {ledgerLoading ? (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-                <Spin size="large" />
-              </div>
-            ) : ledgerData?.data?.items?.length ? (
-              <Table
-                columns={ledgerColumns}
-                dataSource={ledgerData.data.items as LifecycleLedgerItem[]}
-                rowKey={(record) => record.is_candidate ? `candidate:${record.onboarding_id}` : `user:${record.id}`}
-                scroll={{ x: 1200 }}
-                pagination={{
-                  current: ledgerPage,
-                  pageSize: ledgerPageSize,
-                  total: ledgerData.data.total,
-                  showSizeChanger: true,
-                  showTotal: (total: number) => `共 ${total} 条台账记录`,
-                  onChange: (page, pageSize) => {
-                    setLedgerPage(page)
-                    setLedgerPageSize(pageSize)
-                  },
-                }}
-              />
-            ) : (
-              <Empty description="暂无台账数据" />
-            )}
-          </Card>
-        </Tabs.TabPane>
-        <Tabs.TabPane tab="转岗管理" key="transfer" icon={<SwapOutlined />}>
+        <Tabs.TabPane tab="入职" key="onboarding" icon={<UserAddOutlined />}>
           <Card
             extra={
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button icon={<ReloadOutlined />} onClick={() => refetchTransfers()} loading={transfersLoading}>
+                <Button icon={<ReloadOutlined />} onClick={refetchCurrentList} loading={onboardingsQuery.isFetching}>
                   刷新
                 </Button>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)}>
-                  新建转岗申请
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+                  新建入职
                 </Button>
               </div>
             }
           >
-            {transfersLoading ? (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-                <Spin size="large" />
-              </div>
-            ) : transfersData?.data?.items?.length ? (
-              <Table
-                columns={transferColumns}
-                dataSource={transfersData.data.items as Transfer[]}
-                rowKey="id"
-                pagination={{
-                  showTotal: (total: number) => `共 ${total} 条转岗记录`,
-                }}
-              />
-            ) : (
-              <Empty description="暂无转岗记录" />
-            )}
+            {renderListContent()}
           </Card>
         </Tabs.TabPane>
-        <Tabs.TabPane tab="离职管理" key="resignation" icon={<UserDeleteOutlined />}>
+        <Tabs.TabPane tab="调岗" key="transfer" icon={<SwapOutlined />}>
           <Card
             extra={
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button icon={<ReloadOutlined />} onClick={() => refetchResignations()} loading={resignationsLoading}>
+                <Button icon={<ReloadOutlined />} onClick={refetchCurrentList} loading={transfersQuery.isFetching}>
                   刷新
                 </Button>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)}>
-                  新建离职申请
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+                  新建调岗
                 </Button>
               </div>
             }
           >
-            {resignationsLoading ? (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-                <Spin size="large" />
-              </div>
-            ) : resignationsData?.data?.items?.length ? (
-              <Table
-                columns={resignationColumns}
-                dataSource={resignationsData.data.items as Resignation[]}
-                rowKey="id"
-                pagination={{
-                  showTotal: (total: number) => `共 ${total} 条离职记录`,
-                }}
-              />
-            ) : (
-              <Empty description="暂无离职记录" />
-            )}
+            {renderListContent()}
           </Card>
         </Tabs.TabPane>
-        <Tabs.TabPane tab="入职管理" key="onboarding" icon={<UserAddOutlined />}>
+        <Tabs.TabPane tab="离职" key="resignation" icon={<UserDeleteOutlined />}>
           <Card
             extra={
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button icon={<ReloadOutlined />} onClick={() => refetchOnboarding()} loading={onboardingLoading}>
+                <Button icon={<ReloadOutlined />} onClick={refetchCurrentList} loading={resignationsQuery.isFetching}>
                   刷新
                 </Button>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)}>
-                  新建入职申请
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+                  新建离职
                 </Button>
               </div>
             }
           >
-            {onboardingLoading ? (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-                <Spin size="large" />
-              </div>
-            ) : onboardingData?.data?.items?.length ? (
-              <Table
-                columns={onboardingColumns}
-                dataSource={onboardingData.data.items as Onboarding[]}
-                rowKey="id"
-                pagination={{
-                  showTotal: (total: number) => `共 ${total} 条入职记录`,
-                }}
-              />
-            ) : (
-              <Empty description="暂无入职记录" />
-            )}
+            {renderListContent()}
           </Card>
         </Tabs.TabPane>
       </Tabs>
 
-      {currentItem && renderDetail()}
-
       <Modal
-        title={
-          activeTab === 'transfer' ? '新建转岗申请' : 
-          activeTab === 'resignation' ? '新建离职申请' : '新建入职申请'
+        title={createTitleMap[activeTab]}
+        open={createModalOpen}
+        onCancel={resetModalState}
+        onOk={() => void handleCreate()}
+        okText="保存"
+        cancelText="取消"
+        width={820}
+        destroyOnClose
+        confirmLoading={
+          createTransferMutation.isPending || createResignationMutation.isPending || createOnboardingMutation.isPending
         }
-        open={modalVisible}
-        onCancel={() => setModalVisible(false)}
-        footer={[
-          <Button key="cancel" onClick={() => setModalVisible(false)}>
-            取消
-          </Button>,
-          <Button
-            key="submit"
-            type="primary"
-            onClick={handleCreate}
-            loading={
-              activeTab === 'transfer' ? createTransferMutation.isPending :
-              activeTab === 'resignation' ? createResignationMutation.isPending :
-              createOnboardingMutation.isPending
-            }
-          >
-            确认
-          </Button>,
-        ]}
-        width={800}
       >
         <Form form={form} layout="vertical">
-          {activeTab === 'transfer' && (
-            <>
-              <Form.Item
-                name="user_id"
-                label="员工ID"
-                rules={[{ required: true, message: '请输入员工ID' }]}
-              >
-                <Input placeholder="请输入员工ID" />
-              </Form.Item>
-              <Form.Item
-                name="user_name"
-                label="员工姓名"
-                rules={[{ required: true, message: '请输入员工姓名' }]}
-              >
-                <Input placeholder="请输入员工姓名" />
-              </Form.Item>
-              <Form.Item
-                name="old_department_id"
-                label="原部门"
-                rules={[{ required: true, message: '请选择原部门' }]}
-              >
-                <Select
-                  showSearch
-                  placeholder="请选择原部门"
-                  filterOption={(input, option) => (option?.label as string)?.includes(input)}
-                  options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
-                  onChange={(value: string) => form.setFieldsValue({ old_department_name: deptNameMap[value] || '' })}
-                />
-              </Form.Item>
-              <Form.Item name="old_department_name" hidden><Input /></Form.Item>
-              <Form.Item
-                name="old_position"
-                label="原职位"
-                rules={[{ required: true, message: '请输入原职位' }]}
-              >
-                <Input placeholder="请输入原职位" />
-              </Form.Item>
-              <Form.Item
-                name="new_department_id"
-                label="新部门"
-                rules={[{ required: true, message: '请选择新部门' }]}
-              >
-                <Select
-                  showSearch
-                  placeholder="请选择新部门"
-                  filterOption={(input, option) => (option?.label as string)?.includes(input)}
-                  options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
-                  onChange={(value: string) => form.setFieldsValue({ new_department_name: deptNameMap[value] || '' })}
-                />
-              </Form.Item>
-              <Form.Item name="new_department_name" hidden><Input /></Form.Item>
-              <Form.Item
-                name="new_position"
-                label="新职位"
-                rules={[{ required: true, message: '请输入新职位' }]}
-              >
-                <Input placeholder="请输入新职位" />
-              </Form.Item>
-              <Form.Item
-                name="transfer_date"
-                label="转岗日期"
-                rules={[{ required: true, message: '请选择转岗日期' }]}
-              >
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
-              </Form.Item>
-              <Form.Item
-                name="reason"
-                label="转岗原因"
-                rules={[{ required: true, message: '请输入转岗原因' }]}
-              >
-                <Input.TextArea placeholder="请输入转岗原因" rows={4} />
-              </Form.Item>
-            </>
-          )}
+          {activeTab === 'transfer' ? (
+            <Row gutter={16}>
+              <Col xs={24} md={12}>
+                <Form.Item name="user_id" label="员工 ID" rules={[{ required: true, message: '请输入员工 ID' }]}>
+                  <Input placeholder="请输入员工 ID" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="user_name" label="员工姓名" rules={[{ required: true, message: '请输入员工姓名' }]}>
+                  <Input placeholder="请输入员工姓名" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="old_department_id" label="原部门" rules={[{ required: true, message: '请选择原部门' }]}>
+                  <Select showSearch optionFilterProp="label" options={departmentOptions} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="old_position" label="原岗位" rules={[{ required: true, message: '请输入原岗位' }]}>
+                  <Input placeholder="请输入原岗位" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="new_department_id" label="新部门" rules={[{ required: true, message: '请选择新部门' }]}>
+                  <Select showSearch optionFilterProp="label" options={departmentOptions} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="new_position" label="新岗位" rules={[{ required: true, message: '请输入新岗位' }]}>
+                  <Input placeholder="请输入新岗位" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="transfer_date" label="调岗日期" rules={[{ required: true, message: '请选择调岗日期' }]}>
+                  <DatePicker style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={24}>
+                <Form.Item name="reason" label="调岗原因" rules={[{ required: true, message: '请输入调岗原因' }]}>
+                  <TextArea rows={4} placeholder="请输入调岗原因" />
+                </Form.Item>
+              </Col>
+            </Row>
+          ) : null}
 
-          {activeTab === 'resignation' && (
-            <>
-              <Form.Item
-                name="user_id"
-                label="员工ID"
-                rules={[{ required: true, message: '请输入员工ID' }]}
-              >
-                <Input placeholder="请输入员工ID" />
-              </Form.Item>
-              <Form.Item
-                name="user_name"
-                label="员工姓名"
-                rules={[{ required: true, message: '请输入员工姓名' }]}
-              >
-                <Input placeholder="请输入员工姓名" />
-              </Form.Item>
-              <Form.Item
-                name="department_id"
-                label="部门"
-                rules={[{ required: true, message: '请选择部门' }]}
-              >
-                <Select
-                  showSearch
-                  placeholder="请选择部门"
-                  filterOption={(input, option) => (option?.label as string)?.includes(input)}
-                  options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
-                  onChange={(value: string) => form.setFieldsValue({ department_name: deptNameMap[value] || '' })}
-                />
-              </Form.Item>
-              <Form.Item name="department_name" hidden><Input /></Form.Item>
-              <Form.Item
-                name="position"
-                label="职位"
-                rules={[{ required: true, message: '请输入职位' }]}
-              >
-                <Input placeholder="请输入职位" />
-              </Form.Item>
-              <Form.Item
-                name="resign_date"
-                label="离职日期"
-                rules={[{ required: true, message: '请选择离职日期' }]}
-              >
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
-              </Form.Item>
-              <Form.Item
-                name="last_working_day"
-                label="最后工作日"
-                rules={[{ required: true, message: '请选择最后工作日' }]}
-              >
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
-              </Form.Item>
-              <Form.Item
-                name="resign_reason"
-                label="离职原因"
-                rules={[{ required: true, message: '请输入离职原因' }]}
-              >
-                <Input.TextArea placeholder="请输入离职原因" rows={4} />
-              </Form.Item>
-            </>
-          )}
+          {activeTab === 'resignation' ? (
+            <Row gutter={16}>
+              <Col xs={24} md={12}>
+                <Form.Item name="user_id" label="员工 ID" rules={[{ required: true, message: '请输入员工 ID' }]}>
+                  <Input placeholder="请输入员工 ID" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="user_name" label="员工姓名" rules={[{ required: true, message: '请输入员工姓名' }]}>
+                  <Input placeholder="请输入员工姓名" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="department_id" label="部门" rules={[{ required: true, message: '请选择部门' }]}>
+                  <Select showSearch optionFilterProp="label" options={departmentOptions} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="position" label="岗位" rules={[{ required: true, message: '请输入岗位' }]}>
+                  <Input placeholder="请输入岗位" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="resign_date" label="离职日期" rules={[{ required: true, message: '请选择离职日期' }]}>
+                  <DatePicker style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item
+                  name="last_working_day"
+                  label="最后工作日"
+                  rules={[{ required: true, message: '请选择最后工作日' }]}
+                >
+                  <DatePicker style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={24}>
+                <Form.Item name="resign_reason" label="离职原因" rules={[{ required: true, message: '请输入离职原因' }]}>
+                  <TextArea rows={4} placeholder="请输入离职原因" />
+                </Form.Item>
+              </Col>
+            </Row>
+          ) : null}
 
-          {activeTab === 'onboarding' && (
-            <>
-              <Form.Item
-                name="employee_id"
-                label="员工工号"
-                rules={[{ required: true, message: '请输入员工工号' }]}
-              >
-                <Input placeholder="请输入员工工号" />
-              </Form.Item>
-              <Form.Item
-                name="name"
-                label="姓名"
-                rules={[{ required: true, message: '请输入姓名' }]}
-              >
-                <Input placeholder="请输入姓名" />
-              </Form.Item>
-              <Form.Item
-                name="gender"
-                label="性别"
-              >
-                <Select placeholder="请选择性别">
-                  <Option value="男">男</Option>
-                  <Option value="女">女</Option>
-                </Select>
-              </Form.Item>
-              <Form.Item
-                name="birth_date"
-                label="出生日期"
-              >
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
-              </Form.Item>
-              <Form.Item
-                name="id_card_number"
-                label="身份证号"
-              >
-                <Input placeholder="请输入身份证号" />
-              </Form.Item>
-              <Form.Item
-                name="mobile"
-                label="联系电话"
-              >
-                <Input placeholder="请输入联系电话" />
-              </Form.Item>
-              <Form.Item
-                name="email"
-                label="邮箱"
-              >
-                <Input placeholder="请输入邮箱" />
-              </Form.Item>
-              <Form.Item
-                name="department_id"
-                label="部门"
-                rules={[{ required: true, message: '请选择部门' }]}
-              >
-                <Select
-                  showSearch
-                  placeholder="请选择部门"
-                  filterOption={(input, option) => (option?.label as string)?.includes(input)}
-                  options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
-                  onChange={(value: string) => form.setFieldsValue({ department_name: deptNameMap[value] || '' })}
-                />
-              </Form.Item>
-              <Form.Item name="department_name" hidden><Input /></Form.Item>
-              <Form.Item
-                name="position"
-                label="职位"
-                rules={[{ required: true, message: '请输入职位' }]}
-              >
-                <Input placeholder="请输入职位" />
-              </Form.Item>
-              <Form.Item
-                name="entry_date"
-                label="入职日期"
-                rules={[{ required: true, message: '请选择入职日期' }]}
-              >
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
-              </Form.Item>
-              <Form.Item
-                name="employment_type"
-                label="雇佣类型"
-                rules={[{ required: true, message: '请选择雇佣类型' }]}
-              >
-                <Select placeholder="请选择雇佣类型">
-                  <Option value="全职">全职</Option>
-                  <Option value="兼职">兼职</Option>
-                  <Option value="实习">实习</Option>
-                </Select>
-              </Form.Item>
-              <Form.Item
-                name="probation_end_date"
-                label="试用期结束日期"
-              >
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
-              </Form.Item>
-              <Form.Item
-                name="emergency_contact"
-                label="紧急联系人"
-              >
-                <Input placeholder="请输入紧急联系人" />
-              </Form.Item>
-              <Form.Item
-                name="emergency_phone"
-                label="紧急联系电话"
-              >
-                <Input placeholder="请输入紧急联系电话" />
-              </Form.Item>
-              <Form.Item
-                name="education"
-                label="学历"
-              >
-                <Select placeholder="请选择学历">
-                  <Option value="高中">高中</Option>
-                  <Option value="大专">大专</Option>
-                  <Option value="本科">本科</Option>
-                  <Option value="硕士">硕士</Option>
-                  <Option value="博士">博士</Option>
-                </Select>
-              </Form.Item>
-              <Form.Item
-                name="graduate_school"
-                label="毕业院校"
-              >
-                <Input placeholder="请输入毕业院校" />
-              </Form.Item>
-              <Form.Item
-                name="major"
-                label="专业"
-              >
-                <Input placeholder="请输入专业" />
-              </Form.Item>
-            </>
-          )}
+          {activeTab === 'onboarding' ? (
+            <Row gutter={16}>
+              <Col xs={24} md={12}>
+                <Form.Item name="employee_id" label="档案工号" rules={[{ required: true, message: '请输入档案工号' }]}>
+                  <Input placeholder="请输入档案工号" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="name" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}>
+                  <Input placeholder="请输入姓名" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="gender" label="性别">
+                  <Select
+                    allowClear
+                    options={[
+                      { label: '男', value: '男' },
+                      { label: '女', value: '女' },
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="birth_date" label="出生日期">
+                  <DatePicker style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="id_card_number" label="身份证号">
+                  <Input placeholder="请输入身份证号" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="mobile" label="手机号">
+                  <Input placeholder="请输入手机号" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="email" label="邮箱">
+                  <Input placeholder="请输入邮箱" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="department_id" label="部门" rules={[{ required: true, message: '请选择部门' }]}>
+                  <Select showSearch optionFilterProp="label" options={departmentOptions} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="position" label="岗位" rules={[{ required: true, message: '请输入岗位' }]}>
+                  <Input placeholder="请输入岗位" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="entry_date" label="入职日期" rules={[{ required: true, message: '请选择入职日期' }]}>
+                  <DatePicker style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item
+                  name="employment_type"
+                  label="用工类型"
+                  rules={[{ required: true, message: '请选择用工类型' }]}
+                >
+                  <Select allowClear options={employmentTypeOptions.map((item) => ({ label: item, value: item }))} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="probation_end_date" label="试用期结束日期">
+                  <DatePicker style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="emergency_contact" label="紧急联系人">
+                  <Input placeholder="请输入紧急联系人" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="emergency_phone" label="紧急联系电话">
+                  <Input placeholder="请输入紧急联系电话" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="education" label="学历">
+                  <Select allowClear options={educationOptions.map((item) => ({ label: item, value: item }))} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="graduate_school" label="毕业院校">
+                  <Input placeholder="请输入毕业院校" />
+                </Form.Item>
+              </Col>
+              <Col span={24}>
+                <Form.Item name="major" label="专业">
+                  <Input placeholder="请输入专业" />
+                </Form.Item>
+              </Col>
+            </Row>
+          ) : null}
         </Form>
+      </Modal>
+
+      <Modal
+        title="台账详情"
+        open={Boolean(detailState)}
+        onCancel={() => setDetailState(null)}
+        footer={[
+          <Button key="close" onClick={() => setDetailState(null)}>
+            关闭
+          </Button>,
+        ]}
+        width={760}
+      >
+        {renderDetailContent()}
       </Modal>
     </div>
   )

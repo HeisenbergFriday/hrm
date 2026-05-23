@@ -165,7 +165,31 @@ AI 文档更新：
 
 ### 近期模块变更提示
 
-- 加班/调休链路已扩展为“匹配、本地余额、钉钉同步”三段状态模型，核心涉及：
+- **绩效管理模块已扩展为目标设定与多级确认流程**，全栈覆盖：指标库→绩效活动→目标设定/审批→员工自评→主管评分→员工确认→主管确认→HR确认→锁定/归档，核心涉及：
+  `internal/api/performance_handlers.go`、
+  `internal/service/performance_service.go`、
+  `internal/service/performance_indicator_service.go`、
+  `internal/database/performance_models.go`、
+  `internal/repository/performance_repository.go`、
+  `internal/repository/performance_indicator_repository.go`、
+  `internal/repository/performance_goal_record_repository.go`、
+  `internal/repository/performance_goal_approval_repository.go`、
+  `frontend/src/pages/PerformanceOverview.tsx`、
+  `frontend/src/pages/PerformanceIndicatorLibrary.tsx`、
+  `frontend/src/pages/PerformanceGoalSetting.tsx`、
+  `frontend/src/pages/PerformanceSelfEval.tsx`、
+  `frontend/src/pages/PerformanceManagerEval.tsx`、
+  `frontend/src/pages/PerformanceResultView.tsx`、
+  `frontend/src/services/api.ts`（`performanceAPI`）
+  User 模型新增 `manager_user_id`/`manager_name` 字段支撑绩效主管关系
+- 排班同步策略已调整为全员显式推送（含默认班次员工），休息日写入 `ShiftID=0`，涉及：
+  `internal/service/week_schedule_service.go`
+- 钉钉企业消息通知能力已接入（`SendCorpMessageToUser`、`IsNotifiableUserID`），绩效提醒与评分通知依赖此能力，涉及：
+  `internal/dingtalk/dingtalk.go`
+- 考勤同步已修复时区问题（改用 CST 固定时区），并支持 `force` 参数强制重新拉取，涉及：
+  `internal/api/handlers.go`（`SyncAttendance`）、
+  `internal/service/attendance_service.go`
+- 加班/调休链路已扩展为”匹配、本地余额、钉钉同步”三段状态模型，核心涉及：
   `frontend/src/pages/LeaveOvertime.tsx`、
   `frontend/src/services/api.ts`、
   `internal/api/leave_handlers.go`、

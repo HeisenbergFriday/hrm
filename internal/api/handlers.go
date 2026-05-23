@@ -1579,6 +1579,7 @@ func SyncAttendance(c *gin.Context) {
 	var req struct {
 		StartDate string `json:"start_date"`
 		EndDate   string `json:"end_date"`
+		Force     bool   `json:"force"` // true 时先删除该范围内旧记录再重新拉取
 	}
 	c.ShouldBindJSON(&req)
 
@@ -1587,6 +1588,21 @@ func SyncAttendance(c *gin.Context) {
 	}
 	if req.EndDate == "" {
 		req.EndDate = time.Now().Format("2006-01-02")
+	}
+
+	if req.Force {
+		cst := time.FixedZone("CST", 8*3600)
+		start, err1 := time.ParseInLocation("2006-01-02", req.StartDate, cst)
+		end, err2 := time.ParseInLocation("2006-01-02", req.EndDate, cst)
+		if err1 != nil || err2 != nil {
+			c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "日期格式错误"})
+			return
+		}
+		end = end.AddDate(0, 0, 1) // 包含 end 当天
+		if err := database.DB.Where("check_time >= ? AND check_time < ?", start, end).Delete(&database.Attendance{}).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "清理旧记录失败: " + err.Error()})
+			return
+		}
 	}
 
 	syncService := service.NewSyncService(database.DB)
@@ -1633,7 +1649,7 @@ func SyncAttendance(c *gin.Context) {
 		if r.CheckType == "OffDuty" {
 			checkType = "下班"
 		}
-		checkTime, _ := time.Parse("2006-01-02 15:04:05", r.UserCheckTime)
+		checkTime, _ := time.ParseInLocation("2006-01-02 15:04:05", r.UserCheckTime, time.FixedZone("CST", 8*3600))
 
 		record := &database.Attendance{
 			UserID:    r.UserID,
@@ -2894,6 +2910,7 @@ func GetWeekCalendar(c *gin.Context) {
 	userID := c.Query("user_id")
 	departmentID := c.Query("department_id")
 	weeksStr := c.DefaultQuery("weeks", "8")
+	startDate := c.Query("start_date")
 
 	var weeks int
 	fmt.Sscanf(weeksStr, "%d", &weeks)
@@ -2902,7 +2919,7 @@ func GetWeekCalendar(c *gin.Context) {
 	}
 
 	svc := service.NewWeekScheduleService(database.DB)
-	calendar, err := svc.GetWeekCalendar(userID, departmentID, weeks)
+	calendar, err := svc.GetWeekCalendar(userID, departmentID, weeks, startDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,

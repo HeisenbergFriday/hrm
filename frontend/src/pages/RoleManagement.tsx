@@ -4,7 +4,7 @@ import { UsergroupAddOutlined, PlusOutlined, EditOutlined, DeleteOutlined, Reloa
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { permissionAPI } from '../services/api'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 interface Role {
   id: string
@@ -70,23 +70,27 @@ const RoleManagement: React.FC = () => {
       key: 'action',
       render: (_: any, record: Role) => (
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button type="link" icon={<EditOutlined />}>编辑</Button>
-          <Button type="link" danger icon={<DeleteOutlined />}>删除</Button>
+          <Button type="link" icon={<EditOutlined />} style={{ fontWeight: 600, color: '#4338ca' }}>编辑</Button>
+          <Button type="link" danger icon={<DeleteOutlined />} style={{ fontWeight: 600 }}>删除</Button>
         </div>
       ),
     },
   ]
 
   return (
-    <div>
-      <Title level={4}>角色管理</Title>
+    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+        <UsergroupAddOutlined style={{ color: '#4338ca', marginRight: 8 }} />角色管理
+      </h2>
+      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>管理系统角色配置</Text>
       <Card
+        style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
         extra={
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading}>
+            <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading} style={{ borderRadius: 8, fontWeight: 600 }}>
               刷新
             </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)} style={{ borderRadius: 8, fontWeight: 600 }}>
               新建角色
             </Button>
           </div>
@@ -104,7 +108,7 @@ const RoleManagement: React.FC = () => {
               type="error"
               showIcon
               action={
-                <Button size="small" onClick={() => refetch()}>
+                <Button size="small" onClick={() => refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>
                   重试
                 </Button>
               }
@@ -116,11 +120,11 @@ const RoleManagement: React.FC = () => {
             dataSource={rolesData.data.items as Role[]}
             rowKey="id"
             pagination={{
-              showTotal: (total: number) => `共 ${total} 个角色`,
+              showTotal: (v: number) => <span style={{ color: '#6b7280' }}>共 {v} 条</span>,
             }}
           />
         ) : (
-          <Empty description="暂无角色" />
+          <Empty description="暂无角色" imageStyle={{ height: 80 }} />
         )}
       </Card>
 
@@ -129,7 +133,7 @@ const RoleManagement: React.FC = () => {
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         footer={[
-          <Button key="cancel" onClick={() => setModalVisible(false)}>
+          <Button key="cancel" onClick={() => setModalVisible(false)} style={{ borderRadius: 8, fontWeight: 600 }}>
             取消
           </Button>,
           <Button
@@ -137,6 +141,7 @@ const RoleManagement: React.FC = () => {
             type="primary"
             onClick={handleCreateRole}
             loading={createRoleMutation.isPending}
+            style={{ borderRadius: 8, fontWeight: 600 }}
           >
             确认
           </Button>,
