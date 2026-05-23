@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert, Card, Col, Row, Space, Statistic, Table, Tag, Typography, Button, Modal, Form, Input, InputNumber,
-  Select, message, Spin, Drawer, Popconfirm, Tooltip, Divider, Descriptions, Progress, Tabs
+  Select, message, Spin, Drawer, Tooltip, Divider, Descriptions, Steps
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { Dayjs } from 'dayjs'
@@ -16,7 +16,7 @@ import {
   userAPI,
 } from '../services/api'
 import PerformanceActivityEditor from '../components/PerformanceActivityEditor'
-import { BarChartOutlined, BellOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import { BarChartOutlined, PlusOutlined } from '@ant-design/icons'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -84,21 +84,19 @@ const PARTICIPANT_STATUS_MAP: Record<string, { label: string; color: string }> =
   employee_confirmed: { label: '已员工确认', color: 'blue' },
   manager_confirmed: { label: '已主管确认', color: 'orange' },
   hr_confirmed: { label: '已HR确认', color: 'purple' },
-  locked: { label: '已冻结', color: 'error' },
+  locked: { label: '已冻结', color: 'orange' },
   result_confirmed: { label: '已确认', color: 'success' },
   inactive: { label: '已离职', color: 'error' },
   removed_from_scope: { label: '已移除', color: 'error' },
 }
 
 const ACTIVITY_FLOW = [
-  { status: 'draft', label: '草稿' },
   { status: 'target_setting', label: '目标设定' },
-  { status: 'self_evaluation', label: '员工自评' },
-  { status: 'manager_evaluation', label: '主管评分' },
+  { status: 'self_evaluation', label: '自评' },
+  { status: 'manager_evaluation', label: '评分' },
   { status: 'employee_confirmation', label: '员工确认' },
   { status: 'manager_confirmation', label: '主管确认' },
   { status: 'hr_confirmation', label: 'HR确认' },
-  { status: 'locked', label: '锁定' },
   { status: 'archived', label: '归档' },
 ]
 
@@ -108,6 +106,8 @@ function formatDateRange(start?: string, end?: string) {
 }
 
 function getActivityStepIndex(status?: string) {
+  if (status === 'locked') return ACTIVITY_FLOW.length - 1 // archived step
+  if (status === 'draft') return 0
   const index = ACTIVITY_FLOW.findIndex(item => item.status === status)
   return index >= 0 ? index : 0
 }
@@ -120,10 +120,10 @@ function getParticipantStatusMeta(status?: string) {
   return PARTICIPANT_STATUS_MAP[status || ''] || { label: status || '-', color: 'default' }
 }
 
-const compactButtonStyle: React.CSSProperties = { marginRight: 0 }
-
 const PerformanceOverview: React.FC = () => {
   const navigate = useNavigate()
+  const [, forceRender] = React.useState(0)
+  const forceUpdate = () => forceRender(n => n + 1)
   const [activities, setActivities] = useState<PerformanceActivity[]>([])
   const [activitiesLoading, setActivitiesLoading] = useState(false)
   const [activitiesTotal, setActivitiesTotal] = useState(0)
@@ -134,25 +134,6 @@ const PerformanceOverview: React.FC = () => {
   const [departments, setDepartments] = useState<any[]>([])
   const [users, setUsers] = useState<any[]>([])
   const [scopeOptionsLoading, setScopeOptionsLoading] = useState(false)
-
-  // 指标库管理
-  const [indicatorLibraries, setIndicatorLibraries] = useState<any[]>([])
-  const [indicatorLibrariesLoading, setIndicatorLibrariesLoading] = useState(false)
-  const [indicatorLibrariesTotal, setIndicatorLibrariesTotal] = useState(0)
-  const [indicatorLibraryModalVisible, setIndicatorLibraryModalVisible] = useState(false)
-  const [editingIndicatorLibrary, setEditingIndicatorLibrary] = useState<any | null>(null)
-  const [indicatorLibraryForm] = Form.useForm()
-
-  // 指标项管理
-  const [indicatorItems, setIndicatorItems] = useState<any[]>([])
-  const [indicatorItemsLoading, setIndicatorItemsLoading] = useState(false)
-  const [currentIndicatorLibrary, setCurrentIndicatorLibrary] = useState<any | null>(null)
-  const [indicatorItemModalVisible, setIndicatorItemModalVisible] = useState(false)
-  const [editingIndicatorItem, setEditingIndicatorItem] = useState<any | null>(null)
-  const [indicatorItemForm] = Form.useForm()
-
-  // 当前 Tab
-  const [activeTab, setActiveTab] = useState('activities')
 
   // 活动详情抽屉
   const [detailDrawerVisible, setDetailDrawerVisible] = useState(false)
@@ -196,35 +177,6 @@ const PerformanceOverview: React.FC = () => {
     }
   }, [])
 
-  // 加载指标库列表
-  const loadIndicatorLibraries = useCallback(async () => {
-    setIndicatorLibrariesLoading(true)
-    try {
-      const res: any = await performanceAPI.getIndicatorLibraries({ page: 1, page_size: 100 })
-      const data = res.data || res
-      setIndicatorLibraries(data.items || [])
-      setIndicatorLibrariesTotal(data.total || 0)
-    } catch (err: any) {
-      message.error(err?.response?.data?.message || '加载指标库列表失败')
-    } finally {
-      setIndicatorLibrariesLoading(false)
-    }
-  }, [])
-
-  // 加载指标项列表
-  const loadIndicatorItems = useCallback(async (libraryId: number) => {
-    setIndicatorItemsLoading(true)
-    try {
-      const res: any = await performanceAPI.getIndicatorItems(libraryId)
-      const data = res.data || res
-      setIndicatorItems(data.items || [])
-    } catch (err: any) {
-      message.error(err?.response?.data?.message || '加载指标项列表失败')
-    } finally {
-      setIndicatorItemsLoading(false)
-    }
-  }, [])
-
   // 加载活动适用范围选项
   const loadScopeOptions = useCallback(async () => {
     setScopeOptionsLoading(true)
@@ -255,23 +207,10 @@ const PerformanceOverview: React.FC = () => {
     }
   }, [])
 
-  // Tab 切换时加载数据
+  // 首次加载活动列表
   React.useEffect(() => {
-    if (activeTab === 'activities') {
-      loadActivities()
-    } else if (activeTab === 'indicatorLibraries') {
-      loadIndicatorLibraries()
-    }
-  }, [activeTab, loadActivities, loadIndicatorLibraries])
-
-  // 指标库需要部门选项时加载
-  React.useEffect(() => {
-    if (activeTab === 'indicatorLibraries' && departments.length === 0) {
-      departmentAPI.getDepartments().then(res => {
-        setDepartments(getListFromResponse(res, ['departments', 'items']))
-      }).catch(() => {})
-    }
-  }, [activeTab, departments.length])
+    loadActivities()
+  }, [loadActivities])
 
   // 加载活动详情
   const loadActivityDetail = async (activity: PerformanceActivity) => {
@@ -474,7 +413,6 @@ const PerformanceOverview: React.FC = () => {
   const openActivityModal = (activity?: PerformanceActivity) => {
     setEditingActivity(activity || null)
     loadScopeOptions()
-    loadIndicatorLibraries()
     if (activity) {
       form.setFieldsValue({
         name: activity.name,
@@ -501,115 +439,6 @@ const PerformanceOverview: React.FC = () => {
     window.requestAnimationFrame(() => {
       document.getElementById('performance-activity-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
-  }
-
-  // 打开指标库表单
-  const openIndicatorLibraryModal = (library?: any) => {
-    setEditingIndicatorLibrary(library || null)
-    // 确保部门选项已加载
-    if (departments.length === 0) {
-      departmentAPI.getDepartments().then(res => {
-        setDepartments(getListFromResponse(res, ['departments', 'items']))
-      }).catch(() => {})
-    }
-    if (library) {
-      indicatorLibraryForm.setFieldsValue({
-        name: library.name,
-        description: library.description,
-        department_id: library.department_id,
-        department_name: library.department_name,
-        default_cycle: library.default_cycle,
-      })
-    } else {
-      indicatorLibraryForm.resetFields()
-    }
-    setIndicatorLibraryModalVisible(true)
-  }
-
-  // 保存指标库
-  const handleSaveIndicatorLibrary = async () => {
-    try {
-      const values = await indicatorLibraryForm.validateFields()
-      // 自动填充部门名称
-      if (values.department_id && !values.department_name) {
-        const dept = departments.find(d => String(d.department_id || d.id) === String(values.department_id))
-        if (dept) values.department_name = dept.name || dept.department_name || ''
-      }
-      if (editingIndicatorLibrary) {
-        await performanceAPI.updateIndicatorLibrary(editingIndicatorLibrary.id, values)
-        message.success('指标库更新成功')
-      } else {
-        await performanceAPI.createIndicatorLibrary(values)
-        message.success('指标库创建成功')
-      }
-      setIndicatorLibraryModalVisible(false)
-      loadIndicatorLibraries()
-    } catch (err: any) {
-      if (err.errorFields) return
-      message.error(err?.response?.data?.message || '保存失败')
-    }
-  }
-
-  // 打开指标项表单
-  const openIndicatorItemModal = (item?: any, libraryId?: number) => {
-    setEditingIndicatorItem(item || null)
-    if (item) {
-      indicatorItemForm.setFieldsValue({
-        name: item.name,
-        description: item.description,
-        section_type: item.section_type,
-        weight: item.weight,
-        is_default: item.is_default,
-        sort_order: item.sort_order,
-      })
-    } else {
-      indicatorItemForm.resetFields()
-      indicatorItemForm.setFieldsValue({
-        library_id: libraryId,
-        section_type: 'quantitative',
-        weight: 0,
-        is_default: false,
-        sort_order: 0,
-      })
-    }
-    setIndicatorItemModalVisible(true)
-  }
-
-  // 保存指标项
-  const handleSaveIndicatorItem = async () => {
-    try {
-      const values = await indicatorItemForm.validateFields()
-      if (editingIndicatorItem) {
-        await performanceAPI.updateIndicatorItem(editingIndicatorItem.id, values)
-        message.success('指标项更新成功')
-      } else {
-        await performanceAPI.createIndicatorItem({
-          library_id: currentIndicatorLibrary?.id,
-          ...values,
-        })
-        message.success('指标项创建成功')
-      }
-      setIndicatorItemModalVisible(false)
-      if (currentIndicatorLibrary) {
-        loadIndicatorItems(currentIndicatorLibrary.id)
-      }
-    } catch (err: any) {
-      if (err.errorFields) return
-      message.error(err?.response?.data?.message || '保存失败')
-    }
-  }
-
-  // 删除指标项
-  const handleDeleteIndicatorItem = async (itemId: number) => {
-    try {
-      await performanceAPI.deleteIndicatorItem(itemId)
-      message.success('删除成功')
-      if (currentIndicatorLibrary) {
-        loadIndicatorItems(currentIndicatorLibrary.id)
-      }
-    } catch (err: any) {
-      message.error(err?.response?.data?.message || '删除失败')
-    }
   }
 
   // 活动列表操作按钮
@@ -680,81 +509,133 @@ const PerformanceOverview: React.FC = () => {
     },
     { title: '自评时间', key: 'self_eval', width: 200, render: (_, r) => `${r.self_eval_start_at} ~ ${r.self_eval_end_at}` },
     { title: '主管评分时间', key: 'mgr_eval', width: 200, render: (_, r) => `${r.manager_eval_start_at} ~ ${r.manager_eval_end_at}` },
-    { title: '操作', key: 'actions', fixed: 'right', width: 180, render: (_, record) => (
-      <Space size={4}>{getActionButtons(record)}</Space>
+    { title: '操作', key: 'actions', fixed: 'right', width: 220, render: (_, record) => (
+      <Space size={2} wrap>{getActionButtons(record)}</Space>
     )},
   ]
 
   // 参与人 columns
   const participantColumns: ColumnsType<PerformanceParticipant> = [
-    { title: '员工', dataIndex: 'employee_name', key: 'employee_name', width: 100 },
-    { title: '部门', dataIndex: 'department_name', key: 'department_name', width: 120, ellipsis: true },
-    { title: '岗位', dataIndex: 'position', key: 'position', width: 100, ellipsis: true },
-    { title: '直属主管', dataIndex: 'manager_name', key: 'manager_name', width: 100 },
+    { title: '员工', dataIndex: 'employee_name', key: 'employee_name', width: 80 },
+    { title: '部门', dataIndex: 'department_name', key: 'department_name', width: 110, ellipsis: true },
+    { title: '岗位', dataIndex: 'position', key: 'position', width: 90, ellipsis: true },
     {
-      title: '状态', dataIndex: 'status', key: 'status', width: 90,
-      render: (status: string, record: PerformanceParticipant) => {
+      title: '直属主管', dataIndex: 'manager_name', key: 'manager_name', width: 90,
+      render: (name: string, record: PerformanceParticipant) => {
+        if (!name && (record.manager_id === null || record.manager_id === undefined || record.manager_id === '')) {
+          return (
+            <Tooltip title="该员工未设置直属主管，无法进入绩效流程">
+              <Tag color="error" style={{ cursor: 'default' }}>未设置</Tag>
+            </Tooltip>
+          )
+        }
+        return name || '-'
+      }
+    },
+    {
+      title: '状态', dataIndex: 'status', key: 'status', width: 110,
+      render: (status: string) => {
         const s = PARTICIPANT_STATUS_MAP[status] || { label: status, color: 'default' }
+        return <Tag color={s.color}>{s.label}</Tag>
+      }
+    },
+    {
+      title: '自评分', dataIndex: 'self_score', key: 'self_score', width: 70,
+      render: (score: any) => {
+        if (score === null || score === undefined || score === '') return <Text type="secondary">-</Text>
+        const text = String(score)
+        const match = text.match(/^(\d+(?:\.\d+)?)(.*)$/)
+        if (!match) return <Text>{score}</Text>
+        const num = match[1]
+        const suffix = match[2]
         return (
-          <Space size={4}>
-            <Tag color={s.color}>{s.label}</Tag>
-            {record.manager_id === null || record.manager_id === undefined || record.manager_id === '' ? (
-              <Tooltip title="缺少主管">
-                <Tag color="error">无主管</Tag>
-              </Tooltip>
-            ) : null}
-          </Space>
+          <Tooltip title={suffix ? `分数 ${num}（${suffix.trim()}）` : undefined}>
+            <span>
+              <Text strong>{num}</Text>
+              {suffix && <Text type="secondary" style={{ fontSize: 11, marginLeft: 2 }}>{suffix}</Text>}
+            </span>
+          </Tooltip>
         )
       }
     },
-    { title: '自评分', dataIndex: 'self_score', key: 'self_score', width: 70 },
-    { title: '主管分', dataIndex: 'manager_score', key: 'manager_score', width: 70 },
-    { title: '等级', dataIndex: 'final_level', key: 'final_level', width: 60, render: (v: string) => v || '-' },
     {
-      title: '操作', key: 'actions', fixed: 'right', width: 160,
+      title: '主管分', dataIndex: 'manager_score', key: 'manager_score', width: 70,
+      render: (score: any) => {
+        if (score === null || score === undefined || score === '') return <Text type="secondary">-</Text>
+        return <Text strong>{String(score)}</Text>
+      }
+    },
+    {
+      title: '等级', dataIndex: 'final_level', key: 'final_level', width: 50,
+      render: (v: string) => {
+        if (!v) return <Text type="secondary">-</Text>
+        const colorMap: Record<string, string> = { S: '#f50', A: '#1677ff', B: '#52c41a', C: '#faad14', D: '#ff4d4f' }
+        return <Tag color={colorMap[v] || 'default'}>{v}</Tag>
+      }
+    },
+    {
+      title: '操作', key: 'actions', fixed: 'right', width: 120,
       render: (_, record: PerformanceParticipant) => {
         const activityId = currentActivity?.id
         const isArchived = ['archived', 'locked'].includes(currentActivity?.status || '')
-        const canTarget = ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status)
-        const canSelfEval = ['target_set', 'self_submitted'].includes(record.status)
-        const canMgrEval = ['self_submitted', 'manager_submitted'].includes(record.status)
-        const canResultView = ['manager_submitted', 'employee_confirmed', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status)
+        if (!activityId) return null
 
-        return (
-          <Space size={4}>
-            <Button
-              size="small" type="link" disabled={isArchived || !canTarget || !activityId}
-              onClick={() => activityId && navigate(`/performance-goal-setting/${activityId}/${record.id}`)}
+        if (isArchived) {
+          return (
+            <Button size="small" type="link" style={{ fontSize: 13 }}
+              onClick={() => navigate(`/performance-result/${activityId}/${record.id}`)}
+            >查看</Button>
+          )
+        }
+
+        const links: React.ReactNode[] = []
+        const linkStyle = { fontSize: 13, padding: '0 2px' }
+
+        if (['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status)) {
+          links.push(
+            <Button key="target" size="small" type="link" style={linkStyle}
+              onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}`)}
             >目标</Button>
-            <Button
-              size="small" type="link" disabled={isArchived || !canSelfEval || !activityId}
-              onClick={() => activityId && navigate(`/performance-self-eval/${activityId}/${record.id}`)}
+          )
+        }
+        if (['target_set', 'self_submitted'].includes(record.status)) {
+          links.push(
+            <Button key="self" size="small" type="link" style={linkStyle}
+              onClick={() => navigate(`/performance-self-eval/${activityId}/${record.id}`)}
             >自评</Button>
-            <Button
-              size="small" type="link" disabled={isArchived || !canMgrEval || !activityId}
-              onClick={() => activityId && navigate(`/performance-manager-eval/${activityId}/${record.id}`)}
+          )
+        }
+        if (['self_submitted', 'manager_submitted'].includes(record.status)) {
+          links.push(
+            <Button key="mgr" size="small" type="link" style={linkStyle}
+              onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}
             >评分</Button>
-            <Button
-              size="small" type="link" disabled={isArchived || !canResultView || !activityId}
-              onClick={() => activityId && navigate(`/performance-result/${activityId}/${record.id}`)}
+          )
+        }
+        if (['manager_submitted', 'employee_confirmed', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status)) {
+          links.push(
+            <Button key="result" size="small" type="link" style={linkStyle}
+              onClick={() => navigate(`/performance-result/${activityId}/${record.id}`)}
             >结果</Button>
-            {record.status === 'target_pending_approval' && activityId && (
-              <Button
-                size="small"
-                type="link"
-                onClick={async () => {
-                  try {
-                    await performanceAPI.approveGoalRecords(record.id)
-                    message.success('目标已通过')
-                    if (currentActivity) loadActivityDetail(currentActivity)
-                  } catch (err: any) {
-                    message.error(err?.response?.data?.message || '审批失败')
-                  }
-                }}
-              >通过</Button>
-            )}
-          </Space>
-        )
+          )
+        }
+        if (record.status === 'target_pending_approval') {
+          links.push(
+            <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: '#1677ff' }}
+              onClick={async () => {
+                try {
+                  await performanceAPI.approveGoalRecords(record.id)
+                  message.success('目标已通过')
+                  if (currentActivity) loadActivityDetail(currentActivity)
+                } catch (err: any) {
+                  message.error(err?.response?.data?.message || '审批失败')
+                }
+              }}
+            >通过</Button>
+          )
+        }
+
+        return <Space size={0}>{links}</Space>
       }
     },
   ]
@@ -779,9 +660,7 @@ const PerformanceOverview: React.FC = () => {
         style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
         styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
       >
-      <Tabs activeKey={activeTab} onChange={setActiveTab}>
-        <Tabs.TabPane tab="绩效活动" key="activities">
-          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             {[
               { title: '绩效活动总数', value: activitiesTotal, color: '#4338ca', bg: '#eef2ff' },
               { title: '进行中活动', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe' },
@@ -791,22 +670,22 @@ const PerformanceOverview: React.FC = () => {
               <Col xs={24} sm={12} lg={6} key={item.title}>
                 <div style={{
                   background: '#fff',
-                  borderRadius: 14,
-                  padding: '20px 22px',
-                  boxShadow: '0 2px 10px rgba(0,0,0,0.05)',
+                  borderRadius: 10,
+                  padding: '18px 20px',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
                   border: '1px solid #e5e7eb',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 14,
                 }}>
                   <div style={{
-                    width: 48, height: 48, borderRadius: 12, background: item.bg,
+                    width: 44, height: 44, borderRadius: 10, background: item.bg,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 20, color: item.color, fontWeight: 700, flexShrink: 0,
+                    fontSize: 22, color: item.color, fontWeight: 700, flexShrink: 0,
                   }}>
                     {item.value}
                   </div>
-                  <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: 500 }}>{item.title}</Text>
+                  <Text style={{ color: '#374151', fontSize: 13, fontWeight: 500 }}>{item.title}</Text>
                 </div>
               </Col>
             ))}
@@ -817,8 +696,8 @@ const PerformanceOverview: React.FC = () => {
             editing={Boolean(editingActivity)}
             form={form}
             saving={activitySaving}
-            indicatorLibraries={indicatorLibraries}
-            indicatorLibrariesLoading={indicatorLibrariesLoading}
+            indicatorLibraries={[]}
+            indicatorLibrariesLoading={false}
             departmentOptions={departments.flatMap(department => {
               const option = getDepartmentOption(department)
               return option ? [option] : []
@@ -875,84 +754,7 @@ const PerformanceOverview: React.FC = () => {
               />
             </Spin>
           </Card>
-        </Tabs.TabPane>
 
-        <Tabs.TabPane tab="指标库管理" key="indicatorLibraries">
-          <Card
-            title="指标库列表"
-            extra={
-              <Space>
-                <Button type="primary" onClick={() => openIndicatorLibraryModal()}>新建指标库</Button>
-                <Button onClick={() => loadIndicatorLibraries()} disabled={indicatorLibrariesLoading}>刷新</Button>
-              </Space>
-            }
-          >
-            <Spin spinning={indicatorLibrariesLoading}>
-              <Table
-                dataSource={indicatorLibraries}
-                rowKey="id"
-                size="small"
-                columns={[
-                  { title: '指标库名称', dataIndex: 'name', key: 'name' },
-                  { title: '所属部门', dataIndex: 'department_name', key: 'department_name' },
-                  { title: '默认周期', dataIndex: 'default_cycle', key: 'default_cycle' },
-                  { title: '状态', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color={status === 'active' ? 'green' : 'default'}>{status === 'active' ? '启用' : '归档'}</Tag> },
-                  {
-                    title: '操作', key: 'actions', render: (_, record) => (
-                      <Space size="small">
-                        <Button size="small" onClick={() => { setCurrentIndicatorLibrary(record); loadIndicatorItems(record.id); }}>管理指标项</Button>
-                        <Button size="small" onClick={() => openIndicatorLibraryModal(record)}>编辑</Button>
-                        <Popconfirm title="确定归档此指标库？" onConfirm={async () => { await performanceAPI.archiveIndicatorLibrary(record.id); loadIndicatorLibraries(); }}>
-                          <Button size="small" danger>归档</Button>
-                        </Popconfirm>
-                      </Space>
-                    )
-                  }
-                ]}
-                pagination={{ pageSize: 10, total: indicatorLibrariesTotal }}
-              />
-            </Spin>
-          </Card>
-
-          {/* 指标项管理 */}
-          {currentIndicatorLibrary && (
-            <Card
-              title={`${currentIndicatorLibrary.name} - 指标项`}
-              style={{ marginTop: 16 }}
-              extra={
-                <Space>
-                  <Button type="primary" onClick={() => openIndicatorItemModal(undefined, currentIndicatorLibrary.id)}>添加指标项</Button>
-                  <Button onClick={() => setCurrentIndicatorLibrary(null)}>关闭</Button>
-                </Space>
-              }
-            >
-              <Spin spinning={indicatorItemsLoading}>
-                <Table
-                  dataSource={indicatorItems}
-                  rowKey="id"
-                  size="small"
-                  columns={[
-                    { title: '指标名称', dataIndex: 'name', key: 'name' },
-                    { title: '类型', dataIndex: 'section_type', key: 'section_type', render: (type: string) => ({ quantitative: '量化指标', key_action: '关键行动', bonus_penalty: '附加项' }[type] || type) },
-                    { title: '权重', dataIndex: 'weight', key: 'weight', render: (w: number) => `${w}%` },
-                    { title: '默认', dataIndex: 'is_default', key: 'is_default', render: (d: boolean) => d ? '是' : '否' },
-                    {
-                      title: '操作', key: 'actions', render: (_, record) => (
-                        <Space size="small">
-                          <Button size="small" onClick={() => openIndicatorItemModal(record)}>编辑</Button>
-                          <Popconfirm title="确定删除此指标项？" onConfirm={() => handleDeleteIndicatorItem(record.id)}>
-                            <Button size="small" danger>删除</Button>
-                          </Popconfirm>
-                        </Space>
-                      )
-                    }
-                  ]}
-                />
-              </Spin>
-            </Card>
-          )}
-        </Tabs.TabPane>
-      </Tabs>
       </Card>
 
       {/* 活动详情抽屉 */}
@@ -962,9 +764,20 @@ const PerformanceOverview: React.FC = () => {
         width={1000}
         open={detailDrawerVisible}
         onClose={() => { setDetailDrawerVisible(false); setCurrentActivity(null); setParticipants([]); setSummary(null); setDistributionCheck(null); setDistributionRules([]); }}
+        styles={{ footer: { paddingTop: 12 } }}
       >
         {currentActivity && (
           <>
+            <Steps
+              current={getActivityStepIndex(currentActivity.status)}
+              items={ACTIVITY_FLOW.map(item => ({
+                title: item.label,
+                status: item.status === currentActivity.status ? 'process'
+                  : getActivityStepIndex(currentActivity.status) > ACTIVITY_FLOW.findIndex(f => f.status === item.status) ? 'finish' : 'wait'
+              }))}
+              style={{ marginBottom: 20 }}
+              size="small"
+            />
             <Descriptions column={3} size="small" style={{ marginBottom: 16 }} bordered>
               <Descriptions.Item label="状态">
                 <Tag color={STATUS_MAP[currentActivity.status]?.color}>{STATUS_MAP[currentActivity.status]?.label}</Tag>
@@ -976,102 +789,107 @@ const PerformanceOverview: React.FC = () => {
               <Descriptions.Item label="结果确认">{currentActivity.result_confirm_start_at} ~ {currentActivity.result_confirm_end_at}</Descriptions.Item>
             </Descriptions>
 
-            {/* 操作按钮 */}
-            <Space style={{ marginBottom: 16 }} wrap>
+            {/* 操作按钮 - 紧凑布局 */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
               {currentActivity.status === 'draft' && (
                 <>
-                  <Button type="primary" onClick={() => handleActivityAction('open-target-setting', currentActivity)}>开启目标设定</Button>
-                  <Button onClick={() => handleActivityAction('publish', currentActivity)}>直接开启自评（兼容）</Button>
-                  <Button onClick={() => handleActivityAction('refresh', currentActivity)}>刷新参与人</Button>
+                  <Button type="primary" size="small" onClick={() => handleActivityAction('open-target-setting', currentActivity)}>开启目标设定</Button>
+                  <Button size="small" onClick={() => handleActivityAction('publish', currentActivity)}>直接开启自评</Button>
                 </>
               )}
               {currentActivity.status === 'target_setting' && (
-                <>
-                  <Button type="primary" onClick={() => handleActivityAction('open-self-evaluation', currentActivity)}>开启自评</Button>
-                  <Button onClick={() => handleActivityAction('refresh', currentActivity)}>刷新参与人</Button>
-                </>
+                <Button type="primary" size="small" onClick={() => handleActivityAction('open-self-evaluation', currentActivity)}>开启自评</Button>
               )}
               {currentActivity.status === 'self_evaluation' && (
                 <>
-                  <Button onClick={async () => {
-                    try {
-                      await performanceAPI.sendSelfEvalReminder(currentActivity.id)
-                      message.success('已发送自评提醒')
-                    } catch (err: any) {
-                      message.error(err?.response?.data?.message || '发送提醒失败')
-                    }
-                  }}>提醒自评</Button>
-                  <Button type="primary" onClick={() => handleActivityAction('open-manager-evaluation', currentActivity)}>开启主管评分</Button>
-                  <Button onClick={() => handleActivityAction('refresh', currentActivity)}>刷新参与人</Button>
+                  <Button type="primary" size="small" onClick={() => handleActivityAction('open-manager-evaluation', currentActivity)}>开启主管评分</Button>
+                  <Button size="small" onClick={async () => { try { await performanceAPI.sendSelfEvalReminder(currentActivity.id); message.success('已发送自评提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒自评</Button>
                 </>
               )}
               {currentActivity.status === 'manager_evaluation' && (
                 <>
-                  <Button onClick={async () => {
-                    try {
-                      await performanceAPI.sendManagerEvalReminder(currentActivity.id)
-                      message.success('已发送评分提醒')
-                    } catch (err: any) {
-                      message.error(err?.response?.data?.message || '发送提醒失败')
-                    }
-                  }}>提醒评分</Button>
-                  <Button type="primary" onClick={() => handleActivityAction('open-employee-confirmation', currentActivity)}>开启员工确认</Button>
-                  <Button onClick={() => handleActivityAction('refresh', currentActivity)}>刷新参与人</Button>
-                  <Button onClick={() => setDistributionModalVisible(true)}>强制分布</Button>
-                  <Divider type="vertical" />
-                  <Button onClick={() => {
-                    const selectable = participants.filter(p => p.status === 'self_submitted' || p.status === 'manager_submitted')
-                    setBatchEvalSelected(selectable.map(p => p.id))
-                    setBatchEvalModalVisible(true)
-                  }}>批量评分</Button>
+                  <Button type="primary" size="small" onClick={() => handleActivityAction('open-employee-confirmation', currentActivity)}>开启员工确认</Button>
+                  <Button size="small" onClick={() => setDistributionModalVisible(true)}>强制分布</Button>
+                  <Button size="small" onClick={() => { const selectable = participants.filter(p => p.status === 'self_submitted' || p.status === 'manager_submitted'); setBatchEvalSelected(selectable.map(p => p.id)); setBatchEvalModalVisible(true) }}>批量评分</Button>
+                  <Button size="small" onClick={async () => { try { await performanceAPI.sendManagerEvalReminder(currentActivity.id); message.success('已发送评分提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒评分</Button>
                 </>
               )}
               {currentActivity.status === 'employee_confirmation' && (
-                <Button type="primary" onClick={() => handleActivityAction('open-manager-confirmation', currentActivity)}>开启主管确认</Button>
+                <Button type="primary" size="small" onClick={() => handleActivityAction('open-manager-confirmation', currentActivity)}>开启主管确认</Button>
               )}
               {currentActivity.status === 'manager_confirmation' && (
-                <Button type="primary" onClick={() => handleActivityAction('open-hr-confirmation', currentActivity)}>开启HR确认</Button>
+                <Button type="primary" size="small" onClick={() => handleActivityAction('open-hr-confirmation', currentActivity)}>开启HR确认</Button>
               )}
               {currentActivity.status === 'hr_confirmation' && (
-                <Button type="primary" danger onClick={() => handleActivityAction('lock', currentActivity)}>锁定活动</Button>
+                <Button type="primary" danger size="small" onClick={() => handleActivityAction('lock', currentActivity)}>锁定活动</Button>
               )}
               {currentActivity.status === 'locked' && (
-                <Button onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
+                <Button size="small" onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
               )}
               {currentActivity.status === 'result_confirmed' && (
-                <Button onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
+                <Button size="small" onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
               )}
-            </Space>
+              {['draft', 'target_setting', 'self_evaluation', 'manager_evaluation'].includes(currentActivity.status) && (
+                <Button size="small" onClick={() => handleActivityAction('refresh', currentActivity)}>刷新参与人</Button>
+              )}
+            </div>
 
-            <Divider style={{ margin: '12px 0' }}>统计摘要</Divider>
+            <Divider style={{ margin: '8px 0 10px' }} orientationMargin={0}>统计摘要</Divider>
             <Spin spinning={summaryLoading}>
               {summary ? (
-                <Row gutter={[12, 8]} style={{ marginBottom: 12 }}>
-                  <Col span={6}><Card size="small"><Statistic title="参与人数" value={summary.total_participants} /></Card></Col>
-                  <Col span={6}><Card size="small"><Statistic title="已自评" value={summary.self_submitted_count} /></Card></Col>
-                  <Col span={6}><Card size="small"><Statistic title="已评分" value={summary.manager_submitted_count} /></Card></Col>
-                  <Col span={6}><Card size="small"><Statistic title="已确认" value={summary.result_confirmed_count} /></Card></Col>
-                </Row>
+                <div style={{ display: 'flex', gap: 0, marginBottom: 10, borderRadius: 8, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+                  {[
+                    { title: '参与人数', value: summary.total_participants, color: '#4338ca', bg: '#eef2ff' },
+                    { title: '已自评', value: summary.self_submitted_count, color: '#0369a1', bg: '#e0f2fe' },
+                    { title: '已评分', value: summary.manager_submitted_count, color: '#b45309', bg: '#fef3c7' },
+                    { title: '已确认', value: summary.result_confirmed_count, color: '#15803d', bg: '#dcfce7' },
+                  ].map((item, idx) => (
+                    <div key={item.title} style={{
+                      flex: 1, padding: '10px 14px', textAlign: 'center',
+                      background: item.bg, borderRight: idx < 3 ? '1px solid #e5e7eb' : 'none',
+                    }}>
+                      <div style={{ fontSize: 22, fontWeight: 700, color: item.color, lineHeight: 1.2 }}>{item.value}</div>
+                      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{item.title}</div>
+                    </div>
+                  ))}
+                </div>
               ) : <Text type="secondary">暂无数据</Text>}
             </Spin>
 
             {distributionCheck && (
-              <Card size="small" style={{ marginBottom: 12 }}>
-                <Row gutter={[8, 8]}>
+              <Card size="small" style={{ marginBottom: 10 }}>
+                <Row gutter={[6, 6]}>
                   {['S', 'A', 'B', 'C', 'D'].map(level => {
                     const dist = distributionCheck.distribution?.[level]
                     if (!dist) return null
                     const statusColor = dist.status === 'exceeded' ? 'exception' : dist.status === 'warning' ? 'normal' : 'success'
+                    const bg = dist.status === 'exceeded' ? '#fff2f0' : dist.status === 'warning' ? '#fffbe6' : '#f6ffed'
+                    const barColor = dist.status === 'exceeded' ? '#ff4d4f' : dist.status === 'warning' ? '#faad14' : '#52c41a'
                     return (
-                      <Col span={4} key={level}>
-                        <Card size="small" style={{ textAlign: 'center', background: dist.status === 'exceeded' ? '#fff2f0' : dist.status === 'warning' ? '#fffbe6' : '#f6ffed' }}>
-                          <Text strong style={{ fontSize: 16 }}>{level}</Text>
-                          <br />
-                          <Text type="secondary">{dist.actual_count}/{dist.expected_count} 人</Text>
-                          <br />
-                          <Progress percent={Math.min(dist.progress, 100)} size="small" status={statusColor} showInfo={false} strokeWidth={6} />
-                          <Text type="secondary" style={{ fontSize: 10 }}>期望 {dist.expected_percent}%</Text>
-                        </Card>
+                      <Col span={4} key={level} style={{ minWidth: 0 }}>
+                        <div style={{
+                          textAlign: 'center', padding: '8px 4px', borderRadius: 8,
+                          background: bg, border: `1px solid ${barColor}20`,
+                        }}>
+                          <div style={{
+                            fontSize: 18, fontWeight: 700, color: barColor, lineHeight: 1,
+                          }}>{level}</div>
+                          <div style={{ fontSize: 12, color: '#374151', margin: '4px 0 2px' }}>
+                            {dist.actual_count}/{dist.expected_count}人
+                          </div>
+                          <div style={{
+                            height: 4, borderRadius: 2, background: '#e5e7eb',
+                            overflow: 'hidden', margin: '0 8px',
+                          }}>
+                            <div style={{
+                              height: '100%', borderRadius: 2, background: barColor,
+                              width: `${Math.min(dist.progress, 100)}%`,
+                            }} />
+                          </div>
+                          <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 3 }}>
+                            期望 {dist.expected_percent}%
+                          </div>
+                        </div>
                       </Col>
                     )
                   })}
@@ -1082,7 +900,8 @@ const PerformanceOverview: React.FC = () => {
                     showIcon
                     message="配额超限"
                     description={distributionCheck.warnings.join('；')}
-                    style={{ marginTop: 8 }}
+                    style={{ marginTop: 6 }}
+                    closable
                   />
                 )}
               </Card>
@@ -1109,9 +928,61 @@ const PerformanceOverview: React.FC = () => {
         open={distributionModalVisible}
         onOk={handleSaveDistribution}
         onCancel={() => setDistributionModalVisible(false)}
+        width={560}
       >
         <Alert showIcon type="info" style={{ marginBottom: 16 }} message="前端校验比例总和需等于 100%，但以后端校验为准。" />
-        <Form form={distributionForm} layout="vertical">
+
+        {/* 可视化分布预览 */}
+        {(() => {
+          const formVals = distributionForm.getFieldsValue()
+          const levels = ['S', 'A', 'B', 'C', 'D']
+          const colors: Record<string, string> = { S: '#f50', A: '#1677ff', B: '#52c41a', C: '#faad14', D: '#ff4d4f' }
+          const total = levels.reduce((sum, l) => sum + (Number(formVals[`percent_${l}`]) || 0), 0)
+          return (
+            <div style={{ marginBottom: 16 }}>
+              <Text strong style={{ fontSize: 13, color: '#374151', marginBottom: 8, display: 'block' }}>分布预览</Text>
+              <div style={{
+                display: 'flex', height: 32, borderRadius: 6, overflow: 'hidden', border: '1px solid #e5e7eb', background: '#f5f5f5'
+              }}>
+                {levels.map(level => {
+                  const val = Number(formVals[`percent_${level}`]) || 0
+                  if (val <= 0) return null
+                  return (
+                    <Tooltip key={level} title={`${level}: ${val}%`}>
+                      <div style={{
+                        width: `${val}%`,
+                        background: colors[level],
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: '#fff', fontWeight: 700, fontSize: 13,
+                        transition: 'width 0.3s',
+                      }}>
+                        {val >= 8 ? `${level} ${val}%` : val >= 4 ? level : ''}
+                      </div>
+                    </Tooltip>
+                  )
+                })}
+              </div>
+              <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between' }}>
+                <Text type={total === 100 ? 'success' : 'danger'} style={{ fontSize: 12 }}>
+                  合计：{total}%{total !== 100 ? '（需等于 100%）' : ' ✓'}
+                </Text>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  {levels.map(level => {
+                    const val = Number(formVals[`percent_${level}`]) || 0
+                    return val > 0 ? (
+                      <Text key={level} style={{ fontSize: 11, color: colors[level] }}>
+                        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: colors[level], marginRight: 3 }} />
+                        {level} {val}%
+                      </Text>
+                    ) : null
+                  })}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+        <Form form={distributionForm} layout="vertical" onValuesChange={() => forceUpdate()}>
           {['S', 'A', 'B', 'C', 'D'].map(level => (
             <Card key={level} size="small" style={{ marginBottom: 8 }}>
               <Space wrap>
@@ -1184,71 +1055,6 @@ const PerformanceOverview: React.FC = () => {
           </Form.Item>
           <Form.Item name="batch_comment" label="上级评语">
             <TextArea rows={3} placeholder="请输入统一评语（可选）" />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      {/* 指标库表单弹窗 */}
-      <Modal
-        title={editingIndicatorLibrary ? '编辑指标库' : '新建指标库'}
-        open={indicatorLibraryModalVisible}
-        onOk={handleSaveIndicatorLibrary}
-        onCancel={() => setIndicatorLibraryModalVisible(false)}
-      >
-        <Form form={indicatorLibraryForm} layout="vertical">
-          <Form.Item name="name" label="指标库名称" rules={[{ required: true, message: '请输入指标库名称' }]}>
-            <Input placeholder="请输入指标库名称" />
-          </Form.Item>
-          <Form.Item name="description" label="描述">
-            <TextArea rows={3} placeholder="请输入描述" />
-          </Form.Item>
-          <Form.Item name="department_id" label="所属部门" rules={[{ required: true, message: '请选择所属部门' }]}>
-            <Select
-              placeholder="请选择所属部门"
-              showSearch
-              optionFilterProp="label"
-              options={departments.map(d => getDepartmentOption(d)).filter(Boolean) as any[]}
-            />
-          </Form.Item>
-          <Form.Item name="default_cycle" label="默认周期">
-            <Select placeholder="请选择默认周期">
-              <Select.Option value="monthly">月度</Select.Option>
-              <Select.Option value="quarterly">季度</Select.Option>
-              <Select.Option value="annual">年度</Select.Option>
-            </Select>
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      {/* 指标项表单弹窗 */}
-      <Modal
-        title={editingIndicatorItem ? '编辑指标项' : '添加指标项'}
-        open={indicatorItemModalVisible}
-        onOk={handleSaveIndicatorItem}
-        onCancel={() => setIndicatorItemModalVisible(false)}
-      >
-        <Form form={indicatorItemForm} layout="vertical">
-          <Form.Item name="name" label="指标名称" rules={[{ required: true, message: '请输入指标名称' }]}>
-            <Input placeholder="请输入指标名称" />
-          </Form.Item>
-          <Form.Item name="description" label="描述">
-            <TextArea rows={3} placeholder="请输入描述" />
-          </Form.Item>
-          <Form.Item name="section_type" label="指标类型" rules={[{ required: true, message: '请选择指标类型' }]}>
-            <Select placeholder="请选择指标类型">
-              <Select.Option value="quantitative">量化指标</Select.Option>
-              <Select.Option value="key_action">关键行动</Select.Option>
-              <Select.Option value="bonus_penalty">附加项</Select.Option>
-            </Select>
-          </Form.Item>
-          <Form.Item name="weight" label="权重（%）">
-            <InputNumber min={0} max={100} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="is_default" label="默认指标" valuePropName="checked">
-            <Input type="checkbox">设为默认指标</Input>
-          </Form.Item>
-          <Form.Item name="sort_order" label="排序">
-            <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
         </Form>
       </Modal>
