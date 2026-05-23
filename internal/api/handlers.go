@@ -2910,6 +2910,7 @@ func GetWeekCalendar(c *gin.Context) {
 	userID := c.Query("user_id")
 	departmentID := c.Query("department_id")
 	weeksStr := c.DefaultQuery("weeks", "8")
+	startDate := c.Query("start_date")
 
 	var weeks int
 	fmt.Sscanf(weeksStr, "%d", &weeks)
@@ -2918,7 +2919,7 @@ func GetWeekCalendar(c *gin.Context) {
 	}
 
 	svc := service.NewWeekScheduleService(database.DB)
-	calendar, err := svc.GetWeekCalendar(userID, departmentID, weeks)
+	calendar, err := svc.GetWeekCalendar(userID, departmentID, weeks, startDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,

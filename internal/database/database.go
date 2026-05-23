@@ -202,6 +202,11 @@ func migrate() error {
 		&PerformanceReview{},
 		&PerformanceReviewVersion{},
 		&PerformanceRelationshipChangeLog{},
+		&PerformanceGoalRecord{},
+		&PerformanceGoalApprovalLog{},
+		&PerformanceCompanyFinance{},
+		&PerformanceIndicatorLibrary{},
+		&PerformanceIndicatorItem{},
 	); err != nil {
 		return err
 	}
