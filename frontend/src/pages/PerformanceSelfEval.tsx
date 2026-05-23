@@ -18,6 +18,8 @@ const PerformanceSelfEval: React.FC = () => {
   const [saving, setSaving] = useState(false)
   const [records, setRecords] = useState<PerformanceGoalRecord[]>([])
   const [bonusRecords, setBonusRecords] = useState<PerformanceGoalRecord[]>([])
+  const [formItems, setFormItems] = useState<any[]>([])
+  const [formBonusItems, setFormBonusItems] = useState<any[]>([])
   const [totalSelfScore, setTotalSelfScore] = useState(0)
 
   const loadData = useCallback(async () => {
@@ -35,7 +37,7 @@ const PerformanceSelfEval: React.FC = () => {
       setRecords(items)
       setBonusRecords(bonusItems)
 
-      const formItems = items.map(i => ({
+      const itemsData = items.map(i => ({
         record_id: i.id,
         item_name: i.item_name,
         section_type: i.section_type,
@@ -49,19 +51,22 @@ const PerformanceSelfEval: React.FC = () => {
         self_score: i.self_score || 0
       }))
 
-      const bonusFormItems = bonusItems.map(i => ({
+      const bonusData = bonusItems.map(i => ({
         record_id: i.id,
         item_name: i.item_name,
         self_score: i.self_score || 0
       }))
 
+      setFormItems(itemsData)
+      setFormBonusItems(bonusData)
+
       form.setFieldsValue({
-        items: formItems,
-        bonus_items: bonusFormItems,
+        items: itemsData,
+        bonus_items: bonusData,
         evaluation_good: participant?.self_evaluation_good || '',
         evaluation_improvement: participant?.self_evaluation_improvement || ''
       })
-      calcTotal(formItems)
+      calcTotal(itemsData)
     } catch {
       message.error('加载目标指标失败')
     } finally {
@@ -71,13 +76,19 @@ const PerformanceSelfEval: React.FC = () => {
 
   useEffect(() => { loadData() }, [loadData])
 
-  const calcTotal = (items: any[]) => {
-    const total = items.reduce((sum, i) => sum + (i.self_score || 0) * (i.weight || 0), 0)
+  const calcTotal = (items?: any[]) => {
+    const data = items || form.getFieldsValue().items || []
+    const total = (data || []).reduce((sum: number, i: any) => sum + (i.self_score || 0) * (i.weight || 0), 0)
     setTotalSelfScore(Math.round(total * 100) / 100)
   }
 
   const handleValuesChange = (_: any, allValues: any) => {
-    if (allValues.items) calcTotal(allValues.items)
+    if (allValues.items) {
+      calcTotal(allValues.items)
+    }
+    if (allValues.bonus_items) {
+      setFormBonusItems(allValues.bonus_items)
+    }
   }
 
   const handleSubmit = async () => {
@@ -117,11 +128,10 @@ const PerformanceSelfEval: React.FC = () => {
       dataIndex: 'item_name',
       key: 'item_name',
       width: 150,
-      render: (val: string, _: any, idx: number) => {
-        const items = form.getFieldValue('items') || []
-        const prev = idx > 0 ? items[idx - 1] : null
-        const showDivider = idx === 0 || (prev && prev.section_type !== items[idx]?.section_type)
-        const isQuant = items[idx]?.section_type === 'quantitative'
+      render: (val: string, record: any, idx: number) => {
+        const prev = idx > 0 ? formItems[idx - 1] : null
+        const showDivider = idx === 0 || (prev && prev.section_type !== record?.section_type)
+        const isQuant = record?.section_type === 'quantitative'
         return (
           <>
             <Form.Item name={['items', idx, 'record_id']} hidden><Input /></Form.Item>
@@ -203,7 +213,7 @@ const PerformanceSelfEval: React.FC = () => {
       <Form form={form} onValuesChange={handleValuesChange} layout="vertical">
         <Card title="指标评分">
           <Table
-            dataSource={form.getFieldValue('items') || []}
+            dataSource={formItems}
             columns={columns}
             rowKey="record_id"
             pagination={false}
@@ -218,7 +228,7 @@ const PerformanceSelfEval: React.FC = () => {
               附加分仅作为参考或激励依据，不计入总分
             </Text>
             <Table
-              dataSource={form.getFieldValue('bonus_items') || []}
+              dataSource={formBonusItems}
               rowKey="record_id"
               pagination={false}
               size="small"

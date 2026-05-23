@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  Card, Typography, Form, Input, InputNumber, Button, Space,
-  message, Spin, Row, Col, Table, Tag, Modal, Select, Divider
+  Card, Typography, Input, InputNumber, Button, Space,
+  message, Spin, Table, Tag, Modal
 } from 'antd'
 import {
   ArrowLeftOutlined, SaveOutlined, CheckCircleOutlined,
@@ -16,7 +16,6 @@ const { TextArea } = Input
 const PerformanceGoalSetting: React.FC = () => {
   const { activityId, participantId } = useParams<{ activityId: string; participantId: string }>()
   const navigate = useNavigate()
-  const [form] = Form.useForm()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -285,12 +284,12 @@ const PerformanceGoalSetting: React.FC = () => {
       message.error(`权重合计必须为100%，当前为 ${(totalWeight * 100).toFixed(0)}%`)
       return
     }
-    if (quantWeightTotal < 0.69 || quantWeightTotal > 0.71) {
-      message.error('量化指标权重需约70%')
+    if (quantWeightTotal < 0.65 || quantWeightTotal > 0.75) {
+      message.error('量化指标权重需约70%（允许65%-75%）')
       return
     }
-    if (actionWeightTotal < 0.29 || actionWeightTotal > 0.31) {
-      message.error('关键行动权重需约30%')
+    if (actionWeightTotal < 0.25 || actionWeightTotal > 0.35) {
+      message.error('关键行动权重需约30%（允许25%-35%）')
       return
     }
 
@@ -323,7 +322,7 @@ const PerformanceGoalSetting: React.FC = () => {
       title: '指标名称',
       dataIndex: 'item_name',
       key: 'item_name',
-      width: 150,
+      width: 160,
       render: (_: any, __: any, idx: number) => (
         <Input
           value={quantItems[idx]?.item_name}
@@ -333,23 +332,9 @@ const PerformanceGoalSetting: React.FC = () => {
       )
     },
     {
-      title: '指标定义',
-      dataIndex: 'item_definition',
-      key: 'item_definition',
-      width: 240,
-      render: (_: any, __: any, idx: number) => (
-        <TextArea
-          value={quantItems[idx]?.item_definition}
-          onChange={e => handleQuantItemChange(idx, 'item_definition', e.target.value)}
-          rows={2}
-          placeholder="明确指标范围和计算公式"
-        />
-      )
-    },
-    {
       title: '权重%',
       key: 'weight',
-      width: 80,
+      width: 90,
       render: (_: any, __: any, idx: number) => (
         <InputNumber
           min={0}
@@ -357,19 +342,7 @@ const PerformanceGoalSetting: React.FC = () => {
           value={quantItems[idx]?.weight ? quantItems[idx].weight * 100 : 0}
           onChange={val => handleQuantItemChange(idx, 'weight', (val || 0) / 100)}
           style={{ width: '100%' }}
-        />
-      )
-    },
-    {
-      title: '红线值',
-      dataIndex: 'red_line_value',
-      key: 'red_line_value',
-      width: 100,
-      render: (_: any, __: any, idx: number) => (
-        <Input
-          value={quantItems[idx]?.red_line_value}
-          onChange={e => handleQuantItemChange(idx, 'red_line_value', e.target.value)}
-          placeholder="最低"
+          addonAfter="%"
         />
       )
     },
@@ -377,39 +350,12 @@ const PerformanceGoalSetting: React.FC = () => {
       title: '目标值',
       dataIndex: 'target_value',
       key: 'target_value',
-      width: 100,
+      width: 110,
       render: (_: any, __: any, idx: number) => (
         <Input
           value={quantItems[idx]?.target_value}
           onChange={e => handleQuantItemChange(idx, 'target_value', e.target.value)}
           placeholder="标准"
-        />
-      )
-    },
-    {
-      title: '挑战值',
-      dataIndex: 'challenge_value',
-      key: 'challenge_value',
-      width: 100,
-      render: (_: any, __: any, idx: number) => (
-        <Input
-          value={quantItems[idx]?.challenge_value}
-          onChange={e => handleQuantItemChange(idx, 'challenge_value', e.target.value)}
-          placeholder="挑战"
-        />
-      )
-    },
-    {
-      title: '考核标准',
-      dataIndex: 'scoring_rule',
-      key: 'scoring_rule',
-      width: 220,
-      render: (_: any, __: any, idx: number) => (
-        <TextArea
-          value={quantItems[idx]?.scoring_rule}
-          onChange={e => handleQuantItemChange(idx, 'scoring_rule', e.target.value)}
-          rows={2}
-          placeholder="定量按区间/上限设置"
         />
       )
     },
@@ -427,6 +373,45 @@ const PerformanceGoalSetting: React.FC = () => {
       )
     }
   ]
+
+  const quantExpandedRowRender = (record: any, idx: number) => (
+    <div style={{ padding: '8px 0', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
+      <div>
+        <Text type="secondary" style={{ fontSize: 12, marginBottom: 4, display: 'block' }}>指标定义</Text>
+        <TextArea
+          value={quantItems[idx]?.item_definition}
+          onChange={e => handleQuantItemChange(idx, 'item_definition', e.target.value)}
+          rows={2}
+          placeholder="明确指标范围和计算公式"
+        />
+      </div>
+      <div>
+        <Text type="secondary" style={{ fontSize: 12, marginBottom: 4, display: 'block' }}>红线值</Text>
+        <Input
+          value={quantItems[idx]?.red_line_value}
+          onChange={e => handleQuantItemChange(idx, 'red_line_value', e.target.value)}
+          placeholder="最低"
+        />
+      </div>
+      <div>
+        <Text type="secondary" style={{ fontSize: 12, marginBottom: 4, display: 'block' }}>挑战值</Text>
+        <Input
+          value={quantItems[idx]?.challenge_value}
+          onChange={e => handleQuantItemChange(idx, 'challenge_value', e.target.value)}
+          placeholder="挑战"
+        />
+      </div>
+      <div>
+        <Text type="secondary" style={{ fontSize: 12, marginBottom: 4, display: 'block' }}>考核标准</Text>
+        <TextArea
+          value={quantItems[idx]?.scoring_rule}
+          onChange={e => handleQuantItemChange(idx, 'scoring_rule', e.target.value)}
+          rows={2}
+          placeholder="定量按区间/上限设置"
+        />
+      </div>
+    </div>
+  )
 
   const actionColumns = [
     {
@@ -503,23 +488,55 @@ const PerformanceGoalSetting: React.FC = () => {
 
   return (
     <div style={{ padding: 24 }}>
-      <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
-        <Title level={4} style={{ margin: 0 }}>目标设定</Title>
-        {participant && (
-          <Text type="secondary">
-            {participant.employee_name || participant.employee_id}
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 10,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '12px 0', marginBottom: 16,
+        background: '#fff', borderBottom: '1px solid #f0f0f0',
+      }}>
+        <Space>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
+          <Title level={4} style={{ margin: 0 }}>目标设定</Title>
+          {participant && (
+            <Text type="secondary">
+              {participant.employee_name || participant.employee_id}
+            </Text>
+          )}
+        </Space>
+        <Space size="middle">
+          <Text style={{ fontSize: 13 }}>
+            量化 <Text strong style={{ color: Math.abs(quantWeightTotal - 0.7) < 0.06 ? '#52c41a' : '#faad14' }}>{(quantWeightTotal * 100).toFixed(0)}%</Text>
+            {' / '}
+            关键 <Text strong style={{ color: Math.abs(actionWeightTotal - 0.3) < 0.06 ? '#52c41a' : '#faad14' }}>{(actionWeightTotal * 100).toFixed(0)}%</Text>
+            {' / '}
+            合计 <Text strong style={{ color: Math.abs(totalWeight - 1) < 0.001 ? '#52c41a' : '#ff4d4f', fontSize: 15 }}>{(totalWeight * 100).toFixed(0)}%</Text>
+            {Math.abs(totalWeight - 1) > 0.001 && (
+              <Text type="danger" style={{ marginLeft: 4, fontSize: 12 }}>(需100%)</Text>
+            )}
           </Text>
-        )}
-      </Space>
+        </Space>
+        <Space size="middle">
+          <Button
+            icon={<SaveOutlined />}
+            loading={saving}
+            onClick={handleSaveDraft}
+          >
+            保存草稿
+          </Button>
+          <Button
+            type="primary"
+            icon={<CheckCircleOutlined />}
+            loading={submitting}
+            onClick={handleSubmit}
+            disabled={Math.abs(totalWeight - 1) > 0.001}
+          >
+            提交目标
+          </Button>
+        </Space>
+      </div>
 
       <Card title={
-        <Space>
-          <span>量化指标</span>
-          <Tag color={Math.abs(quantWeightTotal - 0.7) < 0.02 ? 'green' : 'orange'}>
-            权重：{(quantWeightTotal * 100).toFixed(0)}%（目标70%）
-          </Tag>
-        </Space>
+        <span>量化指标</span>
       }>
         <Table
           dataSource={quantItems}
@@ -528,6 +545,11 @@ const PerformanceGoalSetting: React.FC = () => {
           pagination={false}
           size="small"
           bordered
+          expandable={{
+            expandedRowRender: (_, idx) => quantExpandedRowRender(_, idx as number),
+            rowExpandable: () => true,
+            expandRowByClick: true,
+          }}
         />
         <Button
           type="dashed"
@@ -541,12 +563,7 @@ const PerformanceGoalSetting: React.FC = () => {
 
       <Card
         title={
-          <Space>
-            <span>关键行动</span>
-            <Tag color={Math.abs(actionWeightTotal - 0.3) < 0.02 ? 'green' : 'orange'}>
-              权重：{(actionWeightTotal * 100).toFixed(0)}%（目标30%）
-            </Tag>
-          </Space>
+          <span>关键行动</span>
         }
         style={{ marginTop: 16 }}
       >
@@ -568,42 +585,15 @@ const PerformanceGoalSetting: React.FC = () => {
         </Button>
       </Card>
 
-      <Card title="权重汇总" style={{ marginTop: 16 }}>
-        <Row gutter={24}>
-          <Col span={8}>
-            <Text>量化指标权重：</Text>
-            <Text strong style={{ color: Math.abs(quantWeightTotal - 0.7) < 0.02 ? '#52c41a' : '#faad14' }}>
-              {(quantWeightTotal * 100).toFixed(0)}%
-            </Text>
-          </Col>
-          <Col span={8}>
-            <Text>关键行动权重：</Text>
-            <Text strong style={{ color: Math.abs(actionWeightTotal - 0.3) < 0.02 ? '#52c41a' : '#faad14' }}>
-              {(actionWeightTotal * 100).toFixed(0)}%
-            </Text>
-          </Col>
-          <Col span={8}>
-            <Text>合计：</Text>
-            <Text strong style={{ fontSize: 18, color: Math.abs(totalWeight - 1) < 0.001 ? '#52c41a' : '#ff4d4f' }}>
-              {(totalWeight * 100).toFixed(0)}%
-            </Text>
-            {Math.abs(totalWeight - 1) > 0.001 && (
-              <Text type="danger" style={{ marginLeft: 8 }}>
-                （必须为100%）
-              </Text>
-            )}
-          </Col>
-        </Row>
-      </Card>
-
       <Card title={
         <Space>
+          <BulbOutlined />
           <span>指标库建议</span>
-          <Button type="link" icon={<BulbOutlined />} onClick={loadSuggestions}>
-            从指标库获取建议
-          </Button>
         </Space>
       } style={{ marginTop: 16 }}>
+        <Button type="primary" icon={<BulbOutlined />} onClick={loadSuggestions} style={{ marginBottom: showSuggestions ? 12 : 0 }}>
+          从指标库获取建议
+        </Button>
         {showSuggestions && suggestions.length > 0 && (
           <div>
             <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
@@ -624,34 +614,9 @@ const PerformanceGoalSetting: React.FC = () => {
           </div>
         )}
         {showSuggestions && suggestions.length === 0 && (
-          <Text type="secondary">暂无建议</Text>
+          <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>暂无建议</Text>
         )}
       </Card>
-
-      <Divider />
-
-      <div style={{ textAlign: 'center' }}>
-        <Space size="large">
-          <Button
-            icon={<SaveOutlined />}
-            loading={saving}
-            onClick={handleSaveDraft}
-            size="large"
-          >
-            保存草稿
-          </Button>
-          <Button
-            type="primary"
-            icon={<CheckCircleOutlined />}
-            loading={submitting}
-            onClick={handleSubmit}
-            size="large"
-            disabled={Math.abs(totalWeight - 1) > 0.001}
-          >
-            提交目标
-          </Button>
-        </Space>
-      </div>
     </div>
   )
 }
