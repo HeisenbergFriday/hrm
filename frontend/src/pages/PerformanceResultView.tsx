@@ -38,8 +38,17 @@ function formatDate(value?: string) {
   return value.substring(0, 10)
 }
 
+function isPlaceholderSignature(value?: string) {
+  const normalized = value?.trim().toLowerCase()
+  return !normalized
+}
+
+function firstRealSignatureName(...names: (string | undefined)[]) {
+  return names.find(name => !isPlaceholderSignature(name))?.trim()
+}
+
 function formatSignature(name?: string, date?: string) {
-  const normalizedName = name?.trim()
+  const normalizedName = firstRealSignatureName(name)
   const normalizedDate = formatDate(date)
 
   if (!normalizedName && normalizedDate === '-') return '-'
@@ -99,32 +108,33 @@ const ArchivePerformanceSheet: React.FC<ArchiveSheetProps> = ({ activity, partic
       ? `${period}${participant?.department_name || ''}绩效考核表`
       : activity?.name || '个人绩效考核表'
   const participantExtra = participant as any
+  const auditSignatureName = firstRealSignatureName(participantExtra?.updated_by, participant?.locked_by, participant?.confirmed_by)
   const employeeResultSignature = formatSignature(
-    participant?.employee_confirmed_by || participant?.employee_name,
+    firstRealSignatureName(participant?.employee_confirmed_by, participant?.employee_name),
     participant?.employee_confirmed_at || participant?.confirmed_at
   )
   const managerResultSignature = formatSignature(
-    participant?.manager_confirmed_by || participant?.manager_name,
+    firstRealSignatureName(participant?.manager_confirmed_by, participant?.manager_name, auditSignatureName),
     participant?.manager_confirmed_at
   )
   const hrResultSignature = formatSignature(
-    participant?.hr_confirmed_by,
+    firstRealSignatureName(participant?.hr_confirmed_by, auditSignatureName),
     participant?.hr_confirmed_at
   )
   const employeeTargetSignature = formatSignature(
-    participantExtra?.employee_target_confirmed_by || participant?.employee_confirmed_by || participant?.employee_name,
+    firstRealSignatureName(participantExtra?.employee_target_confirmed_by, participant?.employee_confirmed_by, participant?.employee_name),
     participantExtra?.employee_target_confirmed_at || participant?.employee_confirmed_at || participant?.confirmed_at
   )
   const managerTargetSignature = formatSignature(
-    participantExtra?.manager_target_confirmed_by || participant?.manager_confirmed_by || participant?.manager_name,
+    firstRealSignatureName(participantExtra?.manager_target_confirmed_by, participant?.manager_confirmed_by, participant?.manager_name, auditSignatureName),
     participantExtra?.manager_target_confirmed_at || participant?.manager_confirmed_at
   )
   const hrTargetSignature = formatSignature(
-    participantExtra?.hr_target_confirmed_by || participant?.hr_confirmed_by,
+    firstRealSignatureName(participantExtra?.hr_target_confirmed_by, participant?.hr_confirmed_by, auditSignatureName),
     participantExtra?.hr_target_confirmed_at || participant?.hr_confirmed_at
   )
   const levelConfirmSignature = formatSignature(
-    participant?.manager_confirmed_by || participant?.manager_name || participant?.hr_confirmed_by,
+    firstRealSignatureName(participant?.manager_confirmed_by, participant?.manager_name, participant?.hr_confirmed_by, auditSignatureName),
     participant?.manager_confirmed_at || participant?.hr_confirmed_at
   )
 
@@ -712,14 +722,12 @@ const PerformanceResultView: React.FC = () => {
   const status = participant?.status
 
   let confirmAction: { type: 'employee' | 'manager' | 'hr'; label: string } | null = null
-  if (!isLocked) {
-    if (status === 'manager_submitted') {
-      confirmAction = { type: 'employee', label: '员工确认结果' }
-    } else if (status === 'employee_confirmed') {
-      confirmAction = { type: 'manager', label: '主管确认并冻结' }
-    } else if (status === 'manager_confirmed') {
-      confirmAction = { type: 'hr', label: 'HR确认' }
-    }
+  if (status === 'manager_submitted' && !isLocked) {
+    confirmAction = { type: 'employee', label: '员工确认结果' }
+  } else if (status === 'employee_confirmed' && !isLocked) {
+    confirmAction = { type: 'manager', label: '主管确认并冻结' }
+  } else if (activity?.status === 'hr_confirmation' && status === 'manager_confirmed') {
+    confirmAction = { type: 'hr', label: 'HR确认' }
   }
 
   return (
@@ -863,7 +871,7 @@ const PerformanceResultView: React.FC = () => {
                 </Descriptions.Item>
               )}
             </Descriptions>
-            {!isLocked && (status === 'manager_submitted' || status === 'employee_confirmed' || status === 'manager_confirmed') && (
+            {!isLocked && (status === 'manager_submitted' || status === 'employee_confirmed') && (
               <Button
                 type="dashed"
                 icon={<EditOutlined />}

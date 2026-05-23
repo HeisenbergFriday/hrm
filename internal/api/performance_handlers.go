@@ -310,6 +310,8 @@ func GetParticipant(c *gin.Context) {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: gin.H{"error": err.Error()}})
 		return
 	}
+	svc.HydrateParticipantTargetConfirmers(participant)
+	normalizeParticipantConfirmers(participant)
 	var activity *database.PerformanceActivity
 	if participant.ActivityID != "" {
 		activity, _ = svc.GetActivity(participant.ActivityID)
@@ -515,17 +517,74 @@ func ConfirmResult(c *gin.Context) {
 }
 
 func currentOperatorName(c *gin.Context) string {
+	userID := strings.TrimSpace(c.GetString("userID"))
+	if userID != "" {
+		userService := service.NewUserService(database.DB)
+		if user, err := userService.GetUserByID(userID); err == nil && strings.TrimSpace(user.Name) != "" {
+			return strings.TrimSpace(user.Name)
+		}
+		if user, err := userService.GetUserByUserID(userID); err == nil && strings.TrimSpace(user.Name) != "" {
+			return strings.TrimSpace(user.Name)
+		}
+	}
+
 	userName := strings.TrimSpace(c.GetString("userName"))
 	if userName != "" {
 		return userName
 	}
-
-	userID := strings.TrimSpace(c.GetString("userID"))
 	if userID != "" {
 		return userID
 	}
 
 	return "system"
+}
+
+func displayUserName(userID string) string {
+	value := strings.TrimSpace(userID)
+	if value == "" {
+		return ""
+	}
+	userService := service.NewUserService(database.DB)
+	if user, err := userService.GetUserByID(value); err == nil && strings.TrimSpace(user.Name) != "" {
+		return strings.TrimSpace(user.Name)
+	}
+	if user, err := userService.GetUserByUserID(value); err == nil && strings.TrimSpace(user.Name) != "" {
+		return strings.TrimSpace(user.Name)
+	}
+	return value
+}
+
+func normalizeParticipantConfirmers(participant *database.PerformanceParticipant) {
+	if participant == nil {
+		return
+	}
+	if name := displayUserName(participant.EmployeeConfirmedBy); name != "" {
+		participant.EmployeeConfirmedBy = name
+	}
+	if name := displayUserName(participant.ManagerConfirmedBy); name != "" {
+		participant.ManagerConfirmedBy = name
+	}
+	if name := displayUserName(participant.HRConfirmedBy); name != "" {
+		participant.HRConfirmedBy = name
+	}
+	if name := displayUserName(participant.EmployeeTargetConfirmedBy); name != "" {
+		participant.EmployeeTargetConfirmedBy = name
+	}
+	if name := displayUserName(participant.ManagerTargetConfirmedBy); name != "" {
+		participant.ManagerTargetConfirmedBy = name
+	}
+	if name := displayUserName(participant.HRTargetConfirmedBy); name != "" {
+		participant.HRTargetConfirmedBy = name
+	}
+	if name := displayUserName(participant.ConfirmedBy); name != "" {
+		participant.ConfirmedBy = name
+	}
+	if name := displayUserName(participant.LockedBy); name != "" {
+		participant.LockedBy = name
+	}
+	if name := displayUserName(participant.UpdatedBy); name != "" {
+		participant.UpdatedBy = name
+	}
 }
 
 func ConfirmEmployeeResultHandler(c *gin.Context) {
@@ -619,11 +678,12 @@ func StartPerformanceActivity(c *gin.Context) {
 func OpenSelfEvaluation(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
+	shouldNotify := shouldNotifyOnSelfEvaluationOpen(svc, activityID)
 	if err := svc.OpenSelfEvaluation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
-	queueSelfEvaluationNotification(activityID, true)
+	queueSelfEvaluationNotification(activityID, shouldNotify)
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: nil})
 }
 
@@ -707,6 +767,17 @@ func LockPerformanceActivityHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "活动已锁定", Data: nil})
 }
 
+func ForceLockOverdueHRConfirmationHandler(c *gin.Context) {
+	activityID := c.Param("activity_id")
+	svc := service.NewPerformanceService(database.DB)
+	result, err := svc.ForceLockOverdueHRConfirmation(activityID, currentOperatorID(c))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "逾期强制锁定已完成", Data: gin.H{"result": result}})
+}
+
 func BatchConfirmResults(c *gin.Context) {
 	activityID := c.Param("activity_id")
 	var req struct {
@@ -768,13 +839,8 @@ func SetCompanyFinanceHandler(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
-
 	svc := service.NewPerformanceService(database.DB)
-	finance, err := svc.SetCompanyFinance(activityID, req.RevenueSign, req.Description, req.Remark, userID)
+	finance, err := svc.SetCompanyFinance(activityID, req.RevenueSign, req.Description, req.Remark, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -814,13 +880,8 @@ func SetHRConfirmDeadlineHandler(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
-
 	svc := service.NewPerformanceService(database.DB)
-	activity, err := svc.SetHRConfirmDeadline(activityID, req.Deadline, userID)
+	activity, err := svc.SetHRConfirmDeadline(activityID, req.Deadline, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -872,10 +933,6 @@ func SubmitReviewSelfEvaluation(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
 
 	// 1. 写入自评版本记录
 	_, submitErr := svc.SubmitSelfEvaluation(participantID, struct {
@@ -885,7 +942,7 @@ func SubmitReviewSelfEvaluation(c *gin.Context) {
 		SelfAttachments []string
 	}{
 		SelfSummary: req.SelfContentJSON.Content,
-	})
+	}, currentOperatorID(c))
 	if submitErr != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: submitErr.Error(), Data: nil})
 		return
@@ -964,7 +1021,7 @@ func SubmitReviewManagerEvaluation(c *gin.Context) {
 		ManagerScore:   managerScore,
 		SuggestedLevel: finalLevel,
 		ManagerComment: req.ManagerComment,
-	})
+	}, currentOperatorID(c))
 	if managerErr != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: managerErr.Error(), Data: nil})
 		return
@@ -998,10 +1055,7 @@ func SubmitGoalSelfEvaluationHandler(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
+	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.SubmitGoalSelfEvaluation(uint(participantID), req.Items, req.BonusItems, req.EvaluationGood, req.EvaluationImprovement, userID); err != nil {
@@ -1031,10 +1085,7 @@ func SubmitGoalManagerEvaluationHandler(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
+	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.SubmitGoalManagerEvaluation(uint(participantID), req.Items, req.BonusItems, req.SuggestedLevel, req.EvaluationGood, req.EvaluationImprovement, userID); err != nil {
@@ -1255,10 +1306,7 @@ func CreatePerformanceTemplate(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
+	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
 	template, err := svc.CreateTemplate(toPerformanceTemplateRequest(req), userID)
@@ -1298,10 +1346,7 @@ func UpdatePerformanceTemplate(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
+	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
 	template, err := svc.UpdateTemplate(uint(templateID), toPerformanceTemplateRequest(req), userID)
@@ -1361,7 +1406,7 @@ func CreateIndicatorLibrary(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
+	userID := currentOperatorID(c)
 	createLib := func() *database.PerformanceIndicatorLibrary {
 		return &database.PerformanceIndicatorLibrary{
 			DepartmentID:   req.DepartmentID,
@@ -1467,7 +1512,7 @@ func UpdateIndicatorLibrary(c *gin.Context) {
 	lib.Description = req.Description
 	lib.DepartmentName = req.DepartmentName
 	lib.DefaultCycle = req.DefaultCycle
-	lib.UpdatedBy = c.GetString("user_id")
+	lib.UpdatedBy = currentOperatorID(c)
 
 	if err := svc.UpdateLibrary(lib); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -1486,7 +1531,7 @@ func ArchiveIndicatorLibrary(c *gin.Context) {
 
 	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
 	svc := service.NewPerformanceIndicatorService(libRepo, nil)
-	if err := svc.ArchiveLibrary(uint(id), c.GetString("user_id")); err != nil {
+	if err := svc.ArchiveLibrary(uint(id), currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "归档失败", Data: gin.H{"error": err.Error()}})
 		return
 	}
@@ -1526,7 +1571,7 @@ func InheritIndicatorLibrary(c *gin.Context) {
 	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
 	itemRepo := repository.NewPerformanceIndicatorItemRepository(database.DB)
 	svc := service.NewPerformanceIndicatorService(libRepo, itemRepo)
-	lib, err := svc.InheritLibrary(req.ParentLibraryID, req.TargetDepartmentID, req.TargetDepartmentName, c.GetString("user_id"))
+	lib, err := svc.InheritLibrary(req.ParentLibraryID, req.TargetDepartmentID, req.TargetDepartmentName, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1604,8 +1649,8 @@ func CreateIndicatorItem(c *gin.Context) {
 		ScoringRule:       req.ScoringRule,
 		IsDefault:         req.IsDefault,
 		SortOrder:         req.SortOrder,
-		CreatedBy:         c.GetString("user_id"),
-		UpdatedBy:         c.GetString("user_id"),
+		CreatedBy:         currentOperatorID(c),
+		UpdatedBy:         currentOperatorID(c),
 	}
 
 	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
@@ -1671,7 +1716,7 @@ func UpdateIndicatorItem(c *gin.Context) {
 	item.ScoringRule = req.ScoringRule
 	item.IsDefault = req.IsDefault
 	item.SortOrder = req.SortOrder
-	item.UpdatedBy = c.GetString("user_id")
+	item.UpdatedBy = currentOperatorID(c)
 
 	if err := svc.UpdateItem(item); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -1690,7 +1735,7 @@ func DeleteIndicatorItem(c *gin.Context) {
 
 	itemRepo := repository.NewPerformanceIndicatorItemRepository(database.DB)
 	svc := service.NewPerformanceIndicatorService(nil, itemRepo)
-	if err := svc.DeleteItem(uint(id), c.GetString("user_id")); err != nil {
+	if err := svc.DeleteItem(uint(id), currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "删除失败", Data: gin.H{"error": err.Error()}})
 		return
 	}
@@ -1766,10 +1811,7 @@ func BatchSaveGoalRecords(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
+	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
 	records, err := svc.BatchSaveGoalRecords(uint(participantID), payload, userID)
@@ -1797,10 +1839,7 @@ func SubmitGoalApprovalHandler(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
+	userID := currentOperatorID(c)
 	action := req.Action
 	if strings.TrimSpace(action) == "" {
 		action = "submit"
@@ -1830,10 +1869,7 @@ func ApproveGoalRecords(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
+	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.SubmitGoalApproval(uint(participantID), "approve", req.Comment, userID); err != nil {
@@ -1859,10 +1895,7 @@ func RejectGoalRecords(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
+	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.SubmitGoalApproval(uint(participantID), "reject", req.Comment, userID); err != nil {
@@ -1921,10 +1954,7 @@ func BatchAssignGoals(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
+	userID := currentOperatorID(c)
 	targets := req.Targets
 	if len(targets) == 0 {
 		targets = req.Items
@@ -1963,10 +1993,7 @@ func SetBonusPenaltyScoreHandler(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		userID = "system"
-	}
+	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.SetBonusPenaltyScore(uint(participantID), req.BonusScore, req.PenaltyScore, userID); err != nil {

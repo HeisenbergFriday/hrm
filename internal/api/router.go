@@ -258,6 +258,7 @@ func SetupRouter() *gin.Engine {
 				performance.POST("/activities/:activity_id/open-manager-confirmation", OpenManagerConfirmationHandler)
 				performance.POST("/activities/:activity_id/open-hr-confirmation", OpenHRConfirmationHandler)
 				performance.POST("/activities/:activity_id/lock", LockPerformanceActivityHandler)
+				performance.POST("/activities/:activity_id/force-lock-overdue-hr", ForceLockOverdueHRConfirmationHandler)
 
 				// 兼容旧接口
 				performance.POST("/activities/:activity_id/publish", PublishPerformanceActivity)
