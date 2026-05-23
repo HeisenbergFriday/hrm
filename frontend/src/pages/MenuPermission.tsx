@@ -4,7 +4,7 @@ import { MenuOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { permissionAPI } from '../services/api'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { Option } = Select
 
 interface Permission {
@@ -105,16 +105,25 @@ const MenuPermission: React.FC = () => {
 
   if (rolesLoading || permissionsLoading) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-        <Spin size="large" />
+      <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+        <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+          <MenuOutlined style={{ color: '#4338ca', marginRight: 8 }} />菜单权限
+        </h2>
+        <Text style={{ color: '#6b7280', fontSize: 13.5 }}>配置角色的菜单访问权限</Text>
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+          <Spin size="large" />
+        </div>
       </div>
     )
   }
 
   return (
-    <div>
-      <Title level={4}>菜单权限</Title>
-      <Card>
+    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+        <MenuOutlined style={{ color: '#4338ca', marginRight: 8 }} />菜单权限
+      </h2>
+      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>配置角色的菜单访问权限</Text>
+      <Card style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>
         <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' }}>
           <Text strong>选择角色：</Text>
           <Select
@@ -128,7 +137,7 @@ const MenuPermission: React.FC = () => {
               </Option>
             ))}
           </Select>
-          <Button type="primary" onClick={handleSave} style={{ marginLeft: 'auto' }}>
+          <Button type="primary" onClick={handleSave} style={{ marginLeft: 'auto', borderRadius: 8, fontWeight: 600 }}>
             保存权限
           </Button>
         </div>

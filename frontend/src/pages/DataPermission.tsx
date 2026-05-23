@@ -4,7 +4,7 @@ import { LockOutlined, ReloadOutlined, TeamOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { permissionAPI, orgAPI } from '../services/api'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { Option } = Select
 
 interface Role {
@@ -63,16 +63,25 @@ const DataPermission: React.FC = () => {
 
   if (rolesLoading || departmentsLoading) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-        <Spin size="large" />
+      <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+        <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+          <LockOutlined style={{ color: '#4338ca', marginRight: 8 }} />数据权限
+        </h2>
+        <Text style={{ color: '#6b7280', fontSize: 13.5 }}>配置角色的数据访问范围</Text>
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+          <Spin size="large" />
+        </div>
       </div>
     )
   }
 
   return (
-    <div>
-      <Title level={4}>数据权限</Title>
-      <Card>
+    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+        <LockOutlined style={{ color: '#4338ca', marginRight: 8 }} />数据权限
+      </h2>
+      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>配置角色的数据访问范围</Text>
+      <Card style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>
         <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' }}>
           <Text strong>选择角色：</Text>
           <Select
@@ -86,7 +95,7 @@ const DataPermission: React.FC = () => {
               </Option>
             ))}
           </Select>
-          <Button type="primary" onClick={handleSave} style={{ marginLeft: 'auto' }}>
+          <Button type="primary" onClick={handleSave} style={{ marginLeft: 'auto', borderRadius: 8, fontWeight: 600 }}>
             保存权限
           </Button>
         </div>

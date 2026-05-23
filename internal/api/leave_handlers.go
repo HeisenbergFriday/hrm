@@ -206,7 +206,6 @@ func SyncGrantsToDingTalk(c *gin.Context) {
 	})
 }
 
-
 func ConsumeAnnualLeave(c *gin.Context) {
 	var req struct {
 		UserID      string  `json:"user_id" binding:"required"`
@@ -245,8 +244,6 @@ func GetConsumeLog(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": logs})
 }
 
-
-
 func GetOvertimeMatches(c *gin.Context) {
 	userID := c.Query("user_id")
 	startDate := c.Query("start_date")
@@ -266,8 +263,8 @@ func GetOvertimeMatches(c *gin.Context) {
 
 func RunOvertimeMatch(c *gin.Context) {
 	var req struct {
-		StartDate string `json:"start_date"`
 		UserID    string `json:"user_id"`
+		StartDate string `json:"start_date"`
 		EndDate   string `json:"end_date"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -559,10 +556,10 @@ func ResyncOvertimeToDingTalk(c *gin.Context) {
 
 	if req.DryRun {
 		type recInfo struct {
-			UserID    string `json:"user_id"`
-			WorkDate  string `json:"work_date"`
-			Minutes   int    `json:"minutes"`
-			Status    string `json:"status"`
+			UserID   string `json:"user_id"`
+			WorkDate string `json:"work_date"`
+			Minutes  int    `json:"minutes"`
+			Status   string `json:"status"`
 		}
 		items := make([]recInfo, 0, len(records))
 		for _, r := range records {

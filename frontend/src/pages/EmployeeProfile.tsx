@@ -1,48 +1,60 @@
 import React, { useMemo, useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Divider, Descriptions, Avatar } from 'antd'
-import { UserOutlined, PlusOutlined, EditOutlined, ReloadOutlined } from '@ant-design/icons'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  DatePicker,
+  Form,
+  Input,
+  Modal,
+  Row,
+  Select,
+  Spin,
+  Table,
+  Tag,
+  Typography,
+  message,
+} from 'antd'
+import { EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { departmentAPI, employeeAPI, orgAPI } from '../services/api'
 
-const { Title, Text } = Typography
-const { Option } = Select
+const { Title, Text, Paragraph } = Typography
+const { TextArea } = Input
 
-interface EmployeeProfile {
-  id: string
+interface EmployeeProfileRecord {
+  id: number | string
   user_id: string
   employee_id: string
-  name: string
-  gender: string
-  birth_date: string
-  nationality: string
-  id_card_number: string
-  employment_type: string
-  entry_date: string
-  probation_end_date: string
-  planned_regular_date: string
-  actual_regular_date: string
-  job_level: string
-  job_family: string
-  contract_start_date: string
-  contract_end_date: string
-  work_email: string
-  personal_email: string
-  emergency_contact: string
-  emergency_phone: string
-  education: string
-  graduate_school: string
-  major: string
-  graduation_date: string
-  work_experience: any
-  skills: any
-  bank_account: string
-  bank_name: string
-  tax_number: string
-  address: string
-  profile_status: string
-  created_at: string
-  updated_at: string
+  gender?: string
+  birth_date?: string
+  nationality?: string
+  id_card_number?: string
+  employment_type?: string
+  entry_date?: string
+  probation_end_date?: string
+  planned_regular_date?: string
+  actual_regular_date?: string
+  job_level?: string
+  job_family?: string
+  contract_start_date?: string
+  contract_end_date?: string
+  work_email?: string
+  personal_email?: string
+  emergency_contact?: string
+  emergency_phone?: string
+  education?: string
+  graduate_school?: string
+  major?: string
+  graduation_date?: string
+  bank_account?: string
+  bank_name?: string
+  tax_number?: string
+  address?: string
+  profile_status?: string
 }
 
 interface EmployeeItem {
@@ -51,6 +63,7 @@ interface EmployeeItem {
   name: string
   department_id: string
   position: string
+  status: string
 }
 
 interface DepartmentItem {
@@ -58,7 +71,37 @@ interface DepartmentItem {
   name: string
 }
 
-const employmentTypeOptions = ['正式', '试用', '实习', '劳务', '兼职']
+interface ProfileFormValues {
+  user_id: string
+  employee_id: string
+  gender?: string
+  birth_date?: Dayjs | null
+  nationality?: string
+  id_card_number?: string
+  employment_type?: string
+  entry_date?: Dayjs | null
+  probation_end_date?: Dayjs | null
+  planned_regular_date?: Dayjs | null
+  actual_regular_date?: Dayjs | null
+  job_level?: string
+  job_family?: string
+  contract_start_date?: Dayjs | null
+  contract_end_date?: Dayjs | null
+  work_email?: string
+  personal_email?: string
+  emergency_contact?: string
+  emergency_phone?: string
+  education?: string
+  graduate_school?: string
+  major?: string
+  graduation_date?: Dayjs | null
+  bank_account?: string
+  bank_name?: string
+  tax_number?: string
+  address?: string
+}
+
+const employmentTypeOptions = ['全职', '兼职', '实习', '劳务']
 const educationOptions = ['高中', '大专', '本科', '硕士', '博士', '其他']
 const jobFamilyOptions = ['管理', '专业', '技术']
 const profileDateFields = [
@@ -70,85 +113,128 @@ const profileDateFields = [
   'contract_start_date',
   'contract_end_date',
   'graduation_date',
-]
+] as const
+
+const trimText = (value?: string) => (typeof value === 'string' ? value.trim() : '')
+const formatDate = (value?: Dayjs | null) => (value ? value.format('YYYY-MM-DD') : '')
+
+const buildProfilePayload = (values: ProfileFormValues) => ({
+  user_id: trimText(values.user_id),
+  employee_id: trimText(values.employee_id),
+  gender: trimText(values.gender),
+  birth_date: formatDate(values.birth_date),
+  nationality: trimText(values.nationality),
+  id_card_number: trimText(values.id_card_number),
+  employment_type: trimText(values.employment_type),
+  entry_date: formatDate(values.entry_date),
+  probation_end_date: formatDate(values.probation_end_date),
+  planned_regular_date: formatDate(values.planned_regular_date),
+  actual_regular_date: formatDate(values.actual_regular_date),
+  job_level: trimText(values.job_level),
+  job_family: trimText(values.job_family),
+  contract_start_date: formatDate(values.contract_start_date),
+  contract_end_date: formatDate(values.contract_end_date),
+  work_email: trimText(values.work_email),
+  personal_email: trimText(values.personal_email),
+  emergency_contact: trimText(values.emergency_contact),
+  emergency_phone: trimText(values.emergency_phone),
+  education: trimText(values.education),
+  graduate_school: trimText(values.graduate_school),
+  major: trimText(values.major),
+  graduation_date: formatDate(values.graduation_date),
+  bank_account: trimText(values.bank_account),
+  bank_name: trimText(values.bank_name),
+  tax_number: trimText(values.tax_number),
+  address: trimText(values.address),
+})
+
+const toFormValues = (profile: EmployeeProfileRecord): ProfileFormValues => {
+  const next = { ...profile } as Record<string, unknown>
+  profileDateFields.forEach((field) => {
+    const value = profile[field]
+    next[field] = value ? dayjs(value) : null
+  })
+  return next as unknown as ProfileFormValues
+}
 
 const EmployeeProfilePage: React.FC = () => {
-  const [modalVisible, setModalVisible] = useState(false)
-  const [currentProfile, setCurrentProfile] = useState<EmployeeProfile | null>(null)
-  const [form] = Form.useForm()
-  const [activeTab, setActiveTab] = useState('list')
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editingProfile, setEditingProfile] = useState<EmployeeProfileRecord | null>(null)
+  const [form] = Form.useForm<ProfileFormValues>()
+  const selectedUserID = Form.useWatch('user_id', form)
 
-  const { data: profilesData, isLoading, isError, refetch, error } = useQuery({
-    queryKey: ['employee-profiles'],
-    queryFn: () => employeeAPI.getProfiles(),
+  const profilesQuery = useQuery({
+    queryKey: ['employee-profiles-page'],
+    queryFn: () => employeeAPI.getProfiles({ page: 1, page_size: 1000 }),
   })
 
-  const { data: employeesData } = useQuery({
+  const employeesQuery = useQuery({
     queryKey: ['employee-profile-org-employees'],
     queryFn: () => orgAPI.getEmployees({ page: 1, page_size: 2000 }),
     staleTime: 60_000,
   })
 
-  const { data: departmentsData } = useQuery({
+  const departmentsQuery = useQuery({
     queryKey: ['employee-profile-departments'],
     queryFn: () => departmentAPI.getDepartments(),
     staleTime: 60_000,
   })
 
+  const employees = (employeesQuery.data?.data?.items ?? []) as EmployeeItem[]
+  const departments = (departmentsQuery.data?.data?.departments ?? []) as DepartmentItem[]
+  const profiles = (profilesQuery.data?.data?.items ?? []) as EmployeeProfileRecord[]
+
   const employeeByUserID = useMemo(() => {
     const result: Record<string, EmployeeItem> = {}
-    ;(employeesData?.data?.items || []).forEach((item: EmployeeItem) => {
+    employees.forEach((item) => {
       result[item.user_id] = item
     })
     return result
-  }, [employeesData])
+  }, [employees])
 
   const departmentNameMap = useMemo(() => {
     const result: Record<string, string> = {}
-    ;(departmentsData?.data?.departments || []).forEach((item: DepartmentItem) => {
+    departments.forEach((item) => {
       result[item.department_id] = item.name
     })
     return result
-  }, [departmentsData])
+  }, [departments])
 
-  const getProfileOrg = (profile?: EmployeeProfile | null) => {
-    if (!profile) {
-      return { departmentName: '-', position: '-' }
-    }
-    const employee = employeeByUserID[profile.user_id]
-    return {
-      departmentName: departmentNameMap[employee?.department_id || ''] || employee?.department_id || '-',
-      position: employee?.position || '-',
-    }
-  }
+  const employeeOptions = useMemo(
+    () =>
+      [...employees]
+        .sort((left, right) => left.name.localeCompare(right.name) || left.user_id.localeCompare(right.user_id))
+        .map((employee) => ({
+          label: `${employee.name} (${employee.user_id})`,
+          value: employee.user_id,
+        })),
+    [employees],
+  )
 
-  const normalizeProfileFormValues = (values: Record<string, any>) => {
-    const payload: Record<string, any> = { ...values }
-    profileDateFields.forEach((field) => {
-      payload[field] = payload[field] ? payload[field].format('YYYY-MM-DD') : ''
-    })
-    return payload
-  }
+  const linkedEmployee = selectedUserID ? employeeByUserID[selectedUserID] : undefined
 
-  const createProfileMutation = useMutation({
-    mutationFn: (data: any) => employeeAPI.createProfile(data),
+  const createMutation = useMutation({
+    mutationFn: (payload: ReturnType<typeof buildProfilePayload>) => employeeAPI.createProfile(payload),
     onSuccess: () => {
       message.success('员工档案创建成功')
-      setModalVisible(false)
+      setModalOpen(false)
+      setEditingProfile(null)
       form.resetFields()
-      refetch()
+      void profilesQuery.refetch()
     },
     onError: () => {
       message.error('员工档案创建失败')
     },
   })
 
-  const updateProfileMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => employeeAPI.updateProfile(id, data),
+  const updateMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: number | string; payload: ReturnType<typeof buildProfilePayload> }) =>
+      employeeAPI.updateProfile(String(id), payload),
     onSuccess: () => {
       message.success('员工档案更新成功')
-      setModalVisible(false)
-      refetch()
+      setModalOpen(false)
+      setEditingProfile(null)
+      void profilesQuery.refetch()
     },
     onError: () => {
       message.error('员工档案更新失败')
@@ -156,396 +242,323 @@ const EmployeeProfilePage: React.FC = () => {
   })
 
   const openCreateModal = () => {
-    setCurrentProfile(null)
+    setEditingProfile(null)
     form.resetFields()
-    form.setFieldsValue({ profile_status: 'active' })
-    setModalVisible(true)
+    setModalOpen(true)
   }
 
-  const handleCreateProfile = () => {
-    form.validateFields().then((values) => {
-      createProfileMutation.mutate(normalizeProfileFormValues(values))
-    })
+  const openEditModal = (profile: EmployeeProfileRecord) => {
+    setEditingProfile(profile)
+    form.setFieldsValue(toFormValues(profile))
+    setModalOpen(true)
   }
 
-  const handleUpdateProfile = () => {
-    form.validateFields().then((values) => {
-      if (currentProfile) {
-        updateProfileMutation.mutate({ id: currentProfile.id, data: normalizeProfileFormValues(values) })
-      }
-    })
+  const closeModal = () => {
+    setModalOpen(false)
+    setEditingProfile(null)
+    form.resetFields()
   }
 
-  const handleEditProfile = (profile: EmployeeProfile) => {
-    setCurrentProfile(profile)
-    const formValues: Record<string, any> = { ...profile }
-    profileDateFields.forEach((field) => {
-      formValues[field] = formValues[field] ? dayjs(formValues[field]) : null
-    })
-    form.setFieldsValue(formValues)
-    setModalVisible(true)
-  }
-
-  const handleViewProfile = (profile: EmployeeProfile) => {
-    setCurrentProfile(profile)
-    setActiveTab('detail')
+  const handleSubmit = async () => {
+    const values = await form.validateFields()
+    const payload = buildProfilePayload(values)
+    if (editingProfile) {
+      updateMutation.mutate({ id: editingProfile.id, payload })
+      return
+    }
+    createMutation.mutate(payload)
   }
 
   const columns = [
     {
-      title: '员工工号',
+      title: '关联员工',
+      key: 'employee',
+      render: (_: unknown, record: EmployeeProfileRecord) => {
+        const employee = employeeByUserID[record.user_id]
+        return (
+          <div>
+            <Text strong>{employee?.name || record.user_id}</Text>
+            <div style={{ color: '#8c8c8c', fontSize: 12 }}>{record.user_id}</div>
+          </div>
+        )
+      },
+    },
+    {
+      title: '档案工号',
       dataIndex: 'employee_id',
       key: 'employee_id',
     },
     {
-      title: '姓名',
-      dataIndex: 'name',
-      key: 'name',
-      render: (text: string) => <Text strong>{text}</Text>,
-    },
-    {
       title: '部门',
-      dataIndex: 'department_name',
-      key: 'department_name',
-      render: (_: string, record: EmployeeProfile) => getProfileOrg(record).departmentName,
+      key: 'department',
+      render: (_: unknown, record: EmployeeProfileRecord) => {
+        const employee = employeeByUserID[record.user_id]
+        return departmentNameMap[employee?.department_id || ''] || employee?.department_id || '-'
+      },
     },
     {
-      title: '职位',
-      dataIndex: 'position',
+      title: '岗位',
       key: 'position',
-      render: (_: string, record: EmployeeProfile) => getProfileOrg(record).position,
+      render: (_: unknown, record: EmployeeProfileRecord) => employeeByUserID[record.user_id]?.position || '-',
     },
     {
       title: '入职日期',
       dataIndex: 'entry_date',
       key: 'entry_date',
+      render: (value?: string) => value || '-',
     },
     {
-      title: '状态',
+      title: '档案状态',
       dataIndex: 'profile_status',
       key: 'profile_status',
-      render: (status: string) => (
-        <Text type={status === 'active' ? 'success' : 'warning'}>
-          {status === 'active' ? '在职' : '离职'}
-        </Text>
-      ),
+      render: (value?: string) => <Tag color={value === 'active' ? 'green' : 'default'}>{value || '未设置'}</Tag>,
     },
     {
       title: '操作',
       key: 'action',
-      render: (_: any, record: EmployeeProfile) => (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button type="link" icon={<EditOutlined />} onClick={() => handleEditProfile(record)}>
-            编辑
-          </Button>
-          <Button type="link" onClick={() => handleViewProfile(record)}>
-            查看
-          </Button>
-        </div>
+      render: (_: unknown, record: EmployeeProfileRecord) => (
+        <Button type="link" icon={<EditOutlined />} onClick={() => openEditModal(record)}>
+          编辑
+        </Button>
       ),
     },
   ]
 
   return (
     <div>
-      <Title level={4}>员工档案中心</Title>
-      {activeTab === 'list' ? (
-        <Card
-          extra={
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading}>
-                刷新
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div>
+          <Title level={4} style={{ marginBottom: 4 }}>
+            员工档案
+          </Title>
+          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+            仅维护 EmployeeProfile 档案字段。User.name / email / mobile / department_id / position / avatar / status 在这里保持只读，不会进入创建或编辑 payload。
+          </Paragraph>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button icon={<ReloadOutlined />} onClick={() => void profilesQuery.refetch()} loading={profilesQuery.isFetching}>
+            刷新
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+            新建档案
+          </Button>
+        </div>
+      </div>
+
+      <Alert
+        style={{ marginBottom: 16 }}
+        type="info"
+        showIcon
+        message="本页不提供删除能力。user_id 只作为档案关联字段；档案编辑不会更新钉钉同步主数据，也不会提交 profile_status。"
+      />
+
+      <Card>
+        {profilesQuery.isLoading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+            <Spin size="large" />
+          </div>
+        ) : profilesQuery.isError ? (
+          <Alert
+            type="error"
+            showIcon
+            message="员工档案加载失败"
+            action={
+              <Button size="small" onClick={() => void profilesQuery.refetch()}>
+                重试
               </Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
-                新建档案
-              </Button>
-            </div>
-          }
-        >
-          {isLoading ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
-              <Spin size="large" />
-            </div>
-          ) : isError ? (
-            <div style={{ padding: 20 }}>
-              <Alert
-                message="加载失败"
-                description={(error as Error)?.message || '获取员工档案失败，请稍后重试'}
-                type="error"
-                showIcon
-                action={
-                  <Button size="small" onClick={() => refetch()}>
-                    重试
-                  </Button>
-                }
-              />
-            </div>
-          ) : profilesData?.data?.items?.length ? (
-            <Table
-              columns={columns}
-              dataSource={profilesData.data.items as EmployeeProfile[]}
-              rowKey="id"
-              pagination={{
-                showTotal: (total: number) => `共 ${total} 个员工档案`,
-              }}
-            />
-          ) : (
-            <Empty description="暂无员工档案" />
-          )}
-        </Card>
-      ) : (
-        <Card
-          title={
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <Avatar size={64} icon={<UserOutlined />} />
-              <div>
-                <Text strong style={{ fontSize: 18 }}>{currentProfile?.name || '-'}</Text>
-                <div style={{ fontSize: 14, color: '#666' }}>
-                  {currentProfile?.employee_id || '-'} / {getProfileOrg(currentProfile).departmentName} / {getProfileOrg(currentProfile).position}
-                </div>
-              </div>
-              <Button type="primary" onClick={() => setActiveTab('list')} style={{ marginLeft: 'auto' }}>
-                返回列表
-              </Button>
-            </div>
-          }
-        >
-          <Tabs defaultActiveKey="basic" style={{ marginTop: 24 }}>
-            <Tabs.TabPane tab="基本信息" key="basic">
-              <Descriptions column={2} bordered>
-                <Descriptions.Item label="姓名">{currentProfile?.name || '-'}</Descriptions.Item>
-                <Descriptions.Item label="工号">{currentProfile?.employee_id || '-'}</Descriptions.Item>
-                <Descriptions.Item label="性别">{currentProfile?.gender || '-'}</Descriptions.Item>
-                <Descriptions.Item label="出生日期">{currentProfile?.birth_date || '-'}</Descriptions.Item>
-                <Descriptions.Item label="国籍">{currentProfile?.nationality || '-'}</Descriptions.Item>
-                <Descriptions.Item label="身份证号">{currentProfile?.id_card_number || '-'}</Descriptions.Item>
-                <Descriptions.Item label="工作邮箱">{currentProfile?.work_email || '-'}</Descriptions.Item>
-                <Descriptions.Item label="个人邮箱">{currentProfile?.personal_email || '-'}</Descriptions.Item>
-                <Descriptions.Item label="紧急联系人">{currentProfile?.emergency_contact || '-'}</Descriptions.Item>
-                <Descriptions.Item label="紧急联系电话">{currentProfile?.emergency_phone || '-'}</Descriptions.Item>
-                <Descriptions.Item label="地址" span={2}>{currentProfile?.address || '-'}</Descriptions.Item>
-              </Descriptions>
-            </Tabs.TabPane>
-            <Tabs.TabPane tab="工作信息" key="work">
-              <Descriptions column={2} bordered>
-                <Descriptions.Item label="部门">{getProfileOrg(currentProfile).departmentName}</Descriptions.Item>
-                <Descriptions.Item label="职位">{getProfileOrg(currentProfile).position}</Descriptions.Item>
-                <Descriptions.Item label="雇佣类型" span={1}>{currentProfile?.employment_type || '-'}</Descriptions.Item>
-                <Descriptions.Item label="职级" span={1}>{currentProfile?.job_level || '-'}</Descriptions.Item>
-                <Descriptions.Item label="岗位序列" span={1}>{currentProfile?.job_family || '-'}</Descriptions.Item>
-                <Descriptions.Item label="入职日期" span={1}>{currentProfile?.entry_date || '-'}</Descriptions.Item>
-                <Descriptions.Item label="试用期结束日期" span={1}>{currentProfile?.probation_end_date || '-'}</Descriptions.Item>
-                <Descriptions.Item label="计划转正日期" span={1}>{currentProfile?.planned_regular_date || '-'}</Descriptions.Item>
-                <Descriptions.Item label="实际转正日期" span={1}>{currentProfile?.actual_regular_date || '-'}</Descriptions.Item>
-                <Descriptions.Item label="合同开始日期" span={1}>{currentProfile?.contract_start_date || '-'}</Descriptions.Item>
-                <Descriptions.Item label="合同结束日期" span={1}>{currentProfile?.contract_end_date || '-'}</Descriptions.Item>
-                <Descriptions.Item label="状态" span={1}>
-                  <Text type={currentProfile?.profile_status === 'active' ? 'success' : 'warning'}>
-                    {currentProfile?.profile_status === 'active' ? '在职' : '离职'}
-                  </Text>
-                </Descriptions.Item>
-              </Descriptions>
-              <Divider orientation="left">工作经历</Divider>
-              {currentProfile?.work_experience?.experiences?.map((exp: any, index: number) => (
-                <Card key={index} style={{ marginBottom: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text strong>{exp.company}</Text>
-                    <Text type="secondary">{exp.start_date} - {exp.end_date}</Text>
-                  </div>
-                  <div style={{ marginTop: 8 }}>
-                    <Text>职位：{exp.position}</Text>
-                  </div>
-                  <div style={{ marginTop: 4 }}>
-                    <Text type="secondary">{exp.description}</Text>
-                  </div>
-                </Card>
-              ))}
-            </Tabs.TabPane>
-            <Tabs.TabPane tab="教育背景" key="education">
-              <Descriptions column={2} bordered>
-                <Descriptions.Item label="学历">{currentProfile?.education || '-'}</Descriptions.Item>
-                <Descriptions.Item label="毕业院校">{currentProfile?.graduate_school || '-'}</Descriptions.Item>
-                <Descriptions.Item label="专业">{currentProfile?.major || '-'}</Descriptions.Item>
-                <Descriptions.Item label="毕业日期">{currentProfile?.graduation_date || '-'}</Descriptions.Item>
-              </Descriptions>
-            </Tabs.TabPane>
-            <Tabs.TabPane tab="技能证书" key="skills">
-              {currentProfile?.skills?.certificates?.map((cert: any, index: number) => (
-                <Card key={index} style={{ marginBottom: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text strong>{cert.name}</Text>
-                    <Text type="secondary">颁发日期：{cert.issue_date}</Text>
-                  </div>
-                  <div style={{ marginTop: 4 }}>
-                    <Text type="secondary">有效期至：{cert.expiry_date}</Text>
-                  </div>
-                </Card>
-              ))}
-            </Tabs.TabPane>
-            <Tabs.TabPane tab="财务信息" key="finance">
-              <Descriptions column={2} bordered>
-                <Descriptions.Item label="银行账号">{currentProfile?.bank_account || '-'}</Descriptions.Item>
-                <Descriptions.Item label="银行名称">{currentProfile?.bank_name || '-'}</Descriptions.Item>
-                <Descriptions.Item label="税号" span={2}>{currentProfile?.tax_number || '-'}</Descriptions.Item>
-              </Descriptions>
-            </Tabs.TabPane>
-          </Tabs>
-        </Card>
-      )}
+            }
+          />
+        ) : (
+          <Table<EmployeeProfileRecord>
+            rowKey="id"
+            columns={columns}
+            dataSource={profiles}
+            locale={{ emptyText: '暂无员工档案' }}
+            pagination={false}
+          />
+        )}
+      </Card>
 
       <Modal
-        title={currentProfile ? '编辑员工档案' : '新建员工档案'}
-        open={modalVisible}
-        onCancel={() => setModalVisible(false)}
-        footer={[
-          <Button key="cancel" onClick={() => setModalVisible(false)}>
-            取消
-          </Button>,
-          <Button
-            key="submit"
-            type="primary"
-            onClick={currentProfile ? handleUpdateProfile : handleCreateProfile}
-            loading={currentProfile ? updateProfileMutation.isPending : createProfileMutation.isPending}
-          >
-            确认
-          </Button>,
-        ]}
-        width={800}
+        title={editingProfile ? '编辑员工档案' : '新建员工档案'}
+        open={modalOpen}
+        onCancel={closeModal}
+        onOk={() => void handleSubmit()}
+        okText="保存"
+        cancelText="取消"
+        width={880}
+        confirmLoading={createMutation.isPending || updateMutation.isPending}
+        destroyOnClose
       >
         <Form form={form} layout="vertical">
-          <Tabs defaultActiveKey="basic">
-            <Tabs.TabPane tab="基本信息" key="basic">
+          <Alert
+            style={{ marginBottom: 16 }}
+            type="info"
+            showIcon
+            message={
+              linkedEmployee
+                ? `当前关联员工：${linkedEmployee.name} / ${departmentNameMap[linkedEmployee.department_id] || linkedEmployee.department_id || '未分配部门'} / ${linkedEmployee.position || '未设置岗位'}`
+                : '请选择一个已同步员工作为档案关联对象。姓名、部门、岗位等主数据仅用于展示，不会通过本表单更新。'
+            }
+          />
+
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
               <Form.Item
                 name="user_id"
-                label="用户 ID"
-                rules={[{ required: true, message: '请输入用户 ID' }]}
+                label="关联员工"
+                rules={[{ required: true, message: '请选择关联员工' }]}
               >
-                <Input placeholder="请输入用户 ID" />
+                <Select
+                  showSearch
+                  placeholder="请选择员工"
+                  optionFilterProp="label"
+                  options={employeeOptions}
+                  loading={employeesQuery.isLoading}
+                />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item
                 name="employee_id"
-                label="员工工号"
-                rules={[{ required: true, message: '请输入员工工号' }]}
+                label="档案工号"
+                rules={[{ required: true, message: '请输入档案工号' }]}
               >
-                <Input placeholder="请输入员工工号" />
+                <Input placeholder="请输入档案工号" />
               </Form.Item>
-              <Form.Item
-                name="name"
-                label="姓名"
-                rules={[{ required: true, message: '请输入姓名' }]}
-              >
-                <Input placeholder="请输入姓名" />
-              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="gender" label="性别">
-                <Select placeholder="请选择性别">
-                  <Option value="男">男</Option>
-                  <Option value="女">女</Option>
-                </Select>
+                <Select
+                  allowClear
+                  options={[
+                    { label: '男', value: '男' },
+                    { label: '女', value: '女' },
+                  ]}
+                />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="birth_date" label="出生日期">
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+                <DatePicker style={{ width: '100%' }} />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="nationality" label="国籍">
                 <Input placeholder="请输入国籍" />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="id_card_number" label="身份证号">
                 <Input placeholder="请输入身份证号" />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="work_email" label="工作邮箱">
                 <Input placeholder="请输入工作邮箱" />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="personal_email" label="个人邮箱">
                 <Input placeholder="请输入个人邮箱" />
               </Form.Item>
-              <Form.Item name="emergency_contact" label="紧急联系人">
-                <Input placeholder="请输入紧急联系人" />
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="employment_type" label="用工类型">
+                <Select allowClear options={employmentTypeOptions.map((item) => ({ label: item, value: item }))} />
               </Form.Item>
-              <Form.Item name="emergency_phone" label="紧急联系电话">
-                <Input placeholder="请输入紧急联系电话" />
-              </Form.Item>
-              <Form.Item name="address" label="地址">
-                <Input.TextArea placeholder="请输入地址" rows={3} />
-              </Form.Item>
-            </Tabs.TabPane>
-            <Tabs.TabPane tab="工作信息" key="work">
-              <Form.Item name="employment_type" label="雇佣类型">
-                <Select placeholder="请选择雇佣类型">
-                  {employmentTypeOptions.map((item) => (
-                    <Option key={item} value={item}>{item}</Option>
-                  ))}
-                </Select>
-              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="job_level" label="职级">
                 <Input placeholder="请输入职级" />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="job_family" label="岗位序列">
-                <Select placeholder="请选择岗位序列">
-                  {jobFamilyOptions.map((item) => (
-                    <Option key={item} value={item}>{item}</Option>
-                  ))}
-                </Select>
+                <Select allowClear options={jobFamilyOptions.map((item) => ({ label: item, value: item }))} />
               </Form.Item>
-              <Form.Item
-                name="entry_date"
-                label="入职日期"
-              >
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="entry_date" label="入职日期">
+                <DatePicker style={{ width: '100%' }} />
               </Form.Item>
-              <Form.Item
-                name="probation_end_date"
-                label="试用期结束日期"
-              >
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item name="probation_end_date" label="试用期结束日期">
+                <DatePicker style={{ width: '100%' }} />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
               <Form.Item name="planned_regular_date" label="计划转正日期">
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+                <DatePicker style={{ width: '100%' }} />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
               <Form.Item name="actual_regular_date" label="实际转正日期">
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+                <DatePicker style={{ width: '100%' }} />
               </Form.Item>
-              <Form.Item
-                name="contract_start_date"
-                label="合同开始日期"
-              >
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="contract_start_date" label="合同开始日期">
+                <DatePicker style={{ width: '100%' }} />
               </Form.Item>
-              <Form.Item
-                name="contract_end_date"
-                label="合同结束日期"
-              >
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="contract_end_date" label="合同结束日期">
+                <DatePicker style={{ width: '100%' }} />
               </Form.Item>
-            </Tabs.TabPane>
-            <Tabs.TabPane tab="教育背景" key="education">
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="emergency_contact" label="紧急联系人">
+                <Input placeholder="请输入紧急联系人" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="emergency_phone" label="紧急联系电话">
+                <Input placeholder="请输入紧急联系电话" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
               <Form.Item name="education" label="学历">
-                <Select placeholder="请选择学历">
-                  {educationOptions.map((item) => (
-                    <Option key={item} value={item}>{item}</Option>
-                  ))}
-                </Select>
+                <Select allowClear options={educationOptions.map((item) => ({ label: item, value: item }))} />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
               <Form.Item name="graduate_school" label="毕业院校">
                 <Input placeholder="请输入毕业院校" />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
               <Form.Item name="major" label="专业">
                 <Input placeholder="请输入专业" />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="graduation_date" label="毕业日期">
-                <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+                <DatePicker style={{ width: '100%' }} />
               </Form.Item>
-            </Tabs.TabPane>
-            <Tabs.TabPane tab="财务信息" key="finance">
-              <Form.Item name="bank_account" label="银行账号">
-                <Input placeholder="请输入银行账号" />
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="bank_account" label="银行卡号">
+                <Input placeholder="请输入银行卡号" />
               </Form.Item>
-              <Form.Item name="bank_name" label="银行名称">
-                <Input placeholder="请输入银行名称" />
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="bank_name" label="开户行">
+                <Input placeholder="请输入开户行" />
               </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="tax_number" label="税号">
                 <Input placeholder="请输入税号" />
               </Form.Item>
-            </Tabs.TabPane>
-          </Tabs>
+            </Col>
+            <Col span={24}>
+              <Form.Item name="address" label="联系地址">
+                <TextArea rows={3} placeholder="请输入联系地址" />
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       </Modal>
     </div>
