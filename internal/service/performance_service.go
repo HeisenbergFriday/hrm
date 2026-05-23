@@ -1497,7 +1497,7 @@ func (s *PerformanceService) UpdateTemplate(templateID uint, req PerformanceTemp
 }
 
 // BatchConfirmResults 批量确认员工绩效结果
-func (s *PerformanceService) BatchConfirmResults(activityID string, participantIDs []uint) ([]map[string]interface{}, error) {
+func (s *PerformanceService) BatchConfirmResults(activityID string, participantIDs []uint, userID string) ([]map[string]interface{}, error) {
 	results := make([]map[string]interface{}, 0, len(participantIDs))
 	for _, pid := range participantIDs {
 		p, err := s.participantR.GetByID(strconv.FormatUint(uint64(pid), 10))
@@ -1509,7 +1509,7 @@ func (s *PerformanceService) BatchConfirmResults(activityID string, participantI
 			results = append(results, map[string]interface{}{"participant_id": pid, "success": false, "error": "状态不是 manager_submitted"})
 			continue
 		}
-		if err := s.confirmResultByID(p.ID, "system"); err != nil {
+		if err := s.confirmResultByID(p.ID, userID); err != nil {
 			results = append(results, map[string]interface{}{"participant_id": pid, "success": false, "error": err.Error()})
 			continue
 		}
