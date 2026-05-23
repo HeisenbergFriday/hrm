@@ -14,7 +14,7 @@ import {
   Typography,
 } from 'antd'
 import type { FormInstance } from 'antd/es/form'
-import { CloseOutlined, SaveOutlined } from '@ant-design/icons'
+import { SaveOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
 const { TextArea } = Input
@@ -56,17 +56,32 @@ function scrollToSection(id: string) {
 }
 
 const sectionStyle: React.CSSProperties = {
-  padding: '20px 24px 8px',
-  borderBottom: '1px solid #eef0f4',
-  scrollMarginTop: 104,
+  padding: '24px 28px 12px',
+  borderBottom: '1px solid #f0f0f0',
+  scrollMarginTop: 110,
+  background: '#fff',
 }
 
 const sectionTitleStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 12,
-  marginBottom: 16,
+  gap: 10,
+  marginBottom: 20,
+}
+
+const cycleLabels: Record<string, string> = {
+  monthly: '月度',
+  quarterly: '季度',
+  annual: '年度',
+}
+
+function normalizeCycleType(value?: string) {
+  return String(value || '').trim()
+}
+
+function getCycleLabel(value?: string) {
+  const normalized = normalizeCycleType(value)
+  return cycleLabels[normalized] || normalized || '未知周期'
 }
 
 const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
@@ -84,6 +99,35 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
 }) => {
   const [, forceFormRerender] = React.useState(0)
   const values = form.getFieldsValue(true)
+  const cycleType = Form.useWatch('cycle_type', form) as string | undefined
+  const selectedIndicatorLibraryId = Form.useWatch('indicator_library_id', form) as number | string | undefined
+  const normalizedCycleType = normalizeCycleType(cycleType)
+  const selectedIndicatorLibraryIdKey = selectedIndicatorLibraryId == null ? '' : String(selectedIndicatorLibraryId)
+  const selectedIndicatorLibrary = React.useMemo(
+    () => indicatorLibraries.find(lib => String(lib.id) === selectedIndicatorLibraryIdKey) || null,
+    [indicatorLibraries, selectedIndicatorLibraryIdKey],
+  )
+  const indicatorLibraryCycleMismatch = Boolean(
+    normalizedCycleType
+      && selectedIndicatorLibrary
+      && normalizeCycleType(selectedIndicatorLibrary.default_cycle) !== normalizedCycleType,
+  )
+  const visibleIndicatorLibraries = React.useMemo(() => {
+    const cycleFilteredLibraries = indicatorLibraries.filter(lib => {
+      if (!normalizedCycleType) return true
+      return normalizeCycleType(lib.default_cycle) === normalizedCycleType
+    })
+
+    if (!selectedIndicatorLibrary || !indicatorLibraryCycleMismatch) {
+      return cycleFilteredLibraries
+    }
+
+    if (cycleFilteredLibraries.some(lib => String(lib.id) === String(selectedIndicatorLibrary.id))) {
+      return cycleFilteredLibraries
+    }
+
+    return [...cycleFilteredLibraries, selectedIndicatorLibrary]
+  }, [indicatorLibraries, normalizedCycleType, indicatorLibraryCycleMismatch, selectedIndicatorLibrary])
   const requiredChecks = [
     { id: 'activity-basic-section', label: '基础信息', done: Boolean(values.name && values.cycle_type) },
     { id: 'activity-period-section', label: '周期设置', done: isRangeFilled(values.date_range) },
@@ -105,39 +149,34 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
     <div
       id="performance-activity-editor"
       style={{
-        marginBottom: 16,
-        overflow: 'hidden',
         background: '#fff',
-        border: '1px solid #dbe3f0',
-        borderRadius: 8,
-        boxShadow: '0 2px 10px rgba(15, 23, 42, 0.06)',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
       <div
         style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 4,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 12,
-          padding: '14px 20px',
+          padding: '14px 24px',
           borderBottom: '1px solid #e5e7eb',
-          background: 'rgba(248, 250, 252, 0.98)',
-          backdropFilter: 'blur(8px)',
+          background: '#f8fafc',
         }}
       >
-        <Space size={12} wrap>
-          <Text strong style={{ fontSize: 16 }}>{editing ? '编辑活动' : '新建活动'}</Text>
-          <Progress percent={progress} size="small" showInfo={false} style={{ width: 150 }} />
-          <Text type="secondary" style={{ fontSize: 13 }}>{doneCount}/{requiredChecks.length}</Text>
+        <Space size={16} align="center">
+          <Progress percent={progress} size="small" showInfo={false} style={{ width: 120 }} />
+          <Text type="secondary" style={{ fontSize: 13, background: '#e2e8f0', padding: '2px 10px', borderRadius: 10 }}>
+            {doneCount}/{requiredChecks.length} 必填项已完成
+          </Text>
         </Space>
         <Space>
-          <Button icon={<CloseOutlined />} onClick={onCancel} disabled={saving}>
+          <Button onClick={onCancel} disabled={saving}>
             取消
           </Button>
-          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave}>
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave} style={{ background: '#4338ca', borderColor: '#4338ca' }}>
             {editing ? '保存修改' : '保存活动'}
           </Button>
         </Space>
@@ -147,13 +186,13 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
         style={{
           display: 'flex',
           gap: 8,
-          padding: '10px 20px',
+          padding: '12px 24px',
           overflowX: 'auto',
-          borderBottom: '1px solid #eef0f4',
-          background: '#fff',
+          borderBottom: '1px solid #e5e7eb',
+          background: '#f8fafc',
         }}
       >
-        {activitySections.map(section => {
+        {activitySections.map((section, idx) => {
           const check = getRequiredCheck(section.id)
           return (
             <Button
@@ -163,12 +202,17 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
               onClick={() => scrollToSection(section.id)}
               style={{
                 flex: '0 0 auto',
-                height: 30,
-                paddingInline: 10,
-                background: check?.done ? '#f0fdf4' : undefined,
-                color: check?.done ? '#166534' : undefined,
+                height: 32,
+                paddingInline: 14,
+                borderRadius: 6,
+                background: check?.done ? '#ecfdf5' : undefined,
+                color: check?.done ? '#047857' : '#4b5563',
+                fontWeight: 500,
+                fontSize: 13,
+                transition: 'all 0.2s',
               }}
             >
+              <span style={{ marginRight: 6, color: '#9ca3af', fontSize: 12 }}>{idx + 1}.</span>
               {section.label}
             </Button>
           )
@@ -202,12 +246,55 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={8}>
-                  <Form.Item name="indicator_library_id" label="关联指标库">
+                  <Form.Item
+                    name="indicator_library_id"
+                    label="关联指标库"
+                    rules={[
+                      {
+                        validator: (_, value) => {
+                          if (!value || !normalizedCycleType) return Promise.resolve()
+
+                          const library = indicatorLibraries.find(lib => String(lib.id) === String(value))
+                          if (!library) return Promise.resolve()
+
+                          const libraryCycle = normalizeCycleType(library.default_cycle)
+                          if (libraryCycle === normalizedCycleType) return Promise.resolve()
+
+                          return Promise.reject(new Error(`请选择${getCycleLabel(normalizedCycleType)}指标库`))
+                        },
+                      },
+                    ]}
+                    extra={
+                      normalizedCycleType
+                        ? indicatorLibraryCycleMismatch && selectedIndicatorLibrary
+                          ? (
+                            <Text type="warning">
+                              当前已选指标库默认周期为 {getCycleLabel(selectedIndicatorLibrary.default_cycle)}，与活动周期 {getCycleLabel(normalizedCycleType)} 不一致，请更换。
+                            </Text>
+                          )
+                          : (
+                            <Text type="secondary">
+                              仅显示默认周期为 {getCycleLabel(normalizedCycleType)} 的指标库。
+                            </Text>
+                          )
+                        : (
+                          <Text type="secondary">
+                            请先选择周期类型，指标库会按周期自动过滤。
+                          </Text>
+                        )
+                    }
+                  >
                     <Select
-                      placeholder="请选择指标库（可选）"
+                      placeholder={normalizedCycleType ? `请选择${getCycleLabel(normalizedCycleType)}指标库（可选）` : '请先选择周期类型'}
                       allowClear
+                      showSearch
+                      disabled={!normalizedCycleType}
                       loading={indicatorLibrariesLoading}
-                      options={indicatorLibraries.map(lib => ({ value: lib.id, label: lib.name }))}
+                      optionFilterProp="label"
+                      options={visibleIndicatorLibraries.map(lib => ({
+                        value: lib.id,
+                        label: `${lib.name}${lib.default_cycle ? `（${getCycleLabel(lib.default_cycle)}）` : ''}`,
+                      }))}
                     />
                   </Form.Item>
                 </Col>
@@ -296,7 +383,7 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
               </Row>
             </section>
 
-            <section id="activity-advanced-section" style={{ ...sectionStyle, borderBottom: 'none' }}>
+            <section id="activity-advanced-section" style={{ ...sectionStyle, borderBottom: 'none', paddingBottom: 24 }}>
               <div style={sectionTitleStyle}>
                 <Text strong style={{ fontSize: 15 }}>高级设置</Text>
                 <Tag style={{ marginInlineEnd: 0 }}>可选</Tag>

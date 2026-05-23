@@ -113,12 +113,16 @@ func (s *PerformanceService) CreateActivity(req CreateActivityRequest) (*databas
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, errors.New("name 不能为空")
 	}
-	if strings.TrimSpace(req.CycleType) == "" {
+	cycleType := strings.TrimSpace(req.CycleType)
+	if cycleType == "" {
 		return nil, errors.New("cycle_type 不能为空")
+	}
+	if err := s.validateActivityIndicatorLibraryCycle(req.IndicatorLibraryID, cycleType); err != nil {
+		return nil, err
 	}
 	activity := &database.PerformanceActivity{
 		Name:                   strings.TrimSpace(req.Name),
-		CycleType:              strings.TrimSpace(req.CycleType),
+		CycleType:              cycleType,
 		StartDate:              strings.TrimSpace(req.StartDate),
 		EndDate:                strings.TrimSpace(req.EndDate),
 		IndicatorLibraryID:     req.IndicatorLibraryID,
@@ -156,8 +160,15 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 	if err != nil {
 		return nil, err
 	}
+	cycleType := strings.TrimSpace(req.CycleType)
+	if cycleType == "" {
+		return nil, errors.New("cycle_type 不能为空")
+	}
+	if err := s.validateActivityIndicatorLibraryCycle(req.IndicatorLibraryID, cycleType); err != nil {
+		return nil, err
+	}
 	activity.Name = strings.TrimSpace(req.Name)
-	activity.CycleType = strings.TrimSpace(req.CycleType)
+	activity.CycleType = cycleType
 	activity.StartDate = strings.TrimSpace(req.StartDate)
 	activity.EndDate = strings.TrimSpace(req.EndDate)
 	activity.IndicatorLibraryID = req.IndicatorLibraryID
@@ -381,6 +392,7 @@ var participantStageStatuses = map[string]map[string]struct{}{
 		"result_confirmed":  {},
 	},
 	"hr_confirmation": {
+		"manager_confirmed": {},
 		"hr_confirmed":     {},
 		"locked":           {},
 		"result_confirmed": {},
@@ -765,21 +777,54 @@ func (s *PerformanceService) ListParticipants(activityID string, page, pageSize 
 	return s.participantR.FindAll(activityID, page, pageSize, departmentID, managerID, status, employeeKeyword)
 }
 
+func (s *PerformanceService) validateActivityIndicatorLibraryCycle(indicatorLibraryID *uint, cycleType string) error {
+	if indicatorLibraryID == nil {
+		return nil
+	}
+
+	var library database.PerformanceIndicatorLibrary
+	if err := s.db.Where("id = ? AND deleted_at IS NULL", *indicatorLibraryID).First(&library).Error; err != nil {
+		return fmt.Errorf("指标库不存在: %w", err)
+	}
+
+	libraryCycle := strings.TrimSpace(library.DefaultCycle)
+	if libraryCycle == "" {
+		return fmt.Errorf("指标库 %s 未配置默认周期，不能关联到绩效活动", library.Name)
+	}
+	if libraryCycle != strings.TrimSpace(cycleType) {
+		return fmt.Errorf("指标库周期与活动周期不一致：活动周期为 %s，指标库周期为 %s", cycleType, libraryCycle)
+	}
+	return nil
+}
+
 func activityIncludesUser(activity *database.PerformanceActivity, user database.User) bool {
-	if len(activity.TargetEmployeeIDs) == 0 && len(activity.TargetDepartmentIDs) == 0 {
-		return true
-	}
+	hasEmployeeScope := false
 	for _, employeeID := range activity.TargetEmployeeIDs {
-		if strings.TrimSpace(employeeID) == user.UserID {
+		employeeID = strings.TrimSpace(employeeID)
+		if employeeID == "" {
+			continue
+		}
+		hasEmployeeScope = true
+		if employeeID == user.UserID {
 			return true
 		}
 	}
+	if hasEmployeeScope {
+		return false
+	}
+
+	hasDepartmentScope := false
 	for _, departmentID := range activity.TargetDepartmentIDs {
-		if strings.TrimSpace(departmentID) == user.DepartmentID {
+		departmentID = strings.TrimSpace(departmentID)
+		if departmentID == "" {
+			continue
+		}
+		hasDepartmentScope = true
+		if departmentID == user.DepartmentID {
 			return true
 		}
 	}
-	return false
+	return !hasDepartmentScope
 }
 
 func (s *PerformanceService) GetParticipant(participantID string) (*database.PerformanceParticipant, error) {
@@ -1452,7 +1497,7 @@ func (s *PerformanceService) UpdateTemplate(templateID uint, req PerformanceTemp
 }
 
 // BatchConfirmResults 批量确认员工绩效结果
-func (s *PerformanceService) BatchConfirmResults(activityID string, participantIDs []uint) ([]map[string]interface{}, error) {
+func (s *PerformanceService) BatchConfirmResults(activityID string, participantIDs []uint, userID string) ([]map[string]interface{}, error) {
 	results := make([]map[string]interface{}, 0, len(participantIDs))
 	for _, pid := range participantIDs {
 		p, err := s.participantR.GetByID(strconv.FormatUint(uint64(pid), 10))
@@ -1464,7 +1509,7 @@ func (s *PerformanceService) BatchConfirmResults(activityID string, participantI
 			results = append(results, map[string]interface{}{"participant_id": pid, "success": false, "error": "状态不是 manager_submitted"})
 			continue
 		}
-		if err := s.confirmResultByID(p.ID, "system"); err != nil {
+		if err := s.confirmResultByID(p.ID, userID); err != nil {
 			results = append(results, map[string]interface{}{"participant_id": pid, "success": false, "error": err.Error()})
 			continue
 		}
