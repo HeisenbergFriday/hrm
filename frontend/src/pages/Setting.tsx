@@ -2,37 +2,26 @@ import React, { useState } from 'react'
 import { Card, Typography, Form, Input, Button, Spin, Empty, Alert, message, Row, Col } from 'antd'
 import { SettingOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
+import { syncAPI } from '../services/api'
 
-const { Title } = Typography
-
-// 模拟API调用
-const fetchSyncStatus = async () => {
-  await new Promise(resolve => setTimeout(resolve, 1000))
-  return {
-    departments: {
-      last_sync_time: '2024-01-01T00:00:00Z',
-      status: 'success'
-    },
-    users: {
-      last_sync_time: '2024-01-01T00:00:00Z',
-      status: 'success'
-    }
-  }
-}
+const { Text } = Typography
 
 const Setting: React.FC = () => {
   const [syncing, setSyncing] = useState(false)
 
   const { data: syncStatus, isLoading, isError, refetch: refetchSyncStatus } = useQuery({
     queryKey: ['syncStatus'],
-    queryFn: fetchSyncStatus
+    queryFn: async () => {
+      const res = await syncAPI.getSyncStatus()
+      return res.data?.data?.status || res.data?.data
+    }
   })
 
   const handleSync = async (type: string) => {
     setSyncing(true)
     try {
-      // 模拟同步请求
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      const fn = type === 'departments' ? syncAPI.syncDepartments : syncAPI.syncUsers
+      await fn()
       message.success(`${type === 'departments' ? '部门' : '用户'}同步成功`)
       refetchSyncStatus()
     } catch (error) {
@@ -48,11 +37,14 @@ const Setting: React.FC = () => {
   }
 
   return (
-    <div>
-      <Title level={4}>系统设置</Title>
-      <Row gutter={16}>
+    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+        <SettingOutlined style={{ color: '#4338ca', marginRight: 8 }} />系统设置
+      </h2>
+      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>管理系统配置与同步设置</Text>
+      <Row gutter={16} style={{ marginTop: 16 }}>
         <Col span={12}>
-          <Card title="系统配置">
+          <Card title="系统配置" style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }} styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}>
             <Form
               layout="vertical"
               onFinish={onFinish}
@@ -67,7 +59,7 @@ const Setting: React.FC = () => {
                 <Input.Password placeholder="请输入JWT Secret" />
               </Form.Item>
               <Form.Item>
-                <Button type="primary" htmlType="submit">
+                <Button type="primary" htmlType="submit" style={{ borderRadius: 8, fontWeight: 600 }}>
                   保存配置
                 </Button>
               </Form.Item>
@@ -75,7 +67,7 @@ const Setting: React.FC = () => {
           </Card>
         </Col>
         <Col span={12}>
-          <Card title="同步设置">
+          <Card title="同步设置" style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }} styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}>
             {isLoading ? (
               <div className="loading-container">
                 <Spin size="small" />
@@ -83,7 +75,7 @@ const Setting: React.FC = () => {
             ) : isError ? (
               <div className="error-container">
                 <Alert message="加载失败" type="error" showIcon />
-                <Button className="retry-button" onClick={() => refetchSyncStatus()}>重试</Button>
+                <Button className="retry-button" onClick={() => refetchSyncStatus()} style={{ borderRadius: 8, fontWeight: 600 }}>重试</Button>
               </div>
             ) : syncStatus ? (
               <div>
@@ -108,19 +100,21 @@ const Setting: React.FC = () => {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 16 }}>
-                  <Button 
-                    type="primary" 
-                    icon={<SyncOutlined />} 
+                  <Button
+                    type="primary"
+                    icon={<SyncOutlined />}
                     loading={syncing}
                     onClick={() => handleSync('departments')}
+                    style={{ borderRadius: 8, fontWeight: 600 }}
                   >
                     同步部门
                   </Button>
-                  <Button 
-                    type="primary" 
-                    icon={<SyncOutlined />} 
+                  <Button
+                    type="primary"
+                    icon={<SyncOutlined />}
                     loading={syncing}
                     onClick={() => handleSync('users')}
+                    style={{ borderRadius: 8, fontWeight: 600 }}
                   >
                     同步用户
                   </Button>
@@ -128,7 +122,7 @@ const Setting: React.FC = () => {
               </div>
             ) : (
               <div className="empty-container">
-                <Empty description="暂无同步状态" />
+                <Empty description="暂无同步状态" imageStyle={{ height: 80 }} />
               </div>
             )}
           </Card>

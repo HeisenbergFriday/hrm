@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { auditAPI } from '../services/api'
 import dayjs from 'dayjs'
 
-const { Title } = Typography
+const { Text } = Typography
 const { RangePicker } = DatePicker
 const { Option } = Select
 
@@ -41,9 +41,12 @@ const Log: React.FC = () => {
   ]
 
   return (
-    <div>
-      <Title level={4}>操作日志</Title>
-      <Card>
+    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+        <HistoryOutlined style={{ color: '#4338ca', marginRight: 8 }} />操作日志
+      </h2>
+      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>查看系统操作日志记录</Text>
+      <Card style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>
         <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' }}>
           <Select
             placeholder="选择用户"
@@ -68,7 +71,7 @@ const Log: React.FC = () => {
             <Option value="同步">同步</Option>
           </Select>
           <RangePicker onChange={handleDateChange} />
-          <Button type="primary" onClick={() => refetch()} icon={<CalendarOutlined />}>
+          <Button type="primary" onClick={() => refetch()} icon={<CalendarOutlined />} style={{ borderRadius: 8, fontWeight: 600 }}>
             查询
           </Button>
         </div>
@@ -80,18 +83,22 @@ const Log: React.FC = () => {
         ) : isError ? (
           <div className="error-container">
             <Alert message="加载失败" type="error" showIcon />
-            <Button className="retry-button" onClick={() => refetch()}>重试</Button>
+            <Button className="retry-button" onClick={() => refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>重试</Button>
           </div>
         ) : logs?.data?.items?.length ? (
           <Table
             columns={columns}
             dataSource={logs.data.items}
             rowKey="id"
-            pagination={{ total: logs.data.total, pageSize: 10 }}
+            pagination={{
+              total: logs.data.total,
+              pageSize: 10,
+              showTotal: (v: number) => <span style={{ color: '#6b7280' }}>共 {v} 条</span>,
+            }}
           />
         ) : (
           <div className="empty-container">
-            <Empty description="暂无操作日志" />
+            <Empty description="暂无操作日志" imageStyle={{ height: 80 }} />
           </div>
         )}
       </Card>

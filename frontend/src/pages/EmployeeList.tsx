@@ -15,7 +15,7 @@ import {
   Typography,
   message,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, SyncOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { departmentAPI, orgAPI } from '../services/api'
 
@@ -77,17 +77,31 @@ const renderDistributionItems = (items: DistributionItem[]) => {
   }
 
   return (
-    <Row gutter={[12, 12]}>
+    <Row gutter={[10, 10]}>
       {items.map((item) => (
         <Col xs={12} md={8} key={item.key}>
-          <Card size="small">
-            <Statistic title={item.label} value={item.count} />
-          </Card>
+          <div style={{
+            background: '#f8f9fc',
+            borderRadius: 10,
+            padding: '12px 14px',
+            border: '1px solid #eef0f5',
+          }}>
+            <Text style={{ color: '#6b7280', fontSize: 12.5, fontWeight: 500, display: 'block', marginBottom: 4 }}>
+              {item.label}
+            </Text>
+            <span style={{ fontSize: 22, fontWeight: 700, color: '#1e1b4b' }}>{item.count}</span>
+          </div>
         </Col>
       ))}
     </Row>
   )
 }
+
+const statConfig = [
+  { key: 'active', title: '在职人数', icon: <UserOutlined />, color: '#4338ca', bg: '#eef2ff' },
+  { key: 'probation', title: '试用期人数', icon: <TeamOutlined />, color: '#0369a1', bg: '#e0f2fe' },
+  { key: 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: '#b45309', bg: '#fef3c7' },
+] as const
 
 const EmployeeList: React.FC = () => {
   const navigate = useNavigate()
@@ -113,19 +127,16 @@ const EmployeeList: React.FC = () => {
       return '正在加载数据范围...'
     }
     if (overview.scope.mode === 'all') {
-      return '当前范围：全组织'
+      return '全组织'
     }
     if (overview.scope.department_names?.length) {
-      return `当前范围：${overview.scope.department_names.join(' / ')}`
+      return overview.scope.department_names.join(' / ')
     }
-    return '当前范围：部门范围'
+    return '部门范围'
   }, [overview])
 
   const loadData = async (showLoading = true) => {
-    if (showLoading) {
-      setLoading(true)
-    }
-
+    if (showLoading) setLoading(true)
     try {
       const [departmentRes, overviewRes, employeeRes] = await Promise.all([
         departmentAPI.getDepartments(),
@@ -138,23 +149,18 @@ const EmployeeList: React.FC = () => {
           status,
         }),
       ])
-
       setDepartments(departmentRes.data.departments || [])
       setOverview(overviewRes.data.overview || null)
       setEmployees(employeeRes.data.items || [])
       setTotal(employeeRes.data.total || 0)
-    } catch (error) {
+    } catch {
       message.error('获取组织数据失败')
     } finally {
-      if (showLoading) {
-        setLoading(false)
-      }
+      if (showLoading) setLoading(false)
     }
   }
 
-  useEffect(() => {
-    void loadData()
-  }, [page, pageSize, search, departmentID, status])
+  useEffect(() => { void loadData() }, [page, pageSize, search, departmentID, status])
 
   const handleSync = async () => {
     setSyncing(true)
@@ -162,126 +168,170 @@ const EmployeeList: React.FC = () => {
       await orgAPI.syncOrg()
       message.success('组织数据同步成功')
       await loadData(false)
-    } catch (error) {
+    } catch {
       message.error('组织数据同步失败')
     } finally {
       setSyncing(false)
     }
   }
 
+  const summaryValues = [
+    overview?.summary.active_employees ?? emptySummary.active_employees,
+    overview?.summary.probation_employee_count ?? emptySummary.probation_employee_count,
+    overview?.summary.planned_regularization_count ?? emptySummary.planned_regularization_count,
+  ]
+
   const columns = [
     {
-      title: '员工',
-      dataIndex: 'name',
-      key: 'name',
+      title: '员工', dataIndex: 'name', key: 'name',
       render: (_: string, record: EmployeeItem) => (
         <div>
-          <Button type="link" style={{ padding: 0 }} onClick={() => navigate(`/employees/${record.id}`)}>
+          <a
+            onClick={() => navigate(`/employees/${record.id}`)}
+            style={{ fontWeight: 600, color: '#4338ca', fontSize: 14 }}
+          >
             {record.name}
-          </Button>
-          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{record.user_id}</div>
+          </a>
+          <div style={{ color: '#9ca3af', fontSize: 12, marginTop: 2 }}>{record.user_id}</div>
         </div>
       ),
     },
     {
-      title: '部门',
-      dataIndex: 'department_id',
-      key: 'department_id',
-      render: (value: string) => departmentNameMap[value] || value || '-',
+      title: '部门', dataIndex: 'department_id', key: 'department_id',
+      render: (value: string) => (
+        <span style={{ color: '#374151' }}>{departmentNameMap[value] || value || '-'}</span>
+      ),
     },
     {
-      title: '岗位',
-      dataIndex: 'position',
-      key: 'position',
-      render: (value: string) => value || '-',
+      title: '岗位', dataIndex: 'position', key: 'position',
+      render: (value: string) => <span style={{ color: '#374151' }}>{value || '-'}</span>,
     },
     {
-      title: '联系方式',
-      key: 'contact',
+      title: '联系方式', key: 'contact',
       render: (_: unknown, record: EmployeeItem) => (
         <div>
-          <div>{record.email || '-'}</div>
-          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{record.mobile || '-'}</div>
+          <div style={{ color: '#374151' }}>{record.email || '-'}</div>
+          <div style={{ color: '#9ca3af', fontSize: 12 }}>{record.mobile || '-'}</div>
         </div>
       ),
     },
     {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
+      title: '状态', dataIndex: 'status', key: 'status', width: 90,
       render: (value: string) => (
-        <Tag color={value === 'active' ? 'green' : 'default'}>
-          {value === 'active' ? '在职' : value === 'inactive' ? '离职/停用' : value}
+        <Tag
+          color={value === 'active' ? 'success' : 'default'}
+          style={{ borderRadius: 6, fontWeight: 600, margin: 0, fontSize: 12.5 }}
+        >
+          {value === 'active' ? '在职' : value === 'inactive' ? '离职' : value}
         </Tag>
       ),
     },
   ]
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+      {/* 标题区 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
-          <Title level={4} style={{ marginBottom: 4 }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
+            <TeamOutlined style={{ marginRight: 10, color: '#4338ca' }} />
             组织花名册
-          </Title>
-          <Text type="secondary">{scopeLabel}</Text>
+          </h2>
+          <Text style={{ color: '#6b7280', fontSize: 13.5 }}>
+            数据范围：<span style={{ color: '#4338ca', fontWeight: 600 }}>{scopeLabel}</span>
+          </Text>
         </div>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => void loadData()}
+            loading={loading}
+            style={{ borderRadius: 8, height: 36, fontWeight: 500 }}
+          >
             刷新
           </Button>
-          <Button type="primary" icon={<SyncOutlined />} onClick={() => void handleSync()} loading={syncing}>
+          <Button
+            type="primary"
+            icon={<SyncOutlined />}
+            onClick={() => void handleSync()}
+            loading={syncing}
+            style={{ borderRadius: 8, height: 36, fontWeight: 600, boxShadow: '0 2px 6px rgba(67,56,202,0.3)' }}
+          >
             同步组织数据
           </Button>
         </Space>
       </div>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic title="在职人数" value={overview?.summary.active_employees ?? emptySummary.active_employees} />
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic
-              title="试用期人数"
-              value={overview?.summary.probation_employee_count ?? emptySummary.probation_employee_count}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic
-              title="计划转正预警"
-              value={overview?.summary.planned_regularization_count ?? emptySummary.planned_regularization_count}
-            />
-          </Card>
-        </Col>
+      {/* 统计卡片 */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+        {statConfig.map((item, idx) => (
+          <Col xs={24} md={8} key={item.key}>
+            <div style={{
+              background: '#fff',
+              borderRadius: 14,
+              padding: '20px 22px',
+              boxShadow: '0 2px 10px rgba(0,0,0,0.05)',
+              border: '1px solid #e5e7eb',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+            }}>
+              <div style={{
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                background: item.bg,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 22,
+                color: item.color,
+                flexShrink: 0,
+              }}>
+                {item.icon}
+              </div>
+              <div>
+                <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: 500 }}>{item.title}</Text>
+                <div style={{ fontSize: 26, fontWeight: 700, color: '#111827', lineHeight: 1.2, marginTop: 2 }}>
+                  {summaryValues[idx]}
+                </div>
+              </div>
+            </div>
+          </Col>
+        ))}
       </Row>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} lg={8}>
-          <Card title="员工类型分布">{renderDistributionItems(overview?.employee_type_distribution || [])}</Card>
-        </Col>
-        <Col xs={24} lg={8}>
-          <Card title="职级分布">{renderDistributionItems(overview?.job_level_distribution || [])}</Card>
-        </Col>
-        <Col xs={24} lg={8}>
-          <Card title="岗位序列分布">{renderDistributionItems(overview?.job_family_distribution || [])}</Card>
-        </Col>
+      {/* 分布卡片 */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+        {[
+          { title: '员工类型分布', data: overview?.employee_type_distribution || [] },
+          { title: '职级分布', data: overview?.job_level_distribution || [] },
+          { title: '岗位序列分布', data: overview?.job_family_distribution || [] },
+        ].map((section) => (
+          <Col xs={24} lg={8} key={section.title}>
+            <Card
+              title={<span style={{ fontWeight: 600, fontSize: 14, color: '#1e1b4b' }}>{section.title}</span>}
+              style={{ borderRadius: 12, border: '1px solid #e5e7eb', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
+              styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+            >
+              {renderDistributionItems(section.data)}
+            </Card>
+          </Col>
+        ))}
       </Row>
 
-      <Card title="花名册">
-        <Space wrap style={{ marginBottom: 16 }}>
+      {/* 花名册表格 */}
+      <Card
+        title={<span style={{ fontWeight: 700, fontSize: 15, color: '#111827' }}>花名册</span>}
+        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
+        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+      >
+        <Space wrap style={{ marginBottom: 18 }}>
           <Search
             allowClear
             enterButton={<SearchOutlined />}
             placeholder="搜索姓名、工号、邮箱、手机号、岗位"
-            onSearch={(value) => {
-              setPage(1)
-              setSearch(value.trim())
-            }}
+            onSearch={(value) => { setPage(1); setSearch(value.trim()) }}
             style={{ width: 320 }}
           />
           <Select
@@ -289,24 +339,15 @@ const EmployeeList: React.FC = () => {
             placeholder="按部门筛选"
             style={{ width: 220 }}
             value={departmentID}
-            onChange={(value) => {
-              setPage(1)
-              setDepartmentID(value)
-            }}
-            options={departments.map((department) => ({
-              label: department.name,
-              value: department.department_id,
-            }))}
+            onChange={(value) => { setPage(1); setDepartmentID(value) }}
+            options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
           />
           <Select
             allowClear
             placeholder="按状态筛选"
             style={{ width: 160 }}
             value={status}
-            onChange={(value) => {
-              setPage(1)
-              setStatus(value)
-            }}
+            onChange={(value) => { setPage(1); setStatus(value) }}
             options={[
               { label: '在职', value: 'active' },
               { label: '离职/停用', value: 'inactive' },
@@ -327,12 +368,9 @@ const EmployeeList: React.FC = () => {
               current: page,
               pageSize,
               total,
-              showSizeChanger: true,
-              showTotal: (value) => `共 ${value} 人`,
-              onChange: (nextPage, nextPageSize) => {
-                setPage(nextPage)
-                setPageSize(nextPageSize)
-              },
+              showSizeChanger: false,
+              showTotal: (value) => <span style={{ color: '#6b7280' }}>共 {value} 人</span>,
+              onChange: (nextPage, nextPageSize) => { setPage(nextPage); setPageSize(nextPageSize) },
             }}
           />
         )}

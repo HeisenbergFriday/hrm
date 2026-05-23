@@ -2,12 +2,11 @@ import React, { useState } from 'react'
 import { Card, Typography, Table, Spin, Empty, Alert, Button, Space, Tag, message, DatePicker, Select, Modal } from 'antd'
 import { DownloadOutlined, SyncOutlined, FileExcelOutlined, EyeOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { attendanceAPI } from '../services/api'
+import { attendanceAPI, departmentAPI, userAPI } from '../services/api'
 import dayjs from 'dayjs'
 
 const { Title } = Typography
 const { RangePicker } = DatePicker
-const { Option } = Select
 
 interface ExportRecord {
   id: string
@@ -34,6 +33,22 @@ const AttendanceExport: React.FC = () => {
   const { data: exportsData, isLoading, isError, refetch, error } = useQuery({
     queryKey: ['attendance-exports', page, pageSize],
     queryFn: () => attendanceAPI.getExports({ page, page_size: pageSize }),
+  })
+
+  const { data: departmentsData } = useQuery({
+    queryKey: ['departments-list'],
+    queryFn: async () => {
+      const res = await departmentAPI.getDepartments()
+      return res.data?.data?.departments || []
+    },
+  })
+
+  const { data: usersData } = useQuery({
+    queryKey: ['users-list'],
+    queryFn: async () => {
+      const res = await userAPI.getUsers({ page: 1, page_size: 200 })
+      return res.data?.data?.users || []
+    },
   })
 
   const exportMutation = useMutation({
@@ -221,12 +236,11 @@ const AttendanceExport: React.FC = () => {
               placeholder="选择部门"
               style={{ width: '100%' }}
               allowClear
+              showSearch
+              optionFilterProp="label"
               onChange={setDepartment}
-            >
-              <Option value="1">技术部</Option>
-              <Option value="2">市场部</Option>
-              <Option value="3">产品部</Option>
-            </Select>
+              options={(departmentsData || []).map((d: any) => ({ label: d.name, value: d.id }))}
+            />
           </div>
           <div style={{ marginBottom: 16 }}>
             <label style={{ display: 'block', marginBottom: 8 }}>员工（可选）</label>
@@ -234,12 +248,11 @@ const AttendanceExport: React.FC = () => {
               placeholder="选择员工"
               style={{ width: '100%' }}
               allowClear
+              showSearch
+              optionFilterProp="label"
               onChange={setUser}
-            >
-              <Option value="user123">张三</Option>
-              <Option value="user456">李四</Option>
-              <Option value="user789">王五</Option>
-            </Select>
+              options={(usersData || []).map((u: any) => ({ label: u.name || u.username, value: u.id }))}
+            />
           </div>
         </div>
       </Modal>
