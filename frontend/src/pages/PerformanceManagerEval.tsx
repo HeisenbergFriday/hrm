@@ -4,7 +4,7 @@ import {
   Card, Typography, Form, Input, InputNumber, Button, Space,
   message, Spin, Row, Col, Table, Select, Progress, Tag, Modal, Badge, Image
 } from 'antd'
-import { ArrowLeftOutlined, CheckCircleOutlined, PaperClipOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, CheckCircleOutlined, PaperClipOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { performanceAPI, PerformanceGoalRecord, PerformanceParticipant, TeamQuotaStatus } from '../services/api'
 
 const { Title, Text } = Typography
@@ -37,6 +37,7 @@ const PerformanceManagerEval: React.FC = () => {
   const [participant, setParticipant] = useState<PerformanceParticipant | null>(null)
   const [bonusItems, setBonusItems] = useState<PerformanceGoalRecord[]>([])
   const [previewAttachments, setPreviewAttachments] = useState<{ visible: boolean; attachments: string[] }>({ visible: false, attachments: [] })
+  const [autoScoring, setAutoScoring] = useState(false)
 
   const loadData = useCallback(async () => {
     if (!participantId || !activityId) return
@@ -81,6 +82,9 @@ const PerformanceManagerEval: React.FC = () => {
         evaluation_good: currentParticipant?.manager_evaluation_good || '',
         evaluation_improvement: currentParticipant?.manager_evaluation_improvement || '',
       })
+      if (currentParticipant?.suggested_level || currentParticipant?.final_level) {
+        levelManuallySetRef.current = true
+      }
       calcTotal(formItems)
     } catch {
       message.error('加载数据失败')
@@ -98,6 +102,54 @@ const PerformanceManagerEval: React.FC = () => {
     if (!levelManuallySetRef.current) {
       const level = calcPerformanceLevel(roundedTotal)
       form.setFieldsValue({ suggested_level: level })
+    }
+  }
+
+  const handleAutoScore = async () => {
+    const allItems = form.getFieldValue('items') || []
+    const quantitativeItems = allItems.filter((i: any) => i.section_type === 'quantitative')
+    if (quantitativeItems.length === 0) {
+      message.info('没有可自动评分的量化指标')
+      return
+    }
+    setAutoScoring(true)
+    try {
+      const res = await performanceAPI.autoScoreGoalRecords(
+        quantitativeItems.map((i: any) => ({
+          record_id: i.record_id,
+          section_type: i.section_type,
+          weight: i.weight,
+          red_line_value: i.red_line_value || '',
+          target_value: i.target_value || '',
+          challenge_value: i.challenge_value || '',
+          scoring_rule: i.scoring_rule || '',
+          actual_result: i.actual_result || '',
+        }))
+      )
+      // axios 拦截器返回 response.data = {code, message, data}
+      const scoredItems = ((res as any)?.data?.items || []) as { record_id: number; score: number; breakdown: string; auto_scored: boolean }[]
+      const scoreMap = new Map<number, { score: number; breakdown: string; auto_scored: boolean }>()
+      for (const item of scoredItems) {
+        scoreMap.set(item.record_id, item)
+      }
+      const updatedItems = allItems.map((i: any) => {
+        const result = scoreMap.get(i.record_id)
+        if (result && result.auto_scored) {
+          return { ...i, manager_score: result.score }
+        }
+        return i
+      })
+      form.setFieldsValue({ items: updatedItems })
+      calcTotal(updatedItems)
+      const autoCount = scoredItems.filter(i => i.auto_scored).length
+      const skipCount = scoredItems.filter(i => !i.auto_scored).length
+      let msg = `已自动评分 ${autoCount} 项`
+      if (skipCount > 0) msg += `，${skipCount} 项需手动评分`
+      message.success(msg)
+    } catch {
+      message.error('自动评分失败')
+    } finally {
+      setAutoScoring(false)
     }
   }
 
@@ -342,7 +394,18 @@ const PerformanceManagerEval: React.FC = () => {
           </Space>
 
           <Form form={form} onValuesChange={handleValuesChange} layout="vertical">
-            <Card title="指标评分">
+            <Card title="指标评分" extra={
+              !['locked', 'hr_confirmed', 'manager_confirmed'].includes(participant?.status || '') ? (
+                <Button
+                  type="primary"
+                  icon={<ThunderboltOutlined />}
+                  loading={autoScoring}
+                  onClick={handleAutoScore}
+                >
+                  一键评分
+                </Button>
+              ) : null
+            }>
               <Table
                 dataSource={form.getFieldValue('items') || []}
                 columns={columns}

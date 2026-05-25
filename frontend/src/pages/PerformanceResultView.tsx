@@ -871,7 +871,7 @@ const PerformanceResultView: React.FC = () => {
                 </Descriptions.Item>
               )}
             </Descriptions>
-            {!isLocked && (status === 'manager_submitted' || status === 'employee_confirmed') && (
+            {!isLocked && (status === 'manager_submitted' || status === 'employee_confirmed') && activity?.enable_bonus_score && (
               <Button
                 type="dashed"
                 icon={<EditOutlined />}

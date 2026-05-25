@@ -3012,15 +3012,14 @@ func SendCorpMessageToUser(userID, title, content string) error {
 }
 
 func buildCorpMessagePayload(userID, title, content string) map[string]interface{} {
+	msgContent, _ := json.Marshal(map[string]interface{}{
+		"content": formatCorpMessageContent(title, content),
+	})
 	return map[string]interface{}{
 		"agent_id":    getDingTalkAgentID(),
 		"userid_list": strings.TrimSpace(userID),
-		"msg": map[string]interface{}{
-			"msgtype": "text",
-			"text": map[string]interface{}{
-				"content": formatCorpMessageContent(title, content),
-			},
-		},
+		"msgtype":     "text",
+		"msgcontent":  string(msgContent),
 	}
 }
 
