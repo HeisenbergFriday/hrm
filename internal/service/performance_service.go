@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -240,6 +241,10 @@ func (s *PerformanceService) PublishActivity(activityID, userID string) error {
 		return errors.New("状态冲突：无法从当前状态 publish 到自评阶段")
 	}
 
+	// 从 draft 直接开启自评时，也需确保目标设定阶段完成
+	if err := s.ensureParticipantStageComplete(activityID, "target_setting"); err != nil {
+		return err
+	}
 	return s.actRepo.UpdateStatus(activityID, "self_evaluation", userID)
 }
 
@@ -263,8 +268,12 @@ func (s *PerformanceService) CloseActivity(activityID, userID string) error {
 	return errors.New("状态冲突：无法从当前状态 close 到归档")
 }
 
-func (s *PerformanceService) ListActivities(page, pageSize int, status, keyword, startDate, endDate string) ([]database.PerformanceActivity, int64, error) {
-	return s.actRepo.FindAll(page, pageSize, status, keyword, startDate, endDate)
+func (s *PerformanceService) ListActivities(page, pageSize int, status, keyword, startDate, endDate string, scope *OrgDataScope) ([]database.PerformanceActivity, int64, error) {
+	var departmentIDs []string
+	if scope != nil && !scope.IsAll() {
+		departmentIDs = scope.DepartmentIDs
+	}
+	return s.actRepo.FindAll(page, pageSize, status, keyword, startDate, endDate, departmentIDs)
 }
 
 func (s *PerformanceService) GetResultSummary(activityID string) (map[string]interface{}, error) {
@@ -788,8 +797,12 @@ func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*Re
 	return result, nil
 }
 
-func (s *PerformanceService) ListParticipants(activityID string, page, pageSize int, departmentID, managerID, status, employeeKeyword string) ([]database.PerformanceParticipant, int64, error) {
-	return s.participantR.FindAll(activityID, page, pageSize, departmentID, managerID, status, employeeKeyword)
+func (s *PerformanceService) ListParticipants(activityID string, page, pageSize int, departmentID, managerID, status, employeeKeyword string, scope *OrgDataScope) ([]database.PerformanceParticipant, int64, error) {
+	var visibleDepartmentIDs []string
+	if scope != nil && !scope.IsAll() {
+		visibleDepartmentIDs = scope.DepartmentIDs
+	}
+	return s.participantR.FindAll(activityID, page, pageSize, departmentID, managerID, status, employeeKeyword, visibleDepartmentIDs)
 }
 
 func (s *PerformanceService) validateActivityIndicatorLibraryCycle(indicatorLibraryID *uint, cycleType string) error {
@@ -886,7 +899,7 @@ func (s *PerformanceService) HydrateParticipantTargetConfirmers(participant *dat
 }
 
 func (s *PerformanceService) GetRealtimeDistributionCheck(activityID string) ([]TeamQuotaStatus, error) {
-	participants, _, err := s.participantR.FindAll(activityID, 1, 5000, "", "", "", "")
+	participants, _, err := s.participantR.FindAll(activityID, 1, 5000, "", "", "", "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1731,13 +1744,30 @@ func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) 
 		if p.Status != "manager_confirmed" {
 			return errors.New("状态冲突：只有主管确认后HR可以确认")
 		}
+
+		// 完度校验：确保前置流程数据完整
+		if p.FinalLevel == "" {
+			return errors.New("数据不完整：最终等级未设定，无法 HR 确认")
+		}
+		if p.ManagerScore == 0 {
+			var itemCount int64
+			tx.Model(&database.PerformanceGoalRecord{}).
+				Where("participant_id = ? AND deleted_at IS NULL AND manager_score > 0", p.ID).
+				Count(&itemCount)
+			if itemCount == 0 {
+				return errors.New("数据不完整：主管评分缺失，无法 HR 确认")
+			}
+		}
+		if p.ManagerConfirmedAt == nil {
+			return errors.New("数据不完整：主管确认时间缺失，无法 HR 确认")
+		}
+
 		now := time.Now()
 		p.HRConfirmedAt = &now
 		p.HRConfirmedBy = userID
 		p.Status = "hr_confirmed"
 		p.UpdatedBy = userID
 
-		// HR确认不覆盖锁定字段
 		return tx.Save(p).Error
 	})
 }
@@ -1928,51 +1958,99 @@ func (s *PerformanceService) BatchSaveGoalRecords(participantID uint, records []
 		return nil, fmt.Errorf("量化指标和关键行动权重合计必须等于 100%%，当前为 %.1f%%", totalWeight)
 	}
 
-	// 在事务内删除旧记录并插入新记录
+	// 在事务内增量更新目标记录（行锁防并发）
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		// 删除旧记录
-		if err := tx.Where("participant_id = ? AND activity_id = ? AND section_type IN ?", participantID, participant.ActivityID, []string{"quantitative", "key_action"}).
-			Delete(&database.PerformanceGoalRecord{}).Error; err != nil {
-			return err
+		// 对 participant 加行锁，防止并发写入
+		var lockedP database.PerformanceParticipant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", participantID).First(&lockedP).Error; err != nil {
+			return fmt.Errorf("锁定参与人失败: %w", err)
 		}
 
-		// 插入新记录
+		// 查询现有记录
+		var existing []database.PerformanceGoalRecord
+		if err := tx.Where("participant_id = ? AND activity_id = ? AND section_type IN ? AND deleted_at IS NULL",
+			participantID, participant.ActivityID, []string{"quantitative", "key_action"}).
+			Find(&existing).Error; err != nil {
+			return err
+		}
+		existingMap := make(map[uint]database.PerformanceGoalRecord, len(existing))
+		for _, e := range existing {
+			existingMap[e.ID] = e
+		}
+
+		// 收集前端提交的已有 ID，用于判断哪些需要软删除
+		submittedIDs := make(map[uint]bool)
 		now := time.Now()
-		var newRecords []database.PerformanceGoalRecord
+
 		for i, r := range normalizedRecords {
-			record := database.PerformanceGoalRecord{
-				ActivityID:      participant.ActivityID,
-				ParticipantID:   participantID,
-				SectionType:     r.SectionType,
-				ItemName:        r.ItemName,
-				ItemDefinition:  r.ItemDefinition,
-				Weight:          r.Weight,
-				RedLineValue:    r.RedLineValue,
-				TargetValue:     r.TargetValue,
-				ChallengeValue:  r.ChallengeValue,
-				ScoringRule:     r.ScoringRule,
-				ActualResult:    r.ActualResult,
-				Attachments:     r.Attachments,
-				SelfScore:       r.SelfScore,
-				ManagerScore:    r.ManagerScore,
-				IsFromSuperior:  r.IsFromSuperior,
-				SortOrder:       r.SortOrder,
-				ApprovalStatus:  "pending",
-				VisibilityScope: "department_only",
-				CreatedAt:       now,
-				UpdatedAt:       now,
+			sortOrder := r.SortOrder
+			if sortOrder == 0 {
+				sortOrder = i + 1
 			}
+
 			if r.ID > 0 {
-				record.ID = r.ID
+				submittedIDs[r.ID] = true
+				// 更新已有记录
+				attachJSON, _ := json.Marshal(r.Attachments)
+				if err := tx.Model(&database.PerformanceGoalRecord{}).Where("id = ? AND deleted_at IS NULL", r.ID).
+					Updates(map[string]interface{}{
+						"section_type":    r.SectionType,
+						"item_name":       r.ItemName,
+						"item_definition": r.ItemDefinition,
+						"weight":          r.Weight,
+						"red_line_value":  r.RedLineValue,
+						"target_value":    r.TargetValue,
+						"challenge_value": r.ChallengeValue,
+						"scoring_rule":    r.ScoringRule,
+						"actual_result":   r.ActualResult,
+						"attachments":     string(attachJSON),
+						"self_score":      r.SelfScore,
+						"manager_score":   r.ManagerScore,
+						"is_from_superior": r.IsFromSuperior,
+						"sort_order":      sortOrder,
+						"updated_at":      now,
+					}).Error; err != nil {
+					return err
+				}
+			} else {
+				// 新增记录
+				record := database.PerformanceGoalRecord{
+					ActivityID:      participant.ActivityID,
+					ParticipantID:   participantID,
+					SectionType:     r.SectionType,
+					ItemName:        r.ItemName,
+					ItemDefinition:  r.ItemDefinition,
+					Weight:          r.Weight,
+					RedLineValue:    r.RedLineValue,
+					TargetValue:     r.TargetValue,
+					ChallengeValue:  r.ChallengeValue,
+					ScoringRule:     r.ScoringRule,
+					ActualResult:    r.ActualResult,
+					Attachments:     r.Attachments,
+					SelfScore:       r.SelfScore,
+					ManagerScore:    r.ManagerScore,
+					IsFromSuperior:  r.IsFromSuperior,
+					SortOrder:       sortOrder,
+					ApprovalStatus:  "pending",
+					VisibilityScope: "department_only",
+					CreatedAt:       now,
+					UpdatedAt:       now,
+				}
+				if err := tx.Create(&record).Error; err != nil {
+					return err
+				}
 			}
-			if record.SortOrder == 0 {
-				record.SortOrder = i + 1
-			}
-			newRecords = append(newRecords, record)
 		}
 
-		if err := tx.Create(&newRecords).Error; err != nil {
-			return err
+		// 软删除不在提交列表中的旧记录
+		for id := range existingMap {
+			if !submittedIDs[id] {
+				if err := tx.Model(&database.PerformanceGoalRecord{}).Where("id = ?", id).
+					Update("deleted_at", now).Error; err != nil {
+					return err
+				}
+			}
 		}
 
 		return nil

@@ -31,8 +31,15 @@ func GetPerformanceActivities(c *gin.Context) {
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 
+	// 获取用户的数据范围（部门隔离）
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		return
+	}
+
 	svc := service.NewPerformanceService(database.DB)
-	items, total, err := svc.ListActivities(page, pageSize, status, keyword, startDate, endDate)
+	items, total, err := svc.ListActivities(page, pageSize, status, keyword, startDate, endDate, scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取绩效活动列表失败", Data: gin.H{"error": err.Error()}})
 		return
@@ -293,8 +300,15 @@ func GetPerformanceParticipants(c *gin.Context) {
 	status := c.Query("status")
 	employeeKeyword := c.Query("employee_keyword")
 
+	// 获取用户的数据范围（部门隔离）
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		return
+	}
+
 	svc := service.NewPerformanceService(database.DB)
-	items, total, err := svc.ListParticipants(activityID, page, pageSize, departmentID, managerID, status, employeeKeyword)
+	items, total, err := svc.ListParticipants(activityID, page, pageSize, departmentID, managerID, status, employeeKeyword, scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取参与人列表失败", Data: gin.H{"error": err.Error()}})
 		return
@@ -1486,9 +1500,16 @@ func GetIndicatorLibraries(c *gin.Context) {
 	keyword := c.Query("keyword")
 	status := c.Query("status")
 
+	// 获取用户的数据范围（部门隔离）
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		return
+	}
+
 	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
 	svc := service.NewPerformanceIndicatorService(libRepo, nil)
-	items, total, err := svc.ListLibraries(page, pageSize, departmentID, keyword, status)
+	items, total, err := svc.ListLibraries(page, pageSize, departmentID, keyword, status, scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取指标库列表失败", Data: gin.H{"error": err.Error()}})
 		return
@@ -1678,6 +1699,8 @@ func InheritIndicatorLibrary(c *gin.Context) {
 		ParentLibraryID      uint   `json:"parent_library_id" binding:"required"`
 		TargetDepartmentID   string `json:"target_department_id" binding:"required"`
 		TargetDepartmentName string `json:"target_department_name" binding:"required"`
+		Name                 string `json:"name"`
+		Description          string `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: gin.H{"error": err.Error()}})
@@ -1687,7 +1710,7 @@ func InheritIndicatorLibrary(c *gin.Context) {
 	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
 	itemRepo := repository.NewPerformanceIndicatorItemRepository(database.DB)
 	svc := service.NewPerformanceIndicatorService(libRepo, itemRepo)
-	lib, err := svc.InheritLibrary(req.ParentLibraryID, req.TargetDepartmentID, req.TargetDepartmentName, currentOperatorID(c))
+	lib, err := svc.InheritLibrary(req.ParentLibraryID, req.TargetDepartmentID, req.TargetDepartmentName, req.Name, req.Description, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1862,6 +1885,7 @@ func DeleteIndicatorItem(c *gin.Context) {
 func SearchIndicatorItems(c *gin.Context) {
 	keyword := c.Query("keyword")
 	libraryIDsStr := c.Query("library_ids")
+	sectionType := c.Query("section_type")
 
 	var libraryIDs []uint
 	if libraryIDsStr != "" {
@@ -1874,7 +1898,7 @@ func SearchIndicatorItems(c *gin.Context) {
 
 	itemRepo := repository.NewPerformanceIndicatorItemRepository(database.DB)
 	svc := service.NewPerformanceIndicatorService(nil, itemRepo)
-	items, err := svc.SearchItems(libraryIDs, keyword)
+	items, err := svc.SearchItems(libraryIDs, keyword, sectionType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "搜索失败", Data: gin.H{"error": err.Error()}})
 		return

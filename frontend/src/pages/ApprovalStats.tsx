@@ -1,8 +1,11 @@
 import React, { useState } from 'react'
-import { Card, Typography, DatePicker, Spin, Empty, Alert, Button, Row, Col, Statistic, Table, Tag, Select } from 'antd'
+import { Typography, DatePicker, Spin, Empty, Alert, Button, Row, Col, Statistic, Table, Tag, Select } from 'antd'
 import { BarChartOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { approvalAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
@@ -101,26 +104,26 @@ const ApprovalStats: React.FC = () => {
       title: '已通过',
       dataIndex: 'completed',
       key: 'completed',
-      render: (count: number) => <Tag color="green">{count}</Tag>,
+      render: (count: number) => <StatusTag color="green">{count}</StatusTag>,
     },
     {
       title: '已拒绝',
       dataIndex: 'rejected',
       key: 'rejected',
-      render: (count: number) => <Tag color="red">{count}</Tag>,
+      render: (count: number) => <StatusTag color="red">{count}</StatusTag>,
     },
     {
       title: '处理中',
       dataIndex: 'in_progress',
       key: 'in_progress',
-      render: (count: number) => <Tag color="blue">{count}</Tag>,
+      render: (count: number) => <StatusTag color="blue">{count}</StatusTag>,
     },
     {
       title: '通过率',
       dataIndex: 'approval_rate',
       key: 'approval_rate',
       render: (rate: string) => (
-        <span style={{ color: parseFloat(rate) >= 80 ? 'green' : 'red' }}>
+        <span style={{ color: parseFloat(rate) >= 80 ? 'var(--color-success)' : 'var(--color-error)' }}>
           {rate}
         </span>
       ),
@@ -128,10 +131,12 @@ const ApprovalStats: React.FC = () => {
   ]
 
   return (
-    <div>
-      <Title level={4}>审批统计</Title>
-      <Card>
-        <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+    <PageContainer
+      title="审批统计"
+      icon={<BarChartOutlined />}
+    >
+      <PageCard>
+        <div style={{ marginBottom: 'var(--space-4)', display: 'flex', gap: 'var(--space-4)', alignItems: 'center', flexWrap: 'wrap' }}>
           <Select
             placeholder="审批模板"
             style={{ width: 150 }}
@@ -160,7 +165,7 @@ const ApprovalStats: React.FC = () => {
           </Button>
         </div>
 
-        <Row gutter={16} style={{ marginBottom: 24 }}>
+        <Row gutter={16} style={{ marginBottom: 'var(--space-6)' }}>
           <Col span={6}>
             <Statistic
               title="总审批数"
@@ -172,52 +177,52 @@ const ApprovalStats: React.FC = () => {
             <Statistic
               title="已完成"
               value={mockStatsData.summary.completed}
-              valueStyle={{ color: '#52c41a' }}
+              valueStyle={{ color: 'var(--color-success)' }}
             />
           </Col>
           <Col span={6}>
             <Statistic
               title="已拒绝"
               value={mockStatsData.summary.rejected}
-              valueStyle={{ color: '#ff4d4f' }}
+              valueStyle={{ color: 'var(--color-error)' }}
             />
           </Col>
           <Col span={6}>
             <Statistic
               title="通过率"
               value={mockStatsData.summary.approval_rate}
-              valueStyle={{ color: parseFloat(mockStatsData.summary.approval_rate) >= 80 ? '#52c41a' : '#ff4d4f' }}
+              valueStyle={{ color: parseFloat(mockStatsData.summary.approval_rate) >= 80 ? 'var(--color-success)' : 'var(--color-error)' }}
             />
           </Col>
         </Row>
 
         <Title level={5}>状态分布</Title>
-        <div style={{ marginBottom: 24 }}>
+        <div style={{ marginBottom: 'var(--space-6)' }}>
           <Row gutter={16}>
             {mockStatsData.status_stats.map((stat, index) => (
               <Col key={index} span={8}>
-                <Card>
+                <PageCard>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Text strong>{stat.status}</Text>
                     <Text>{stat.count}</Text>
                   </div>
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <div style={{ marginTop: 'var(--space-2)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--space-1)' }}>
                       <Text type="secondary">占比</Text>
                       <Text>{stat.percentage}</Text>
                     </div>
-                    <div style={{ height: 8, backgroundColor: '#f0f0f0', borderRadius: 4 }}>
+                    <div style={{ height: 8, backgroundColor: 'var(--color-border-light)', borderRadius: 'var(--radius-xs)' }}>
                       <div
                         style={{
                           height: '100%',
-                          backgroundColor: stat.status === '已完成' ? '#52c41a' : stat.status === '已拒绝' ? '#ff4d4f' : '#1890ff',
-                          borderRadius: 4,
+                          backgroundColor: stat.status === '已完成' ? 'var(--color-success)' : stat.status === '已拒绝' ? 'var(--color-error)' : 'var(--color-primary)',
+                          borderRadius: 'var(--radius-xs)',
                           width: stat.percentage,
                         }}
                       />
                     </div>
                   </div>
-                </Card>
+                </PageCard>
               </Col>
             ))}
           </Row>
@@ -230,8 +235,8 @@ const ApprovalStats: React.FC = () => {
           rowKey="template_id"
           pagination={false}
         />
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

@@ -1,9 +1,11 @@
 import React, { useState } from 'react'
-import { Card, Typography, DatePicker, Table, Spin, Empty, Alert, Button, Select } from 'antd'
+import { Typography, DatePicker, Table, Spin, Empty, Alert, Button, Select } from 'antd'
 import { HistoryOutlined, CalendarOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { auditAPI } from '../services/api'
 import dayjs from 'dayjs'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -41,13 +43,13 @@ const Log: React.FC = () => {
   ]
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-        <HistoryOutlined style={{ color: '#4338ca', marginRight: 8 }} />操作日志
-      </h2>
-      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>查看系统操作日志记录</Text>
-      <Card style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>
-        <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' }}>
+    <PageContainer
+      title="操作日志"
+      icon={<HistoryOutlined />}
+      subtitle="查看系统操作日志记录"
+    >
+      <PageCard>
+        <div style={{ marginBottom: 'var(--space-4)', display: 'flex', gap: 'var(--space-4)', alignItems: 'center' }}>
           <Select
             placeholder="选择用户"
             style={{ width: 200 }}
@@ -71,7 +73,7 @@ const Log: React.FC = () => {
             <Option value="同步">同步</Option>
           </Select>
           <RangePicker onChange={handleDateChange} />
-          <Button type="primary" onClick={() => refetch()} icon={<CalendarOutlined />} style={{ borderRadius: 8, fontWeight: 600 }}>
+          <Button type="primary" onClick={() => refetch()} icon={<CalendarOutlined />}>
             查询
           </Button>
         </div>
@@ -83,7 +85,7 @@ const Log: React.FC = () => {
         ) : isError ? (
           <div className="error-container">
             <Alert message="加载失败" type="error" showIcon />
-            <Button className="retry-button" onClick={() => refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>重试</Button>
+            <Button className="retry-button" onClick={() => refetch()}>重试</Button>
           </div>
         ) : logs?.data?.items?.length ? (
           <Table
@@ -93,7 +95,7 @@ const Log: React.FC = () => {
             pagination={{
               total: logs.data.total,
               pageSize: 10,
-              showTotal: (v: number) => <span style={{ color: '#6b7280' }}>共 {v} 条</span>,
+              showTotal: (v: number) => <span style={{ color: 'var(--color-text-secondary)' }}>共 {v} 条</span>,
             }}
           />
         ) : (
@@ -101,8 +103,8 @@ const Log: React.FC = () => {
             <Empty description="暂无操作日志" imageStyle={{ height: 80 }} />
           </div>
         )}
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

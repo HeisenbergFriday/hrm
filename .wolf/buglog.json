@@ -1,0 +1,1413 @@
+{
+  "version": 1,
+  "bugs": [
+    {
+      "id": "bug-001",
+      "timestamp": "2026-05-25T07:17:20.638Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T07:17:20.638Z"
+    },
+    {
+      "id": "bug-002",
+      "timestamp": "2026-05-25T07:19:52.201Z",
+      "error_message": "Null/undefined access in ",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "Property access on potentially null/undefined value",
+      "fix": "Added null safety (optional chaining or null check)",
+      "tags": [
+        "auto-detected",
+        "null-safety",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T07:19:52.201Z"
+    },
+    {
+      "id": "bug-003",
+      "timestamp": "2026-05-25T07:38:35.822Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/performance_service.go",
+      "root_cause": "12 lines replaced/restructured",
+      "fix": "Rewrote 49→96 lines (12 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T07:38:35.822Z"
+    },
+    {
+      "id": "bug-004",
+      "timestamp": "2026-05-25T08:38:20.924Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/Approval.tsx",
+      "root_cause": "Had '#1e1b4b'",
+      "fix": "Changed to 'var(--font-weight-semibold)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 7,
+      "last_seen": "2026-05-25T08:40:21.846Z"
+    },
+    {
+      "id": "bug-005",
+      "timestamp": "2026-05-25T08:40:14.965Z",
+      "error_message": "CSS fix: borderRadius",
+      "file": "frontend/src/pages/Approval.tsx",
+      "root_cause": "borderRadius: 8, fontWeight: 600 → 'var(--radius-md)', fontWeight: 'var(--font-weight-semibold)'",
+      "fix": "Changed borderRadius: 8, fontWeight: 600 → 'var(--radius-md)', fontWeight: 'var(--font-weight-semibold)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T08:40:14.965Z"
+    },
+    {
+      "id": "bug-006",
+      "timestamp": "2026-05-25T08:46:10.474Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/components/PageContainer.tsx",
+      "root_cause": "Had 'var(--font-size-title)'",
+      "fix": "Changed to 'var(--font-size-xl)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T08:46:10.474Z"
+    },
+    {
+      "id": "bug-007",
+      "timestamp": "2026-05-25T08:46:19.201Z",
+      "error_message": "CSS fix: color",
+      "file": "frontend/src/components/PageContainer.tsx",
+      "root_cause": "color: 'var(--color-text-secondary)', fontSize: 13.5 → 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)'",
+      "fix": "Changed color: 'var(--color-text-secondary)', fontSize: 13.5 → 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T08:46:19.201Z"
+    },
+    {
+      "id": "bug-008",
+      "timestamp": "2026-05-25T08:50:10.469Z",
+      "error_message": "Type error",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T08:50:10.469Z"
+    },
+    {
+      "id": "bug-009",
+      "timestamp": "2026-05-25T08:50:30.614Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T08:50:30.614Z"
+    },
+    {
+      "id": "bug-010",
+      "timestamp": "2026-05-25T08:50:46.915Z",
+      "error_message": "CSS fix: width, name",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "width: 150, → '100%'; name: e.target.value → val",
+      "fix": "Changed width: 150, → '100%'; name: e.target.value → val",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 4,
+      "last_seen": "2026-05-25T08:52:11.856Z"
+    },
+    {
+      "id": "bug-011",
+      "timestamp": "2026-05-25T09:06:44.489Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/LoginError.tsx",
+      "root_cause": "Had '#f0f2f5'",
+      "fix": "Changed to 'var(--color-bg-page)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:06:44.489Z"
+    },
+    {
+      "id": "bug-012",
+      "timestamp": "2026-05-25T09:07:13.580Z",
+      "error_message": "CSS fix: display",
+      "file": "frontend/src/pages/DepartmentTree.tsx",
+      "root_cause": "display: 'flex', gap: 8 → 'flex', gap: 'var(--space-2)'",
+      "fix": "Changed display: 'flex', gap: 8 → 'flex', gap: 'var(--space-2)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:08:47.758Z"
+    },
+    {
+      "id": "bug-013",
+      "timestamp": "2026-05-25T09:07:30.175Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "10 lines replaced/restructured",
+      "fix": "Rewrote 11→6 lines (10 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:07:30.175Z"
+    },
+    {
+      "id": "bug-014",
+      "timestamp": "2026-05-25T09:07:31.833Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/DepartmentTree.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:07:31.833Z"
+    },
+    {
+      "id": "bug-015",
+      "timestamp": "2026-05-25T09:07:46.212Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/AttendanceStats.tsx",
+      "root_cause": "Had 'red'",
+      "fix": "Changed to 'error'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 8,
+      "last_seen": "2026-05-25T09:09:40.969Z"
+    },
+    {
+      "id": "bug-016",
+      "timestamp": "2026-05-25T09:08:15.353Z",
+      "error_message": "CSS fix: marginBottom",
+      "file": "frontend/src/pages/Organization.tsx",
+      "root_cause": "marginBottom: 16 → 'var(--space-4)'",
+      "fix": "Changed marginBottom: 16 → 'var(--space-4)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 5,
+      "last_seen": "2026-05-25T09:10:14.376Z"
+    },
+    {
+      "id": "bug-017",
+      "timestamp": "2026-05-25T09:08:18.306Z",
+      "error_message": "CSS fix: render",
+      "file": "frontend/src/pages/AttendanceStats.tsx",
+      "root_cause": "render: (count: number) => count > 0 ? <Tag color=\"red\">{count → (count: number) => count > 0 ? <StatusTag color=\"error\">{count",
+      "fix": "Changed render: (count: number) => count > 0 ? <Tag color=\"red\">{count → (count: number) => count > 0 ? <StatusTag color=\"error\">{count",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 4,
+      "last_seen": "2026-05-25T09:09:32.151Z"
+    },
+    {
+      "id": "bug-018",
+      "timestamp": "2026-05-25T09:08:32.298Z",
+      "error_message": "Wrong return value",
+      "file": "frontend/src/pages/DepartmentTree.tsx",
+      "root_cause": "Was returning: <Tag color={colors[value] || 'default'}>{labels[va",
+      "fix": "Now returns: <StatusTag color={colors[value] || 'default'}>{lab",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:08:32.298Z"
+    },
+    {
+      "id": "bug-019",
+      "timestamp": "2026-05-25T09:08:34.180Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/Organization.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-25T09:09:07.333Z"
+    },
+    {
+      "id": "bug-020",
+      "timestamp": "2026-05-25T09:08:45.587Z",
+      "error_message": "CSS fix: borderRadius, header",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' → 'var(--radius-xl)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)'; header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' → { background: 'var(--color-bg-card-header)', borderBottom: '1px solid var(--color-border-light)'",
+      "fix": "Changed borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' → 'var(--radius-xl)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)'; header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' → { background: 'var(--color-bg-card-header)', borderBottom: '1px solid var(--color-border-light)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 11,
+      "last_seen": "2026-05-25T09:13:16.756Z"
+    },
+    {
+      "id": "bug-021",
+      "timestamp": "2026-05-25T09:08:55.132Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/DepartmentTree.tsx",
+      "root_cause": "Had '#8c8c8c'",
+      "fix": "Changed to 'var(--color-text-tertiary)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-25T09:09:27.230Z"
+    },
+    {
+      "id": "bug-022",
+      "timestamp": "2026-05-25T09:09:16.736Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "Had '#374151'",
+      "fix": "Changed to 'var(--color-text)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 8,
+      "last_seen": "2026-05-25T09:13:01.208Z"
+    },
+    {
+      "id": "bug-023",
+      "timestamp": "2026-05-25T09:09:22.000Z",
+      "error_message": "Wrong return value",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "Was returning: <Tag color={s.color}>{s.label}</Tag>",
+      "fix": "Now returns: <StatusTag color={s.color}>{s.label}</StatusTag>",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-25T09:09:47.989Z"
+    },
+    {
+      "id": "bug-024",
+      "timestamp": "2026-05-25T09:10:14.053Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/EmployeeDetail.tsx",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 23→24 lines (2 removed) | Also: <Card; style={{ marginBottom: 16 }}",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:11:31.622Z"
+    },
+    {
+      "id": "bug-025",
+      "timestamp": "2026-05-25T09:10:29.279Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/EmployeeDetail.tsx",
+      "root_cause": "Had '#faad14'",
+      "fix": "Changed to 'var(--color-warning)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 4,
+      "last_seen": "2026-05-25T09:13:29.106Z"
+    },
+    {
+      "id": "bug-026",
+      "timestamp": "2026-05-25T09:10:36.943Z",
+      "error_message": "CSS fix: default",
+      "file": "frontend/src/pages/AttendanceExport.tsx",
+      "root_cause": "default: return <Tag>{status → return <StatusTag>{status",
+      "fix": "Changed default: return <Tag>{status → return <StatusTag>{status",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:10:36.943Z"
+    },
+    {
+      "id": "bug-027",
+      "timestamp": "2026-05-25T09:10:38.019Z",
+      "error_message": "CSS fix: marginBottom",
+      "file": "frontend/src/pages/SyncLog.tsx",
+      "root_cause": "marginBottom: '24px' → 'var(--space-6)'",
+      "fix": "Changed marginBottom: '24px' → 'var(--space-6)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:10:38.019Z"
+    },
+    {
+      "id": "bug-028",
+      "timestamp": "2026-05-25T09:10:40.818Z",
+      "error_message": "Null/undefined access in ",
+      "file": "frontend/src/pages/EmployeeDetail.tsx",
+      "root_cause": "Property access on potentially null/undefined value",
+      "fix": "Added null safety (optional chaining or null check)",
+      "tags": [
+        "auto-detected",
+        "null-safety",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:10:40.818Z"
+    },
+    {
+      "id": "bug-029",
+      "timestamp": "2026-05-25T09:10:42.111Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/SyncLog.tsx",
+      "root_cause": "Had '24px'",
+      "fix": "Changed to 'var(--space-6)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-25T09:10:49.509Z"
+    },
+    {
+      "id": "bug-030",
+      "timestamp": "2026-05-25T09:10:58.363Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/AttendanceExport.tsx",
+      "root_cause": "Had '40px'",
+      "fix": "Changed to 'var(--space-10)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 5,
+      "last_seen": "2026-05-25T09:11:30.325Z"
+    },
+    {
+      "id": "bug-031",
+      "timestamp": "2026-05-25T09:11:08.730Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/SyncLog.tsx",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 3→3 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:11:08.730Z"
+    },
+    {
+      "id": "bug-032",
+      "timestamp": "2026-05-25T09:11:15.904Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/AttendanceExport.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:11:17.073Z"
+    },
+    {
+      "id": "bug-033",
+      "timestamp": "2026-05-25T09:11:43.864Z",
+      "error_message": "CSS fix: fontSize",
+      "file": "frontend/src/pages/EmployeeDetail.tsx",
+      "root_cause": "fontSize: 12, color: '#8c8c8c', marginBottom: 8 → 'var(--font-size-xs)', color: 'var(--color-text-tertiary)', marginBottom: 8",
+      "fix": "Changed fontSize: 12, color: '#8c8c8c', marginBottom: 8 → 'var(--font-size-xs)', color: 'var(--color-text-tertiary)', marginBottom: 8",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:11:43.864Z"
+    },
+    {
+      "id": "bug-034",
+      "timestamp": "2026-05-25T09:11:55.757Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/EmployeeDetail.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-25T09:13:33.927Z"
+    },
+    {
+      "id": "bug-035",
+      "timestamp": "2026-05-25T09:11:59.978Z",
+      "error_message": "Wrong reference: Tag should be StatusTag",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "Used \"Tag\" instead of \"StatusTag\"",
+      "fix": "Changed Tag → StatusTag",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:12:16.116Z"
+    },
+    {
+      "id": "bug-036",
+      "timestamp": "2026-05-25T09:12:24.594Z",
+      "error_message": "CSS fix: marginBottom",
+      "file": "frontend/src/pages/EmployeeShiftConfig.tsx",
+      "root_cause": "marginBottom: 16, display: 'flex', gap: 8, alignItems: 'center' → 'var(--space-4)', display: 'flex', gap: 'var(--space-2)', alignItems: 'center'",
+      "fix": "Changed marginBottom: 16, display: 'flex', gap: 8, alignItems: 'center' → 'var(--space-4)', display: 'flex', gap: 'var(--space-2)', alignItems: 'center'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 13,
+      "last_seen": "2026-05-25T09:13:20.620Z"
+    },
+    {
+      "id": "bug-037",
+      "timestamp": "2026-05-25T09:12:25.729Z",
+      "error_message": "Wrong return value",
+      "file": "frontend/src/pages/EmployeeShiftConfig.tsx",
+      "root_cause": "Was returning: item.is_rest ? <Tag>休</Tag> : <Tag color=\"blue\">{i",
+      "fix": "Now returns: item.is_rest ? <StatusTag>休</StatusTag> : <StatusT",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:12:25.729Z"
+    },
+    {
+      "id": "bug-038",
+      "timestamp": "2026-05-25T09:12:31.408Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/EmployeeShiftConfig.tsx",
+      "root_cause": "Had \"info\"",
+      "fix": "Changed to 'var(--space-4)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-25T09:12:39.039Z"
+    },
+    {
+      "id": "bug-039",
+      "timestamp": "2026-05-25T09:13:16.400Z",
+      "error_message": "Wrong reference: div should be PageContainer",
+      "file": "frontend/src/pages/EmployeeShiftConfig.tsx",
+      "root_cause": "Used \"div\" instead of \"PageContainer\"",
+      "fix": "Changed div → PageContainer",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:13:16.400Z"
+    },
+    {
+      "id": "bug-040",
+      "timestamp": "2026-05-25T09:13:41.503Z",
+      "error_message": "CSS fix: background",
+      "file": "frontend/src/pages/PerformanceGoalSetting.tsx",
+      "root_cause": "background: '#fff', borderBottom: '1px solid #f0f0f0', → 'var(--color-bg-card)', borderBottom: '1px solid var(--color-border-light)',",
+      "fix": "Changed background: '#fff', borderBottom: '1px solid #f0f0f0', → 'var(--color-bg-card)', borderBottom: '1px solid var(--color-border-light)',",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-25T09:13:54.662Z"
+    },
+    {
+      "id": "bug-041",
+      "timestamp": "2026-05-25T09:13:44.846Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/EmployeeProfile.tsx",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 18→19 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:13:44.846Z"
+    },
+    {
+      "id": "bug-042",
+      "timestamp": "2026-05-25T09:14:00.199Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/PerformanceGoalSetting.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:14:00.199Z"
+    },
+    {
+      "id": "bug-043",
+      "timestamp": "2026-05-25T09:14:04.197Z",
+      "error_message": "CSS fix: display",
+      "file": "frontend/src/pages/EmployeeProfile.tsx",
+      "root_cause": "display: 'flex', gap: 8 → 'flex', gap: 'var(--space-2)'",
+      "fix": "Changed display: 'flex', gap: 8 → 'flex', gap: 'var(--space-2)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:14:04.197Z"
+    },
+    {
+      "id": "bug-044",
+      "timestamp": "2026-05-25T09:14:15.870Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/EmployeeProfile.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:14:22.879Z"
+    },
+    {
+      "id": "bug-045",
+      "timestamp": "2026-05-25T09:14:36.145Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/PerformanceGoalSetting.tsx",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 4→4 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:14:36.145Z"
+    },
+    {
+      "id": "bug-046",
+      "timestamp": "2026-05-25T09:14:36.745Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/EmployeeProfile.tsx",
+      "root_cause": "Had 'green'",
+      "fix": "Changed to 'success'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:14:44.371Z"
+    },
+    {
+      "id": "bug-047",
+      "timestamp": "2026-05-25T09:15:29.398Z",
+      "error_message": "CSS fix: StatusTag, borderRadius",
+      "file": "frontend/src/components/StatusTag.tsx",
+      "root_cause": "StatusTag: React.FC<StatusTagProps> = ({ children, ...props → React.FC<StatusTagProps> = ({ children, style, ...props; borderRadius: 'var(--radius-sm)', fontWeight: 'var(--font-weight-semibold)', margin: 0 → 'var(--radius-sm)', fontWeight: 'var(--font-weight-semibold)', margin: 0, ...style",
+      "fix": "Changed StatusTag: React.FC<StatusTagProps> = ({ children, ...props → React.FC<StatusTagProps> = ({ children, style, ...props; borderRadius: 'var(--radius-sm)', fontWeight: 'var(--font-weight-semibold)', margin: 0 → 'var(--radius-sm)', fontWeight: 'var(--font-weight-semibold)', margin: 0, ...style",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:15:29.399Z"
+    },
+    {
+      "id": "bug-048",
+      "timestamp": "2026-05-25T09:15:38.615Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/EmployeeFlow.tsx",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 20→21 lines (2 removed) | Also: <div>; <div style={{ display: 'flex', justifyContent: 'sp",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:17:23.760Z"
+    },
+    {
+      "id": "bug-049",
+      "timestamp": "2026-05-25T09:15:59.663Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/PerformanceSelfEval.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:15:59.663Z"
+    },
+    {
+      "id": "bug-050",
+      "timestamp": "2026-05-25T09:16:04.088Z",
+      "error_message": "CSS fix: color",
+      "file": "frontend/src/pages/EmployeeFlow.tsx",
+      "root_cause": "color: '#8c8c8c', fontSize: 12 → 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)'",
+      "fix": "Changed color: '#8c8c8c', fontSize: 12 → 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-25T09:17:32.829Z"
+    },
+    {
+      "id": "bug-051",
+      "timestamp": "2026-05-25T09:16:19.753Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/PerformanceSelfEval.tsx",
+      "root_cause": "Had '#1890ff'",
+      "fix": "Changed to 'var(--color-info)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:16:19.753Z"
+    },
+    {
+      "id": "bug-052",
+      "timestamp": "2026-05-25T09:16:53.162Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/EmployeeFlow.tsx",
+      "root_cause": "Had '#8c8c8c'",
+      "fix": "Changed to 'var(--color-text-tertiary)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:16:53.162Z"
+    },
+    {
+      "id": "bug-053",
+      "timestamp": "2026-05-25T09:16:58.792Z",
+      "error_message": "CSS fix: fontSize",
+      "file": "frontend/src/pages/PerformanceSelfEval.tsx",
+      "root_cause": "fontSize: 12 → 'var(--font-size-xs)'",
+      "fix": "Changed fontSize: 12 → 'var(--font-size-xs)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:17:07.673Z"
+    },
+    {
+      "id": "bug-054",
+      "timestamp": "2026-05-25T09:17:35.400Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/PerformanceManagerEval.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 4,
+      "last_seen": "2026-05-25T09:20:17.003Z"
+    },
+    {
+      "id": "bug-055",
+      "timestamp": "2026-05-25T09:18:08.871Z",
+      "error_message": "Wrong reference: div should be PageContainer",
+      "file": "frontend/src/pages/EmployeeFlow.tsx",
+      "root_cause": "Used \"div\" instead of \"PageContainer\"",
+      "fix": "Changed div → PageContainer",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:18:08.871Z"
+    },
+    {
+      "id": "bug-056",
+      "timestamp": "2026-05-25T09:18:27.474Z",
+      "error_message": "CSS fix: padding, borderRadius, background",
+      "file": "frontend/src/pages/DepartmentTree.tsx",
+      "root_cause": "padding: '10px 12px', → '16px',; borderRadius: 'var(--radius-md)', → 'var(--radius-lg)',; background: 'var(--color-bg-light)', → 'linear-gradient(135deg, var(--color-bg-light) 0%, var(--color-bg-page) 100%)',",
+      "fix": "Changed padding: '10px 12px', → '16px',; borderRadius: 'var(--radius-md)', → 'var(--radius-lg)',; background: 'var(--color-bg-light)', → 'linear-gradient(135deg, var(--color-bg-light) 0%, var(--color-bg-page) 100%)',",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-25T09:19:47.146Z"
+    },
+    {
+      "id": "bug-057",
+      "timestamp": "2026-05-25T09:18:29.981Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/PerformanceManagerEval.tsx",
+      "root_cause": "Had '#1890ff'",
+      "fix": "Changed to 'var(--color-info)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:18:29.981Z"
+    },
+    {
+      "id": "bug-058",
+      "timestamp": "2026-05-25T09:19:06.562Z",
+      "error_message": "CSS fix: display",
+      "file": "frontend/src/pages/TalentAnalysis.tsx",
+      "root_cause": "display: 'flex', gap: 8 → 'flex', gap: 'var(--space-2)'",
+      "fix": "Changed display: 'flex', gap: 8 → 'flex', gap: 'var(--space-2)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:19:21.540Z"
+    },
+    {
+      "id": "bug-059",
+      "timestamp": "2026-05-25T09:19:34.535Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/DepartmentTree.tsx",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 24→35 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:19:34.535Z"
+    },
+    {
+      "id": "bug-060",
+      "timestamp": "2026-05-25T09:19:35.794Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/TalentAnalysis.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:20:45.160Z"
+    },
+    {
+      "id": "bug-061",
+      "timestamp": "2026-05-25T09:19:54.470Z",
+      "error_message": "CSS fix: fontSize, color",
+      "file": "frontend/src/pages/PerformanceManagerEval.tsx",
+      "root_cause": "fontSize: 12 → 'var(--font-size-xs)'; color: '#8c8c8c' → 'var(--color-text-tertiary)'",
+      "fix": "Changed fontSize: 12 → 'var(--font-size-xs)'; color: '#8c8c8c' → 'var(--color-text-tertiary)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:20:00.529Z"
+    },
+    {
+      "id": "bug-062",
+      "timestamp": "2026-05-25T09:20:25.833Z",
+      "error_message": "Null/undefined access in ",
+      "file": "frontend/src/pages/DepartmentTree.tsx",
+      "root_cause": "Property access on potentially null/undefined value",
+      "fix": "Added null safety (optional chaining or null check)",
+      "tags": [
+        "auto-detected",
+        "null-safety",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:20:25.833Z"
+    },
+    {
+      "id": "bug-063",
+      "timestamp": "2026-05-25T09:20:41.288Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/PerformanceResultView.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 6,
+      "last_seen": "2026-05-25T09:23:53.620Z"
+    },
+    {
+      "id": "bug-064",
+      "timestamp": "2026-05-25T09:21:51.124Z",
+      "error_message": "CSS fix: color, fontSize",
+      "file": "frontend/src/pages/PerformanceResultView.tsx",
+      "root_cause": "color: '#ff4d4f' → 'var(--color-error)'; fontSize: 18, color: '#1890ff' → 18, color: 'var(--color-info)'",
+      "fix": "Changed color: '#ff4d4f' → 'var(--color-error)'; fontSize: 18, color: '#1890ff' → 18, color: 'var(--color-info)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:24:13.531Z"
+    },
+    {
+      "id": "bug-065",
+      "timestamp": "2026-05-25T09:23:10.678Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/PerformanceResultView.tsx",
+      "root_cause": "Had \"performance-page\"",
+      "fix": "Changed to \"绩效结果\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T09:23:10.678Z"
+    },
+    {
+      "id": "bug-066",
+      "timestamp": "2026-05-25T09:24:47.194Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "19 lines replaced/restructured",
+      "fix": "Rewrote 31→22 lines (19 removed) | Also: <Card; title={ | Also: <Tag style={{ borderRadius: 6, margin: 0, backgrou; </Tag> | Also: </Card>; <Card",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 4,
+      "last_seen": "2026-05-25T09:29:51.102Z"
+    },
+    {
+      "id": "bug-067",
+      "timestamp": "2026-05-25T09:25:36.936Z",
+      "error_message": "CSS fix: background, borderRadius, color",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)', → 'linear-gradient(135deg, var(--color-primary-bg), #e0e7ff)',; borderRadius: 6, fontWeight: 500, margin: 0 → 'var(--radius-md)',; color: '#1e1b4b', fontSize: 15 → 'var(--color-text-heading)', fontSize: 'var(--font-size-md)'",
+      "fix": "Changed background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)', → 'linear-gradient(135deg, var(--color-primary-bg), #e0e7ff)',; borderRadius: 6, fontWeight: 500, margin: 0 → 'var(--radius-md)',; color: '#1e1b4b', fontSize: 15 → 'var(--color-text-heading)', fontSize: 'var(--font-size-md)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 7,
+      "last_seen": "2026-05-25T09:28:22.083Z"
+    },
+    {
+      "id": "bug-068",
+      "timestamp": "2026-05-25T09:25:45.979Z",
+      "error_message": "Wrong reference: Card should be PageCard",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "Used \"Card\" instead of \"PageCard\"",
+      "fix": "Changed Card → PageCard",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T09:28:01.886Z"
+    },
+    {
+      "id": "bug-069",
+      "timestamp": "2026-05-25T09:25:58.318Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "Had '#111827'",
+      "fix": "Changed to 'var(--font-weight-bold)'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 7,
+      "last_seen": "2026-05-25T09:29:10.971Z"
+    },
+    {
+      "id": "bug-070",
+      "timestamp": "2026-05-25T09:43:52.689Z",
+      "error_message": "CSS fix: width",
+      "file": "frontend/src/pages/PerformanceGoalSetting.tsx",
+      "root_cause": "width: 90, → 120,",
+      "fix": "Changed width: 90, → 120,",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 7,
+      "last_seen": "2026-05-25T09:49:57.944Z"
+    },
+    {
+      "id": "bug-071",
+      "timestamp": "2026-05-25T10:01:45.991Z",
+      "error_message": "CSS fix: title, fontWeight",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "title: '操作', key: 'action', width: 120, → '操作', key: 'action', width: 110,; fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-primary)' → 'var(--font-weight-semibold)', color: selectedLib?.id === record.id ? 'var(--color-primary)' : 'var(--color-text-heading)', fontSize: 'var(--font-size-base)'",
+      "fix": "Changed title: '操作', key: 'action', width: 120, → '操作', key: 'action', width: 110,; fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-primary)' → 'var(--font-weight-semibold)', color: selectedLib?.id === record.id ? 'var(--color-primary)' : 'var(--color-text-heading)', fontSize: 'var(--font-size-base)'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T10:02:20.396Z"
+    },
+    {
+      "id": "bug-072",
+      "timestamp": "2026-05-25T10:02:09.746Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "21 lines replaced/restructured",
+      "fix": "Rewrote 30→12 lines (21 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:02:09.746Z"
+    },
+    {
+      "id": "bug-073",
+      "timestamp": "2026-05-25T10:10:35.878Z",
+      "error_message": "Significant refactor of ",
+      "file": ".ai/AI_WORKFLOW.md",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 10→11 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:10:35.878Z"
+    },
+    {
+      "id": "bug-074",
+      "timestamp": "2026-05-25T10:16:41.274Z",
+      "error_message": "Significant refactor of ",
+      "file": "CLAUDE.md",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 16→68 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:16:41.274Z"
+    },
+    {
+      "id": "bug-075",
+      "timestamp": "2026-05-25T10:17:27.752Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "frontend/src/pages/PerformanceGoalSetting.tsx",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:17:27.752Z"
+    },
+    {
+      "id": "bug-076",
+      "timestamp": "2026-05-25T10:17:36.660Z",
+      "error_message": "CSS fix: width",
+      "file": "frontend/src/pages/PerformanceGoalSetting.tsx",
+      "root_cause": "width: '40%', → '100%'",
+      "fix": "Changed width: '40%', → '100%'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T10:17:45.435Z"
+    },
+    {
+      "id": "bug-077",
+      "timestamp": "2026-05-25T10:19:02.769Z",
+      "error_message": "Type error",
+      "file": "frontend/src/pages/PerformanceResultView.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:19:02.769Z"
+    },
+    {
+      "id": "bug-078",
+      "timestamp": "2026-05-25T10:19:08.789Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/PerformanceResultView.tsx",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 18→12 lines (4 removed) | Also: padding: 16px;; border: 1px solid var(--color-border);",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T10:23:43.861Z"
+    },
+    {
+      "id": "bug-079",
+      "timestamp": "2026-05-25T10:21:54.889Z",
+      "error_message": "CSS fix: margin, width",
+      "file": "frontend/src/pages/PerformanceResultView.tsx",
+      "root_cause": "margin: '32px 0 24px' → '40px 0 24px'; width: 200, → '100%'",
+      "fix": "Changed margin: '32px 0 24px' → '40px 0 24px'; width: 200, → '100%'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 5,
+      "last_seen": "2026-05-25T10:23:55.888Z"
+    },
+    {
+      "id": "bug-080",
+      "timestamp": "2026-05-25T10:28:55.436Z",
+      "error_message": "Wrong return value",
+      "file": "internal/service/performance_indicator_service.go",
+      "root_cause": "Was returning: s.itemRepo.Search(libraryIDs, keyword)",
+      "fix": "Now returns: s.itemRepo.Search(libraryIDs, keyword, sectionType",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:28:55.436Z"
+    },
+    {
+      "id": "bug-081",
+      "timestamp": "2026-05-25T10:29:36.267Z",
+      "error_message": "CSS fix: keyword, res",
+      "file": "frontend/src/pages/PerformanceGoalSetting.tsx",
+      "root_cause": "keyword: string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number) => { → string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number, sectionType: string) => {; res: any = await performanceAPI.searchIndicatorItems({ keyword: keyword.trim() → any = await performanceAPI.searchIndicatorItems({ keyword: keyword.trim(), section_type: sectionType",
+      "fix": "Changed keyword: string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number) => { → string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number, sectionType: string) => {; res: any = await performanceAPI.searchIndicatorItems({ keyword: keyword.trim() → any = await performanceAPI.searchIndicatorItems({ keyword: keyword.trim(), section_type: sectionType",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-25T10:32:22.777Z"
+    },
+    {
+      "id": "bug-082",
+      "timestamp": "2026-05-25T10:30:28.160Z",
+      "error_message": "Significant refactor of ",
+      "file": ".ai/AI_WORKFLOW.md",
+      "root_cause": "100 lines replaced/restructured",
+      "fix": "Rewrote 145→3 lines (100 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:30:28.160Z"
+    },
+    {
+      "id": "bug-083",
+      "timestamp": "2026-05-25T10:31:02.687Z",
+      "error_message": "Significant refactor of ",
+      "file": "CLAUDE.md",
+      "root_cause": "18 lines replaced/restructured",
+      "fix": "Rewrote 26→3 lines (18 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:31:02.687Z"
+    },
+    {
+      "id": "bug-084",
+      "timestamp": "2026-05-25T10:31:11.771Z",
+      "error_message": "CSS fix: keyword, res",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "keyword: string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number) => { → string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number, sectionType: string) => {; res: any = await performanceAPI.searchIndicatorItems({ keyword: keyword.trim() → any = await performanceAPI.searchIndicatorItems({ keyword: keyword.trim(), section_type: sectionType",
+      "fix": "Changed keyword: string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number) => { → string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number, sectionType: string) => {; res: any = await performanceAPI.searchIndicatorItems({ keyword: keyword.trim() → any = await performanceAPI.searchIndicatorItems({ keyword: keyword.trim(), section_type: sectionType",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:31:11.771Z"
+    },
+    {
+      "id": "bug-085",
+      "timestamp": "2026-05-25T10:40:19.406Z",
+      "error_message": "Significant refactor of ",
+      "file": ".ai/AI_WORKFLOW.md",
+      "root_cause": "43 lines replaced/restructured",
+      "fix": "Rewrote 659→1704 lines (43 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:40:19.406Z"
+    },
+    {
+      "id": "bug-086",
+      "timestamp": "2026-05-25T10:41:06.125Z",
+      "error_message": "Significant refactor of ",
+      "file": "CLAUDE.md",
+      "root_cause": "9 lines replaced/restructured",
+      "fix": "Rewrote 228→358 lines (9 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:41:06.125Z"
+    },
+    {
+      "id": "bug-087",
+      "timestamp": "2026-05-25T10:51:56.906Z",
+      "error_message": "Wrong return value",
+      "file": "internal/service/performance_service.go",
+      "root_cause": "Was returning: s.actRepo.FindAll(page, pageSize, status, keyword,",
+      "fix": "Now returns: s.actRepo.FindAll(page, pageSize, status, keyword,",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-25T10:52:09.890Z"
+    },
+    {
+      "id": "bug-088",
+      "timestamp": "2026-05-25T10:52:25.690Z",
+      "error_message": "Wrong return value",
+      "file": "internal/service/performance_indicator_service.go",
+      "root_cause": "Was returning: s.libRepo.FindAll(page, pageSize, departmentID, ke",
+      "fix": "Now returns: s.libRepo.FindAll(page, pageSize, departmentID, ke",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-25T10:52:25.690Z"
+    }
+  ]
+}

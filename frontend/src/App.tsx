@@ -73,6 +73,16 @@ const appTheme = {
     borderRadius: 8,
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif",
   },
+  components: {
+    Button: {
+      borderRadius: 8,
+      controlHeight: 36,
+      fontWeight: 600,
+    },
+    Tag: {
+      borderRadiusSM: 6,
+    },
+  },
 }
 
 const authPaths = ['/login', '/callback', '/login-error']

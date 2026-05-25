@@ -1,8 +1,11 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Tag, Modal, Descriptions, Space } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Tag, Modal, Descriptions, Space } from 'antd'
 import { FileOutlined, EditOutlined, DeleteOutlined, EyeOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { approvalAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 
 const { Title, Text } = Typography
 
@@ -80,9 +83,9 @@ const ApprovalTemplate: React.FC = () => {
       dataIndex: 'status',
       key: 'status',
       render: (status: string) => (
-        <Tag color={status === 'active' ? 'green' : 'red'}>
+        <StatusTag color={status === 'active' ? 'green' : 'red'}>
           {status === 'active' ? '启用' : '禁用'}
-        </Tag>
+        </StatusTag>
       ),
     },
     {
@@ -109,25 +112,26 @@ const ApprovalTemplate: React.FC = () => {
   ]
 
   return (
-    <div>
-      <Title level={4}>审批模板</Title>
-      <Card
-        extra={
-          <Button
-            icon={<SyncOutlined />}
-            onClick={() => syncMutation.mutate()}
-            loading={syncMutation.isPending}
-          >
-            同步模板
-          </Button>
-        }
-      >
+    <PageContainer
+      title="审批模板"
+      icon={<FileOutlined />}
+      extra={
+        <Button
+          icon={<SyncOutlined />}
+          onClick={() => syncMutation.mutate()}
+          loading={syncMutation.isPending}
+        >
+          同步模板
+        </Button>
+      }
+    >
+      <PageCard>
         {isLoading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
             <Spin size="large" />
           </div>
         ) : isError ? (
-          <div style={{ padding: '20px' }}>
+          <div style={{ padding: 'var(--space-5)' }}>
             <Alert
               message="加载失败"
               description={(error as Error)?.message || '获取审批模板失败，请稍后重试'}
@@ -152,7 +156,7 @@ const ApprovalTemplate: React.FC = () => {
         ) : (
           <Empty description="暂无审批模板" />
         )}
-      </Card>
+      </PageCard>
 
       <Modal
         title="审批模板详情"
@@ -172,26 +176,26 @@ const ApprovalTemplate: React.FC = () => {
               <Descriptions.Item label="模板ID">{selectedTemplate.template_id}</Descriptions.Item>
               <Descriptions.Item label="分类">{selectedTemplate.category}</Descriptions.Item>
               <Descriptions.Item label="状态">
-                <Tag color={selectedTemplate.status === 'active' ? 'green' : 'red'}>
+                <StatusTag color={selectedTemplate.status === 'active' ? 'green' : 'red'}>
                   {selectedTemplate.status === 'active' ? '启用' : '禁用'}
-                </Tag>
+                </StatusTag>
               </Descriptions.Item>
               <Descriptions.Item label="描述">{selectedTemplate.description}</Descriptions.Item>
               <Descriptions.Item label="创建时间">{selectedTemplate.created_at}</Descriptions.Item>
               <Descriptions.Item label="更新时间">{selectedTemplate.updated_at}</Descriptions.Item>
             </Descriptions>
 
-            <div style={{ marginTop: 24 }}>
+            <div style={{ marginTop: 'var(--space-6)' }}>
               <Title level={5}>表单字段</Title>
-              <div style={{ border: '1px solid #f0f0f0', borderRadius: 4, padding: 16 }}>
+              <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 'var(--radius-xs)', padding: 'var(--space-4)' }}>
                 {selectedTemplate.form_items?.items?.map((item, index) => (
-                  <div key={index} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px dashed #f0f0f0' }}>
+                  <div key={index} style={{ marginBottom: 'var(--space-3)', paddingBottom: 'var(--space-3)', borderBottom: '1px dashed var(--color-border-light)' }}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <span style={{ fontWeight: 'bold', marginRight: 12 }}>{item.name}</span>
+                      <span style={{ fontWeight: 'var(--font-weight-bold)', marginRight: 'var(--space-3)' }}>{item.name}</span>
                       <Tag>{item.type}</Tag>
                     </div>
                     {item.options && item.options.length > 0 && (
-                      <div style={{ marginTop: 8, marginLeft: 12 }}>
+                      <div style={{ marginTop: 'var(--space-2)', marginLeft: 'var(--space-3)' }}>
                         <Text type="secondary">选项: {item.options.join(', ')}</Text>
                       </div>
                     )}
@@ -200,13 +204,13 @@ const ApprovalTemplate: React.FC = () => {
               </div>
             </div>
 
-            <div style={{ marginTop: 24 }}>
+            <div style={{ marginTop: 'var(--space-6)' }}>
               <Title level={5}>审批节点</Title>
-              <div style={{ border: '1px solid #f0f0f0', borderRadius: 4, padding: 16 }}>
+              <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 'var(--radius-xs)', padding: 'var(--space-4)' }}>
                 {selectedTemplate.flow_nodes?.nodes?.map((node, index) => (
-                  <div key={index} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px dashed #f0f0f0' }}>
+                  <div key={index} style={{ marginBottom: 'var(--space-3)', paddingBottom: 'var(--space-3)', borderBottom: '1px dashed var(--color-border-light)' }}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <span style={{ fontWeight: 'bold', marginRight: 12 }}>第 {node.level} 级: {node.name}</span>
+                      <span style={{ fontWeight: 'var(--font-weight-bold)', marginRight: 'var(--space-3)' }}>第 {node.level} 级: {node.name}</span>
                       <Tag>{node.type}</Tag>
                     </div>
                   </div>
@@ -216,7 +220,7 @@ const ApprovalTemplate: React.FC = () => {
           </div>
         )}
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

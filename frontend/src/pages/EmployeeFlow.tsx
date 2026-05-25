@@ -3,7 +3,6 @@ import type { Dayjs } from 'dayjs'
 import {
   Alert,
   Button,
-  Card,
   Col,
   DatePicker,
   Descriptions,
@@ -15,11 +14,13 @@ import {
   Spin,
   Table,
   Tabs,
-  Tag,
   Typography,
   message,
 } from 'antd'
 import { PlusOutlined, ReloadOutlined, SwapOutlined, UserAddOutlined, UserDeleteOutlined } from '@ant-design/icons'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { departmentAPI, employeeAPI } from '../services/api'
 
@@ -147,16 +148,16 @@ const formatDate = (value?: Dayjs | null) => (value ? value.format('YYYY-MM-DD')
 const renderStatusTag = (value?: string) => {
   const statusMap: Record<string, { color: string; label: string }> = {
     pending: { color: 'blue', label: '待处理' },
-    approved: { color: 'green', label: '已批准' },
-    rejected: { color: 'red', label: '已驳回' },
-    processing: { color: 'orange', label: '处理中' },
-    completed: { color: 'green', label: '已完成' },
+    approved: { color: 'success', label: '已批准' },
+    rejected: { color: 'error', label: '已驳回' },
+    processing: { color: 'warning', label: '处理中' },
+    completed: { color: 'success', label: '已完成' },
   }
   const matched = statusMap[value || '']
   if (!matched) {
-    return <Tag>{value || '未设置'}</Tag>
+    return <StatusTag>{value || '未设置'}</StatusTag>
   }
-  return <Tag color={matched.color}>{matched.label}</Tag>
+  return <StatusTag color={matched.color}>{matched.label}</StatusTag>
 }
 
 const employmentTypeOptions = ['全职', '兼职', '实习']
@@ -339,7 +340,7 @@ const EmployeeFlow: React.FC = () => {
       render: (_: unknown, record: TransferRecord) => (
         <div>
           <Text strong>{record.user_name}</Text>
-          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{record.user_id}</div>
+          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>{record.user_id}</div>
         </div>
       ),
     },
@@ -387,7 +388,7 @@ const EmployeeFlow: React.FC = () => {
       render: (_: unknown, record: ResignationRecord) => (
         <div>
           <Text strong>{record.user_name}</Text>
-          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{record.user_id}</div>
+          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>{record.user_id}</div>
         </div>
       ),
     },
@@ -435,7 +436,7 @@ const EmployeeFlow: React.FC = () => {
       render: (_: unknown, record: OnboardingRecord) => (
         <div>
           <Text strong>{record.name}</Text>
-          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{record.employee_id}</div>
+          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>{record.employee_id}</div>
         </div>
       ),
     },
@@ -660,18 +661,10 @@ const EmployeeFlow: React.FC = () => {
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <Title level={4} style={{ marginBottom: 4 }}>
-            入转调离
-          </Title>
-          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            本页只保留查询与新建。状态、审批人、审批时间、审批意见以及流程结果字段仅用于展示，不会进入创建 payload。
-          </Paragraph>
-        </div>
-      </div>
-
+    <PageContainer
+      title="入转调离"
+      subtitle="本页只保留查询与新建。状态、审批人、审批时间、审批意见以及流程结果字段仅用于展示，不会进入创建 payload。"
+    >
       <Alert
         style={{ marginBottom: 16 }}
         type="info"
@@ -681,9 +674,9 @@ const EmployeeFlow: React.FC = () => {
 
       <Tabs activeKey={activeTab} onChange={handleTabChange}>
         <Tabs.TabPane tab="入职" key="onboarding" icon={<UserAddOutlined />}>
-          <Card
+          <PageCard
             extra={
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
                 <Button icon={<ReloadOutlined />} onClick={refetchCurrentList} loading={onboardingsQuery.isFetching}>
                   刷新
                 </Button>
@@ -694,12 +687,12 @@ const EmployeeFlow: React.FC = () => {
             }
           >
             {renderListContent()}
-          </Card>
+          </PageCard>
         </Tabs.TabPane>
         <Tabs.TabPane tab="调岗" key="transfer" icon={<SwapOutlined />}>
-          <Card
+          <PageCard
             extra={
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
                 <Button icon={<ReloadOutlined />} onClick={refetchCurrentList} loading={transfersQuery.isFetching}>
                   刷新
                 </Button>
@@ -710,12 +703,12 @@ const EmployeeFlow: React.FC = () => {
             }
           >
             {renderListContent()}
-          </Card>
+          </PageCard>
         </Tabs.TabPane>
         <Tabs.TabPane tab="离职" key="resignation" icon={<UserDeleteOutlined />}>
-          <Card
+          <PageCard
             extra={
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
                 <Button icon={<ReloadOutlined />} onClick={refetchCurrentList} loading={resignationsQuery.isFetching}>
                   刷新
                 </Button>
@@ -726,7 +719,7 @@ const EmployeeFlow: React.FC = () => {
             }
           >
             {renderListContent()}
-          </Card>
+          </PageCard>
         </Tabs.TabPane>
       </Tabs>
 
@@ -948,7 +941,7 @@ const EmployeeFlow: React.FC = () => {
       >
         {renderDetailContent()}
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

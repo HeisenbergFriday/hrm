@@ -1,9 +1,11 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, DatePicker, Input, Select } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, DatePicker, Input, Select } from 'antd'
 import { HistoryOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { auditAPI, userAPI } from '../services/api'
 import dayjs from 'dayjs'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -55,7 +57,7 @@ const AuditLogs: React.FC = () => {
       render: (text: string, record: AuditLog) => (
         <div>
           <Text strong>{text}</Text>
-          <div style={{ fontSize: 12, color: '#999' }}>{record.user_id}</div>
+          <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)' }}>{record.user_id}</div>
         </div>
       ),
     },
@@ -91,13 +93,13 @@ const AuditLogs: React.FC = () => {
   ]
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-        <HistoryOutlined style={{ color: '#4338ca', marginRight: 8 }} />审计日志
-      </h2>
-      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>查看系统操作审计记录</Text>
-      <Card style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>
-        <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+    <PageContainer
+      title="审计日志"
+      icon={<HistoryOutlined />}
+      subtitle="查看系统操作审计记录"
+    >
+      <PageCard>
+        <div style={{ marginBottom: 'var(--space-4)', display: 'flex', gap: 'var(--space-4)', alignItems: 'center', flexWrap: 'wrap' }}>
           <RangePicker onChange={setDateRange} />
           <Input
             placeholder="搜索操作"
@@ -115,27 +117,27 @@ const AuditLogs: React.FC = () => {
             onChange={setUserID}
             options={(usersData || []).map((u: any) => ({ label: u.name || u.username, value: u.id }))}
           />
-          <Button type="primary" onClick={() => refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>
+          <Button type="primary" onClick={() => refetch()}>
             查询
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading} style={{ borderRadius: 8, fontWeight: 600 }}>
+          <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading}>
             刷新
           </Button>
         </div>
 
         {isLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6) var(--space-6)' }}>
             <Spin size="large" />
           </div>
         ) : isError ? (
-          <div style={{ padding: '20px' }}>
+          <div style={{ padding: 'var(--space-5) var(--space-5)' }}>
             <Alert
               message="加载失败"
               description={(error as Error)?.message || '获取审计日志失败，请稍后重试'}
               type="error"
               showIcon
               action={
-                <Button size="small" onClick={() => refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>
+                <Button size="small" onClick={() => refetch()}>
                   重试
                 </Button>
               }
@@ -152,7 +154,7 @@ const AuditLogs: React.FC = () => {
               total: logsData.data.total,
               showSizeChanger: true,
               showQuickJumper: true,
-              showTotal: (v: number) => <span style={{ color: '#6b7280' }}>共 {v} 条</span>,
+              showTotal: (v: number) => <span style={{ color: 'var(--color-text-secondary)' }}>共 {v} 条</span>,
               onChange: (newPage, newPageSize) => {
                 setPage(newPage)
                 setPageSize(newPageSize)
@@ -162,8 +164,8 @@ const AuditLogs: React.FC = () => {
         ) : (
           <Empty description="暂无审计日志" imageStyle={{ height: 80 }} />
         )}
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

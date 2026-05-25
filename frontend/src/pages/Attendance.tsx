@@ -1,11 +1,14 @@
 import React, { useState } from 'react'
-import { Card, Typography, DatePicker, Table, Spin, Empty, Alert, Button, Select, Space, Tag, message, Drawer } from 'antd'
+import { Typography, DatePicker, Table, Spin, Empty, Alert, Button, Select, Space, Drawer, message } from 'antd'
 import { ClockCircleOutlined, CalendarOutlined, SyncOutlined, ExportOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { attendanceAPI, userAPI, departmentAPI } from '../services/api'
 import dayjs from 'dayjs'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { RangePicker } = DatePicker
 const { Option } = Select
 
@@ -85,8 +88,8 @@ const Attendance: React.FC = () => {
   }
 
   const columns = [
-    { title: '姓名', dataIndex: 'user_name', key: 'user_name', render: (v: string) => <span style={{ fontWeight: 600, color: '#1e1b4b' }}>{v}</span> },
-    { title: '员工ID', dataIndex: 'user_id', key: 'user_id', render: (v: string) => <span style={{ color: '#6b7280' }}>{v}</span> },
+    { title: '姓名', dataIndex: 'user_name', key: 'user_name', render: (v: string) => <span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text-heading)' }}>{v}</span> },
+    { title: '员工ID', dataIndex: 'user_id', key: 'user_id', render: (v: string) => <span style={{ color: 'var(--color-text-secondary)' }}>{v}</span> },
     { title: '打卡时间', dataIndex: 'check_time', key: 'check_time' },
     { title: '打卡类型', dataIndex: 'check_type', key: 'check_type' },
     { title: '打卡地点', dataIndex: 'location', key: 'location', render: (v: string) => v || '-' },
@@ -94,38 +97,25 @@ const Attendance: React.FC = () => {
       title: '状态', dataIndex: 'is_abnormal', key: 'is_abnormal',
       render: (isAbnormal: boolean, record: AttendanceRecord) => (
         isAbnormal ? (
-          <Tag color="error" icon={<ExclamationCircleOutlined />} style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>
+          <StatusTag color="error" icon={<ExclamationCircleOutlined />}>
             {record.abnormal_type || '异常'}
-          </Tag>
+          </StatusTag>
         ) : (
-          <Tag color="success" style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>正常</Tag>
+          <StatusTag color="success">正常</StatusTag>
         )
       ),
     },
     {
       title: '操作', key: 'action',
       render: (_: any, record: AttendanceRecord) => (
-        <a onClick={() => handleViewDetail(record)} style={{ fontWeight: 600, color: '#4338ca' }}>查看详情</a>
+        <a onClick={() => handleViewDetail(record)} style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-primary)' }}>查看详情</a>
       ),
     },
   ]
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-          <ClockCircleOutlined style={{ marginRight: 10, color: '#4338ca' }} />
-          考勤查询
-        </h2>
-        <Text style={{ color: '#6b7280', fontSize: 13.5 }}>
-          查询员工打卡记录，同步钉钉考勤数据
-        </Text>
-      </div>
-
-      <Card
-        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
-      >
+    <PageContainer title="考勤查询" icon={<ClockCircleOutlined />} subtitle="查询员工打卡记录，同步钉钉考勤数据">
+      <PageCard>
         <div style={{ marginBottom: 18, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <Select placeholder="选择员工" style={{ width: 150 }} allowClear onChange={setUser}>
             {users.map(u => (
@@ -139,34 +129,31 @@ const Attendance: React.FC = () => {
           </Select>
           <RangePicker onChange={handleDateChange} />
           <Space>
-            <Button type="primary" icon={<CalendarOutlined />} onClick={() => refetch()}
-              style={{ borderRadius: 8, fontWeight: 600 }}>查询</Button>
-            <Button icon={<SyncOutlined />} onClick={handleSync} loading={syncMutation.isPending}
-              style={{ borderRadius: 8 }}>同步</Button>
-            <Button icon={<ExportOutlined />} onClick={() => window.location.href = '/attendance-export'}
-              style={{ borderRadius: 8 }}>导出</Button>
+            <Button type="primary" icon={<CalendarOutlined />} onClick={() => refetch()}>查询</Button>
+            <Button icon={<SyncOutlined />} onClick={handleSync} loading={syncMutation.isPending}>同步</Button>
+            <Button icon={<ExportOutlined />} onClick={() => window.location.href = '/attendance-export'}>导出</Button>
           </Space>
         </div>
 
         {lastSyncData && (
           <div style={{
-            marginBottom: 16,
+            marginBottom: 'var(--space-4)',
             padding: '10px 14px',
-            background: '#f8f9fc',
-            borderRadius: 8,
-            border: '1px solid #eef0f5',
-            color: '#6b7280',
-            fontSize: 13,
+            background: 'var(--color-bg-container)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-border-subtle)',
+            color: 'var(--color-text-secondary)',
+            fontSize: 'var(--font-size-sm)',
           }}>
-            最近同步时间: <span style={{ color: '#1e1b4b', fontWeight: 500 }}>{lastSyncData.data?.attendance?.last_sync_time || '暂无'}</span>
+            最近同步时间: <span style={{ color: 'var(--color-text-heading)', fontWeight: 'var(--font-weight-medium)' }}>{lastSyncData.data?.attendance?.last_sync_time || '暂无'}</span>
             {lastSyncData.data?.attendance?.record_count !== undefined && (
-              <span style={{ marginLeft: 20 }}>同步记录数: <span style={{ color: '#1e1b4b', fontWeight: 500 }}>{lastSyncData.data.attendance.record_count}</span></span>
+              <span style={{ marginLeft: 20 }}>同步记录数: <span style={{ color: 'var(--color-text-heading)', fontWeight: 'var(--font-weight-medium)' }}>{lastSyncData.data.attendance.record_count}</span></span>
             )}
           </div>
         )}
 
         {isLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-10)' }}>
             <Spin size="large" />
           </div>
         ) : isError ? (
@@ -187,17 +174,17 @@ const Attendance: React.FC = () => {
               pageSize,
               total: attendanceData.data.total,
               showSizeChanger: false,
-              showTotal: (total: number) => <span style={{ color: '#6b7280' }}>共 {total} 条记录</span>,
+              showTotal: (total: number) => <span style={{ color: 'var(--color-text-secondary)' }}>共 {total} 条记录</span>,
               onChange: (newPage, newPageSize) => { setPage(newPage); setPageSize(newPageSize) },
             }}
           />
         ) : (
           <Empty description="暂无考勤数据" imageStyle={{ height: 80 }} />
         )}
-      </Card>
+      </PageCard>
 
       <Drawer
-        title={<span style={{ fontWeight: 700, color: '#111827' }}>考勤详情</span>}
+        title={<span style={{ fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text-title)' }}>考勤详情</span>}
         placement="right"
         width={420}
         onClose={() => setDrawerVisible(false)}
@@ -213,20 +200,20 @@ const Attendance: React.FC = () => {
               { label: '打卡地点', value: selectedRecord.location || '-' },
               { label: '状态', value: selectedRecord.is_abnormal ? selectedRecord.abnormal_type || '异常' : '正常' },
             ].map((item) => (
-              <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
-                <Text style={{ color: '#6b7280', fontWeight: 500 }}>{item.label}</Text>
-                <Text style={{ color: '#1e1b4b', fontWeight: 600 }}>{item.value}</Text>
+              <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid var(--color-border-light)' }}>
+                <Text style={{ color: 'var(--color-text-secondary)', fontWeight: 'var(--font-weight-medium)' }}>{item.label}</Text>
+                <Text style={{ color: 'var(--color-text-heading)', fontWeight: 'var(--font-weight-semibold)' }}>{item.value}</Text>
               </div>
             ))}
             {selectedRecord.extension && Object.keys(selectedRecord.extension).length > 0 && (
               <div>
-                <Text style={{ color: '#6b7280', fontWeight: 500, display: 'block', marginBottom: 8 }}>扩展信息</Text>
+                <Text style={{ color: 'var(--color-text-secondary)', fontWeight: 'var(--font-weight-medium)', display: 'block', marginBottom: 8 }}>扩展信息</Text>
                 <pre style={{
-                  background: '#f8f9fc',
-                  borderRadius: 8,
+                  background: 'var(--color-bg-container)',
+                  borderRadius: 'var(--radius-md)',
                   padding: 14,
-                  border: '1px solid #eef0f5',
-                  fontSize: 12.5,
+                  border: '1px solid var(--color-border-subtle)',
+                  fontSize: 'var(--font-size-xs)',
                   color: '#374151',
                   overflow: 'auto',
                   maxHeight: 300,
@@ -238,7 +225,7 @@ const Attendance: React.FC = () => {
           </div>
         )}
       </Drawer>
-    </div>
+    </PageContainer>
   )
 }
 

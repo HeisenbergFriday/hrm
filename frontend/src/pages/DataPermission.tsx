@@ -1,8 +1,10 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Select, Tree, message, Form, Switch } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Select, Tree, message, Form, Switch } from 'antd'
 import { LockOutlined, ReloadOutlined, TeamOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { permissionAPI, orgAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
 
 const { Text } = Typography
 const { Option } = Select
@@ -63,25 +65,17 @@ const DataPermission: React.FC = () => {
 
   if (rolesLoading || departmentsLoading) {
     return (
-      <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-        <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-          <LockOutlined style={{ color: '#4338ca', marginRight: 8 }} />数据权限
-        </h2>
-        <Text style={{ color: '#6b7280', fontSize: 13.5 }}>配置角色的数据访问范围</Text>
+      <PageContainer title="数据权限" icon={<LockOutlined />} subtitle="配置角色的数据访问范围">
         <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
           <Spin size="large" />
         </div>
-      </div>
+      </PageContainer>
     )
   }
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-        <LockOutlined style={{ color: '#4338ca', marginRight: 8 }} />数据权限
-      </h2>
-      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>配置角色的数据访问范围</Text>
-      <Card style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>
+    <PageContainer title="数据权限" icon={<LockOutlined />} subtitle="配置角色的数据访问范围">
+      <PageCard>
         <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' }}>
           <Text strong>选择角色：</Text>
           <Select
@@ -95,7 +89,7 @@ const DataPermission: React.FC = () => {
               </Option>
             ))}
           </Select>
-          <Button type="primary" onClick={handleSave} style={{ marginLeft: 'auto', borderRadius: 8, fontWeight: 600 }}>
+          <Button type="primary" onClick={handleSave} style={{ marginLeft: 'auto' }}>
             保存权限
           </Button>
         </div>
@@ -114,7 +108,7 @@ const DataPermission: React.FC = () => {
 
           {!isAllDepartments && (
             <Form.Item label="指定部门">
-              <div style={{ border: '1px solid #f0f0f0', borderRadius: 4, padding: 16, minHeight: 400 }}>
+              <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 'var(--radius-xs)', padding: 16, minHeight: 400 }}>
                 <Tree
                   checkable
                   treeData={renderDepartmentTree(departmentTreeData?.data?.tree || [])}
@@ -126,7 +120,7 @@ const DataPermission: React.FC = () => {
             </Form.Item>
           )}
 
-          <div style={{ marginTop: 24, padding: 16, backgroundColor: '#f9f9f9', borderRadius: 4 }}>
+          <div style={{ marginTop: 24, padding: 16, backgroundColor: 'var(--color-bg-container)', borderRadius: 'var(--radius-xs)' }}>
             <Text strong>权限说明：</Text>
             <ul style={{ marginTop: 8, marginLeft: 20 }}>
               <li>全部部门：可以查看所有部门的数据</li>
@@ -135,8 +129,8 @@ const DataPermission: React.FC = () => {
             </ul>
           </div>
         </Form>
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

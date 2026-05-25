@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  Card, Typography, Form, Input, InputNumber, Button, Space, Divider,
-  message, Spin, Row, Col, Table, Alert, Tag
+  Typography, Form, Input, InputNumber, Button, Space, Divider,
+  message, Spin, Row, Col, Table, Alert, Tag, Card
 } from 'antd'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import { SaveOutlined, ArrowLeftOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { performanceAPI, PerformanceGoalRecord, PerformanceParticipant } from '../services/api'
 
@@ -137,9 +140,9 @@ const PerformanceSelfEval: React.FC = () => {
             <Form.Item name={['items', idx, 'record_id']} hidden><Input /></Form.Item>
             <div>
               {showDivider && (
-                <Tag color={isQuant ? 'blue' : 'green'} style={{ marginBottom: 4 }}>
+                <StatusTag color={isQuant ? 'blue' : 'green'} style={{ marginBottom: 4 }}>
                   {isQuant ? '量化指标' : '关键行动'}
-                </Tag>
+                </StatusTag>
               )}
               <Text strong>{val}</Text>
             </div>
@@ -161,7 +164,7 @@ const PerformanceSelfEval: React.FC = () => {
       render: (_: any, record: any) => {
         if (record.section_type === 'quantitative') {
           return (
-            <div style={{ fontSize: 12 }}>
+            <div style={{ fontSize: 'var(--font-size-xs)' }}>
               {record.red_line_value && <div>红线: {record.red_line_value}</div>}
               {record.target_value && <div>目标: {record.target_value}</div>}
               {record.challenge_value && <div>挑战: {record.challenge_value}</div>}
@@ -171,7 +174,7 @@ const PerformanceSelfEval: React.FC = () => {
         }
         const qualitativeTarget = record.target_value || record.scoring_rule
         return (
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
             {qualitativeTarget ? (qualitativeTarget.length > 50 ? qualitativeTarget.substring(0, 50) + '...' : qualitativeTarget) : '-'}
           </Text>
         )
@@ -204,14 +207,14 @@ const PerformanceSelfEval: React.FC = () => {
   if (loading) return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
 
   return (
-    <div style={{ padding: 24 }}>
+    <PageContainer title="绩效自评">
       <Space style={{ marginBottom: 16 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
         <Title level={4} style={{ margin: 0 }}>绩效自评</Title>
       </Space>
 
       <Form form={form} onValuesChange={handleValuesChange} layout="vertical">
-        <Card title="指标评分">
+        <PageCard title="指标评分">
           <Table
             dataSource={formItems}
             columns={columns}
@@ -220,10 +223,10 @@ const PerformanceSelfEval: React.FC = () => {
             size="small"
             bordered
           />
-        </Card>
+        </PageCard>
 
         {bonusRecords.length > 0 && (
-          <Card title="附加考核项" style={{ marginTop: 16 }}>
+          <PageCard title="附加考核项" style={{ marginTop: 16 }}>
             <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
               附加分仅作为参考或激励依据，不计入总分
             </Text>
@@ -258,19 +261,19 @@ const PerformanceSelfEval: React.FC = () => {
                 }
               ]}
             />
-          </Card>
+          </PageCard>
         )}
 
-        <Card title="系统自动计算" style={{ marginTop: 16 }}>
+        <PageCard title="系统自动计算" style={{ marginTop: 16 }}>
           <Row gutter={16}>
             <Col span={8}>
               <Text>自评总分：</Text>
-              <Text strong style={{ fontSize: 24, color: '#1890ff' }}>{totalSelfScore}</Text>
+              <Text strong style={{ fontSize: 24, color: 'var(--color-info)' }}>{totalSelfScore}</Text>
             </Col>
           </Row>
-        </Card>
+        </PageCard>
 
-        <Card title="员工自我评价" style={{ marginTop: 16 }}>
+        <PageCard title="员工自我评价" style={{ marginTop: 16 }}>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="evaluation_good" label="做得好的地方">
@@ -283,7 +286,7 @@ const PerformanceSelfEval: React.FC = () => {
               </Form.Item>
             </Col>
           </Row>
-        </Card>
+        </PageCard>
 
         <div style={{ textAlign: 'center', marginTop: 24 }}>
           <Button type="primary" icon={<CheckCircleOutlined />} loading={saving} onClick={handleSubmit} size="large">
@@ -291,7 +294,7 @@ const PerformanceSelfEval: React.FC = () => {
           </Button>
         </div>
       </Form>
-    </div>
+    </PageContainer>
   )
 }
 

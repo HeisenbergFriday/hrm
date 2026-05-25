@@ -1,9 +1,12 @@
-import React, { useState } from 'react'
-import { Card, Typography, Descriptions, Timeline, Tag, Button, Spin, Alert, Divider, Empty } from 'antd'
-import { ArrowLeftOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined } from '@ant-design/icons'
+import React from 'react'
+import { Typography, Descriptions, Timeline, Button, Spin, Alert, Divider, Empty } from 'antd'
+import { ArrowLeftOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, FileSearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import { approvalAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -35,23 +38,23 @@ const ApprovalDetail: React.FC = () => {
   const getStatusTag = (status: string) => {
     switch (status) {
       case 'completed':
-        return <Tag color="green">已完成</Tag>
+        return <StatusTag color="green">已完成</StatusTag>
       case 'in_progress':
-        return <Tag color="blue">处理中</Tag>
+        return <StatusTag color="blue">处理中</StatusTag>
       case 'rejected':
-        return <Tag color="red">已拒绝</Tag>
+        return <StatusTag color="red">已拒绝</StatusTag>
       case 'pending':
-        return <Tag color="orange">待处理</Tag>
+        return <StatusTag color="orange">待处理</StatusTag>
       default:
-        return <Tag>{status}</Tag>
+        return <StatusTag>{status}</StatusTag>
     }
   }
 
   const getActionIcon = (action: string) => {
     if (action === 'approved') {
-      return <CheckCircleOutlined style={{ color: '#52c41a' }} />
+      return <CheckCircleOutlined style={{ color: 'var(--color-success)' }} />
     } else if (action === 'rejected') {
-      return <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
+      return <CloseCircleOutlined style={{ color: 'var(--color-error)' }} />
     }
     return null
   }
@@ -70,23 +73,25 @@ const ApprovalDetail: React.FC = () => {
   }
 
   return (
-    <div>
-      <Title level={4}>审批详情</Title>
-      <Card>
+    <PageContainer
+      title="审批详情"
+      icon={<FileSearchOutlined />}
+      extra={
         <Button
           icon={<ArrowLeftOutlined />}
           onClick={() => navigate('/approval-instances')}
-          style={{ marginBottom: 24 }}
         >
           返回列表
         </Button>
-
+      }
+    >
+      <PageCard>
         {isLoading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
             <Spin size="large" />
           </div>
         ) : isError ? (
-          <div style={{ padding: '20px' }}>
+          <div style={{ padding: 'var(--space-5)' }}>
             <Alert
               message="加载失败"
               description={(error as Error)?.message || '获取审批详情失败，请稍后重试'}
@@ -101,7 +106,7 @@ const ApprovalDetail: React.FC = () => {
           </div>
         ) : approvalData?.data?.approval ? (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
               <div>
                 <Title level={5}>{approvalData.data.approval.title}</Title>
                 <Text type="secondary">模板：{approvalData.data.approval.template_name}</Text>
@@ -109,7 +114,7 @@ const ApprovalDetail: React.FC = () => {
               {getStatusTag(approvalData.data.approval.status)}
             </div>
 
-            <Descriptions bordered column={1} style={{ marginBottom: 24 }}>
+            <Descriptions bordered column={1} style={{ marginBottom: 'var(--space-6)' }}>
               <Descriptions.Item label="发起人">{approvalData.data.approval.applicant_name}</Descriptions.Item>
               <Descriptions.Item label="发起时间">{approvalData.data.approval.create_time}</Descriptions.Item>
               {approvalData.data.approval.finish_time && (
@@ -118,9 +123,9 @@ const ApprovalDetail: React.FC = () => {
             </Descriptions>
 
             <Title level={5}>审批内容</Title>
-            <div style={{ border: '1px solid #f0f0f0', borderRadius: 4, padding: 16, marginBottom: 24 }}>
+            <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 'var(--radius-xs)', padding: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
               {Object.entries(approvalData.data.approval.content || {}).map(([key, value]) => (
-                <div key={key} style={{ marginBottom: 12 }}>
+                <div key={key} style={{ marginBottom: 'var(--space-3)' }}>
                   <Text strong>{key}：</Text>
                   <Text>{String(value ?? '-')}</Text>
                 </div>
@@ -135,18 +140,18 @@ const ApprovalDetail: React.FC = () => {
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
                       <Text strong>{node.node_name}</Text>
-                      <Text style={{ marginLeft: 12 }}>{node.approver_name}</Text>
+                      <Text style={{ marginLeft: 'var(--space-3)' }}>{node.approver_name}</Text>
                       {getActionIcon(node.action)}
-                      <Text style={{ marginLeft: 8, color: node.action === 'approved' ? '#52c41a' : node.action === 'rejected' ? '#ff4d4f' : '#1890ff' }}>
+                      <Text style={{ marginLeft: 'var(--space-2)', color: node.action === 'approved' ? 'var(--color-success)' : node.action === 'rejected' ? 'var(--color-error)' : 'var(--color-primary)' }}>
                         {getActionText(node.action)}
                       </Text>
                     </div>
                     {node.comment && (
-                      <Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
+                      <Paragraph style={{ marginTop: 'var(--space-2)', marginBottom: 0 }}>
                         备注：{node.comment}
                       </Paragraph>
                     )}
-                    <Text type="secondary" style={{ fontSize: 12 }}>{node.time}</Text>
+                    <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>{node.time}</Text>
                   </div>
                 ),
               })) || []}
@@ -166,8 +171,8 @@ const ApprovalDetail: React.FC = () => {
         ) : (
           <Empty description="审批详情不存在" />
         )}
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

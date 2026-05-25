@@ -1,9 +1,12 @@
 import React, { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Card, Col, Row, Space, Statistic, Table, Tag, Typography, Button, Modal, Form, Input, InputNumber,
+  Alert, Card, Col, Row, Space, Table, Tag, Typography, Button, Modal, Form, Input, InputNumber,
   Select, message, Spin, Drawer, Tooltip, Divider, Descriptions, Steps
 } from 'antd'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import type { ColumnsType } from 'antd/es/table'
 import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
@@ -591,7 +594,7 @@ const PerformanceOverview: React.FC = () => {
       title: '状态', dataIndex: 'status', key: 'status', width: 90,
       render: (status: string) => {
         const s = STATUS_MAP[status] || { label: status, color: 'default' }
-        return <Tag color={s.color}>{s.label}</Tag>
+        return <StatusTag color={s.color}>{s.label}</StatusTag>
       }
     },
     { title: '自评时间', key: 'self_eval', width: 200, render: (_, r) => `${r.self_eval_start_at} ~ ${r.self_eval_end_at}` },
@@ -612,7 +615,7 @@ const PerformanceOverview: React.FC = () => {
         if (!name && (record.manager_id === null || record.manager_id === undefined || record.manager_id === '')) {
           return (
             <Tooltip title="该员工未设置直属主管，无法进入绩效流程">
-              <Tag color="error" style={{ cursor: 'default' }}>未设置</Tag>
+              <StatusTag color="error" style={{ cursor: 'default' }}>未设置</StatusTag>
             </Tooltip>
           )
         }
@@ -623,7 +626,7 @@ const PerformanceOverview: React.FC = () => {
       title: '状态', dataIndex: 'status', key: 'status', width: 110,
       render: (status: string) => {
         const s = PARTICIPANT_STATUS_MAP[status] || { label: status, color: 'default' }
-        return <Tag color={s.color}>{s.label}</Tag>
+        return <StatusTag color={s.color}>{s.label}</StatusTag>
       }
     },
     {
@@ -639,7 +642,7 @@ const PerformanceOverview: React.FC = () => {
           <Tooltip title={suffix ? `分数 ${num}（${suffix.trim()}）` : undefined}>
             <span>
               <Text strong>{num}</Text>
-              {suffix && <Text type="secondary" style={{ fontSize: 11, marginLeft: 2 }}>{suffix}</Text>}
+              {suffix && <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)', marginLeft: 2 }}>{suffix}</Text>}
             </span>
           </Tooltip>
         )
@@ -657,7 +660,7 @@ const PerformanceOverview: React.FC = () => {
       render: (v: string) => {
         if (!v) return <Text type="secondary">-</Text>
         const colorMap: Record<string, string> = { S: '#f50', A: '#1677ff', B: '#52c41a', C: '#faad14', D: '#ff4d4f' }
-        return <Tag color={colorMap[v] || 'default'}>{v}</Tag>
+        return <StatusTag color={colorMap[v] || 'default'}>{v}</StatusTag>
       }
     },
     {
@@ -669,14 +672,14 @@ const PerformanceOverview: React.FC = () => {
 
         if (isArchived) {
           return (
-            <Button size="small" type="link" style={{ fontSize: 13 }}
+            <Button size="small" type="link" style={{ fontSize: 'var(--font-size-sm)' }}
               onClick={() => navigate(`/performance-result/${activityId}/${record.id}`)}
             >查看</Button>
           )
         }
 
         const links: React.ReactNode[] = []
-        const linkStyle = { fontSize: 13, padding: '0 2px' }
+        const linkStyle = { fontSize: 'var(--font-size-sm)', padding: '0 2px' }
         const activityStatus = currentActivity?.status
 
         // 目标设定：活动必须处于 target_setting 状态，且参与人状态允许
@@ -712,7 +715,7 @@ const PerformanceOverview: React.FC = () => {
         }
         if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed') {
           links.push(
-            <Button key="hr-confirm" size="small" type="link" style={{ ...linkStyle, color: '#722ed1' }}
+            <Button key="hr-confirm" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }}
               onClick={async () => {
                 try {
                   await performanceAPI.confirmHRResult(record.id)
@@ -727,7 +730,7 @@ const PerformanceOverview: React.FC = () => {
         }
         if (record.status === 'target_pending_approval') {
           links.push(
-            <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: '#1677ff' }}
+            <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }}
               onClick={async () => {
                 try {
                   await performanceAPI.approveGoalRecords(record.id)
@@ -756,47 +759,42 @@ const PerformanceOverview: React.FC = () => {
   const confirmedCount = activities.filter(a => ['locked', 'result_confirmed'].includes(a.status)).length
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-          <BarChartOutlined style={{ marginRight: 10, color: '#4338ca' }} />
-          绩效管理
-        </h2>
-        <Paragraph type="secondary" style={{ marginBottom: 0, color: '#6b7280', fontSize: 13.5 }}>
-          绩效活动管理与评分工作台
-        </Paragraph>
-      </div>
+    <PageContainer
+      title="绩效管理"
+      icon={<BarChartOutlined />}
+      subtitle="绩效活动管理与评分工作台"
+    >
 
       <Card
-        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+        style={{ borderRadius: 'var(--radius-xl)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)' }}
+        styles={{ header: { background: 'var(--color-bg-card-header)', borderBottom: '1px solid var(--color-border-light)' } }}
       >
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             {[
-              { title: '绩效活动总数', value: activitiesTotal, color: '#4338ca', bg: '#eef2ff' },
+              { title: '绩效活动总数', value: activitiesTotal, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
               { title: '进行中活动', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe' },
-              { title: '已确认结果', value: confirmedCount, color: '#15803d', bg: '#dcfce7' },
-              { title: '已归档活动', value: activities.filter(a => a.status === 'archived').length, color: '#6b7280', bg: '#f3f4f6' },
+              { title: '已确认结果', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7' },
+              { title: '已归档活动', value: activities.filter(a => a.status === 'archived').length, color: 'var(--color-text-secondary)', bg: 'var(--color-bg-hover)' },
             ].map((item) => (
               <Col xs={24} sm={12} lg={6} key={item.title}>
                 <div style={{
-                  background: '#fff',
-                  borderRadius: 10,
+                  background: 'var(--color-bg-card)',
+                  borderRadius: 'var(--radius-md)',
                   padding: '18px 20px',
-                  boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
-                  border: '1px solid #e5e7eb',
+                  boxShadow: 'var(--shadow-card)',
+                  border: '1px solid var(--color-border)',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 14,
                 }}>
                   <div style={{
-                    width: 44, height: 44, borderRadius: 10, background: item.bg,
+                    width: 44, height: 44, borderRadius: 'var(--radius-md)', background: item.bg,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 22, color: item.color, fontWeight: 700, flexShrink: 0,
+                    fontSize: 22, color: item.color, fontWeight: 'var(--font-weight-bold)', flexShrink: 0,
                   }}>
                     {item.value}
                   </div>
-                  <Text style={{ color: '#374151', fontSize: 13, fontWeight: 500 }}>{item.title}</Text>
+                  <Text style={{ color: 'var(--color-text)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.title}</Text>
                 </div>
               </Col>
             ))}
@@ -823,7 +821,7 @@ const PerformanceOverview: React.FC = () => {
           />
 
           {/* 活动列表 */}
-          <Card
+          <PageCard
             title="绩效活动"
             style={{ marginBottom: 16 }}
             extra={
@@ -864,7 +862,7 @@ const PerformanceOverview: React.FC = () => {
                 scroll={{ x: 900 }}
               />
             </Spin>
-          </Card>
+          </PageCard>
 
       </Card>
 
@@ -891,7 +889,7 @@ const PerformanceOverview: React.FC = () => {
             />
             <Descriptions column={3} size="small" style={{ marginBottom: 16 }} bordered>
               <Descriptions.Item label="状态">
-                <Tag color={STATUS_MAP[currentActivity.status]?.color}>{STATUS_MAP[currentActivity.status]?.label}</Tag>
+                <StatusTag color={STATUS_MAP[currentActivity.status]?.color}>{STATUS_MAP[currentActivity.status]?.label}</StatusTag>
               </Descriptions.Item>
               <Descriptions.Item label="周期类型">{currentActivity.cycle_type}</Descriptions.Item>
               <Descriptions.Item label="绩效周期">{currentActivity.start_date} ~ {currentActivity.end_date}</Descriptions.Item>
@@ -963,19 +961,19 @@ const PerformanceOverview: React.FC = () => {
 
             <Spin spinning={summaryLoading}>
               {summary ? (
-                <div style={{ display: 'flex', gap: 0, marginBottom: 10, borderRadius: 8, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', gap: 0, marginBottom: 10, borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)', overflow: 'hidden' }}>
                   {[
-                    { title: '参与人数', value: summary.total_participants, color: '#4338ca', bg: '#eef2ff' },
+                    { title: '参与人数', value: summary.total_participants, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
                     { title: '已自评', value: summary.self_submitted_count, color: '#0369a1', bg: '#e0f2fe' },
                     { title: '已评分', value: summary.manager_submitted_count, color: '#b45309', bg: '#fef3c7' },
-                    { title: '已确认', value: summary.result_confirmed_count, color: '#15803d', bg: '#dcfce7' },
+                    { title: '已确认', value: summary.result_confirmed_count, color: 'var(--color-success)', bg: '#dcfce7' },
                   ].map((item, idx) => (
                     <div key={item.title} style={{
                       flex: 1, padding: '10px 14px', textAlign: 'center',
-                      background: item.bg, borderRight: idx < 3 ? '1px solid #e5e7eb' : 'none',
+                      background: item.bg, borderRight: idx < 3 ? '1px solid var(--color-border)' : 'none',
                     }}>
-                      <div style={{ fontSize: 22, fontWeight: 700, color: item.color, lineHeight: 1.2 }}>{item.value}</div>
-                      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{item.title}</div>
+                      <div style={{ fontSize: 22, fontWeight: 'var(--font-weight-bold)', color: item.color, lineHeight: 1.2 }}>{item.value}</div>
+                      <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', marginTop: 2 }}>{item.title}</div>
                     </div>
                   ))}
                 </div>
@@ -994,17 +992,17 @@ const PerformanceOverview: React.FC = () => {
                     return (
                       <Col span={4} key={level} style={{ minWidth: 0 }}>
                         <div style={{
-                          textAlign: 'center', padding: '8px 4px', borderRadius: 8,
+                          textAlign: 'center', padding: '8px 4px', borderRadius: 'var(--radius-md)',
                           background: bg, border: `1px solid ${barColor}20`,
                         }}>
                           <div style={{
-                            fontSize: 18, fontWeight: 700, color: barColor, lineHeight: 1,
+                            fontSize: 18, fontWeight: 'var(--font-weight-bold)', color: barColor, lineHeight: 1,
                           }}>{level}</div>
-                          <div style={{ fontSize: 12, color: '#374151', margin: '4px 0 2px' }}>
+                          <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text)', margin: '4px 0 2px' }}>
                             {dist.actual_count}/{dist.expected_count}人
                           </div>
                           <div style={{
-                            height: 4, borderRadius: 2, background: '#e5e7eb',
+                            height: 4, borderRadius: 2, background: 'var(--color-border)',
                             overflow: 'hidden', margin: '0 8px',
                           }}>
                             <div style={{
@@ -1012,7 +1010,7 @@ const PerformanceOverview: React.FC = () => {
                               width: `${Math.min(dist.progress, 100)}%`,
                             }} />
                           </div>
-                          <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 3 }}>
+                          <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
                             期望 {dist.expected_percent}%
                           </div>
                         </div>
@@ -1066,9 +1064,9 @@ const PerformanceOverview: React.FC = () => {
           const total = levels.reduce((sum, l) => sum + (Number(formVals[`percent_${l}`]) || 0), 0)
           return (
             <div style={{ marginBottom: 16 }}>
-              <Text strong style={{ fontSize: 13, color: '#374151', marginBottom: 8, display: 'block' }}>分布预览</Text>
+              <Text strong style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text)', marginBottom: 8, display: 'block' }}>分布预览</Text>
               <div style={{
-                display: 'flex', height: 32, borderRadius: 6, overflow: 'hidden', border: '1px solid #e5e7eb', background: '#f5f5f5'
+                display: 'flex', height: 32, borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--color-border)', background: '#f5f5f5'
               }}>
                 {levels.map(level => {
                   const val = Number(formVals[`percent_${level}`]) || 0
@@ -1089,7 +1087,7 @@ const PerformanceOverview: React.FC = () => {
                 })}
               </div>
               <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between' }}>
-                <Text type={total === 100 ? 'success' : 'danger'} style={{ fontSize: 12 }}>
+                <Text type={total === 100 ? 'success' : 'danger'} style={{ fontSize: 'var(--font-size-xs)' }}>
                   合计：{total}%{total !== 100 ? '（需等于 100%）' : ' ✓'}
                 </Text>
                 <div style={{ display: 'flex', gap: 12 }}>
@@ -1097,7 +1095,7 @@ const PerformanceOverview: React.FC = () => {
                     const val = Number(formVals[`percent_${level}`]) || 0
                     return val > 0 ? (
                       <Text key={level} style={{ fontSize: 11, color: colors[level] }}>
-                        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: colors[level], marginRight: 3 }} />
+                        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 'var(--radius-xs)', background: colors[level], marginRight: 3 }} />
                         {level} {val}%
                       </Text>
                     ) : null
@@ -1166,7 +1164,7 @@ const PerformanceOverview: React.FC = () => {
             <InputNumber min={0} max={120} style={{ width: '100%' }} placeholder="0-120" />
           </Form.Item>
           <Form.Item label="绩效等级">
-            <Tag color={
+            <StatusTag color={
               batchEvalScore >= 100 ? '#f50' :
               batchEvalScore >= 90 ? '#2db7f5' :
               batchEvalScore >= 80 ? '#87d068' :
@@ -1176,7 +1174,7 @@ const PerformanceOverview: React.FC = () => {
                batchEvalScore >= 90 ? 'A - 优秀' :
                batchEvalScore >= 80 ? 'B - 良好' :
                batchEvalScore >= 60 ? 'C - 待改进' : 'D - 不合格'}
-            </Tag>
+            </StatusTag>
             <Text type="secondary" style={{ marginLeft: 8 }}>根据评分自动生成</Text>
           </Form.Item>
           <Form.Item name="batch_comment" label="上级评语">
@@ -1184,7 +1182,7 @@ const PerformanceOverview: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

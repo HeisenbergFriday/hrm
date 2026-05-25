@@ -1,7 +1,9 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Tree } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Tree } from 'antd'
 import { KeyOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
 
 const { Text } = Typography
 
@@ -103,33 +105,33 @@ const Permission: React.FC = () => {
       key: 'action',
       render: (_: any, record: any) => (
         <>
-          <Button icon={<EditOutlined />} size="small" onClick={() => handleEditRole(record)} style={{ borderRadius: 8, fontWeight: 600 }} />
-          <Button icon={<DeleteOutlined />} size="small" danger style={{ borderRadius: 8, fontWeight: 600 }} />
+          <Button icon={<EditOutlined />} size="small" onClick={() => handleEditRole(record)} />
+          <Button icon={<DeleteOutlined />} size="small" danger />
         </>
       )
     },
   ]
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-        <KeyOutlined style={{ color: '#4338ca', marginRight: 8 }} />权限管理
-      </h2>
-      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>管理角色与权限分配</Text>
-      <Card style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>
-        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Button type="primary" icon={<PlusOutlined />} style={{ borderRadius: 8, fontWeight: 600 }}>
+    <PageContainer
+      title="权限管理"
+      icon={<KeyOutlined />}
+      subtitle="管理角色与权限分配"
+    >
+      <PageCard>
+        <div style={{ marginBottom: 'var(--space-4)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Button type="primary" icon={<PlusOutlined />}>
             创建角色
           </Button>
         </div>
 
         {rolesLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6) var(--space-6)' }}>
             <Spin size="large" />
           </div>
         ) : rolesError ? (
           <Alert message="加载失败" type="error" showIcon
-            action={<Button size="small" onClick={() => refetchRoles()} style={{ borderRadius: 8, fontWeight: 600 }}>重试</Button>}
+            action={<Button size="small" onClick={() => refetchRoles()}>重试</Button>}
           />
         ) : roles?.length ? (
           <Table
@@ -142,7 +144,7 @@ const Permission: React.FC = () => {
             <Empty description="暂无角色数据" imageStyle={{ height: 80 }} />
           </div>
         )}
-      </Card>
+      </PageCard>
 
       <Modal
         title="编辑角色权限"
@@ -170,7 +172,7 @@ const Permission: React.FC = () => {
             ) : permissionsError ? (
               <div className="error-container">
                 <Alert message="加载失败" type="error" showIcon />
-                <Button className="retry-button" onClick={() => refetchPermissions()} style={{ borderRadius: 8, fontWeight: 600 }}>重试</Button>
+                <Button className="retry-button" onClick={() => refetchPermissions()}>重试</Button>
               </div>
             ) : permissions?.length ? (
               <Tree
@@ -186,7 +188,7 @@ const Permission: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

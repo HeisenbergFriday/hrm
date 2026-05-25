@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Table, Button, Modal, Form, Input, Select, Tag, Space, Card, message,
-  Popconfirm, Empty, InputNumber, Row, Col
+  Popconfirm, Empty, InputNumber, Row, Col, AutoComplete
 } from 'antd'
-import { PlusOutlined, ArrowLeftOutlined, DeleteOutlined, DatabaseOutlined, AppstoreOutlined } from '@ant-design/icons'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
+import { PlusOutlined, ArrowLeftOutlined, DeleteOutlined, DatabaseOutlined, EditOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { performanceAPI, departmentAPI, type PerformanceIndicatorLibrary as ILibrary, type PerformanceIndicatorItem } from '../services/api'
 
@@ -58,8 +61,18 @@ export default function PerformanceIndicatorLibrary() {
   const [departments, setDepartments] = useState<DepartmentOption[]>([])
   const [departmentsLoading, setDepartmentsLoading] = useState(false)
   const [form] = Form.useForm()
+  const [inheritOpen, setInheritOpen] = useState(false)
+  const [inheritForm] = Form.useForm()
+  const [inheriting, setInheriting] = useState(false)
+  const [editItemOpen, setEditItemOpen] = useState(false)
+  const [editItemForm] = Form.useForm()
+  const [editingItem, setEditingItem] = useState<PerformanceIndicatorItem | null>(null)
+  const [editingItemLoading, setEditingItemLoading] = useState(false)
   const [quantItems, setQuantItems] = useState<DraftIndicatorItem[]>([newQuantItem()])
   const [actionItems, setActionItems] = useState<DraftIndicatorItem[]>([newActionItem()])
+  const [quantSearchResults, setQuantSearchResults] = useState<Record<number, any[]>>({})
+  const [actionSearchResults, setActionSearchResults] = useState<Record<number, any[]>>({})
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const fetchLibraries = useCallback(async () => {
     setLoading(true)
@@ -197,6 +210,74 @@ export default function PerformanceIndicatorLibrary() {
     }
   }
 
+  const handleInherit = async (values: any) => {
+    const dept = departments.find(d => d.department_id === values.target_department_id)
+    setInheriting(true)
+    try {
+      const res: any = await performanceAPI.inheritIndicatorLibrary({
+        parent_library_id: values.parent_library_id,
+        target_department_id: values.target_department_id,
+        target_department_name: dept?.name || '',
+        name: values.name || undefined,
+        description: values.description || undefined,
+      })
+      const data = res.data || res
+      const library = data?.library
+      message.success('继承成功')
+      setInheritOpen(false)
+      inheritForm.resetFields()
+      await fetchLibraries()
+      if (library?.id) {
+        setSelectedLib(library)
+        fetchItems(library.id)
+      }
+    } catch (err: any) {
+      message.error(err.response?.data?.message || '继承失败')
+    } finally {
+      setInheriting(false)
+    }
+  }
+
+  const handleEditItem = (item: PerformanceIndicatorItem) => {
+    setEditingItem(item)
+    editItemForm.setFieldsValue({
+      name: item.name,
+      description: item.description,
+      weight: item.weight ?? item.default_weight,
+      red_line_value: item.red_line_value,
+      target_value: item.target_value,
+      challenge_value: item.challenge_value,
+      scoring_rule: item.scoring_rule,
+    })
+    setEditItemOpen(true)
+  }
+
+  const handleEditItemSubmit = async (values: any) => {
+    if (!editingItem) return
+    setEditingItemLoading(true)
+    try {
+      await performanceAPI.updateIndicatorItem(editingItem.id, values)
+      message.success('修改成功')
+      setEditItemOpen(false)
+      setEditingItem(null)
+      if (selectedLib) fetchItems(selectedLib.id)
+    } catch (err: any) {
+      message.error(err.response?.data?.message || '修改失败')
+    } finally {
+      setEditingItemLoading(false)
+    }
+  }
+
+  const handleDeleteItem = async (itemId: number) => {
+    try {
+      await performanceAPI.deleteIndicatorItem(itemId)
+      message.success('删除成功')
+      if (selectedLib) fetchItems(selectedLib.id)
+    } catch {
+      message.error('删除失败')
+    }
+  }
+
   const handleArchive = async (id: number) => {
     try {
       await performanceAPI.archiveIndicatorLibrary(id)
@@ -221,6 +302,50 @@ export default function PerformanceIndicatorLibrary() {
     setActionItems(prev => prev.map((item, idx) => idx === index ? { ...item, ...patch } : item))
   }
 
+  const searchIndicators = useCallback((keyword: string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number, sectionType: string) => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+    if (!keyword || keyword.trim().length < 1) {
+      resultsSetter(prev => ({ ...prev, [rowIndex]: [] }))
+      return
+    }
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res: any = await performanceAPI.searchIndicatorItems({ keyword: keyword.trim(), section_type: sectionType })
+        const data = res.data || res
+        const raw: any[] = data?.items || []
+        resultsSetter(prev => ({ ...prev, [rowIndex]: raw }))
+      } catch {
+        resultsSetter(prev => ({ ...prev, [rowIndex]: [] }))
+      }
+    }, 300)
+  }, [])
+
+  const getSearchOptions = (results: any[]) =>
+    results.map((item: any) => ({
+      value: item.name,
+      label: `${item.name}${item.description ? ' — ' + item.description.slice(0, 40) : ''}`,
+    }))
+
+  const handleIndicatorSelect = (
+    value: string,
+    rowIndex: number,
+    sourceItems: any[],
+    setter: (items: DraftIndicatorItem[]) => void,
+    allItems: DraftIndicatorItem[],
+  ) => {
+    const matched = sourceItems.find((item: any) => item.name === value)
+    if (!matched) return
+    const patch: Partial<DraftIndicatorItem> = {
+      name: matched.name,
+      description: matched.description || '',
+      red_line_value: matched.red_line_value || '',
+      target_value: matched.target_value || '',
+      challenge_value: matched.challenge_value || '',
+      scoring_rule: matched.scoring_rule || '',
+    }
+    setter(allItems.map((item, idx) => idx === rowIndex ? { ...item, ...patch } : item))
+  }
+
   const handleDepartmentChange = (departmentId: string) => {
     const department = departments.find(item => item.department_id === departmentId)
     form.setFieldsValue({
@@ -231,44 +356,43 @@ export default function PerformanceIndicatorLibrary() {
 
   const columns = [
     {
-      title: '指标库名称', dataIndex: 'name', key: 'name',
+      title: '指标库名称', dataIndex: 'name', key: 'name', width: 180,
       render: (text: string, record: ILibrary) => (
         <a
           onClick={() => handleSelectLib(record)}
-          style={{ fontWeight: 600, color: selectedLib?.id === record.id ? '#4338ca' : '#1e1b4b', fontSize: 14 }}
+          style={{ fontWeight: 'var(--font-weight-semibold)', color: selectedLib?.id === record.id ? 'var(--color-primary)' : 'var(--color-text-heading)', fontSize: 'var(--font-size-base)' }}
         >
           {text}
         </a>
       ),
     },
-    { title: '所属部门', dataIndex: 'department_name', key: 'department_name' },
+    { title: '所属部门', dataIndex: 'department_name', key: 'department_name', width: 140 },
     {
-      title: '状态', dataIndex: 'status', key: 'status', width: 90,
+      title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (status: string) => (
-        <Tag
+        <StatusTag
           color={status === 'active' ? 'success' : 'default'}
-          style={{ borderRadius: 6, fontWeight: 600, margin: 0, fontSize: 12.5 }}
         >
           {status === 'active' ? '启用' : '已归档'}
-        </Tag>
+        </StatusTag>
       )
     },
     {
-      title: '来源', key: 'source', width: 80,
+      title: '来源', key: 'source', width: 70,
       render: (_: any, record: ILibrary) => (
-        <Tag style={{ borderRadius: 6, margin: 0, background: record.parent_library_id ? '#fff7e6' : '#f0fdf4', color: record.parent_library_id ? '#d48806' : '#15803d', border: 'none', fontWeight: 600, fontSize: 12.5 }}>
+        <StatusTag color={record.parent_library_id ? 'warning' : 'success'}>
           {record.parent_library_id ? '继承' : '自建'}
-        </Tag>
+        </StatusTag>
       )
     },
     {
-      title: '操作', key: 'action', width: 120,
+      title: '操作', key: 'action', width: 110,
       render: (_: any, record: ILibrary) => (
-        <Space size={14}>
-          <a onClick={() => handleSelectLib(record)} style={{ fontWeight: 600, color: '#4338ca' }}>查看</a>
+        <Space size={4}>
+          <Button type="link" size="small" onClick={() => handleSelectLib(record)} style={{ padding: '0 4px' }}>查看</Button>
           {record.status === 'active' && (
             <Popconfirm title="确认归档该指标库？" onConfirm={() => handleArchive(record.id)}>
-              <a style={{ color: '#dc2626', fontWeight: 600 }}>归档</a>
+              <Button type="link" size="small" danger style={{ padding: '0 4px' }}>归档</Button>
             </Popconfirm>
           )}
         </Space>
@@ -311,93 +435,69 @@ export default function PerformanceIndicatorLibrary() {
         return record.target_value || '-'
       }
     },
+    {
+      title: '操作', key: 'action', width: 100,
+      render: (_: any, record: PerformanceIndicatorItem) => (
+        <Space size={8}>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditItem(record)} style={{ padding: 0, color: 'var(--color-primary)' }} />
+          <Popconfirm title="确认删除该指标项？" onConfirm={() => handleDeleteItem(record.id)}>
+            <Button type="link" size="small" icon={<DeleteOutlined />} style={{ padding: 0, color: 'var(--color-error)' }} />
+          </Popconfirm>
+        </Space>
+      )
+    },
   ]
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <Button
-        type="text"
-        icon={<ArrowLeftOutlined />}
-        onClick={() => navigate(-1)}
-        style={{
-          paddingLeft: 0,
-          color: '#6b7280',
-          fontWeight: 500,
-          marginBottom: 4,
-          fontSize: 14,
-        }}
-      >
-        返回
-      </Button>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{
-          margin: '4px 0 6px',
-          fontSize: 24,
-          fontWeight: 700,
-          color: '#111827',
-          letterSpacing: 0.5,
-        }}>
-          <DatabaseOutlined style={{ marginRight: 10, color: '#4338ca' }} />
-          指标库管理
-        </h2>
-        <p style={{ color: '#6b7280', marginBottom: 0, fontSize: 14 }}>
-          创建时一次性配置指标项，创建后的指标库仅支持查看与继承
-        </p>
-      </div>
+    <PageContainer
+      title="指标库管理"
+      icon={<DatabaseOutlined />}
+      subtitle="创建时一次性配置指标项，创建后的指标库仅支持查看与继承"
+      extra={
+        <Button
+          type="text"
+          icon={<ArrowLeftOutlined />}
+          onClick={() => navigate(-1)}
+          style={{
+            paddingLeft: 0,
+            color: 'var(--color-text-secondary)',
+            fontWeight: 'var(--font-weight-medium)',
+            marginBottom: 4,
+            fontSize: 'var(--font-size-base)',
+          }}
+        >
+          返回
+        </Button>
+      }
+    >
 
       <div style={{
-        background: 'linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)',
-        border: '1px solid #c7d2fe',
-        borderRadius: 12,
-        padding: '16px 20px',
+        background: 'var(--color-primary-bg)',
+        border: '1px solid var(--color-border-light)',
+        borderRadius: 'var(--radius-md)',
+        padding: '10px 16px',
         marginBottom: 20,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 14,
+        fontSize: 'var(--font-size-sm)',
+        color: 'var(--color-text-secondary)',
       }}>
-        <div style={{
-          width: 40,
-          height: 40,
-          borderRadius: 10,
-          background: 'linear-gradient(135deg, #4338ca, #6366f1)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          boxShadow: '0 2px 8px rgba(99,102,241,0.3)',
-        }}>
-          <AppstoreOutlined style={{ color: '#fff', fontSize: 18 }} />
-        </div>
-        <div>
-          <strong style={{ color: '#1e1b4b', fontSize: 14 }}>创建规则</strong>
-          <p style={{ margin: '2px 0 0', color: '#4338ca', fontSize: 13.5, fontWeight: 500 }}>
-            量化指标权重合计 70% ，关键行动权重合计 30% ，总权重必须为 100% 。
-          </p>
-        </div>
+        <strong style={{ color: 'var(--color-text-heading)' }}>创建规则：</strong>
+        量化指标权重合计 70%，关键行动权重合计 30%，总权重必须为 100%。
       </div>
 
-      <div style={{ display: 'flex', gap: 20 }}>
-        <Card
-          title={
-            <span style={{ fontWeight: 700, fontSize: 15, color: '#111827' }}>指标库列表</span>
-          }
+      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+        <PageCard
+          title="指标库列表"
+          style={{ flexShrink: 0 }}
           extra={
             <Space>
               <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}
-                style={{ borderRadius: 8, fontWeight: 600, height: 36, boxShadow: '0 2px 6px rgba(67,56,202,0.3)' }}
+                style={{ height: 36, boxShadow: '0 2px 6px rgba(67,56,202,0.3)' }}
               >
                 创建
               </Button>
-              <Button style={{ borderRadius: 8, height: 36 }}>继承</Button>
+              <Button style={{ height: 36 }} onClick={() => setInheritOpen(true)}>继承</Button>
             </Space>
           }
-          style={{
-            flex: 1,
-            borderRadius: 14,
-            boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
-            border: '1px solid #e5e7eb',
-          }}
-          styles={{ header: { borderBottom: '1px solid #f0f0f0', background: '#fafbfc' } }}
         >
           <Table
             dataSource={libraries}
@@ -407,34 +507,29 @@ export default function PerformanceIndicatorLibrary() {
             pagination={{ current: page, pageSize, total, onChange: (p, ps) => { setPage(p); setPageSize(ps) }, showSizeChanger: false }}
             locale={{ emptyText: <Empty description="暂无指标库" imageStyle={{ height: 60 }} /> }}
           />
-        </Card>
+        </PageCard>
 
-        <Card
-          title={
-            <span style={{ fontWeight: 700, fontSize: 15, color: '#111827' }}>指标项</span>
-          }
+        <PageCard
+          title="指标项"
           style={{
-            width: 520,
-            borderRadius: 14,
-            boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
-            border: '1px solid #e5e7eb',
+            flex: 1,
+            minWidth: 0,
           }}
-          styles={{ header: { borderBottom: '1px solid #f0f0f0', background: '#fafbfc' } }}
         >
           {selectedLib ? (
             <div>
               <div style={{
-                background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)',
-                borderRadius: 10,
-                padding: '12px 16px',
+                background: 'var(--color-primary-bg)',
+                borderRadius: 'var(--radius-md)',
+                padding: '10px 14px',
                 marginBottom: 16,
-                border: '1px solid #c7d2fe',
+                border: '1px solid var(--color-border-light)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
               }}>
-                <span style={{ color: '#6366f1', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>当前查看</span>
-                <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <strong style={{ color: '#1e1b4b', fontSize: 15 }}>{selectedLib.name}</strong>
-                  <Tag color="blue" style={{ borderRadius: 6, fontWeight: 500, margin: 0 }}>{selectedLib.department_name}</Tag>
-                </div>
+                <strong style={{ color: 'var(--color-text-heading)', fontSize: 'var(--font-size-base)' }}>{selectedLib.name}</strong>
+                <StatusTag color="blue" style={{ fontWeight: 'var(--font-weight-medium)', margin: 0 }}>{selectedLib.department_name}</StatusTag>
               </div>
               <Table
                 dataSource={items}
@@ -451,9 +546,13 @@ export default function PerformanceIndicatorLibrary() {
               />
             </div>
           ) : (
-            <Empty description="请先选择一个指标库" imageStyle={{ height: 80 }} />
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', color: 'var(--color-text-tertiary)' }}>
+              <DatabaseOutlined style={{ fontSize: 48, marginBottom: 12, opacity: 0.4 }} />
+              <div style={{ fontSize: 'var(--font-size-base)' }}>请先选择一个指标库</div>
+              <div style={{ fontSize: 'var(--font-size-sm)', marginTop: 4 }}>点击左侧列表中的指标库名称查看指标项</div>
+            </div>
           )}
-        </Card>
+        </PageCard>
       </div>
 
       <Modal
@@ -462,8 +561,8 @@ export default function PerformanceIndicatorLibrary() {
             <div style={{
               width: 36,
               height: 36,
-              borderRadius: 10,
-              background: 'linear-gradient(135deg, #4338ca, #6366f1)',
+              borderRadius: 'var(--radius-md)',
+              background: 'linear-gradient(135deg, var(--color-primary), #6366f1)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -471,7 +570,7 @@ export default function PerformanceIndicatorLibrary() {
             }}>
               <PlusOutlined style={{ color: '#fff', fontSize: 16 }} />
             </div>
-            <span style={{ fontWeight: 700, fontSize: 17, color: '#111827' }}>创建指标库</span>
+            <span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 17, color: 'var(--color-text-title)' }}>创建指标库</span>
           </div>
         }
         open={createOpen}
@@ -493,20 +592,20 @@ export default function PerformanceIndicatorLibrary() {
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 4 }}>
           <div style={{
-            background: '#f8f9fc',
-            borderRadius: 12,
+            background: 'var(--color-bg-light)',
+            borderRadius: 'var(--radius-lg)',
             padding: '22px 22px 10px',
             marginBottom: 22,
             border: '1px solid #e2e5f0',
             boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.03)',
           }}>
             <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ width: 4, height: 18, borderRadius: 2, background: 'linear-gradient(180deg, #4338ca, #6366f1)' }} />
-              <span style={{ fontWeight: 700, fontSize: 14, color: '#1e1b4b' }}>基本信息</span>
+              <div style={{ width: 4, height: 18, borderRadius: 'var(--radius-xs)', background: 'linear-gradient(180deg, var(--color-primary), #6366f1)' }} />
+              <span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>基本信息</span>
             </div>
             <Row gutter={20}>
               <Col span={8}>
-                <Form.Item name="department_id" label={<span style={{ fontWeight: 600, color: '#374151' }}>所属部门</span>} rules={[{ required: true, message: '请选择所属部门' }]}>
+                <Form.Item name="department_id" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>所属部门</span>} rules={[{ required: true, message: '请选择所属部门' }]}>
                   <Select
                     showSearch
                     placeholder="请选择所属部门"
@@ -517,7 +616,6 @@ export default function PerformanceIndicatorLibrary() {
                       value: item.department_id,
                     }))}
                     onChange={handleDepartmentChange}
-                    style={{ borderRadius: 8 }}
                   />
                 </Form.Item>
               </Col>
@@ -527,22 +625,21 @@ export default function PerformanceIndicatorLibrary() {
                 </Form.Item>
               </Col>
               <Col span={8}>
-                <Form.Item name="name" label={<span style={{ fontWeight: 600, color: '#374151' }}>指标库名称</span>} rules={[{ required: true, message: '请输入指标库名称' }]}>
-                  <Input style={{ borderRadius: 8 }} />
+                <Form.Item name="name" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>指标库名称</span>} rules={[{ required: true, message: '请输入指标库名称' }]}>
+                  <Input />
                 </Form.Item>
               </Col>
             </Row>
             <Row gutter={20}>
               <Col span={16}>
-                <Form.Item name="description" label={<span style={{ fontWeight: 600, color: '#374151' }}>描述</span>}>
-                  <TextArea rows={2} style={{ borderRadius: 8 }} />
+                <Form.Item name="description" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>描述</span>}>
+                  <TextArea rows={2} />
                 </Form.Item>
               </Col>
               <Col span={8}>
-                <Form.Item name="default_cycle" label={<span style={{ fontWeight: 600, color: '#374151' }}>默认周期</span>} initialValue="monthly">
+                <Form.Item name="default_cycle" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>默认周期</span>} initialValue="monthly">
                   <Select
                     options={[{ value: 'monthly', label: '月度' }, { value: 'quarterly', label: '季度' }, { value: 'annual', label: '年度' }]}
-                    style={{ borderRadius: 8 }}
                   />
                 </Form.Item>
               </Col>
@@ -554,15 +651,15 @@ export default function PerformanceIndicatorLibrary() {
           size="small"
           title={
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 4, height: 18, borderRadius: 2, background: 'linear-gradient(180deg, #4338ca, #6366f1)' }} />
-              <span style={{ fontWeight: 700, fontSize: 14, color: '#1e1b4b' }}>量化指标</span>
+              <div style={{ width: 4, height: 18, borderRadius: 'var(--radius-xs)', background: 'linear-gradient(180deg, var(--color-primary), #6366f1)' }} />
+              <span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>量化指标</span>
               <span style={{
-                background: 'linear-gradient(135deg, #eef2ff, #dbeafe)',
-                color: '#4338ca',
-                fontSize: 12,
-                fontWeight: 700,
+                background: 'linear-gradient(135deg, var(--color-primary-bg), #dbeafe)',
+                color: 'var(--color-primary)',
+                fontSize: 'var(--font-size-xs)',
+                fontWeight: 'var(--font-weight-bold)',
                 padding: '4px 12px',
-                borderRadius: 14,
+                borderRadius: 'var(--radius-xl)',
                 border: '1px solid #c7d2fe',
                 letterSpacing: 0.3,
               }}>
@@ -572,7 +669,7 @@ export default function PerformanceIndicatorLibrary() {
           }
           style={{
             marginTop: 10,
-            borderRadius: 12,
+            borderRadius: 'var(--radius-lg)',
             border: '1px solid #e0e3ed',
             boxShadow: '0 1px 6px rgba(0,0,0,0.05)',
           }}
@@ -587,9 +684,17 @@ export default function PerformanceIndicatorLibrary() {
             columns={[
               {
                 title: '指标名称',
-                width: 150,
+                width: 200,
                 render: (_: any, __: any, idx: number) => (
-                  <Input value={quantItems[idx].name} onChange={e => updateQuantItem(idx, { name: e.target.value })} />
+                  <AutoComplete
+                    value={quantItems[idx].name}
+                    options={getSearchOptions(quantSearchResults[idx] || [])}
+                    onSearch={(val) => searchIndicators(val, setQuantSearchResults, idx, 'quantitative')}
+                    onChange={(val) => updateQuantItem(idx, { name: val })}
+                    onSelect={(val) => handleIndicatorSelect(val, idx, quantSearchResults[idx] || [], setQuantItems, quantItems)}
+                    placeholder="输入关键词搜索指标"
+                    style={{ width: '100%' }}
+                  />
                 )
               },
               {
@@ -650,12 +755,10 @@ export default function PerformanceIndicatorLibrary() {
             style={{
               marginTop: 12,
               width: '100%',
-              borderRadius: 8,
               height: 40,
-              fontWeight: 600,
-              color: '#4338ca',
+              color: 'var(--color-primary)',
               borderColor: '#a5b4fc',
-              fontSize: 13.5,
+              fontSize: 'var(--font-size-sm)',
             }}
           >
             添加量化指标
@@ -666,15 +769,15 @@ export default function PerformanceIndicatorLibrary() {
           size="small"
           title={
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 4, height: 18, borderRadius: 2, background: 'linear-gradient(180deg, #15803d, #22c55e)' }} />
-              <span style={{ fontWeight: 700, fontSize: 14, color: '#14532d' }}>关键行动</span>
+              <div style={{ width: 4, height: 18, borderRadius: 'var(--radius-xs)', background: 'linear-gradient(180deg, #15803d, #22c55e)' }} />
+              <span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-base)', color: '#14532d' }}>关键行动</span>
               <span style={{
                 background: 'linear-gradient(135deg, #f0fdf4, #dcfce7)',
                 color: '#15803d',
-                fontSize: 12,
-                fontWeight: 700,
+                fontSize: 'var(--font-size-xs)',
+                fontWeight: 'var(--font-weight-bold)',
                 padding: '4px 12px',
-                borderRadius: 14,
+                borderRadius: 'var(--radius-xl)',
                 border: '1px solid #bbf7d0',
                 letterSpacing: 0.3,
               }}>
@@ -684,7 +787,7 @@ export default function PerformanceIndicatorLibrary() {
           }
           style={{
             marginTop: 16,
-            borderRadius: 12,
+            borderRadius: 'var(--radius-lg)',
             border: '1px solid #e0e3ed',
             boxShadow: '0 1px 6px rgba(0,0,0,0.05)',
           }}
@@ -699,9 +802,17 @@ export default function PerformanceIndicatorLibrary() {
             columns={[
               {
                 title: '重点计划',
-                width: 180,
+                width: 200,
                 render: (_: any, __: any, idx: number) => (
-                  <Input value={actionItems[idx].name} onChange={e => updateActionItem(idx, { name: e.target.value })} />
+                  <AutoComplete
+                    value={actionItems[idx].name}
+                    options={getSearchOptions(actionSearchResults[idx] || [])}
+                    onSearch={(val) => searchIndicators(val, setActionSearchResults, idx, 'key_action')}
+                    onChange={(val) => updateActionItem(idx, { name: val })}
+                    onSelect={(val) => handleIndicatorSelect(val, idx, actionSearchResults[idx] || [], setActionItems, actionItems)}
+                    placeholder="输入关键词搜索指标"
+                    style={{ width: '100%' }}
+                  />
                 )
               },
               {
@@ -740,18 +851,129 @@ export default function PerformanceIndicatorLibrary() {
             style={{
               marginTop: 12,
               width: '100%',
-              borderRadius: 8,
               height: 40,
-              fontWeight: 600,
               color: '#15803d',
               borderColor: '#86efac',
-              fontSize: 13.5,
+              fontSize: 'var(--font-size-sm)',
             }}
           >
             添加关键行动
           </Button>
         </Card>
       </Modal>
-    </div>
+
+      <Modal
+        title={<span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 17, color: 'var(--color-text-title)' }}>继承指标库</span>}
+        open={inheritOpen}
+        onCancel={() => { setInheritOpen(false); inheritForm.resetFields() }}
+        onOk={() => inheritForm.submit()}
+        confirmLoading={inheriting}
+        width={480}
+        styles={{ mask: { backdropFilter: 'blur(4px)' } }}
+      >
+        <Form form={inheritForm} layout="vertical" onFinish={handleInherit} style={{ marginTop: 16 }}>
+          <Form.Item
+            name="parent_library_id"
+            label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>源指标库</span>}
+            rules={[{ required: true, message: '请选择要继承的指标库' }]}
+          >
+            <Select
+              showSearch
+              placeholder="请选择要继承的指标库"
+              optionFilterProp="label"
+              options={libraries.filter(l => l.status === 'active').map(l => ({
+                label: `${l.name}（${l.department_name}）`,
+                value: l.id,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="target_department_id"
+            label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>目标部门</span>}
+            rules={[{ required: true, message: '请选择目标部门' }]}
+          >
+            <Select
+              showSearch
+              placeholder="请选择目标部门"
+              loading={departmentsLoading}
+              optionFilterProp="label"
+              options={departments.map(d => ({
+                label: d.name,
+                value: d.department_id,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="name"
+            label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>新指标库名称</span>}
+            extra={<span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>留空则沿用源指标库名称</span>}
+          >
+            <Input placeholder="不填则与源指标库同名" />
+          </Form.Item>
+          <Form.Item
+            name="description"
+            label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>描述</span>}
+            extra={<span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>留空则沿用源指标库描述</span>}
+          >
+            <TextArea rows={2} placeholder="可补充本部门的差异说明" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={<span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 17, color: 'var(--color-text-title)' }}>编辑指标项</span>}
+        open={editItemOpen}
+        onCancel={() => { setEditItemOpen(false); setEditingItem(null) }}
+        onOk={() => editItemForm.submit()}
+        confirmLoading={editingItemLoading}
+        width={560}
+        styles={{ mask: { backdropFilter: 'blur(4px)' } }}
+      >
+        <Form form={editItemForm} layout="vertical" onFinish={handleEditItemSubmit} style={{ marginTop: 16 }}>
+          <Form.Item name="name" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>指标名称</span>} rules={[{ required: true, message: '请输入指标名称' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>指标定义及口径说明</span>}>
+            <TextArea rows={2} />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item name="weight" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>权重</span>}>
+                <InputNumber min={5} max={100} step={5} addonAfter="%" style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          {editingItem?.section_type === 'quantitative' && (
+            <>
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Form.Item name="red_line_value" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>红线值</span>}>
+                    <Input />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item name="target_value" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>目标值</span>}>
+                    <Input />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item name="challenge_value" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>挑战值</span>}>
+                    <Input />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Form.Item name="scoring_rule" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>考核标准</span>}>
+                <TextArea rows={2} />
+              </Form.Item>
+            </>
+          )}
+          {editingItem?.section_type === 'key_action' && (
+            <Form.Item name="target_value" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>定性目标</span>}>
+              <TextArea rows={2} />
+            </Form.Item>
+          )}
+        </Form>
+      </Modal>
+    </PageContainer>
   )
 }

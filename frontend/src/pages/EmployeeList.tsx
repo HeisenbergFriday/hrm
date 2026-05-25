@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
   Button,
-  Card,
   Col,
   Empty,
   Input,
@@ -9,17 +8,18 @@ import {
   Select,
   Space,
   Spin,
-  Statistic,
   Table,
-  Tag,
   Typography,
   message,
 } from 'antd'
 import { ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { departmentAPI, orgAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { Search } = Input
 
 interface Department {
@@ -81,15 +81,15 @@ const renderDistributionItems = (items: DistributionItem[]) => {
       {items.map((item) => (
         <Col xs={12} md={8} key={item.key}>
           <div style={{
-            background: '#f8f9fc',
-            borderRadius: 10,
+            background: 'var(--color-bg-container)',
+            borderRadius: 'var(--radius-sm)',
             padding: '12px 14px',
-            border: '1px solid #eef0f5',
+            border: '1px solid var(--color-border-subtle)',
           }}>
-            <Text style={{ color: '#6b7280', fontSize: 12.5, fontWeight: 500, display: 'block', marginBottom: 4 }}>
+            <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-medium)', display: 'block', marginBottom: 4 }}>
               {item.label}
             </Text>
-            <span style={{ fontSize: 22, fontWeight: 700, color: '#1e1b4b' }}>{item.count}</span>
+            <span style={{ fontSize: 'var(--font-size-xl)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text-heading)' }}>{item.count}</span>
           </div>
         </Col>
       ))}
@@ -98,7 +98,7 @@ const renderDistributionItems = (items: DistributionItem[]) => {
 }
 
 const statConfig = [
-  { key: 'active', title: '在职人数', icon: <UserOutlined />, color: '#4338ca', bg: '#eef2ff' },
+  { key: 'active', title: '在职人数', icon: <UserOutlined />, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
   { key: 'probation', title: '试用期人数', icon: <TeamOutlined />, color: '#0369a1', bg: '#e0f2fe' },
   { key: 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: '#b45309', bg: '#fef3c7' },
 ] as const
@@ -188,11 +188,11 @@ const EmployeeList: React.FC = () => {
         <div>
           <a
             onClick={() => navigate(`/employees/${record.id}`)}
-            style={{ fontWeight: 600, color: '#4338ca', fontSize: 14 }}
+            style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-primary)', fontSize: 'var(--font-size-base)' }}
           >
             {record.name}
           </a>
-          <div style={{ color: '#9ca3af', fontSize: 12, marginTop: 2 }}>{record.user_id}</div>
+          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>{record.user_id}</div>
         </div>
       ),
     },
@@ -211,67 +211,42 @@ const EmployeeList: React.FC = () => {
       render: (_: unknown, record: EmployeeItem) => (
         <div>
           <div style={{ color: '#374151' }}>{record.email || '-'}</div>
-          <div style={{ color: '#9ca3af', fontSize: 12 }}>{record.mobile || '-'}</div>
+          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>{record.mobile || '-'}</div>
         </div>
       ),
     },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 90,
       render: (value: string) => (
-        <Tag
-          color={value === 'active' ? 'success' : 'default'}
-          style={{ borderRadius: 6, fontWeight: 600, margin: 0, fontSize: 12.5 }}
-        >
+        <StatusTag color={value === 'active' ? 'success' : 'default'}>
           {value === 'active' ? '在职' : value === 'inactive' ? '离职' : value}
-        </Tag>
+        </StatusTag>
       ),
     },
   ]
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      {/* 标题区 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
-        <div>
-          <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-            <TeamOutlined style={{ marginRight: 10, color: '#4338ca' }} />
-            组织花名册
-          </h2>
-          <Text style={{ color: '#6b7280', fontSize: 13.5 }}>
-            数据范围：<span style={{ color: '#4338ca', fontWeight: 600 }}>{scopeLabel}</span>
-          </Text>
-        </div>
+    <PageContainer
+      title="组织花名册"
+      icon={<TeamOutlined />}
+      subtitle={<>数据范围：<span style={{ color: 'var(--color-primary)', fontWeight: 'var(--font-weight-semibold)' }}>{scopeLabel}</span></>}
+      extra={
         <Space>
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => void loadData()}
-            loading={loading}
-            style={{ borderRadius: 8, height: 36, fontWeight: 500 }}
-          >
-            刷新
-          </Button>
-          <Button
-            type="primary"
-            icon={<SyncOutlined />}
-            onClick={() => void handleSync()}
-            loading={syncing}
-            style={{ borderRadius: 8, height: 36, fontWeight: 600, boxShadow: '0 2px 6px rgba(67,56,202,0.3)' }}
-          >
-            同步组织数据
-          </Button>
+          <Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>刷新</Button>
+          <Button type="primary" icon={<SyncOutlined />} onClick={() => void handleSync()} loading={syncing}>同步组织数据</Button>
         </Space>
-      </div>
-
+      }
+    >
       {/* 统计卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+      <Row gutter={[16, 16]} style={{ marginBottom: 'var(--space-5)' }}>
         {statConfig.map((item, idx) => (
           <Col xs={24} md={8} key={item.key}>
             <div style={{
-              background: '#fff',
-              borderRadius: 14,
+              background: 'var(--color-bg-card)',
+              borderRadius: 'var(--radius-xl)',
               padding: '20px 22px',
-              boxShadow: '0 2px 10px rgba(0,0,0,0.05)',
-              border: '1px solid #e5e7eb',
+              boxShadow: 'var(--shadow-card)',
+              border: '1px solid var(--color-border)',
               display: 'flex',
               alignItems: 'center',
               gap: 14,
@@ -279,20 +254,20 @@ const EmployeeList: React.FC = () => {
               <div style={{
                 width: 48,
                 height: 48,
-                borderRadius: 12,
+                borderRadius: 'var(--radius-lg)',
                 background: item.bg,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: 22,
+                fontSize: 'var(--font-size-xl)',
                 color: item.color,
                 flexShrink: 0,
               }}>
                 {item.icon}
               </div>
               <div>
-                <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: 500 }}>{item.title}</Text>
-                <div style={{ fontSize: 26, fontWeight: 700, color: '#111827', lineHeight: 1.2, marginTop: 2 }}>
+                <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.title}</Text>
+                <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text-title)', lineHeight: 1.2, marginTop: 2 }}>
                   {summaryValues[idx]}
                 </div>
               </div>
@@ -302,30 +277,24 @@ const EmployeeList: React.FC = () => {
       </Row>
 
       {/* 分布卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+      <Row gutter={[16, 16]} style={{ marginBottom: 'var(--space-5)' }}>
         {[
           { title: '员工类型分布', data: overview?.employee_type_distribution || [] },
           { title: '职级分布', data: overview?.job_level_distribution || [] },
           { title: '岗位序列分布', data: overview?.job_family_distribution || [] },
         ].map((section) => (
           <Col xs={24} lg={8} key={section.title}>
-            <Card
-              title={<span style={{ fontWeight: 600, fontSize: 14, color: '#1e1b4b' }}>{section.title}</span>}
-              style={{ borderRadius: 12, border: '1px solid #e5e7eb', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
-              styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+            <PageCard
+              title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>{section.title}</span>}
             >
               {renderDistributionItems(section.data)}
-            </Card>
+            </PageCard>
           </Col>
         ))}
       </Row>
 
       {/* 花名册表格 */}
-      <Card
-        title={<span style={{ fontWeight: 700, fontSize: 15, color: '#111827' }}>花名册</span>}
-        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
-      >
+      <PageCard title={<span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-md)', color: 'var(--color-text-title)' }}>花名册</span>}>
         <Space wrap style={{ marginBottom: 18 }}>
           <Search
             allowClear
@@ -369,13 +338,13 @@ const EmployeeList: React.FC = () => {
               pageSize,
               total,
               showSizeChanger: false,
-              showTotal: (value) => <span style={{ color: '#6b7280' }}>共 {value} 人</span>,
+              showTotal: (value) => <span style={{ color: 'var(--color-text-secondary)' }}>共 {value} 人</span>,
               onChange: (nextPage, nextPageSize) => { setPage(nextPage); setPageSize(nextPageSize) },
             }}
           />
         )}
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

@@ -1,8 +1,11 @@
 import React, { useState } from 'react'
-import { Card, Typography, DatePicker, Table, Spin, Empty, Alert, Button, Select, Space, Tag, message, Row, Col, Statistic } from 'antd'
+import { Typography, DatePicker, Table, Spin, Empty, Alert, Button, Select, Space, message, Row, Col, Statistic } from 'antd'
 import { WarningOutlined, ClockCircleOutlined, UserOutlined, TeamOutlined, ExclamationCircleOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { attendanceAPI, departmentAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
 
 const { Title } = Typography
@@ -111,9 +114,9 @@ const AttendanceStats: React.FC = () => {
       dataIndex: 'count',
       key: 'count',
       render: (count: number, record: AbnormalDetail) => (
-        <Tag color={count > 0 ? 'red' : 'green'} icon={<ExclamationCircleOutlined />}>
+        <StatusTag color={count > 0 ? 'error' : 'success'}>
           {count} 人
-        </Tag>
+        </StatusTag>
       ),
     },
     {
@@ -155,25 +158,25 @@ const AttendanceStats: React.FC = () => {
       title: '正常',
       dataIndex: 'normal_count',
       key: 'normal_count',
-      render: (count: number) => <Tag color="green">{count}</Tag>,
+      render: (count: number) => <StatusTag color="success">{count}</StatusTag>,
     },
     {
       title: '迟到',
       dataIndex: 'late_count',
       key: 'late_count',
-      render: (count: number) => count > 0 ? <Tag color="orange">{count}</Tag> : <span>0</span>,
+      render: (count: number) => count > 0 ? <StatusTag color="warning">{count}</StatusTag> : <span>0</span>,
     },
     {
       title: '早退',
       dataIndex: 'leave_early_count',
       key: 'leave_early_count',
-      render: (count: number) => count > 0 ? <Tag color="orange">{count}</Tag> : <span>0</span>,
+      render: (count: number) => count > 0 ? <StatusTag color="warning">{count}</StatusTag> : <span>0</span>,
     },
     {
       title: '缺勤',
       dataIndex: 'absent_count',
       key: 'absent_count',
-      render: (count: number) => count > 0 ? <Tag color="red">{count}</Tag> : <span>0</span>,
+      render: (count: number) => count > 0 ? <StatusTag color="error">{count}</StatusTag> : <span>0</span>,
     },
     {
       title: '正常率',
@@ -182,7 +185,7 @@ const AttendanceStats: React.FC = () => {
       render: (rate: string) => {
         const rateValue = parseFloat(rate)
         return (
-          <span style={{ color: rateValue >= 90 ? 'green' : rateValue >= 80 ? 'orange' : 'red' }}>
+          <span style={{ color: rateValue >= 90 ? 'var(--color-success)' : rateValue >= 80 ? 'var(--color-warning)' : 'var(--color-error)' }}>
             {rate}
           </span>
         )
@@ -191,10 +194,9 @@ const AttendanceStats: React.FC = () => {
   ]
 
   return (
-    <div>
-      <Title level={4}>异常统计</Title>
-      <Card>
-        <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+    <PageContainer title="异常统计" icon={<WarningOutlined />} subtitle="考勤异常数据统计分析">
+      <PageCard>
+        <div style={{ marginBottom: 'var(--space-4)', display: 'flex', gap: 'var(--space-4)', alignItems: 'center', flexWrap: 'wrap' }}>
           <Select
             placeholder="选择部门"
             style={{ width: 150 }}
@@ -219,11 +221,11 @@ const AttendanceStats: React.FC = () => {
         </div>
 
         {isLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-10)' }}>
             <Spin size="large" />
           </div>
         ) : isError ? (
-          <div style={{ padding: '20px' }}>
+          <div style={{ padding: 'var(--space-5)' }}>
             <Alert
               message="加载失败"
               description={(error as Error)?.message || '获取考勤统计失败，请稍后重试'}
@@ -238,7 +240,7 @@ const AttendanceStats: React.FC = () => {
           </div>
         ) : statsData?.data ? (
           <>
-            <Row gutter={16} style={{ marginBottom: 24 }}>
+            <Row gutter={16} style={{ marginBottom: 'var(--space-6)' }}>
               <Col span={4}>
                 <Statistic
                   title="总人数"
@@ -250,7 +252,7 @@ const AttendanceStats: React.FC = () => {
                 <Statistic
                   title="正常人数"
                   value={statsData.data.summary?.normal_count || 0}
-                  valueStyle={{ color: '#3f8600' }}
+                  valueStyle={{ color: 'var(--color-success)' }}
                   prefix={<TeamOutlined />}
                 />
               </Col>
@@ -258,7 +260,7 @@ const AttendanceStats: React.FC = () => {
                 <Statistic
                   title="迟到人数"
                   value={statsData.data.summary?.late_count || 0}
-                  valueStyle={{ color: '#cf1322' }}
+                  valueStyle={{ color: 'var(--color-error)' }}
                   prefix={<WarningOutlined />}
                 />
               </Col>
@@ -266,7 +268,7 @@ const AttendanceStats: React.FC = () => {
                 <Statistic
                   title="早退人数"
                   value={statsData.data.summary?.leave_early_count || 0}
-                  valueStyle={{ color: '#cf1322' }}
+                  valueStyle={{ color: 'var(--color-error)' }}
                   prefix={<WarningOutlined />}
                 />
               </Col>
@@ -274,7 +276,7 @@ const AttendanceStats: React.FC = () => {
                 <Statistic
                   title="缺勤人数"
                   value={statsData.data.summary?.absent_count || 0}
-                  valueStyle={{ color: '#cf1322' }}
+                  valueStyle={{ color: 'var(--color-error)' }}
                   prefix={<ExclamationCircleOutlined />}
                 />
               </Col>
@@ -282,7 +284,7 @@ const AttendanceStats: React.FC = () => {
                 <Statistic
                   title="正常率"
                   value={statsData.data.summary?.normal_rate || '0%'}
-                  valueStyle={{ color: parseFloat(statsData.data.summary?.normal_rate || '0') >= 90 ? '#3f8600' : '#cf1322' }}
+                  valueStyle={{ color: parseFloat(statsData.data.summary?.normal_rate || '0') >= 90 ? 'var(--color-success)' : 'var(--color-error)' }}
                 />
               </Col>
             </Row>
@@ -297,7 +299,7 @@ const AttendanceStats: React.FC = () => {
                 expandedRowRender,
               }}
               pagination={false}
-              style={{ marginBottom: 24 }}
+              style={{ marginBottom: 'var(--space-6)' }}
             />
 
             <Title level={5}>部门统计</Title>
@@ -319,8 +321,8 @@ const AttendanceStats: React.FC = () => {
         ) : (
           <Empty description="暂无统计数据" />
         )}
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

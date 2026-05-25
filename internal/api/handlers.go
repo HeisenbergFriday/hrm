@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
 	"peopleops/internal/middleware"
@@ -3365,4 +3366,89 @@ func GetOrCreateCustomShift(c *gin.Context) {
 		Message: "success",
 		Data:    gin.H{"shift_id": shiftID},
 	})
+}
+
+// UploadFile 文件上传
+func UploadFile(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "请选择要上传的文件",
+		})
+		return
+	}
+
+	// 限制文件大小 (10MB)
+	if file.Size > 10*1024*1024 {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "文件大小不能超过10MB",
+		})
+		return
+	}
+
+	// 检查上传目录
+	uploadDir := "uploads"
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "创建上传目录失败",
+		})
+		return
+	}
+
+	// 生成唯一文件名
+	ext := filepath.Ext(file.Filename)
+	if ext == "" {
+		ext = ".bin"
+	}
+	filename := fmt.Sprintf("%s%s", time.Now().Format("20060102150405"), ext)
+	filePath := filepath.Join(uploadDir, filename)
+
+	// 保存文件
+	if err := c.SaveUploadedFile(file, filePath); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "保存文件失败",
+		})
+		return
+	}
+
+	// 返回文件URL
+	fileURL := fmt.Sprintf("/api/v1/files/%s", filename)
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "上传成功",
+		Data: gin.H{
+			"url":  fileURL,
+			"name": file.Filename,
+			"size": file.Size,
+		},
+	})
+}
+
+// ServeFile 提供文件访问
+func ServeFile(c *gin.Context) {
+	filename := c.Param("filename")
+	// 防止路径穿越
+	if strings.Contains(filename, "..") || strings.Contains(filename, "/") {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "无效的文件名",
+		})
+		return
+	}
+
+	filePath := filepath.Join("uploads", filename)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, Response{
+			Code:    http.StatusNotFound,
+			Message: "文件不存在",
+		})
+		return
+	}
+
+	c.File(filePath)
 }

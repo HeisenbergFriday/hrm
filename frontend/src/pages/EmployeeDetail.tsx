@@ -3,7 +3,6 @@ import {
   Alert,
   Avatar,
   Button,
-  Card,
   Col,
   DatePicker,
   Descriptions,
@@ -16,12 +15,14 @@ import {
   Space,
   Spin,
   Statistic,
-  Tag,
   Timeline,
   Typography,
   message,
 } from 'antd'
 import { ArrowLeftOutlined, EditOutlined, SwapRightOutlined, SyncOutlined, UserOutlined } from '@ant-design/icons'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import { useNavigate, useParams } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { employeeAPI, orgAPI } from '../services/api'
@@ -265,9 +266,9 @@ const EmployeeDetail: React.FC = () => {
   }
 
   const statusTag = (value?: string) => (
-    <Tag color={value === 'active' ? 'green' : 'default'}>
+    <StatusTag color={value === 'active' ? 'success' : 'default'}>
       {value === 'active' ? '在职' : value === 'inactive' ? '离职/停用' : value || '未设置'}
-    </Tag>
+    </StatusTag>
   )
 
   const formatFlowStatus = (value?: string) => {
@@ -288,16 +289,16 @@ const EmployeeDetail: React.FC = () => {
         flex: '1 1 180px',
         minWidth: 0,
         padding: '8px 10px',
-        border: '1px solid #f0f0f0',
-        borderRadius: 6,
-        background: '#fafafa',
+        border: '1px solid var(--color-border-light)',
+        borderRadius: 'var(--radius-md)',
+        background: 'var(--color-bg-light)',
       }}
     >
-      <div style={{ color: '#8c8c8c', fontSize: 12, marginBottom: 2 }}>{label}</div>
+      <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)', marginBottom: 2 }}>{label}</div>
       <Text strong style={{ display: 'block' }}>
         {endpoint?.department_name || endpoint?.department_id || '未记录部门'}
       </Text>
-      <Text type="secondary" style={{ fontSize: 12 }}>
+      <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
         {endpoint?.position || '未记录岗位'}
       </Text>
     </div>
@@ -311,83 +312,80 @@ const EmployeeDetail: React.FC = () => {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
         {renderTimelineEndpoint(item.from, '从')}
-        <SwapRightOutlined style={{ color: '#faad14' }} />
+        <SwapRightOutlined style={{ color: 'var(--color-warning)' }} />
         {renderTimelineEndpoint(item.to, '到')}
       </div>
     )
   }
 
   return (
-    <div>
-      <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/employees')} style={{ marginBottom: 16 }}>
-        返回花名册
-      </Button>
-
+    <PageContainer
+      title={detail?.employee?.name || '员工详情'}
+      subtitle={scopeLabel}
+      icon={<UserOutlined />}
+      extra={
+        <Space>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/employees')}>
+            返回花名册
+          </Button>
+          <Button icon={<EditOutlined />} onClick={openEdit}>
+            编辑档案
+          </Button>
+          <Button type="primary" icon={<SyncOutlined />} onClick={() => void handleSync()} loading={syncing}>
+            同步组织数据
+          </Button>
+        </Space>
+      }
+    >
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
           <Spin size="large" />
         </div>
       ) : detail ? (
         <>
-          <Card
-            style={{ marginBottom: 16 }}
-            extra={
-              <Space>
-                <Button icon={<EditOutlined />} onClick={openEdit}>
-                  编辑档案
-                </Button>
-                <Button type="primary" icon={<SyncOutlined />} onClick={() => void handleSync()} loading={syncing}>
-                  同步组织数据
-                </Button>
-              </Space>
-            }
-          >
+          <PageCard style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
               <Avatar size={80} src={detail.employee.avatar} icon={<UserOutlined />} />
               <div style={{ flex: 1 }}>
-                <Title level={4} style={{ marginBottom: 4 }}>
-                  {detail.employee.name}
-                </Title>
                 <div style={{ marginBottom: 8 }}>
                   <Text>{detail.employee.position || '未设置岗位'}</Text>
                   <Text type="secondary"> / {detail.department.name || detail.employee.department_id}</Text>
                 </div>
                 <Space wrap>
                   {statusTag(detail.employee.status)}
-                  <Tag>{detail.employee.user_id}</Tag>
-                  <Text type="secondary">{scopeLabel}</Text>
+                  <StatusTag>{detail.employee.user_id}</StatusTag>
                 </Space>
               </div>
             </div>
-          </Card>
+          </PageCard>
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col xs={24} sm={12} lg={6}>
-              <Card>
+              <PageCard>
                 <Statistic title="当前预警" value={detail.warnings.length} />
-              </Card>
+              </PageCard>
             </Col>
             <Col xs={24} sm={12} lg={6}>
-              <Card>
+              <PageCard>
                 <Statistic title="同部门成员" value={detail.org_relation.same_department_count} />
-              </Card>
+              </PageCard>
             </Col>
             <Col xs={24} sm={12} lg={6}>
-              <Card>
+              <PageCard>
                 <Statistic title="直属下属" value={detail.org_relation.direct_reports.length} />
-              </Card>
+              </PageCard>
             </Col>
             <Col xs={24} sm={12} lg={6}>
-              <Card>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 8 }}>档案状态</div>
+              <PageCard>
+                <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)', marginBottom: 8 }}>档案状态</div>
                 {statusTag(detail.profile?.profile_status || detail.employee.status)}
-              </Card>
+              </PageCard>
             </Col>
           </Row>
 
           <Row gutter={[16, 16]}>
             <Col xs={24} lg={14}>
-              <Card title="档案聚合">
+              <PageCard title="档案聚合">
                 <Descriptions column={2} bordered size="small">
                   <Descriptions.Item label="员工工号">{detail.profile?.employee_id || detail.employee.user_id}</Descriptions.Item>
                   <Descriptions.Item label="员工状态">{statusTag(detail.employee.status)}</Descriptions.Item>
@@ -414,9 +412,9 @@ const EmployeeDetail: React.FC = () => {
                     {detail.profile?.address || '-'}
                   </Descriptions.Item>
                 </Descriptions>
-              </Card>
+              </PageCard>
 
-              <Card title="生命周期时间轴" style={{ marginTop: 16 }}>
+              <PageCard title="生命周期时间轴" style={{ marginTop: 16 }}>
                 {detail.timeline.length ? (
                   <Timeline
                     items={detail.timeline.map((item) => ({
@@ -437,7 +435,7 @@ const EmployeeDetail: React.FC = () => {
                           {renderTransferChange(item)}
                           {item.description ? <div style={{ marginTop: 4 }}>{item.description}</div> : null}
                           {item.status || item.operator_name ? (
-                            <div style={{ marginTop: 4, color: '#8c8c8c', fontSize: 12 }}>
+                            <div style={{ marginTop: 4, color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>
                               {item.status ? `状态：${formatFlowStatus(item.status)}` : ''}
                               {item.status && item.operator_name ? ' / ' : ''}
                               {item.operator_name ? `操作人：${item.operator_name}` : ''}
@@ -450,11 +448,11 @@ const EmployeeDetail: React.FC = () => {
                 ) : (
                   <Alert type="info" showIcon message="当前员工还没有可展示的生命周期记录" />
                 )}
-              </Card>
+              </PageCard>
             </Col>
 
             <Col xs={24} lg={10}>
-              <Card title="汇报关系">
+              <PageCard title="汇报关系">
                 <Descriptions column={1} bordered size="small">
                   <Descriptions.Item label="直属上级">
                     {detail.org_relation.manager
@@ -478,7 +476,7 @@ const EmployeeDetail: React.FC = () => {
                       <List.Item>
                         <div>
                           <Text strong>{item.name}</Text>
-                          <div style={{ color: '#8c8c8c', fontSize: 12 }}>
+                          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>
                             {item.position || '未设置岗位'} / {item.department_name || item.department_id}
                           </div>
                         </div>
@@ -486,9 +484,9 @@ const EmployeeDetail: React.FC = () => {
                     )}
                   />
                 </div>
-              </Card>
+              </PageCard>
 
-              <Card title="当前预警" style={{ marginTop: 16 }}>
+              <PageCard title="当前预警" style={{ marginTop: 16 }}>
                 {detail.warnings.length ? (
                   <List
                     dataSource={detail.warnings}
@@ -499,7 +497,7 @@ const EmployeeDetail: React.FC = () => {
                             <Text strong>{item.title}</Text>
                             {item.due_date ? <Text type="secondary">{item.due_date}</Text> : null}
                           </div>
-                          <div style={{ marginTop: 4, color: '#8c8c8c' }}>{item.description}</div>
+                          <div style={{ marginTop: 4, color: 'var(--color-text-tertiary)' }}>{item.description}</div>
                         </div>
                       </List.Item>
                     )}
@@ -507,7 +505,7 @@ const EmployeeDetail: React.FC = () => {
                 ) : (
                   <Alert type="success" showIcon message="当前没有组织预警" />
                 )}
-              </Card>
+              </PageCard>
             </Col>
           </Row>
         </>
@@ -638,7 +636,7 @@ const EmployeeDetail: React.FC = () => {
           </Row>
         </Form>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

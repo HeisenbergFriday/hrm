@@ -1,9 +1,11 @@
 import React, { useState } from 'react'
-import { Card, Typography, DatePicker, Table, Spin, Empty, Alert, Button, Select, Badge } from 'antd'
+import { Typography, DatePicker, Table, Spin, Empty, Alert, Button, Select, Badge } from 'antd'
 import { CalendarOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { RangePicker } = DatePicker
 const { Option } = Select
 
@@ -54,11 +56,11 @@ const Approval: React.FC = () => {
   const columns = [
     {
       title: '审批标题', dataIndex: 'title', key: 'title',
-      render: (v: string) => <span style={{ fontWeight: 600, color: '#1e1b4b' }}>{v}</span>,
+      render: (v: string) => <span style={{ fontWeight: 600, color: 'var(--color-text-heading)' }}>{v}</span>,
     },
     {
       title: '申请人', dataIndex: 'applicant_name', key: 'applicant_name',
-      render: (v: string) => <span style={{ color: '#4338ca', fontWeight: 500 }}>{v}</span>,
+      render: (v: string) => <span style={{ color: 'var(--color-primary)', fontWeight: 500 }}>{v}</span>,
     },
     {
       title: '状态', dataIndex: 'status', key: 'status',
@@ -71,21 +73,8 @@ const Approval: React.FC = () => {
   ]
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-          <CalendarOutlined style={{ marginRight: 10, color: '#4338ca' }} />
-          审批管理
-        </h2>
-        <Text style={{ color: '#6b7280', fontSize: 13.5 }}>
-          查询审批记录与审批状态
-        </Text>
-      </div>
-
-      <Card
-        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
-      >
+    <PageContainer title="审批管理" icon={<CalendarOutlined />} subtitle="查询审批记录与审批状态">
+      <PageCard>
         <div style={{ marginBottom: 18, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <Select placeholder="选择申请人" style={{ width: 200 }} allowClear onChange={setUser}>
             <Option value="">全部申请人</Option>
@@ -100,8 +89,7 @@ const Approval: React.FC = () => {
             <Option value="rejected">已拒绝</Option>
           </Select>
           <RangePicker onChange={handleDateChange} />
-          <Button type="primary" onClick={() => refetch()} icon={<CalendarOutlined />}
-            style={{ borderRadius: 8, fontWeight: 600 }}>
+          <Button type="primary" onClick={() => refetch()} icon={<CalendarOutlined />}>
             查询
           </Button>
         </div>
@@ -119,12 +107,12 @@ const Approval: React.FC = () => {
           />
         ) : approvals?.items?.length ? (
           <Table columns={columns} dataSource={approvals.items} rowKey="id"
-            pagination={{ total: approvals.total, pageSize: 10, showSizeChanger: false, showTotal: (v) => <span style={{ color: '#6b7280' }}>共 {v} 条</span> }} />
+            pagination={{ total: approvals.total, pageSize: 10, showSizeChanger: false, showTotal: (v) => <span style={{ color: 'var(--color-text-secondary)' }}>共 {v} 条</span> }} />
         ) : (
           <Empty description="暂无审批数据" imageStyle={{ height: 80 }} />
         )}
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

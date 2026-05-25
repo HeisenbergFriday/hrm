@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  Card, Typography, Button, Space, message, Spin, Row, Col, Table, Tag, Descriptions, Timeline, InputNumber, Form, Modal, Image
+  Typography, Button, Space, message, Spin, Row, Col, Table, Tag, Descriptions, Timeline, InputNumber, Form, Modal, Image, Card, Divider, Collapse
 } from 'antd'
-import { ArrowLeftOutlined, CheckCircleOutlined, LockOutlined, EditOutlined, PrinterOutlined, FileExcelOutlined } from '@ant-design/icons'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
+import { ArrowLeftOutlined, CheckCircleOutlined, LockOutlined, EditOutlined, PrinterOutlined, FileExcelOutlined, FileTextOutlined } from '@ant-design/icons'
 import { performanceAPI, PerformanceActivity, PerformanceGoalRecord, PerformanceParticipant } from '../services/api'
 
 const { Title, Text } = Typography
@@ -362,15 +365,6 @@ const ArchivePerformanceSheet: React.FC<ArchiveSheetProps> = ({ activity, partic
 }
 
 const archiveStyles = `
-.performance-page .archive-actions {
-  margin-bottom: 16px;
-}
-.performance-page .performance-archive-card {
-  margin-top: 24px;
-}
-.performance-page .performance-archive-card .ant-card-body {
-  overflow-x: auto;
-}
 .performance-archive-sheet {
   background: #fff;
   color: #000;
@@ -698,9 +692,9 @@ const PerformanceResultView: React.FC = () => {
       key: 'section_type',
       width: 90,
       render: (val: string) => (
-        <Tag color={val === 'quantitative' ? 'blue' : val === 'bonus_penalty' ? 'gold' : 'green'}>
+        <StatusTag color={val === 'quantitative' ? 'blue' : val === 'bonus_penalty' ? 'gold' : 'green'}>
           {SECTION_LABEL[val] || val}
-        </Tag>
+        </StatusTag>
       )
     },
     { title: '指标名称', dataIndex: 'item_name', key: 'item_name', width: 150 },
@@ -731,207 +725,235 @@ const PerformanceResultView: React.FC = () => {
   }
 
   return (
-    <div className="performance-page" style={{ padding: 24 }}>
+    <PageContainer title="绩效结果" style={{ padding: '24px 32px' }}>
       <style>{archiveStyles}</style>
-      <Space className="archive-actions">
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
-        <Title level={4} style={{ margin: 0 }}>绩效结果查看</Title>
-        {isLocked && <Tag icon={<LockOutlined />} color="red">已冻结</Tag>}
-        <Button icon={<PrinterOutlined />} onClick={handlePrint}>打印 / 导出 PDF</Button>
-        <Button icon={<FileExcelOutlined />} onClick={handleExportExcel}>导出 Excel</Button>
-      </Space>
+      <div style={{ marginBottom: 24 }}>
+        <Space size={16} align="center">
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
+          <Title level={4} style={{ margin: 0 }}>绩效结果查看</Title>
+          {isLocked && <StatusTag icon={<LockOutlined />} color="red">已冻结</StatusTag>}
+        </Space>
+        <Space style={{ marginLeft: 'auto' }}>
+          <Button icon={<PrinterOutlined />} onClick={handlePrint}>打印 / 导出 PDF</Button>
+          <Button icon={<FileExcelOutlined />} onClick={handleExportExcel}>导出 Excel</Button>
+        </Space>
+      </div>
 
-      <Row gutter={24}>
-        <Col span={18}>
-          <Card title="评分明细" style={{ marginBottom: 16 }}>
-            <Table
-              dataSource={records}
-              columns={columns}
-              rowKey="id"
-              pagination={false}
-              size="small"
-              bordered
-              summary={() => (
-                <Table.Summary fixed>
-                  <Table.Summary.Row>
-                    <Table.Summary.Cell index={0} colSpan={4}><Text strong>合计</Text></Table.Summary.Cell>
-                    <Table.Summary.Cell index={1}><Text strong>{participant?.total_self_score || participant?.self_score}</Text></Table.Summary.Cell>
-                    <Table.Summary.Cell index={2}><Text strong>{participant?.total_manager_score || participant?.manager_score}</Text></Table.Summary.Cell>
-                    <Table.Summary.Cell index={3}>
-                      <Text strong style={{ fontSize: 16 }}>
-                        {(participant?.total_manager_score || participant?.manager_score || 0).toFixed(1)}
-                      </Text>
-                    </Table.Summary.Cell>
-                  </Table.Summary.Row>
-                </Table.Summary>
-              )}
-            />
-          </Card>
-
-          {records.filter(r => r.section_type === 'bonus_penalty').length > 0 && (
-            <Card title="附加考核项" style={{ marginBottom: 16 }}>
-              <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-                附加分仅作为参考或激励依据，不计入总分
-              </Text>
+      <Row gutter={[32, 24]}>
+        <Col xs={24} lg={16}>
+          <Space direction="vertical" size={20} style={{ width: '100%' }}>
+            <PageCard title="评分明细">
               <Table
-                dataSource={records.filter(r => r.section_type === 'bonus_penalty')}
+                dataSource={records}
+                columns={columns}
                 rowKey="id"
                 pagination={false}
                 size="small"
                 bordered
-                columns={[
-                  { title: '指标名称', dataIndex: 'item_name', key: 'item_name', width: 200 },
-                  { title: '权重', dataIndex: 'weight', key: 'weight', width: 80, render: (v: number) => formatWeight(v) },
-                  { title: '员工自评', dataIndex: 'self_score', key: 'self_score', width: 100, render: (v: number) => v || '-' },
-                  { title: '附加分', dataIndex: 'bonus_score', key: 'bonus_score', width: 100, render: (v: number) => v || '-' },
-                  {
-                    title: '附件',
-                    dataIndex: 'attachments',
-                    key: 'attachments',
-                    width: 200,
-                    render: (val: any) => {
-                      const attachments = Array.isArray(val) ? val : []
-                      if (attachments.length === 0) return '-'
-                      return (
-                        <Image.PreviewGroup>
-                          <Space wrap size={4}>
-                            {attachments.map((url: string, idx: number) => (
-                              <Image
-                                key={idx}
-                                src={url}
-                                width={48}
-                                height={48}
-                                style={{ objectFit: 'cover', borderRadius: 4 }}
-                                preview={{ mask: '查看' }}
-                              />
-                            ))}
-                          </Space>
-                        </Image.PreviewGroup>
-                      )
+                summary={() => (
+                  <Table.Summary fixed>
+                    <Table.Summary.Row>
+                      <Table.Summary.Cell index={0} colSpan={4}><Text strong>合计</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={1}><Text strong>{participant?.total_self_score || participant?.self_score}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={2}><Text strong>{participant?.total_manager_score || participant?.manager_score}</Text></Table.Summary.Cell>
+                      <Table.Summary.Cell index={3}>
+                        <Text strong style={{ fontSize: 16 }}>
+                          {(participant?.total_manager_score || participant?.manager_score || 0).toFixed(1)}
+                        </Text>
+                      </Table.Summary.Cell>
+                    </Table.Summary.Row>
+                  </Table.Summary>
+                )}
+              />
+            </PageCard>
+
+            {records.filter(r => r.section_type === 'bonus_penalty').length > 0 && (
+              <PageCard title="附加考核项">
+                <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+                  附加分仅作为参考或激励依据，不计入总分
+                </Text>
+                <Table
+                  dataSource={records.filter(r => r.section_type === 'bonus_penalty')}
+                  rowKey="id"
+                  pagination={false}
+                  size="small"
+                  bordered
+                  columns={[
+                    { title: '指标名称', dataIndex: 'item_name', key: 'item_name', width: 200 },
+                    { title: '权重', dataIndex: 'weight', key: 'weight', width: 80, render: (v: number) => formatWeight(v) },
+                    { title: '员工自评', dataIndex: 'self_score', key: 'self_score', width: 100, render: (v: number) => v || '-' },
+                    { title: '附加分', dataIndex: 'bonus_score', key: 'bonus_score', width: 100, render: (v: number) => v || '-' },
+                    {
+                      title: '附件',
+                      dataIndex: 'attachments',
+                      key: 'attachments',
+                      width: 200,
+                      render: (val: any) => {
+                        const attachments = Array.isArray(val) ? val : []
+                        if (attachments.length === 0) return '-'
+                        return (
+                          <Image.PreviewGroup>
+                            <Space wrap size={4}>
+                              {attachments.map((url: string, idx: number) => (
+                                <Image
+                                  key={idx}
+                                  src={url}
+                                  width={48}
+                                  height={48}
+                                  style={{ objectFit: 'cover', borderRadius: 4 }}
+                                  preview={{ mask: '查看' }}
+                                />
+                              ))}
+                            </Space>
+                          </Image.PreviewGroup>
+                        )
+                      }
                     }
+                  ]}
+                />
+              </PageCard>
+            )}
+
+            <Row gutter={20}>
+              <Col span={12}>
+                <PageCard title="员工自我评价">
+                  <div style={{ marginBottom: 12 }}>
+                    <Text type="secondary" style={{ fontSize: 13 }}>做得好的地方：</Text>
+                    <div style={{ marginTop: 4 }}>{participant?.self_evaluation_good || '暂无'}</div>
+                  </div>
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 13 }}>需要改进的地方：</Text>
+                    <div style={{ marginTop: 4 }}>{participant?.self_evaluation_improvement || '暂无'}</div>
+                  </div>
+                </PageCard>
+              </Col>
+              <Col span={12}>
+                <PageCard title="上级总体评价">
+                  <div style={{ marginBottom: 12 }}>
+                    <Text type="secondary" style={{ fontSize: 13 }}>做得好的地方：</Text>
+                    <div style={{ marginTop: 4 }}>{participant?.manager_evaluation_good || '暂无'}</div>
+                  </div>
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 13 }}>需要改进的地方：</Text>
+                    <div style={{ marginTop: 4 }}>{participant?.manager_evaluation_improvement || '暂无'}</div>
+                  </div>
+                </PageCard>
+              </Col>
+            </Row>
+          </Space>
+        </Col>
+
+        <Col xs={24} lg={8}>
+          <Space direction="vertical" size={20} style={{ width: '100%' }}>
+            <PageCard title="绩效结果">
+              <Descriptions column={1} size="small">
+                <Descriptions.Item label="基础分数">
+                  <Text strong>{(participant?.manager_score || 0).toFixed(1)}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="附加项加分">
+                  <Text style={{ color: 'var(--color-success)' }}>+{(participant?.bonus_score || 0).toFixed(1)}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="附加项扣分">
+                  <Text style={{ color: 'var(--color-error)' }}>-{(participant?.penalty_score || 0).toFixed(1)}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="调整后分数">
+                  <Text strong style={{ fontSize: 18, color: 'var(--color-info)' }}>
+                    {(participant?.adjusted_score || participant?.manager_score || 0).toFixed(1)}
+                  </Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="绩效等级">
+                  <StatusTag color={LEVEL_COLOR[participant?.final_level || ''] || 'default'} style={{ fontSize: 16, padding: '4px 12px' }}>
+                    {participant?.final_level || '-'}
+                  </StatusTag>
+                </Descriptions.Item>
+                {participant?.revenue_coefficient && participant.revenue_coefficient !== 1 && (
+                  <Descriptions.Item label="收支系数">
+                    <Text>{participant.revenue_coefficient}</Text>
+                  </Descriptions.Item>
+                )}
+              </Descriptions>
+              {!isLocked && (status === 'manager_submitted' || status === 'employee_confirmed') && activity?.enable_bonus_score && (
+                <Button
+                  type="dashed"
+                  icon={<EditOutlined />}
+                  onClick={handleSetBonusPenalty}
+                  block
+                  style={{ marginTop: 12 }}
+                >
+                  设置附加项
+                </Button>
+              )}
+            </PageCard>
+
+            <PageCard title="确认进度">
+              <Timeline
+                items={[
+                  {
+                    color: participant?.employee_confirmed_at ? 'green' : 'gray',
+                    children: participant?.employee_confirmed_at
+                      ? `员工已确认 (${participant.employee_confirmed_at?.substring(0, 10)})`
+                      : '待员工确认'
+                  },
+                  {
+                    color: participant?.manager_confirmed_at ? 'green' : 'gray',
+                    children: participant?.manager_confirmed_at
+                      ? `主管已确认并冻结 (${participant.manager_confirmed_at?.substring(0, 10)})`
+                      : '待主管确认并冻结'
+                  },
+                  {
+                    color: participant?.hr_confirmed_at ? 'green' : 'gray',
+                    children: participant?.hr_confirmed_at
+                      ? `人力已确认 (${participant.hr_confirmed_at?.substring(0, 10)})`
+                      : '待人力确认'
+                  },
+                  {
+                    color: isLocked ? 'red' : 'gray',
+                    children: isLocked ? '已冻结' : '未冻结',
+                    dot: isLocked ? <LockOutlined /> : undefined
                   }
                 ]}
               />
-            </Card>
-          )}
+            </PageCard>
 
-          <Row gutter={16}>
-            <Col span={12}>
-              <Card title="员工自我评价" size="small">
-                <div style={{ marginBottom: 8 }}>
-                  <Text strong>做得好的地方：</Text>
-                  <div>{participant?.self_evaluation_good || '暂无'}</div>
-                </div>
-                <div>
-                  <Text strong>需要改进的地方：</Text>
-                  <div>{participant?.self_evaluation_improvement || '暂无'}</div>
-                </div>
-              </Card>
-            </Col>
-            <Col span={12}>
-              <Card title="上级总体评价" size="small">
-                <div style={{ marginBottom: 8 }}>
-                  <Text strong>做得好的地方：</Text>
-                  <div>{participant?.manager_evaluation_good || '暂无'}</div>
-                </div>
-                <div>
-                  <Text strong>需要改进的地方：</Text>
-                  <div>{participant?.manager_evaluation_improvement || '暂无'}</div>
-                </div>
-              </Card>
-            </Col>
-          </Row>
-        </Col>
-
-        <Col span={6}>
-          <Card title="绩效结果" style={{ marginBottom: 16 }}>
-            <Descriptions column={1} size="small">
-              <Descriptions.Item label="基础分数">
-                <Text strong>{(participant?.manager_score || 0).toFixed(1)}</Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="附加项加分">
-                <Text style={{ color: '#52c41a' }}>+{(participant?.bonus_score || 0).toFixed(1)}</Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="附加项扣分">
-                <Text style={{ color: '#ff4d4f' }}>-{(participant?.penalty_score || 0).toFixed(1)}</Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="调整后分数">
-                <Text strong style={{ fontSize: 18, color: '#1890ff' }}>
-                  {(participant?.adjusted_score || participant?.manager_score || 0).toFixed(1)}
-                </Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="绩效等级">
-                <Tag color={LEVEL_COLOR[participant?.final_level || ''] || 'default'} style={{ fontSize: 16, padding: '4px 12px' }}>
-                  {participant?.final_level || '-'}
-                </Tag>
-              </Descriptions.Item>
-              {participant?.revenue_coefficient && participant.revenue_coefficient !== 1 && (
-                <Descriptions.Item label="收支系数">
-                  <Text>{participant.revenue_coefficient}</Text>
-                </Descriptions.Item>
-              )}
-            </Descriptions>
-            {!isLocked && (status === 'manager_submitted' || status === 'employee_confirmed') && activity?.enable_bonus_score && (
+            {confirmAction && (
               <Button
-                type="dashed"
-                icon={<EditOutlined />}
-                onClick={handleSetBonusPenalty}
+                type="primary"
+                icon={<CheckCircleOutlined />}
+                loading={confirming && confirmType === confirmAction.type}
+                onClick={() => handleConfirm(confirmAction!.type)}
                 block
-                style={{ marginTop: 12 }}
+                size="large"
               >
-                设置附加项
+                {confirmAction.label}
               </Button>
             )}
-          </Card>
-
-          <Card title="确认进度" size="small" style={{ marginBottom: 16 }}>
-            <Timeline
-              items={[
-                {
-                  color: participant?.employee_confirmed_at ? 'green' : 'gray',
-                  children: participant?.employee_confirmed_at
-                    ? `员工已确认 (${participant.employee_confirmed_at?.substring(0, 10)})`
-                    : '待员工确认'
-                },
-                {
-                  color: participant?.manager_confirmed_at ? 'green' : 'gray',
-                  children: participant?.manager_confirmed_at
-                    ? `主管已确认并冻结 (${participant.manager_confirmed_at?.substring(0, 10)})`
-                    : '待主管确认并冻结'
-                },
-                {
-                  color: participant?.hr_confirmed_at ? 'green' : 'gray',
-                  children: participant?.hr_confirmed_at
-                    ? `人力已确认 (${participant.hr_confirmed_at?.substring(0, 10)})`
-                    : '待人力确认'
-                },
-                {
-                  color: isLocked ? 'red' : 'gray',
-                  children: isLocked ? '已冻结' : '未冻结',
-                  dot: isLocked ? <LockOutlined /> : undefined
-                }
-              ]}
-            />
-          </Card>
-
-          {confirmAction && (
-            <Button
-              type="primary"
-              icon={<CheckCircleOutlined />}
-              loading={confirming && confirmType === confirmAction.type}
-              onClick={() => handleConfirm(confirmAction!.type)}
-              block
-              size="large"
-            >
-              {confirmAction.label}
-            </Button>
-          )}
+          </Space>
         </Col>
       </Row>
 
-      <Card className="performance-archive-card" title="个人绩效考核表（归档 / 导出）">
-        <ArchivePerformanceSheet activity={activity} participant={participant} records={records} />
-      </Card>
+      <Divider style={{ margin: '40px 0 24px' }} />
+
+      <Collapse
+        defaultActiveKey={[]}
+        expandIconPosition="start"
+        style={{ marginBottom: 24 }}
+        items={[
+          {
+            key: 'archive',
+            label: (
+              <Space>
+                <FileTextOutlined />
+                <Text strong>个人绩效考核表（归档 / 导出）</Text>
+              </Space>
+            ),
+            children: (
+              <div id="performance-archive-sheet" className="performance-archive-sheet">
+                <ArchivePerformanceSheet activity={activity} participant={participant} records={records} />
+              </div>
+            )
+          }
+        ]}
+      />
 
       <Modal
         title="设置附加项分数"
@@ -949,12 +971,12 @@ const PerformanceResultView: React.FC = () => {
           <Form.Item name="penalty_score" label="附加项扣分" rules={[{ required: true, message: '请输入扣分' }]}>
             <InputNumber min={0} max={20} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
             调整后分数 = 基础分数 + 加分 - 扣分
           </Text>
         </Form>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

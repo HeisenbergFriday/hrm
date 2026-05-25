@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react'
-import { Card, Table, Button, message, Spin, Typography, DatePicker } from 'antd'
+import { Table, Button, message, Spin, DatePicker } from 'antd'
 import { SyncOutlined, ReloadOutlined } from '@ant-design/icons'
 import { orgAPI, syncAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 
 // 格式化时间函数
 const formatDateTime = (dateString: string): string => {
@@ -15,7 +18,6 @@ const formatDateTime = (dateString: string): string => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
-const { Title } = Typography
 const { RangePicker } = DatePicker
 
 const SyncLog: React.FC = () => {
@@ -106,9 +108,9 @@ const SyncLog: React.FC = () => {
       key: 'status',
       render: (status: string) => {
         return status === 'success' ? (
-          <span style={{ color: 'green' }}>成功</span>
+          <StatusTag color="success">成功</StatusTag>
         ) : (
-          <span style={{ color: 'red' }}>失败</span>
+          <StatusTag color="error">失败</StatusTag>
         )
       },
     },
@@ -131,24 +133,25 @@ const SyncLog: React.FC = () => {
   ]
 
   return (
-    <div>
-      <Card 
-        title={<Title level={4}>同步日志</Title>} 
-        extra={
-          <Button 
-            type="primary" 
-            icon={<SyncOutlined />} 
-            onClick={handleSync}
-            loading={loading}
-          >
-            手动同步
-          </Button>
-        }
-      >
-        <div style={{ marginBottom: '24px' }}>
+    <PageContainer
+      title="同步日志"
+      icon={<SyncOutlined />}
+      extra={
+        <Button
+          type="primary"
+          icon={<SyncOutlined />}
+          onClick={handleSync}
+          loading={loading}
+        >
+          手动同步
+        </Button>
+      }
+    >
+      <PageCard>
+        <div style={{ marginBottom: 'var(--space-6)' }}>
           <h3>同步状态</h3>
           {syncStatus && (
-            <div style={{ display: 'flex', gap: '24px', marginTop: '8px' }}>
+            <div style={{ display: 'flex', gap: 'var(--space-6)', marginTop: 'var(--space-2)' }}>
               <div>
                 <p>部门同步状态: {syncStatus.departments.status}</p>
                 <p>最后同步时间: {formatDateTime(syncStatus.departments.last_sync_time)}</p>
@@ -160,7 +163,7 @@ const SyncLog: React.FC = () => {
             </div>
           )}
         </div>
-        <div style={{ marginBottom: '16px', display: 'flex', gap: '16px', alignItems: 'center' }}>
+        <div style={{ marginBottom: 'var(--space-4)', display: 'flex', gap: 'var(--space-4)', alignItems: 'center' }}>
           <RangePicker style={{ width: 300 }} />
           <Button 
             icon={<ReloadOutlined />} 
@@ -170,7 +173,7 @@ const SyncLog: React.FC = () => {
           </Button>
         </div>
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-10)' }}>
             <Spin size="large" />
           </div>
         ) : (
@@ -183,8 +186,8 @@ const SyncLog: React.FC = () => {
             }}
           />
         )}
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

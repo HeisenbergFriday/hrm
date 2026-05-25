@@ -10,7 +10,6 @@ import {
   Select,
   Space,
   Table,
-  Tag,
   Tooltip,
   Typography,
   message,
@@ -18,6 +17,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ClockCircleOutlined, DeleteOutlined, SettingOutlined, TeamOutlined } from '@ant-design/icons'
 import { shiftConfigAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import StatusTag from '../components/StatusTag'
 
 const { RangePicker } = DatePicker
 const { Text } = Typography
@@ -255,7 +256,7 @@ export default function EmployeeShiftConfig() {
         if (!item) {
           return <Text type="secondary">-</Text>
         }
-        return item.is_rest ? <Tag>休</Tag> : <Tag color="blue">{item.shift_name}</Tag>
+        return item.is_rest ? <StatusTag>休</StatusTag> : <StatusTag color="blue">{item.shift_name}</StatusTag>
       },
     }))
 
@@ -285,14 +286,14 @@ export default function EmployeeShiftConfig() {
           width: 720,
           content: (
             <div>
-              <div style={{ marginBottom: 8 }}>结果：{result.message || '本地已保存，但钉钉同步未完全成功。'}</div>
+              <div style={{ marginBottom: 'var(--space-2)' }}>结果：{result.message || '本地已保存，但钉钉同步未完全成功。'}</div>
               {result.group_id ? (
-                <div style={{ marginBottom: 8 }}>
+                <div style={{ marginBottom: 'var(--space-2)' }}>
                   考勤组：{result.group_name || '未命名考勤组'} ({result.group_id})
                 </div>
               ) : null}
               {result.error_detail ? (
-                <div style={{ marginBottom: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                <div style={{ marginBottom: 'var(--space-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                   钉钉返回：{result.error_detail}
                 </div>
               ) : null}
@@ -387,11 +388,11 @@ export default function EmployeeShiftConfig() {
       width: 120,
       render: (value: string, record: EmployeeShiftItem) =>
         record.has_custom ? (
-          <Tag color="blue" icon={<ClockCircleOutlined />}>
+          <StatusTag color="blue">
             {value}
-          </Tag>
+          </StatusTag>
         ) : (
-          <Tag color="default">18:30(默认)</Tag>
+          <StatusTag color="default">18:30(默认)</StatusTag>
         ),
     },
     { title: '备注', dataIndex: 'note', ellipsis: true },
@@ -426,13 +427,9 @@ export default function EmployeeShiftConfig() {
   ]
 
   return (
-    <div>
-      <div style={{ marginBottom: 16, display: 'flex', gap: 8, alignItems: 'center' }}>
-        <h2 style={{ margin: 0 }}>员工下班时间配置</h2>
-      </div>
-
+    <PageContainer title="员工下班时间配置" icon={<ClockCircleOutlined />} subtitle="为员工设置专属下班班次">
       <Alert
-        style={{ marginBottom: 16 }}
+        style={{ marginBottom: 'var(--space-4)' }}
         type="info"
         showIcon
         message="使用说明"
@@ -445,7 +442,7 @@ export default function EmployeeShiftConfig() {
         }
       />
 
-      <div style={{ marginBottom: 12, display: 'flex', gap: 8 }}>
+      <div style={{ marginBottom: 'var(--space-3)', display: 'flex', gap: 'var(--space-2)' }}>
         <Button type="primary" icon={<TeamOutlined />} disabled={selectedRowKeys.length === 0} onClick={handleBatchSet}>
           一站式设置(已选 {selectedRowKeys.length} 人)
         </Button>
@@ -456,7 +453,7 @@ export default function EmployeeShiftConfig() {
 
       {catalogs.length > 0 ? (
         <Alert
-          style={{ marginBottom: 12 }}
+          style={{ marginBottom: 'var(--space-3)' }}
           type={catalogs.some((item) => item.attached_to_group === false) ? 'warning' : 'success'}
           showIcon
           message="考勤组班次状态"
@@ -501,14 +498,14 @@ export default function EmployeeShiftConfig() {
         <Alert
           type="info"
           showIcon
-          style={{ marginBottom: 16 }}
+          style={{ marginBottom: 'var(--space-4)' }}
           message="会一次完成：创建/复用钉钉班次、保存本地配置、并只给选中员工在指定日期范围内批量下发。"
         />
 
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 'var(--space-4)' }}>
           <label>班次来源</label>
           <Radio.Group
-            style={{ display: 'block', marginTop: 8 }}
+            style={{ display: 'block', marginTop: 'var(--space-2)' }}
             value={batchForm.mode}
             onChange={(e) => setBatchForm((prev) => ({ ...prev, mode: e.target.value as ShiftMode }))}
           >
@@ -520,10 +517,10 @@ export default function EmployeeShiftConfig() {
         </div>
 
         {batchForm.mode === 'existing' ? (
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 'var(--space-4)' }}>
             <label>已有班次</label>
             <Select
-              style={{ width: '100%', marginTop: 8 }}
+              style={{ width: '100%', marginTop: 'var(--space-2)' }}
               placeholder={shiftOptions.length === 0 ? '暂无本地班次，请切换到直接新建班次' : '选择已有班次'}
               value={batchForm.shift_id || undefined}
               options={shiftOptions}
@@ -536,11 +533,11 @@ export default function EmployeeShiftConfig() {
             />
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
             <div style={{ gridColumn: '1 / -1' }}>
               <label>班次名称</label>
               <Input
-                style={{ marginTop: 8 }}
+                style={{ marginTop: 'var(--space-2)' }}
                 value={batchForm.name}
                 onChange={(e) => setBatchForm((prev) => ({ ...prev, name: e.target.value }))}
                 placeholder="例如：17:30下班"
@@ -549,7 +546,7 @@ export default function EmployeeShiftConfig() {
             <div>
               <label>上班时间</label>
               <Input
-                style={{ marginTop: 8 }}
+                style={{ marginTop: 'var(--space-2)' }}
                 value={batchForm.check_in}
                 onChange={(e) => setBatchForm((prev) => ({ ...prev, check_in: e.target.value }))}
                 placeholder="09:00"
@@ -558,7 +555,7 @@ export default function EmployeeShiftConfig() {
             <div>
               <label>下班时间</label>
               <Input
-                style={{ marginTop: 8 }}
+                style={{ marginTop: 'var(--space-2)' }}
                 value={batchForm.check_out}
                 onChange={(e) => setBatchForm((prev) => ({ ...prev, check_out: e.target.value }))}
                 placeholder="17:30"
@@ -567,10 +564,10 @@ export default function EmployeeShiftConfig() {
           </div>
         )}
 
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 'var(--space-4)' }}>
           <label>局部下发日期范围</label>
           <RangePicker
-            style={{ width: '100%', marginTop: 8 }}
+            style={{ width: '100%', marginTop: 'var(--space-2)' }}
             value={batchForm.date_range}
             onChange={(dates) => {
               if (!dates || !dates[0] || !dates[1]) {
@@ -579,12 +576,12 @@ export default function EmployeeShiftConfig() {
               setBatchForm((prev) => ({ ...prev, date_range: [dates[0], dates[1]] }))
             }}
           />
-          <div style={{ marginTop: 6 }}>
+          <div style={{ marginTop: 'var(--space-1)' }}>
             <Text type="secondary">会按员工自定义班次和公司节假日、调休、大小周规则生成最终结果，只对这段日期做局部下发。</Text>
           </div>
         </div>
 
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 'var(--space-4)' }}>
           <Alert
             type="info"
             showIcon
@@ -592,7 +589,7 @@ export default function EmployeeShiftConfig() {
             description="这里直接显示选中员工在当前日期范围内的最终结果：员工自定义下班时间优先，节假日、调休和大小周仍按公司规则计算。"
           />
           <Table
-            style={{ marginTop: 12 }}
+            style={{ marginTop: 'var(--space-3)' }}
             size="small"
             loading={previewLoading}
             columns={previewColumns}
@@ -608,13 +605,13 @@ export default function EmployeeShiftConfig() {
         <div>
           <label>备注(可选)</label>
           <Input
-            style={{ marginTop: 8 }}
+            style={{ marginTop: 'var(--space-2)' }}
             value={batchForm.note}
             onChange={(e) => setBatchForm((prev) => ({ ...prev, note: e.target.value }))}
             placeholder="例如：研发团队弹性下班"
           />
         </div>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
