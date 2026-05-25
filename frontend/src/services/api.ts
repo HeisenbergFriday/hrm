@@ -891,6 +891,18 @@ export const performanceAPI = {
     evaluation_improvement: string
   }) => api.post(`/performance/goal-reviews/${participantId}/manager-evaluation`, data),
 
+  // ===== 自动评分 =====
+  autoScoreGoalRecords: (items: {
+    record_id: number
+    section_type: string
+    weight: number
+    red_line_value: string
+    target_value: string
+    challenge_value: string
+    scoring_rule: string
+    actual_result: string
+  }[]) => api.post('/performance/auto-score', { items }),
+
   // ===== 实时分布检查 =====
   getRealtimeDistributionCheck: (activityId: number) =>
     api.get(`/performance/activities/${activityId}/realtime-distribution-check`),

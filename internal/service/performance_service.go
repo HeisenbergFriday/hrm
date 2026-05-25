@@ -1744,6 +1744,10 @@ func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) 
 
 // SendSelfEvalReminders 发送自评提醒给未提交的参与者
 func (s *PerformanceService) SendSelfEvalReminders(activityID string) error {
+	var activity database.PerformanceActivity
+	if err := s.db.Where("id = ? AND deleted_at IS NULL", activityID).First(&activity).Error; err != nil {
+		return fmt.Errorf("活动不存在: %v", err)
+	}
 	var participants []database.PerformanceParticipant
 	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL", activityID).
 		Find(&participants).Error; err != nil {
@@ -1772,7 +1776,7 @@ func (s *PerformanceService) SendSelfEvalReminders(activityID string) error {
 			continue
 		}
 		title := "绩效自评提醒"
-		content := fmt.Sprintf("您有一个绩效自评待完成，请尽快登录系统完成自评。员工：%s", p.EmployeeName)
+		content := fmt.Sprintf("您有一个绩效自评待完成，请尽快登录系统完成自评。绩效活动：%s", activity.Name)
 		if err := dingtalk.SendCorpMessageToUser(employeeID, title, content); err != nil {
 			logrus.Warnf("send self eval reminder to %s failed: %v", employeeID, err)
 			failed++
@@ -1887,6 +1891,15 @@ func (s *PerformanceService) BatchSaveGoalRecords(participantID uint, records []
 		return nil, fmt.Errorf("参与人不存在: %w", err)
 	}
 
+	// 检查活动状态是否允许目标设定
+	activity, err := s.actRepo.GetByID(participant.ActivityID)
+	if err != nil {
+		return nil, fmt.Errorf("获取绩效活动失败: %w", err)
+	}
+	if activity.Status != "target_setting" {
+		return nil, fmt.Errorf("当前活动状态不允许设定目标，活动状态为: %s", activity.Status)
+	}
+
 	// 权重校验
 	if participant.IsLocked {
 		return nil, fmt.Errorf("该参与人的绩效结果已锁定，无法修改目标")
@@ -1977,6 +1990,15 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 	participant, err := s.participantR.GetByID(strconv.FormatUint(uint64(participantID), 10))
 	if err != nil {
 		return fmt.Errorf("参与人不存在: %w", err)
+	}
+
+	// 检查活动状态是否允许目标审批
+	activity, err := s.actRepo.GetByID(participant.ActivityID)
+	if err != nil {
+		return fmt.Errorf("获取绩效活动失败: %w", err)
+	}
+	if activity.Status != "target_setting" {
+		return fmt.Errorf("当前活动状态不允许进行目标审批，活动状态为: %s", activity.Status)
 	}
 
 	// 获取最新审批日志
@@ -2190,6 +2212,16 @@ func (s *PerformanceService) SetBonusPenaltyScore(participantID uint, bonusScore
 		return fmt.Errorf("该参与人的绩效结果已锁定，无法修改")
 	}
 
+	// 查询活动配置，判断是否启用附加分
+	var activity database.PerformanceActivity
+	if err := s.db.Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
+		return fmt.Errorf("绩效活动不存在: %w", err)
+	}
+
+	if !activity.EnableBonusScore {
+		return fmt.Errorf("该绩效活动未启用附加分，无法设置")
+	}
+
 	// 在事务内更新
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var p database.PerformanceParticipant
@@ -2198,9 +2230,14 @@ func (s *PerformanceService) SetBonusPenaltyScore(participantID uint, bonusScore
 			return err
 		}
 
-		p.BonusScore = bonusScore
-		p.PenaltyScore = penaltyScore
-		p.AdjustedScore = p.ManagerScore + bonusScore - penaltyScore
+		if activity.EnableBonusScore {
+			p.BonusScore = bonusScore
+			p.PenaltyScore = penaltyScore
+		} else {
+			p.BonusScore = 0
+			p.PenaltyScore = 0
+		}
+		p.AdjustedScore = p.ManagerScore + p.BonusScore - p.PenaltyScore
 		if p.AdjustedScore < 0 {
 			p.AdjustedScore = 0
 		}
@@ -2230,6 +2267,15 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 		}
 		if participant.IsLocked {
 			return fmt.Errorf("该参与人的绩效结果已锁定，无法提交自评")
+		}
+
+		// 检查活动状态是否允许自评
+		var activity database.PerformanceActivity
+		if err := tx.Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
+			return fmt.Errorf("获取绩效活动失败: %w", err)
+		}
+		if activity.Status != "self_evaluation" {
+			return fmt.Errorf("当前活动状态不允许提交自评，活动状态为: %s", activity.Status)
 		}
 
 		var records []database.PerformanceGoalRecord
@@ -2318,6 +2364,11 @@ func (s *PerformanceService) SubmitGoalManagerEvaluation(participantID uint, ite
 		var activity database.PerformanceActivity
 		if err := tx.Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
 			return fmt.Errorf("绩效活动不存在: %w", err)
+		}
+
+		// 检查活动状态是否允许主管评分
+		if activity.Status != "manager_evaluation" {
+			return fmt.Errorf("当前活动状态不允许提交主管评分，活动状态为: %s", activity.Status)
 		}
 
 		var records []database.PerformanceGoalRecord

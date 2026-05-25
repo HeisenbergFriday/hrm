@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"math"
 	"peopleops/internal/database"
 	"strings"
 	"time"
@@ -325,12 +326,13 @@ func (r *PerformanceReviewVersionRepository) CreateSelfEvaluationVersion(partici
 			return err
 		}
 
-		p.SelfScore = score
-		p.SelfLevel = level
-		p.SelfSummary = summary
-		p.Status = nextParticipantStatusAfterSelfEvaluation(p.Status)
-		p.UpdatedBy = userID
-		return tx.Save(p).Error
+		return tx.Model(&p).Updates(map[string]interface{}{
+			"self_score":   score,
+			"self_level":   level,
+			"self_summary": summary,
+			"status":       nextParticipantStatusAfterSelfEvaluation(p.Status),
+			"updated_by":   userID,
+		}).Error
 	})
 	if err != nil {
 		return nil, err
@@ -358,22 +360,21 @@ func (r *PerformanceReviewVersionRepository) CreateManagerEvaluationVersion(part
 			SuggestedLevel:      suggestedLevel,
 			ManagerComment:      comment,
 			EvaluationItemsJSON: items,
-			FinalLevel:          p.FinalLevel,
+			FinalLevel:          ensureFinalLevel(suggestedLevel, score),
 			CreatedBy:           userID,
 		}
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
 
-		p.ManagerScore = score
-		p.SuggestedLevel = suggestedLevel
-		p.ManagerComment = comment
-		p.Status = nextParticipantStatusAfterManagerEvaluation(p.Status)
-		p.UpdatedBy = userID
-		if p.FinalLevel == "" {
-			p.FinalLevel = suggestedLevel
-		}
-		return tx.Save(p).Error
+		return tx.Model(&p).Updates(map[string]interface{}{
+			"manager_score":   score,
+			"suggested_level": suggestedLevel,
+			"manager_comment": comment,
+			"status":          nextParticipantStatusAfterManagerEvaluation(p.Status),
+			"updated_by":      userID,
+			"final_level":     ensureFinalLevel(suggestedLevel, score),
+		}).Error
 	})
 	if err != nil {
 		return nil, err
@@ -406,18 +407,38 @@ func (r *PerformanceReviewVersionRepository) BatchCreateManagerEvaluationVersion
 				ManagerScore:        e.ManagerScore,
 				SuggestedLevel:      e.SuggestedLevel,
 				ManagerComment:      e.ManagerComment,
-				FinalLevel:          e.SuggestedLevel,
+				FinalLevel:          ensureFinalLevel(e.SuggestedLevel, e.ManagerScore),
 				CreatedBy:           userID,
 				EvaluationItemsJSON: e.EvaluationItems,
 			}
 			if err := tx.Create(&v).Error; err != nil {
 				return err
 			}
+			// 没有逐项评分时，按权重分摊总分到各指标
+			if len(e.EvaluationItems) == 0 {
+				var records []database.PerformanceGoalRecord
+				if err := tx.Where("participant_id = ? AND deleted_at IS NULL AND section_type != ?",
+					e.ParticipantID, "bonus_penalty").Find(&records).Error; err == nil && len(records) > 0 {
+					totalWeight := 0.0
+					for _, r := range records {
+						totalWeight += r.Weight
+					}
+					if totalWeight > 0 {
+						for _, r := range records {
+							newScore := math.Round(e.ManagerScore*(r.Weight/totalWeight)*100) / 100
+							if err := tx.Model(&database.PerformanceGoalRecord{}).Where("id = ?", r.ID).Update("manager_score", newScore).Error; err != nil {
+								return err
+							}
+						}
+					}
+				}
+			}
+
 			if err := tx.Model(&database.PerformanceParticipant{}).Where("id = ?", e.ParticipantID).Updates(map[string]interface{}{
 				"manager_score":   e.ManagerScore,
 				"suggested_level": e.SuggestedLevel,
 				"manager_comment": e.ManagerComment,
-				"final_level":     e.SuggestedLevel,
+				"final_level":     ensureFinalLevel(e.SuggestedLevel, e.ManagerScore),
 				"status":          nextParticipantStatusAfterManagerEvaluation(p.Status),
 				"updated_by":      userID,
 			}).Error; err != nil {
@@ -451,10 +472,11 @@ func (r *PerformanceReviewVersionRepository) AdjustFinalLevel(participantID, fin
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
-		p.FinalLevel = finalLevel
-		p.AdjustReason = reason
-		p.UpdatedBy = userID
-		return tx.Save(p).Error
+		return tx.Model(&p).Updates(map[string]interface{}{
+			"final_level":   finalLevel,
+			"adjust_reason": reason,
+			"updated_by":    userID,
+		}).Error
 	})
 	if err != nil {
 		return nil, err
@@ -482,14 +504,15 @@ func (r *PerformanceReviewVersionRepository) ConfirmResult(participantID, confir
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
-		p.Status = "locked"
-		p.ConfirmedAt = version.ConfirmedAt
-		p.ConfirmedBy = userID
-		p.IsLocked = true
-		p.LockedAt = version.ConfirmedAt
-		p.LockedBy = userID
-		p.UpdatedBy = userID
-		return tx.Save(p).Error
+		return tx.Model(&p).Updates(map[string]interface{}{
+			"status":       "locked",
+			"confirmed_at": confirmedAt,
+			"confirmed_by": userID,
+			"is_locked":    true,
+			"locked_at":    confirmedAt,
+			"locked_by":    userID,
+			"updated_by":   userID,
+		}).Error
 	})
 	if err != nil {
 		return nil, err
@@ -551,4 +574,23 @@ func nextParticipantStatusAfterManagerEvaluation(current string) string {
 		return current
 	}
 	return "manager_submitted"
+}
+
+func ensureFinalLevel(level string, score float64) string {
+	if strings.TrimSpace(level) != "" {
+		return strings.TrimSpace(level)
+	}
+	if score >= 100 {
+		return "S"
+	}
+	if score >= 90 {
+		return "A"
+	}
+	if score >= 80 {
+		return "B"
+	}
+	if score >= 60 {
+		return "C"
+	}
+	return "D"
 }
