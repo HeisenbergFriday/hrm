@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  Card, Typography, Form, Input, InputNumber, Button, Space,
+  Typography, Form, Input, InputNumber, Button, Space,
   message, Spin, Row, Col, Table, Select, Progress, Tag, Modal, Badge, Image
 } from 'antd'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import { ArrowLeftOutlined, CheckCircleOutlined, PaperClipOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { performanceAPI, PerformanceGoalRecord, PerformanceParticipant, TeamQuotaStatus } from '../services/api'
 
@@ -250,7 +253,7 @@ const PerformanceManagerEval: React.FC = () => {
     const team = currentTeamQuota()
     if (!team) return null
     return (
-      <Card title="配额进度" size="small" style={{ marginBottom: 16 }}>
+      <PageCard title="配额进度" size="small" style={{ marginBottom: 16 }}>
         <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
           团队：{team.manager_name || '未分组'}（共 {team.total} 人）
         </Text>
@@ -262,7 +265,7 @@ const PerformanceManagerEval: React.FC = () => {
           return (
             <div key={level} style={{ marginBottom: 8 }}>
               <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                <Tag color={isFull ? 'red' : 'blue'}>{level}</Tag>
+                <StatusTag color={isFull ? 'red' : 'blue'}>{level}</StatusTag>
                 <Text>{q.current} / {q.max}（{q.percent}%）</Text>
               </Space>
               <Progress percent={percent} size="small" status={isFull ? 'exception' : 'active'}
@@ -270,7 +273,7 @@ const PerformanceManagerEval: React.FC = () => {
             </div>
           )
         })}
-      </Card>
+      </PageCard>
     )
   }
 
@@ -288,9 +291,9 @@ const PerformanceManagerEval: React.FC = () => {
           <>
             <Form.Item name={['items', idx, 'record_id']} hidden><Input /></Form.Item>
             <div>
-              <Tag color={isQuant ? 'blue' : 'green'} style={{ marginBottom: 4 }}>
+              <StatusTag color={isQuant ? 'blue' : 'green'} style={{ marginBottom: 4 }}>
                 {isQuant ? '量化指标' : '关键行动'}
-              </Tag>
+              </StatusTag>
               <Text strong>{val}</Text>
             </div>
           </>
@@ -306,11 +309,11 @@ const PerformanceManagerEval: React.FC = () => {
         const item = items[idx]
         if (item?.section_type === 'quantitative') {
           return (
-            <div style={{ fontSize: 12 }}>
-              {item.red_line_value && <div style={{ color: '#ff4d4f' }}>红线: {item.red_line_value}</div>}
-              {item.target_value && <div style={{ color: '#1890ff' }}>目标: {item.target_value}</div>}
-              {item.challenge_value && <div style={{ color: '#52c41a' }}>挑战: {item.challenge_value}</div>}
-              {item.scoring_rule && <div style={{ color: '#8c8c8c' }}>考核: {item.scoring_rule}</div>}
+            <div style={{ fontSize: 'var(--font-size-xs)' }}>
+              {item.red_line_value && <div style={{ color: 'var(--color-error)' }}>红线: {item.red_line_value}</div>}
+              {item.target_value && <div style={{ color: 'var(--color-info)' }}>目标: {item.target_value}</div>}
+              {item.challenge_value && <div style={{ color: 'var(--color-success)' }}>挑战: {item.challenge_value}</div>}
+              {item.scoring_rule && <div style={{ color: 'var(--color-text-tertiary)' }}>考核: {item.scoring_rule}</div>}
               {!item.red_line_value && !item.target_value && !item.challenge_value && <Text type="secondary">-</Text>}
             </div>
           )
@@ -337,7 +340,7 @@ const PerformanceManagerEval: React.FC = () => {
       dataIndex: 'actual_result',
       key: 'actual_result',
       width: 150,
-      render: (val: string) => <Text style={{ fontSize: 12 }}>{val || '-'}</Text>
+      render: (val: string) => <Text style={{ fontSize: 'var(--font-size-xs)' }}>{val || '-'}</Text>
     },
     {
       title: '附件',
@@ -385,7 +388,7 @@ const PerformanceManagerEval: React.FC = () => {
   if (loading) return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
 
   return (
-    <div style={{ padding: 24 }}>
+    <PageContainer title="上级绩效评分">
       <Row gutter={24}>
         <Col span={18}>
           <Space style={{ marginBottom: 16 }}>
@@ -394,7 +397,7 @@ const PerformanceManagerEval: React.FC = () => {
           </Space>
 
           <Form form={form} onValuesChange={handleValuesChange} layout="vertical">
-            <Card title="指标评分" extra={
+            <PageCard title="指标评分" extra={
               !['locked', 'hr_confirmed', 'manager_confirmed'].includes(participant?.status || '') ? (
                 <Button
                   type="primary"
@@ -414,10 +417,10 @@ const PerformanceManagerEval: React.FC = () => {
                 size="small"
                 bordered
               />
-            </Card>
+            </PageCard>
 
             {bonusItems.length > 0 && (
-              <Card title="附加考核项" style={{ marginTop: 16 }}>
+              <PageCard title="附加考核项" style={{ marginTop: 16 }}>
                 <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
                   附加分仅作为参考或激励依据，不计入总分
                 </Text>
@@ -502,21 +505,21 @@ const PerformanceManagerEval: React.FC = () => {
                     }
                   ]}
                 />
-              </Card>
+              </PageCard>
             )}
 
-            <Card title="总分与等级" style={{ marginTop: 16 }}>
+            <PageCard title="总分与等级" style={{ marginTop: 16 }}>
               <Row gutter={24}>
                 <Col span={6}>
                   <Text>上级评分总分：</Text>
-                  <Text strong style={{ fontSize: 24, color: '#1890ff' }}>{totalManagerScore}</Text>
+                  <Text strong style={{ fontSize: 24, color: 'var(--color-info)' }}>{totalManagerScore}</Text>
                 </Col>
                 <Col span={8}>
                   <Form.Item name="suggested_level" label="绩效等级" rules={[{ required: true, message: '请填写等级' }]}>
                     <Select placeholder="根据上级评分总分自动生成">
                       {LEVEL_OPTIONS.map(l => (
                         <Select.Option key={l.value} value={l.value}>
-                          <Tag color={l.color}>{l.label}</Tag>
+                          <StatusTag color={l.color}>{l.label}</StatusTag>
                         </Select.Option>
                       ))}
                     </Select>
@@ -528,9 +531,9 @@ const PerformanceManagerEval: React.FC = () => {
                   </Text>
                 </Col>
               </Row>
-            </Card>
+            </PageCard>
 
-            <Card title="上级总体评价" style={{ marginTop: 16 }}>
+            <PageCard title="上级总体评价" style={{ marginTop: 16 }}>
               <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="evaluation_good" label="做得好的地方">
@@ -543,7 +546,7 @@ const PerformanceManagerEval: React.FC = () => {
                   </Form.Item>
                 </Col>
               </Row>
-            </Card>
+            </PageCard>
 
             <div style={{ textAlign: 'center', marginTop: 24 }}>
               <Button type="primary" icon={<CheckCircleOutlined />} loading={saving} onClick={handleSubmit} size="large">
@@ -574,7 +577,7 @@ const PerformanceManagerEval: React.FC = () => {
           ))}
         </div>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

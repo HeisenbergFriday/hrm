@@ -4,7 +4,6 @@ import dayjs from 'dayjs'
 import {
   Alert,
   Button,
-  Card,
   Col,
   DatePicker,
   Form,
@@ -14,11 +13,13 @@ import {
   Select,
   Spin,
   Table,
-  Tag,
   Typography,
   message,
 } from 'antd'
 import { EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { departmentAPI, employeeAPI, orgAPI } from '../services/api'
 
@@ -278,7 +279,7 @@ const EmployeeProfilePage: React.FC = () => {
         return (
           <div>
             <Text strong>{employee?.name || record.user_id}</Text>
-            <div style={{ color: '#8c8c8c', fontSize: 12 }}>{record.user_id}</div>
+            <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>{record.user_id}</div>
           </div>
         )
       },
@@ -311,7 +312,7 @@ const EmployeeProfilePage: React.FC = () => {
       title: '档案状态',
       dataIndex: 'profile_status',
       key: 'profile_status',
-      render: (value?: string) => <Tag color={value === 'active' ? 'green' : 'default'}>{value || '未设置'}</Tag>,
+      render: (value?: string) => <StatusTag color={value === 'active' ? 'success' : 'default'}>{value || '未设置'}</StatusTag>,
     },
     {
       title: '操作',
@@ -325,17 +326,11 @@ const EmployeeProfilePage: React.FC = () => {
   ]
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <Title level={4} style={{ marginBottom: 4 }}>
-            员工档案
-          </Title>
-          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            仅维护 EmployeeProfile 档案字段。User.name / email / mobile / department_id / position / avatar / status 在这里保持只读，不会进入创建或编辑 payload。
-          </Paragraph>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+    <PageContainer
+      title="员工档案"
+      subtitle="仅维护 EmployeeProfile 档案字段。User.name / email / mobile / department_id / position / avatar / status 在这里保持只读，不会进入创建或编辑 payload。"
+      extra={
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           <Button icon={<ReloadOutlined />} onClick={() => void profilesQuery.refetch()} loading={profilesQuery.isFetching}>
             刷新
           </Button>
@@ -343,7 +338,8 @@ const EmployeeProfilePage: React.FC = () => {
             新建档案
           </Button>
         </div>
-      </div>
+      }
+    >
 
       <Alert
         style={{ marginBottom: 16 }}
@@ -352,7 +348,7 @@ const EmployeeProfilePage: React.FC = () => {
         message="本页不提供删除能力。user_id 只作为档案关联字段；档案编辑不会更新钉钉同步主数据，也不会提交 profile_status。"
       />
 
-      <Card>
+      <PageCard>
         {profilesQuery.isLoading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
             <Spin size="large" />
@@ -377,7 +373,7 @@ const EmployeeProfilePage: React.FC = () => {
             pagination={false}
           />
         )}
-      </Card>
+      </PageCard>
 
       <Modal
         title={editingProfile ? '编辑员工档案' : '新建员工档案'}
@@ -561,7 +557,7 @@ const EmployeeProfilePage: React.FC = () => {
           </Row>
         </Form>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

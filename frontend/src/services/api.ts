@@ -1004,6 +1004,8 @@ export const performanceAPI = {
     parent_library_id: number
     target_department_id: string
     target_department_name: string
+    name?: string
+    description?: string
   }) => api.post('/performance/indicator-libraries/inherit', data),
 
   // ===== 指标项管理 =====
@@ -1034,6 +1036,10 @@ export const performanceAPI = {
     name?: string
     description?: string
     weight?: number
+    red_line_value?: string
+    target_value?: string
+    challenge_value?: string
+    scoring_rule?: string
     is_default?: boolean
     sort_order?: number
   }) => api.put(`/performance/indicator-items/${itemId}`, data),
@@ -1044,6 +1050,7 @@ export const performanceAPI = {
   searchIndicatorItems: (params: {
     keyword?: string
     library_ids?: number[]
+    section_type?: string
   }) => api.get('/performance/indicator-items/search', { params }),
 
   // ===== 目标记录管理（目标设定阶段） =====

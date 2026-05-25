@@ -1,6 +1,8 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Descriptions, Statistic, Row, Col, Progress } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Descriptions, Statistic, Row, Col, Progress } from 'antd'
 import { UserOutlined, StarOutlined, AlertOutlined, ReloadOutlined, PlusOutlined, LineChartOutlined } from '@ant-design/icons'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { talentAPI } from '../services/api'
 
@@ -196,12 +198,11 @@ const TalentAnalysis: React.FC = () => {
   }
 
   return (
-    <div>
-      <Title level={4}>人才分析</Title>
+    <PageContainer title="人才分析">
       {activeTab === 'list' ? (
-        <Card
+        <PageCard
           extra={
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
               <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading}>
                 刷新
               </Button>
@@ -213,30 +214,30 @@ const TalentAnalysis: React.FC = () => {
         >
           <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
             <Col span={6}>
-              <Card>
+              <PageCard>
                 <Statistic title="总分析人数" value={10} prefix={<UserOutlined />} />
-              </Card>
+              </PageCard>
             </Col>
             <Col span={6}>
-              <Card>
-                <Statistic title="优秀员工" value={3} prefix={<StarOutlined />} valueStyle={{ color: '#52c41a' }} />
-              </Card>
+              <PageCard>
+                <Statistic title="优秀员工" value={3} prefix={<StarOutlined />} valueStyle={{ color: 'var(--color-success)' }} />
+              </PageCard>
             </Col>
             <Col span={6}>
-              <Card>
-                <Statistic title="高潜力员工" value={4} prefix={<LineChartOutlined />} valueStyle={{ color: '#1890ff' }} />
-              </Card>
+              <PageCard>
+                <Statistic title="高潜力员工" value={4} prefix={<LineChartOutlined />} valueStyle={{ color: 'var(--color-info)' }} />
+              </PageCard>
             </Col>
             <Col span={6}>
-              <Card>
-                <Statistic title="离职风险" value={2} prefix={<AlertOutlined />} valueStyle={{ color: '#faad14' }} />
-              </Card>
+              <PageCard>
+                <Statistic title="离职风险" value={2} prefix={<AlertOutlined />} valueStyle={{ color: 'var(--color-warning)' }} />
+              </PageCard>
             </Col>
           </Row>
 
-          <Card title="绩效分布" style={{ marginBottom: 24 }}>
+          <PageCard title="绩效分布" style={{ marginBottom: 24 }}>
             {renderPerformanceBar()}
-          </Card>
+          </PageCard>
 
           {isLoading ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
@@ -268,9 +269,9 @@ const TalentAnalysis: React.FC = () => {
           ) : (
             <Empty description="暂无人才分析记录" />
           )}
-        </Card>
+        </PageCard>
       ) : (
-        <Card
+        <PageCard
           title={
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <Text strong style={{ fontSize: 18 }}>{currentAnalysis?.user_name} - 人才分析</Text>
@@ -282,42 +283,42 @@ const TalentAnalysis: React.FC = () => {
         >
           <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
             <Col span={6}>
-              <Card>
+              <PageCard>
                 <Statistic title="绩效得分" value={currentAnalysis?.performance_score} suffix="/100" />
                 <div style={{ marginTop: 8 }}>
                   <Text strong type={getLevelType(currentAnalysis?.performance_level || '')}>
                     {currentAnalysis?.performance_level}
                   </Text>
                 </div>
-              </Card>
+              </PageCard>
             </Col>
             <Col span={6}>
-              <Card>
+              <PageCard>
                 <Statistic title="潜力得分" value={currentAnalysis?.potential_score} suffix="/100" />
                 <div style={{ marginTop: 8 }}>
                   <Text strong type={getLevelType(currentAnalysis?.potential_level || '')}>
                     {currentAnalysis?.potential_level}
                   </Text>
                 </div>
-              </Card>
+              </PageCard>
             </Col>
             <Col span={6}>
-              <Card>
+              <PageCard>
                 <Statistic title="离职风险" value={currentAnalysis?.turnover_risk_score} suffix="/100" />
                 <div style={{ marginTop: 8 }}>
                   <Text strong type={
-                    currentAnalysis?.turnover_risk_level === '高' ? 'danger' : 
+                    currentAnalysis?.turnover_risk_level === '高' ? 'danger' :
                     currentAnalysis?.turnover_risk_level === '中' ? 'warning' : 'success'
                   }>
                     {currentAnalysis?.turnover_risk_level}
                   </Text>
                 </div>
-              </Card>
+              </PageCard>
             </Col>
             <Col span={6}>
-              <Card>
+              <PageCard>
                 <Statistic title="分析日期" value={currentAnalysis?.analysis_date} />
-              </Card>
+              </PageCard>
             </Col>
           </Row>
 
@@ -340,7 +341,7 @@ const TalentAnalysis: React.FC = () => {
             </Tabs.TabPane>
             <Tabs.TabPane tab="培训记录" key="training">
               {currentAnalysis?.training_records?.trainings?.map((training: any, index: number) => (
-                <Card key={index} style={{ marginBottom: 12 }}>
+                <PageCard key={index} style={{ marginBottom: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Text strong>{training.name}</Text>
                     <Text type="secondary">{training.date}</Text>
@@ -348,21 +349,21 @@ const TalentAnalysis: React.FC = () => {
                   <div style={{ marginTop: 8 }}>
                     <Text>培训得分：{training.score}</Text>
                   </div>
-                </Card>
+                </PageCard>
               )) || <Empty description="暂无培训记录" />}
             </Tabs.TabPane>
             <Tabs.TabPane tab="晋升记录" key="promotion">
               {currentAnalysis?.promotion_records?.promotions?.map((promotion: any, index: number) => (
-                <Card key={index} style={{ marginBottom: 12 }}>
+                <PageCard key={index} style={{ marginBottom: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Text strong>{promotion.position}</Text>
                     <Text type="secondary">{promotion.date}</Text>
                   </div>
-                </Card>
+                </PageCard>
               )) || <Empty description="暂无晋升记录" />}
             </Tabs.TabPane>
           </Tabs>
-        </Card>
+        </PageCard>
       )}
 
       <Modal
@@ -490,7 +491,7 @@ const TalentAnalysis: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

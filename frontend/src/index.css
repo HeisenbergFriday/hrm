@@ -1,36 +1,108 @@
 :root {
-  /* 主色 */
+  /* ========== 主色 ========== */
   --color-primary: #4338ca;
-  --color-primary-light: #6366f1;
-  --color-primary-lighter: #818cf8;
+  --color-primary-hover: #6366f1;
+  --color-primary-active: #3730a3;
+  --color-primary-light: #818cf8;
+  --color-primary-bg: #eef2ff;
 
-  /* 文本 */
+  /* ========== 语义色 ========== */
+  --color-success: #52c41a;
+  --color-success-dark: #047857;
+  --color-success-bg: #ecfdf5;
+  --color-error: #ff4d4f;
+  --color-error-dark: #cf1322;
+  --color-error-bg: #fef2f2;
+  --color-warning: #faad14;
+  --color-warning-dark: #d48806;
+  --color-info: #1890ff;
+
+  /* ========== 文本层级 ========== */
+  --color-text-title: #111827;
+  --color-text-heading: #1e1b4b;
   --color-text-primary: #111827;
   --color-text-secondary: #6b7280;
-  --color-text-dark: #1e1b4b;
+  --color-text-tertiary: #9ca3af;
   --color-text-muted: #8c8c8c;
+  --color-text-disabled: #999;
+  --color-text-inverse: #fff;
 
-  /* 背景 */
+  /* ========== 背景 ========== */
   --color-bg-page: #e4e8ee;
+  --color-bg-body: #f5f5f5;
+  --color-bg-card: #fff;
   --color-bg-card-header: #fafbfc;
+  --color-bg-container: #f8fafc;
+  --color-bg-elevated: #fafbfc;
+  --color-bg-subtle: #f9f9f9;
+  --color-bg-overlay: rgba(0, 0, 0, 0.5);
 
-  /* 边框与阴影 */
+  /* ========== 边框 ========== */
   --color-border: #e5e7eb;
   --color-border-light: #f0f0f0;
+  --color-border-subtle: #eef0f5;
+  --color-border-dashed: #f0f0f0;
+
+  /* ========== 阴影 ========== */
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 10px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 4px 20px rgba(0, 0, 0, 0.08);
   --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.05);
   --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --shadow-button-primary: 0 2px 6px rgba(67, 56, 202, 0.3);
+  --shadow-inset: inset 0 1px 3px rgba(0, 0, 0, 0.03);
 
-  /* 圆角 */
-  --radius-page: 16px;
-  --radius-card: 14px;
-  --radius-sm: 10px;
+  /* ========== 圆角 ========== */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-2xl: 16px;
+  --radius-pill: 999px;
 
-  /* 间距 */
+  /* ========== 间距（4px 基数） ========== */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ========== 页面布局间距 ========== */
   --page-padding: 20px 28px;
+  --card-padding: 24px;
+  --section-gap: 16px;
 
-  /* 字体 */
-  --font-size-title: 22px;
-  --font-weight-title: 700;
+  /* ========== 字号 ========== */
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-base: 14px;
+  --font-size-md: 15px;
+  --font-size-lg: 18px;
+  --font-size-xl: 22px;
+  --font-size-2xl: 26px;
+
+  /* ========== 字重 ========== */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* ========== 行高 ========== */
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.75;
+
+  /* ========== 过渡 ========== */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.2s ease;
+  --transition-slow: 0.3s ease;
 }
 
 * {
@@ -45,7 +117,10 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #f5f5f5;
+  background-color: var(--color-bg-body);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
 }
 
 code {
@@ -57,35 +132,49 @@ code {
   min-height: 100vh;
 }
 
+/* ========== Ant Design 覆盖 ========== */
+
 .ant-layout {
   min-height: 100vh;
 }
 
 .ant-layout-content {
-  padding: 24px;
+  padding: var(--space-6);
   min-height: calc(100vh - 64px - 70px);
 }
 
 .ant-card {
-  margin-bottom: 24px;
+  margin-bottom: var(--space-6);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-card);
 }
 
 .ant-table {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .ant-pagination {
-  margin-top: 16px;
+  margin-top: var(--space-4);
   text-align: center;
 }
 
 .ant-form-item {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .ant-btn {
-  margin-right: 8px;
+  margin-right: var(--space-2);
+  border-radius: var(--radius-md);
+  font-weight: var(--font-weight-semibold);
 }
+
+.ant-tag {
+  border-radius: var(--radius-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* ========== 通用工具类 ========== */
 
 .loading-container {
   display: flex;
@@ -100,7 +189,7 @@ code {
   justify-content: center;
   align-items: center;
   height: 200px;
-  color: #999;
+  color: var(--color-text-disabled);
 }
 
 .error-container {
@@ -109,9 +198,9 @@ code {
   justify-content: center;
   align-items: center;
   height: 200px;
-  color: #ff4d4f;
+  color: var(--color-error);
 }
 
 .retry-button {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }

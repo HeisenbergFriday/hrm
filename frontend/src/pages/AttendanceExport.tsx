@@ -1,8 +1,11 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Space, Tag, message, DatePicker, Select, Modal } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Space, message, DatePicker, Select, Modal } from 'antd'
 import { DownloadOutlined, SyncOutlined, FileExcelOutlined, EyeOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { attendanceAPI, departmentAPI, userAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
 
 const { Title } = Typography
@@ -108,15 +111,15 @@ const AttendanceExport: React.FC = () => {
   const getStatusTag = (status: string) => {
     switch (status) {
       case 'completed':
-        return <Tag color="success" icon={<DownloadOutlined />}>已完成</Tag>
+        return <StatusTag color="success">已完成</StatusTag>
       case 'processing':
-        return <Tag color="processing" icon={<SyncOutlined />}>处理中</Tag>
+        return <StatusTag color="processing">处理中</StatusTag>
       case 'pending':
-        return <Tag color="default" icon={<SyncOutlined />}>等待中</Tag>
+        return <StatusTag color="default">等待中</StatusTag>
       case 'failed':
-        return <Tag color="error" icon={<DeleteOutlined />}>失败</Tag>
+        return <StatusTag color="error">失败</StatusTag>
       default:
-        return <Tag>{status}</Tag>
+        return <StatusTag>{status}</StatusTag>
     }
   }
 
@@ -159,9 +162,8 @@ const AttendanceExport: React.FC = () => {
   ]
 
   return (
-    <div>
-      <Title level={4}>导出记录</Title>
-      <Card
+    <PageContainer title="导出记录" icon={<FileExcelOutlined />} subtitle="考勤数据导出记录管理">
+      <PageCard
         extra={
           <Button
             type="primary"
@@ -173,11 +175,11 @@ const AttendanceExport: React.FC = () => {
         }
       >
         {isLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-10)' }}>
             <Spin size="large" />
           </div>
         ) : isError ? (
-          <div style={{ padding: '20px' }}>
+          <div style={{ padding: 'var(--space-5)' }}>
             <Alert
               message="加载失败"
               description={(error as Error)?.message || '获取导出记录失败，请稍后重试'}
@@ -211,7 +213,7 @@ const AttendanceExport: React.FC = () => {
         ) : (
           <Empty description="暂无导出记录" />
         )}
-      </Card>
+      </PageCard>
 
       <Modal
         title="新建考勤导出"
@@ -222,16 +224,16 @@ const AttendanceExport: React.FC = () => {
         okText="确定"
         cancelText="取消"
       >
-        <div style={{ padding: '20px 0' }}>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', marginBottom: 8 }}>日期范围</label>
+        <div style={{ padding: 'var(--space-5) 0' }}>
+          <div style={{ marginBottom: 'var(--space-4)' }}>
+            <label style={{ display: 'block', marginBottom: 'var(--space-2)' }}>日期范围</label>
             <RangePicker
               style={{ width: '100%' }}
               onChange={handleDateChange}
             />
           </div>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', marginBottom: 8 }}>部门（可选）</label>
+          <div style={{ marginBottom: 'var(--space-4)' }}>
+            <label style={{ display: 'block', marginBottom: 'var(--space-2)' }}>部门（可选）</label>
             <Select
               placeholder="选择部门"
               style={{ width: '100%' }}
@@ -242,8 +244,8 @@ const AttendanceExport: React.FC = () => {
               options={(departmentsData || []).map((d: any) => ({ label: d.name, value: d.id }))}
             />
           </div>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', marginBottom: 8 }}>员工（可选）</label>
+          <div style={{ marginBottom: 'var(--space-4)' }}>
+            <label style={{ display: 'block', marginBottom: 'var(--space-2)' }}>员工（可选）</label>
             <Select
               placeholder="选择员工"
               style={{ width: '100%' }}
@@ -256,7 +258,7 @@ const AttendanceExport: React.FC = () => {
           </div>
         </div>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

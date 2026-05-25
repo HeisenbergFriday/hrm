@@ -2,7 +2,6 @@ import React from 'react'
 import {
   Alert,
   Button,
-  Card,
   Col,
   Row,
   Spin,
@@ -20,6 +19,8 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { orgAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -114,21 +115,18 @@ const Organization: React.FC = () => {
   const overview = overviewQuery.data?.data?.overview as OrgOverviewData | undefined
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <Title level={4} style={{ marginBottom: 4 }}>
-            人才管理驾驶舱
-          </Title>
-          <Text type="secondary">{formatScopeLabel(overview?.scope)}</Text>
-        </div>
+    <PageContainer
+      title="人才管理驾驶舱"
+      icon={<TeamOutlined />}
+      subtitle={formatScopeLabel(overview?.scope)}
+      extra={
         <Button onClick={() => void overviewQuery.refetch()} loading={overviewQuery.isFetching}>
           刷新
         </Button>
-      </div>
-
+      }
+    >
       <Alert
-        style={{ marginBottom: 16 }}
+        style={{ marginBottom: 'var(--space-4)' }}
         type="info"
         showIcon
         message="本轮只收口组织模块真实数据与员工档案 / 入转调离入口。部门 CRUD、用户主数据 CRUD、岗位 / 职级 / 汇报关系 CRUD 继续保持未接入。"
@@ -141,7 +139,7 @@ const Organization: React.FC = () => {
             key: 'dashboard',
             label: '人才管理驾驶舱',
             children: overviewQuery.isLoading ? (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-10)' }}>
                 <Spin size="large" />
               </div>
             ) : overviewQuery.isError ? (
@@ -159,40 +157,40 @@ const Organization: React.FC = () => {
               <>
                 <Row gutter={[16, 16]}>
                   <Col xs={24} sm={12} xl={4}>
-                    <Card>
+                    <PageCard>
                       <Statistic title="员工总数" value={overview?.summary.total_employees ?? 0} prefix={<UserOutlined />} />
-                    </Card>
+                    </PageCard>
                   </Col>
                   <Col xs={24} sm={12} xl={4}>
-                    <Card>
+                    <PageCard>
                       <Statistic title="在职人数" value={overview?.summary.active_employees ?? 0} prefix={<TeamOutlined />} />
-                    </Card>
+                    </PageCard>
                   </Col>
                   <Col xs={24} sm={12} xl={4}>
-                    <Card>
+                    <PageCard>
                       <Statistic title="部门数" value={overview?.summary.department_count ?? 0} prefix={<ApartmentOutlined />} />
-                    </Card>
+                    </PageCard>
                   </Col>
                   <Col xs={24} sm={12} xl={6}>
-                    <Card>
+                    <PageCard>
                       <Statistic title="试用期人数" value={overview?.summary.probation_employee_count ?? 0} />
-                    </Card>
+                    </PageCard>
                   </Col>
                   <Col xs={24} sm={12} xl={6}>
-                    <Card>
+                    <PageCard>
                       <Statistic title="转正预警" value={overview?.summary.planned_regularization_count ?? 0} />
-                    </Card>
+                    </PageCard>
                   </Col>
                 </Row>
 
-                <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
+                <Row gutter={[16, 16]} style={{ marginTop: 'var(--space-2)' }}>
                   {connectedEntries.map((entry) => (
                     <Col xs={24} md={12} key={entry.key}>
-                      <Card>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start' }}>
+                      <PageCard>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-4)', alignItems: 'flex-start' }}>
                           <div>
-                            <Title level={5} style={{ marginTop: 0, marginBottom: 8 }}>
-                              {entry.icon} <span style={{ marginLeft: 8 }}>{entry.title}</span>
+                            <Title level={5} style={{ marginTop: 0, marginBottom: 'var(--space-2)' }}>
+                              {entry.icon} <span style={{ marginLeft: 'var(--space-2)' }}>{entry.title}</span>
                             </Title>
                             <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                               {entry.description}
@@ -202,7 +200,7 @@ const Organization: React.FC = () => {
                             进入
                           </Button>
                         </div>
-                      </Card>
+                      </PageCard>
                     </Col>
                   ))}
                 </Row>
@@ -216,13 +214,13 @@ const Organization: React.FC = () => {
               <Row gutter={[16, 16]}>
                 {pendingEntries.map((entry) => (
                   <Col xs={24} md={8} key={entry.key}>
-                    <Card>
-                      <Title level={5} style={{ marginTop: 0, marginBottom: 8 }}>
+                    <PageCard>
+                      <Title level={5} style={{ marginTop: 0, marginBottom: 'var(--space-2)' }}>
                         {entry.title}
                       </Title>
                       <Paragraph type="secondary">{entry.description}</Paragraph>
                       <Button disabled>待接入</Button>
-                    </Card>
+                    </PageCard>
                   </Col>
                 ))}
               </Row>
@@ -230,7 +228,7 @@ const Organization: React.FC = () => {
           },
         ]}
       />
-    </div>
+    </PageContainer>
   )
 }
 

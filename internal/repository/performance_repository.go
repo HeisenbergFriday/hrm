@@ -36,7 +36,7 @@ func (r *PerformanceActivityRepository) UpdateStatus(activityID, status, updated
 	return r.db.Model(&database.PerformanceActivity{}).Where("id = ?", activityID).Updates(map[string]interface{}{"status": status, "updated_by": updatedBy}).Error
 }
 
-func (r *PerformanceActivityRepository) FindAll(page, pageSize int, status, keyword, startDate, endDate string) ([]database.PerformanceActivity, int64, error) {
+func (r *PerformanceActivityRepository) FindAll(page, pageSize int, status, keyword, startDate, endDate string, departmentIDs []string) ([]database.PerformanceActivity, int64, error) {
 	var items []database.PerformanceActivity
 	var total int64
 
@@ -54,6 +54,10 @@ func (r *PerformanceActivityRepository) FindAll(page, pageSize int, status, keyw
 	}
 	if endDate != "" {
 		query = query.Where("end_date <= ?", endDate)
+	}
+	// 部门隔离：只显示包含可见部门参与人的活动
+	if len(departmentIDs) > 0 {
+		query = query.Where("id IN (SELECT DISTINCT activity_id FROM performance_participants WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
 	}
 
 	if err := query.Count(&total).Error; err != nil {
@@ -248,7 +252,7 @@ func (r *PerformanceParticipantRepository) GetByID(participantID string) (*datab
 	return &p, nil
 }
 
-func (r *PerformanceParticipantRepository) FindAll(activityID string, page, pageSize int, departmentID, managerID, status, employeeKeyword string) ([]database.PerformanceParticipant, int64, error) {
+func (r *PerformanceParticipantRepository) FindAll(activityID string, page, pageSize int, departmentID, managerID, status, employeeKeyword string, visibleDepartmentIDs []string) ([]database.PerformanceParticipant, int64, error) {
 	var items []database.PerformanceParticipant
 	var total int64
 
@@ -268,6 +272,10 @@ func (r *PerformanceParticipantRepository) FindAll(activityID string, page, page
 	if employeeKeyword != "" {
 		like := "%" + strings.TrimSpace(employeeKeyword) + "%"
 		query = query.Where("employee_name LIKE ? OR employee_id LIKE ?", like, like)
+	}
+	// 部门隔离：只显示可见部门的参与人
+	if len(visibleDepartmentIDs) > 0 {
+		query = query.Where("department_id IN ?", visibleDepartmentIDs)
 	}
 
 	if err := query.Count(&total).Error; err != nil {

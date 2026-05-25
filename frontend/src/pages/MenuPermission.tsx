@@ -1,8 +1,10 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Select, Tree, message } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Select, Tree, message } from 'antd'
 import { MenuOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { permissionAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
 
 const { Text } = Typography
 const { Option } = Select
@@ -105,25 +107,17 @@ const MenuPermission: React.FC = () => {
 
   if (rolesLoading || permissionsLoading) {
     return (
-      <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-        <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-          <MenuOutlined style={{ color: '#4338ca', marginRight: 8 }} />菜单权限
-        </h2>
-        <Text style={{ color: '#6b7280', fontSize: 13.5 }}>配置角色的菜单访问权限</Text>
+      <PageContainer title="菜单权限" icon={<MenuOutlined />} subtitle="配置角色的菜单访问权限">
         <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
           <Spin size="large" />
         </div>
-      </div>
+      </PageContainer>
     )
   }
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-        <MenuOutlined style={{ color: '#4338ca', marginRight: 8 }} />菜单权限
-      </h2>
-      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>配置角色的菜单访问权限</Text>
-      <Card style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>
+    <PageContainer title="菜单权限" icon={<MenuOutlined />} subtitle="配置角色的菜单访问权限">
+      <PageCard>
         <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' }}>
           <Text strong>选择角色：</Text>
           <Select
@@ -137,12 +131,12 @@ const MenuPermission: React.FC = () => {
               </Option>
             ))}
           </Select>
-          <Button type="primary" onClick={handleSave} style={{ marginLeft: 'auto', borderRadius: 8, fontWeight: 600 }}>
+          <Button type="primary" onClick={handleSave} style={{ marginLeft: 'auto' }}>
             保存权限
           </Button>
         </div>
 
-        <div style={{ border: '1px solid #f0f0f0', borderRadius: 4, padding: 16, minHeight: 400 }}>
+        <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 'var(--radius-xs)', padding: 16, minHeight: 400 }}>
           <Tree
             checkable
             treeData={menuItems}
@@ -151,8 +145,8 @@ const MenuPermission: React.FC = () => {
             defaultExpandAll
           />
         </div>
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

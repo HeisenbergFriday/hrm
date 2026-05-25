@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Avatar, Button, Card, Col, Empty, List, Row, Space, Spin, Statistic, Tabs, Tag, Tree, Typography, message } from 'antd'
-import { ReloadOutlined, SyncOutlined, UserOutlined } from '@ant-design/icons'
+import { Alert, Avatar, Button, Col, Empty, List, Row, Space, Spin, Statistic, Tabs, Tree, Typography, message } from 'antd'
+import { ApartmentOutlined, ReloadOutlined, SyncOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import type { DataNode } from 'antd/es/tree'
 import { useNavigate } from 'react-router-dom'
 import { orgAPI } from '../services/api'
@@ -224,9 +227,15 @@ const DepartmentTree: React.FC = () => {
       nodes.map((node) => ({
         key: node.id,
         title: (
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, width: '100%' }}>
-            <span>{node.name}</span>
-            <span style={{ color: '#8c8c8c', fontSize: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, width: '100%', padding: '4px 0' }}>
+            <span style={{ fontWeight: node.children?.length ? 500 : 400 }}>{node.name}</span>
+            <span style={{
+              color: 'var(--color-text-tertiary)',
+              fontSize: 'var(--font-size-xs)',
+              background: 'var(--color-bg-light)',
+              padding: '2px 8px',
+              borderRadius: 'var(--radius-sm)'
+            }}>
               {node.active_count} 人{node.direct_active_count !== node.active_count ? ` (直属 ${node.direct_active_count})` : ''}
             </span>
           </div>
@@ -264,16 +273,17 @@ const DepartmentTree: React.FC = () => {
   }
 
   const employeeStatusTag = (value?: string) => (
-    <Tag color={value === 'active' ? 'green' : 'default'}>
+    <StatusTag color={value === 'active' ? 'success' : 'default'}>
       {value === 'active' ? '在职' : value === 'inactive' ? '离职/停用' : value || '未设置'}
-    </Tag>
+    </StatusTag>
   )
 
   const statBoxStyle = {
-    padding: '10px 12px',
-    border: '1px solid #f0f0f0',
-    borderRadius: 6,
-    background: '#fafafa',
+    padding: '16px',
+    borderRadius: 'var(--radius-lg)',
+    background: 'linear-gradient(135deg, var(--color-bg-light) 0%, var(--color-bg-page) 100%)',
+    border: '1px solid var(--color-border-light)',
+    transition: 'all 0.2s ease',
   }
 
   const fieldLabel = (fieldName: string) => {
@@ -295,7 +305,7 @@ const DepartmentTree: React.FC = () => {
       created: 'green',
       updated: 'blue',
     }
-    return <Tag color={colors[value] || 'default'}>{labels[value] || value}</Tag>
+    return <StatusTag color={colors[value] || 'default'}>{labels[value] || value}</StatusTag>
   }
 
   const formatDateTime = (value?: string) => {
@@ -306,15 +316,11 @@ const DepartmentTree: React.FC = () => {
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <Title level={4} style={{ marginBottom: 4 }}>
-            组织架构
-          </Title>
-          <Text type="secondary">{scopeLabel}</Text>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+    <PageContainer
+      title="组织架构"
+      subtitle={scopeLabel}
+      extra={
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           <Button icon={<ReloadOutlined />} onClick={() => void loadTree()} loading={loading}>
             刷新
           </Button>
@@ -322,7 +328,8 @@ const DepartmentTree: React.FC = () => {
             同步组织数据
           </Button>
         </div>
-      </div>
+      }
+    >
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
@@ -333,13 +340,14 @@ const DepartmentTree: React.FC = () => {
       ) : (
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={14}>
-            <Card title="组织树">
+            <PageCard title="组织树">
               <Alert
                 style={{ marginBottom: 16 }}
                 type="info"
                 showIcon
                 message="展示部门层级中的在职人数，区分直属在职与含下级汇总在职，帮助快速查看组织结构。"
               />
+              <div style={{ maxHeight: 'calc(100vh - 380px)', overflow: 'auto' }}>
               <Tree
                 defaultExpandAll
                 selectedKeys={selectedNode ? [selectedNode.id] : []}
@@ -353,18 +361,32 @@ const DepartmentTree: React.FC = () => {
                   setSelectedNode(nodeMap.get(nextKey) || null)
                 }}
               />
-            </Card>
+              </div>
+            </PageCard>
           </Col>
           <Col xs={24} lg={10}>
-            <Card title="部门基础统计">
+            <PageCard title="部门基础统计">
               {selectedNode ? (
                 <>
-                  <Title level={5} style={{ marginTop: 0 }}>
-                    {selectedNode.name}
-                  </Title>
-                  <div style={{ marginTop: 16, color: '#8c8c8c' }}>
-                    总人数 {selectedNode.headcount}（直属 {selectedNode.direct_headcount}）
-                    {selectedNode.children?.length ? `，下级部门 ${selectedNode.children.length} 个` : ''}
+                  <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid var(--color-border-light)' }}>
+                    <Title level={4} style={{ marginTop: 0, marginBottom: 8, color: 'var(--color-text)' }}>
+                      {selectedNode.name}
+                    </Title>
+                    <Space size={16}>
+                      <Text type="secondary">
+                        <TeamOutlined style={{ marginRight: 4 }} />
+                        总人数 {selectedNode.headcount}
+                      </Text>
+                      <Text type="secondary">
+                        直属 {selectedNode.direct_headcount}
+                      </Text>
+                      {selectedNode.children?.length ? (
+                        <Text type="secondary">
+                          <ApartmentOutlined style={{ marginRight: 4 }} />
+                          下级部门 {selectedNode.children.length} 个
+                        </Text>
+                      ) : null}
+                    </Space>
                   </div>
                   {overviewLoading ? (
                     <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
@@ -373,26 +395,37 @@ const DepartmentTree: React.FC = () => {
                   ) : (
                     <>
                       <div style={{ marginTop: 12, marginBottom: 8 }}>
-                        <Text type="secondary">统计口径：含下级部门汇总数据</Text>
+                        <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>统计口径：含下级部门汇总数据</Text>
                       </div>
                       <Row gutter={[12, 12]}>
                         <Col span={8}>
                           <div style={statBoxStyle}>
                             <Statistic
-                              title="在职人数"
+                              title={<Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>在职人数</Text>}
                               value={departmentOverview?.summary.active_employees ?? selectedNode.active_count}
-                              suffix={selectedNode.direct_active_count !== selectedNode.active_count ? `(直属 ${selectedNode.direct_active_count})` : ''}
+                              valueStyle={{ fontSize: 24, fontWeight: 600, color: 'var(--color-success)' }}
+                              suffix={selectedNode.direct_active_count !== selectedNode.active_count ? (
+                                <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>(直属 {selectedNode.direct_active_count})</Text>
+                              ) : null}
                             />
                           </div>
                         </Col>
                         <Col span={8}>
                           <div style={statBoxStyle}>
-                            <Statistic title="试用期" value={departmentOverview?.summary.probation_employee_count ?? 0} />
+                            <Statistic
+                              title={<Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>试用期</Text>}
+                              value={departmentOverview?.summary.probation_employee_count ?? 0}
+                              valueStyle={{ fontSize: 24, fontWeight: 600, color: 'var(--color-warning)' }}
+                            />
                           </div>
                         </Col>
                         <Col span={8}>
                           <div style={statBoxStyle}>
-                            <Statistic title="转正预警" value={departmentOverview?.summary.planned_regularization_count ?? 0} />
+                            <Statistic
+                              title={<Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>转正预警</Text>}
+                              value={departmentOverview?.summary.planned_regularization_count ?? 0}
+                              valueStyle={{ fontSize: 24, fontWeight: 600, color: departmentOverview?.summary.planned_regularization_count ? 'var(--color-error)' : 'var(--color-text-tertiary)' }}
+                            />
                           </div>
                         </Col>
                       </Row>
@@ -426,24 +459,35 @@ const DepartmentTree: React.FC = () => {
                                   : false
                               }
                               renderItem={(item) => (
-                                <List.Item>
+                                <List.Item
+                                  style={{ padding: '12px 0' }}
+                                  actions={[
+                                    <StatusTag key="status" color={item.status === 'active' ? 'success' : 'default'}>
+                                      {item.status === 'active' ? '在职' : '离职/停用'}
+                                    </StatusTag>
+                                  ]}
+                                >
                                   <List.Item.Meta
-                                    avatar={<Avatar src={item.avatar} icon={<UserOutlined />} />}
+                                    avatar={
+                                      <Avatar
+                                        src={item.avatar}
+                                        icon={<UserOutlined />}
+                                        style={{ backgroundColor: item.avatar ? 'transparent' : 'var(--color-primary-bg)' }}
+                                      />
+                                    }
                                     title={
                                       <Button
                                         type="link"
-                                        style={{ padding: 0, height: 'auto' }}
+                                        style={{ padding: 0, height: 'auto', fontWeight: 500 }}
                                         onClick={() => navigate(`/employees/${item.id}`)}
                                       >
                                         {item.name}
                                       </Button>
                                     }
                                     description={
-                                      <Space size={4} wrap>
+                                      <Space size={8} split={<span style={{ color: 'var(--color-border)' }}>·</span>}>
                                         <Text type="secondary">{item.position || '未设置岗位'}</Text>
-                                        <Text type="secondary">·</Text>
                                         <Text type="secondary">{nodeMap.get(item.department_id)?.name || item.department_id || '未分配部门'}</Text>
-                                        {employeeStatusTag(item.status)}
                                       </Space>
                                     }
                                   />
@@ -476,7 +520,7 @@ const DepartmentTree: React.FC = () => {
                                     <Text type="secondary"> {'->'} </Text>
                                     <Text>{item.new_value || '-'}</Text>
                                   </div>
-                                  <div style={{ marginTop: 4, color: '#8c8c8c', fontSize: 12 }}>
+                                  <div style={{ marginTop: 4, color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>
                                     来源：{item.source || 'system'}
                                   </div>
                                 </div>
@@ -491,11 +535,11 @@ const DepartmentTree: React.FC = () => {
               ) : (
                 <Empty description="请选择一个部门" />
               )}
-            </Card>
+            </PageCard>
           </Col>
         </Row>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

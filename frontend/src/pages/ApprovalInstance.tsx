@@ -1,9 +1,12 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Tag, Select, DatePicker, Space, Input } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input } from 'antd'
 import { FileTextOutlined, SyncOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { approvalAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
@@ -69,15 +72,15 @@ const ApprovalInstance: React.FC = () => {
   const getStatusTag = (status: string) => {
     switch (status) {
       case 'completed':
-        return <Tag color="green">已完成</Tag>
+        return <StatusTag color="green">已完成</StatusTag>
       case 'in_progress':
-        return <Tag color="blue">处理中</Tag>
+        return <StatusTag color="blue">处理中</StatusTag>
       case 'rejected':
-        return <Tag color="red">已拒绝</Tag>
+        return <StatusTag color="red">已拒绝</StatusTag>
       case 'pending':
-        return <Tag color="orange">待处理</Tag>
+        return <StatusTag color="orange">待处理</StatusTag>
       default:
-        return <Tag>{status}</Tag>
+        return <StatusTag>{status}</StatusTag>
     }
   }
 
@@ -87,7 +90,7 @@ const ApprovalInstance: React.FC = () => {
       dataIndex: 'title',
       key: 'title',
       render: (text: string, record: ApprovalInstance) => (
-        <Text strong onClick={() => handleViewDetail(record.id)} style={{ cursor: 'pointer', color: '#1890ff' }}>
+        <Text strong onClick={() => handleViewDetail(record.id)} style={{ cursor: 'pointer', color: 'var(--color-primary)' }}>
           {text}
         </Text>
       ),
@@ -134,10 +137,12 @@ const ApprovalInstance: React.FC = () => {
   ]
 
   return (
-    <div>
-      <Title level={4}>审批实例</Title>
-      <Card>
-        <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+    <PageContainer
+      title="审批实例"
+      icon={<FileTextOutlined />}
+    >
+      <PageCard>
+        <div style={{ marginBottom: 'var(--space-4)', display: 'flex', gap: 'var(--space-4)', alignItems: 'center', flexWrap: 'wrap' }}>
           <Select
             placeholder="状态"
             style={{ width: 120 }}
@@ -188,7 +193,7 @@ const ApprovalInstance: React.FC = () => {
             <Spin size="large" />
           </div>
         ) : isError ? (
-          <div style={{ padding: '20px' }}>
+          <div style={{ padding: 'var(--space-5)' }}>
             <Alert
               message="加载失败"
               description={(error as Error)?.message || '获取审批实例失败，请稍后重试'}
@@ -222,8 +227,8 @@ const ApprovalInstance: React.FC = () => {
         ) : (
           <Empty description="暂无审批实例" />
         )}
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 
