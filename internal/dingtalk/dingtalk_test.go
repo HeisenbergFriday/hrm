@@ -1,6 +1,7 @@
 package dingtalk
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,21 +19,20 @@ func TestBuildCorpMessagePayloadUsesAsyncSendSchema(t *testing.T) {
 	if got, ok := payload["userid_list"].(string); !ok || got != "ding-user-1" {
 		t.Fatalf("expected userid_list ding-user-1, got %#v", payload["userid_list"])
 	}
-
-	msg, ok := payload["msg"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected msg payload, got %#v", payload["msg"])
-	}
-	if got, ok := msg["msgtype"].(string); !ok || got != "text" {
-		t.Fatalf("expected msg.msgtype text, got %#v", msg["msgtype"])
+	if got, ok := payload["msgtype"].(string); !ok || got != "text" {
+		t.Fatalf("expected msgtype text, got %#v", payload["msgtype"])
 	}
 
-	text, ok := msg["text"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected msg.text payload, got %#v", msg["text"])
+	msgcontent, ok := payload["msgcontent"].(string)
+	if !ok || msgcontent == "" {
+		t.Fatalf("expected msgcontent string, got %#v", payload["msgcontent"])
 	}
-	if got, ok := text["content"].(string); !ok || got != "Review Reminder\n\nPlease finish self review" {
-		t.Fatalf("unexpected text content: %#v", text["content"])
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(msgcontent), &parsed); err != nil {
+		t.Fatalf("msgcontent is not valid JSON: %v", err)
+	}
+	if got, ok := parsed["content"].(string); !ok || got != "Review Reminder\n\nPlease finish self review" {
+		t.Fatalf("unexpected msgcontent.content: %#v", parsed["content"])
 	}
 }
 

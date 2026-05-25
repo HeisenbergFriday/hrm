@@ -402,6 +402,7 @@ const PerformanceOverview: React.FC = () => {
         'open-hr-confirmation': performanceAPI.openHRConfirmation,
         lock: performanceAPI.lockActivity,
         'force-lock-overdue-hr': performanceAPI.forceLockOverdueHR,
+        'notify-self-eval': performanceAPI.sendSelfEvalReminder,
       }
       const apiFn = apiMap[action]
       if (!apiFn) return
@@ -545,7 +546,7 @@ const PerformanceOverview: React.FC = () => {
     } else if (status === 'self_evaluation') {
       buttons.push(
         <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
-        <Button size="small" type="link" onClick={() => handleActivityAction('open-self-evaluation', record)} key="notify-self">提醒自评</Button>,
+        <Button size="small" type="link" onClick={() => handleActivityAction('notify-self-eval', record)} key="notify-self">提醒自评</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('open-manager-evaluation', record)} key="open-mgr">开启主管评分</Button>
       )
     } else if (status === 'manager_evaluation') {
@@ -555,14 +556,17 @@ const PerformanceOverview: React.FC = () => {
       )
     } else if (status === 'employee_confirmation') {
       buttons.push(
+        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('open-manager-confirmation', record)} key="manager-confirm">主管确认</Button>
       )
     } else if (status === 'manager_confirmation') {
       buttons.push(
+        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('open-hr-confirmation', record)} key="hr-confirm">HR确认</Button>
       )
     } else if (status === 'hr_confirmation') {
       buttons.push(
+        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" danger onClick={() => handleActivityAction('lock', record)} key="lock">锁定</Button>
       )
     } else if (status === 'locked') {
@@ -571,6 +575,7 @@ const PerformanceOverview: React.FC = () => {
       )
     } else if (status === 'result_confirmed') {
       buttons.push(
+        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('archive', record)} key="archive">归档</Button>
       )
     }
@@ -672,22 +677,26 @@ const PerformanceOverview: React.FC = () => {
 
         const links: React.ReactNode[] = []
         const linkStyle = { fontSize: 13, padding: '0 2px' }
+        const activityStatus = currentActivity?.status
 
-        if (['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status)) {
+        // 目标设定：活动必须处于 target_setting 状态，且参与人状态允许
+        if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status)) {
           links.push(
             <Button key="target" size="small" type="link" style={linkStyle}
               onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}`)}
             >目标</Button>
           )
         }
-        if (['target_set', 'self_submitted'].includes(record.status)) {
+        // 自评：活动必须处于 self_evaluation 状态，且参与人状态允许
+        if (activityStatus === 'self_evaluation' && ['target_set', 'self_submitted'].includes(record.status)) {
           links.push(
             <Button key="self" size="small" type="link" style={linkStyle}
               onClick={() => navigate(`/performance-self-eval/${activityId}/${record.id}`)}
             >自评</Button>
           )
         }
-        if (['self_submitted', 'manager_submitted'].includes(record.status)) {
+        // 主管评分：活动必须处于 manager_evaluation 状态，且参与人状态允许
+        if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status)) {
           links.push(
             <Button key="mgr" size="small" type="link" style={linkStyle}
               onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}

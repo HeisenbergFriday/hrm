@@ -168,6 +168,7 @@ AI 文档更新：
 - **绩效管理模块已扩展为目标设定与多级确认流程**，全栈覆盖：指标库→绩效活动→目标设定/审批→员工自评→主管评分→员工确认→主管确认→HR确认→锁定/归档，核心涉及：
   `internal/api/performance_handlers.go`、
   `internal/service/performance_service.go`、
+  `internal/service/scoring_engine.go`（自动评分引擎：区间插值/达标制/比率制三种模式）、
   `internal/service/performance_indicator_service.go`、
   `internal/database/performance_models.go`、
   `internal/repository/performance_repository.go`、

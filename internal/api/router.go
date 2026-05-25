@@ -283,6 +283,7 @@ func SetupRouter() *gin.Engine {
 				performance.POST("/goal-reviews/:participant_id/self-evaluation", SubmitGoalSelfEvaluationHandler)
 				performance.POST("/goal-reviews/:participant_id/manager-evaluation", SubmitGoalManagerEvaluationHandler)
 				performance.POST("/goal-reviews/:participant_id/bonus-penalty", SetBonusPenaltyScoreHandler)
+				performance.POST("/auto-score", AutoScoreGoalRecordsHandler)
 				performance.POST("/activities/:activity_id/batch-manager-evaluations", BatchSubmitManagerEvaluation)
 
 				performance.POST("/participants/:participant_id/adjust-final-level", AdjustFinalLevel)
