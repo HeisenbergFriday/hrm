@@ -50,8 +50,12 @@ func (s *PerformanceIndicatorService) UpdateLibrary(lib *database.PerformanceInd
 	return s.libRepo.Update(existing)
 }
 
-func (s *PerformanceIndicatorService) ListLibraries(page, pageSize int, departmentID, keyword, status string) ([]database.PerformanceIndicatorLibrary, int64, error) {
-	return s.libRepo.FindAll(page, pageSize, departmentID, keyword, status)
+func (s *PerformanceIndicatorService) ListLibraries(page, pageSize int, departmentID, keyword, status string, scope *OrgDataScope) ([]database.PerformanceIndicatorLibrary, int64, error) {
+	var visibleDepartmentIDs []string
+	if scope != nil && !scope.IsAll() {
+		visibleDepartmentIDs = scope.DepartmentIDs
+	}
+	return s.libRepo.FindAll(page, pageSize, departmentID, keyword, status, visibleDepartmentIDs)
 }
 
 func (s *PerformanceIndicatorService) GetLibrariesByDepartment(departmentID string) ([]database.PerformanceIndicatorLibrary, error) {
@@ -62,18 +66,27 @@ func (s *PerformanceIndicatorService) ArchiveLibrary(id uint, updatedBy string) 
 	return s.libRepo.Archive(id, updatedBy)
 }
 
-func (s *PerformanceIndicatorService) InheritLibrary(parentID uint, targetDepartmentID, targetDepartmentName, createdBy string) (*database.PerformanceIndicatorLibrary, error) {
+func (s *PerformanceIndicatorService) InheritLibrary(parentID uint, targetDepartmentID, targetDepartmentName, name, description, createdBy string) (*database.PerformanceIndicatorLibrary, error) {
 	parent, err := s.libRepo.GetByID(parentID)
 	if err != nil {
 		return nil, fmt.Errorf("父指标库不存在: %w", err)
+	}
+
+	libName := parent.Name
+	if name != "" {
+		libName = name
+	}
+	libDesc := parent.Description
+	if description != "" {
+		libDesc = description
 	}
 
 	newLib := &database.PerformanceIndicatorLibrary{
 		DepartmentID:    targetDepartmentID,
 		DepartmentName:  targetDepartmentName,
 		ParentLibraryID: &parent.ID,
-		Name:            parent.Name,
-		Description:     parent.Description,
+		Name:            libName,
+		Description:     libDesc,
 		DefaultCycle:    parent.DefaultCycle,
 		Status:          "active",
 		CreatedBy:       createdBy,
@@ -178,6 +191,6 @@ func (s *PerformanceIndicatorService) ListItemsByLibrary(libraryID uint, section
 	return s.itemRepo.FindByLibrary(libraryID, sectionType)
 }
 
-func (s *PerformanceIndicatorService) SearchItems(libraryIDs []uint, keyword string) ([]database.PerformanceIndicatorItem, error) {
-	return s.itemRepo.Search(libraryIDs, keyword)
+func (s *PerformanceIndicatorService) SearchItems(libraryIDs []uint, keyword string, sectionType string) ([]database.PerformanceIndicatorItem, error) {
+	return s.itemRepo.Search(libraryIDs, keyword, sectionType)
 }

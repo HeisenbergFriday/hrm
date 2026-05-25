@@ -1,8 +1,10 @@
 import React, { useState } from 'react'
-import { Card, Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, message } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, message } from 'antd'
 import { UsergroupAddOutlined, PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { permissionAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
 
 const { Text } = Typography
 
@@ -69,46 +71,45 @@ const RoleManagement: React.FC = () => {
       title: '操作',
       key: 'action',
       render: (_: any, record: Role) => (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button type="link" icon={<EditOutlined />} style={{ fontWeight: 600, color: '#4338ca' }}>编辑</Button>
-          <Button type="link" danger icon={<DeleteOutlined />} style={{ fontWeight: 600 }}>删除</Button>
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <Button type="link" icon={<EditOutlined />} style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-primary)' }}>编辑</Button>
+          <Button type="link" danger icon={<DeleteOutlined />} style={{ fontWeight: 'var(--font-weight-semibold)' }}>删除</Button>
         </div>
       ),
     },
   ]
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-        <UsergroupAddOutlined style={{ color: '#4338ca', marginRight: 8 }} />角色管理
-      </h2>
-      <Text style={{ color: '#6b7280', fontSize: 13.5 }}>管理系统角色配置</Text>
-      <Card
-        style={{ marginTop: 16, borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
+    <PageContainer
+      title="角色管理"
+      icon={<UsergroupAddOutlined />}
+      subtitle="管理系统角色配置"
+    >
+      <PageCard
         extra={
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading} style={{ borderRadius: 8, fontWeight: 600 }}>
+          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading}>
               刷新
             </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)} style={{ borderRadius: 8, fontWeight: 600 }}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalVisible(true)}>
               新建角色
             </Button>
           </div>
         }
       >
         {isLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6) var(--space-6)' }}>
             <Spin size="large" />
           </div>
         ) : isError ? (
-          <div style={{ padding: '20px' }}>
+          <div style={{ padding: 'var(--space-5) var(--space-5)' }}>
             <Alert
               message="加载失败"
               description={(error as Error)?.message || '获取角色列表失败，请稍后重试'}
               type="error"
               showIcon
               action={
-                <Button size="small" onClick={() => refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>
+                <Button size="small" onClick={() => refetch()}>
                   重试
                 </Button>
               }
@@ -120,20 +121,20 @@ const RoleManagement: React.FC = () => {
             dataSource={rolesData.data.items as Role[]}
             rowKey="id"
             pagination={{
-              showTotal: (v: number) => <span style={{ color: '#6b7280' }}>共 {v} 条</span>,
+              showTotal: (v: number) => <span style={{ color: 'var(--color-text-secondary)' }}>共 {v} 条</span>,
             }}
           />
         ) : (
           <Empty description="暂无角色" imageStyle={{ height: 80 }} />
         )}
-      </Card>
+      </PageCard>
 
       <Modal
         title="新建角色"
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         footer={[
-          <Button key="cancel" onClick={() => setModalVisible(false)} style={{ borderRadius: 8, fontWeight: 600 }}>
+          <Button key="cancel" onClick={() => setModalVisible(false)}>
             取消
           </Button>,
           <Button
@@ -141,7 +142,6 @@ const RoleManagement: React.FC = () => {
             type="primary"
             onClick={handleCreateRole}
             loading={createRoleMutation.isPending}
-            style={{ borderRadius: 8, fontWeight: 600 }}
           >
             确认
           </Button>,
@@ -164,7 +164,7 @@ const RoleManagement: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

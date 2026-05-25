@@ -27,6 +27,9 @@ func SetupRouter() *gin.Engine {
 	// 健康检查
 	router.GET("/health", HealthCheck)
 
+	// 文件访问（公开）
+	router.GET("/api/v1/files/:filename", ServeFile)
+
 	// API v1 路由组
 	v1 := router.Group("/api/v1")
 	{
@@ -237,6 +240,9 @@ func SetupRouter() *gin.Engine {
 				shiftConfig.DELETE("/:user_id", DeleteShiftConfig)
 				shiftConfig.POST("/get-or-create-shift", GetOrCreateCustomShift)
 			}
+
+			// 文件上传
+			authRequired.POST("/upload", UploadFile)
 
 			performance := authRequired.Group("/performance")
 			{

@@ -9,7 +9,7 @@ const LoginError: React.FC = () => {
   const error = searchParams.get('error') || '登录失败，请重试'
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f0f2f5' }}>
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--color-bg-page)' }}>
       <Card style={{ width: 400 }}>
         <Result
           status="error"

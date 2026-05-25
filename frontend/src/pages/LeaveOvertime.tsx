@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import {
   Alert,
   Button,
-  Card,
   Col,
   DatePicker,
   Form,
@@ -17,7 +16,6 @@ import {
   Steps,
   Table,
   Tabs,
-  Tag,
   Tooltip,
   Typography,
   message,
@@ -26,6 +24,9 @@ import { ClockCircleOutlined, DeleteOutlined, GiftOutlined, MinusCircleOutlined,
 import { useMutation, useQuery } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import { leaveAPI, orgAPI, overtimeAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
+import PageCard from '../components/PageCard'
+import StatusTag from '../components/StatusTag'
 
 const { Title, Text } = Typography
 
@@ -99,9 +100,9 @@ const EligibilityTab: React.FC = () => {
     {
       title: '是否有资格', dataIndex: 'is_eligible', key: 'is_eligible',
       render: (value: boolean) => (
-        <Tag color={value ? 'success' : 'error'} style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>
+        <StatusTag color={value ? 'success' : 'error'}>
           {value ? '有资格' : '无资格'}
-        </Tag>
+        </StatusTag>
       ),
     },
     { title: '入职日期', dataIndex: 'entry_date', key: 'entry_date' },
@@ -204,7 +205,7 @@ const GrantTab: React.FC = () => {
     { title: '季度', dataIndex: 'quarter', key: 'quarter', render: (q: number) => `Q${q}` },
     {
       title: '类型', dataIndex: 'grant_type', key: 'grant_type',
-      render: (value: string) => <Tag color={typeColor[value] || 'default'} style={{ borderRadius: 6, fontWeight: 500 }}>{typeLabel[value] || value}</Tag>,
+      render: (value: string) => <StatusTag color={typeColor[value] || 'default'}>{typeLabel[value] || value}</StatusTag>,
     },
     { title: '工龄(年)', dataIndex: 'working_years', key: 'working_years', render: (value?: number) => formatWorkingYears(value) },
     { title: '基础天数', dataIndex: 'base_days', key: 'base_days', render: (value?: number) => formatDays(value) },
@@ -215,7 +216,7 @@ const GrantTab: React.FC = () => {
     {
       title: '钉钉同步', dataIndex: 'dingtalk_sync_status', key: 'dingtalk_sync_status',
       render: (value: string) => (
-        <Tag color={syncStatusColor[value] || 'default'} style={{ borderRadius: 6, fontWeight: 500 }}>{syncStatusLabel[value] || value || '-'}</Tag>
+        <StatusTag color={syncStatusColor[value] || 'default'}>{syncStatusLabel[value] || value || '-'}</StatusTag>
       ),
     },
   ]
@@ -517,7 +518,7 @@ const OvertimeTab: React.FC = () => {
       title: '状态', dataIndex: 'match_status', key: 'match_status',
       render: (value: string, record: any) => (
         <Space size={4}>
-          <Tag color={statusColor[value] || 'default'} style={{ borderRadius: 6, fontWeight: 500 }}>{statusLabel[value] || value}</Tag>
+          <StatusTag color={statusColor[value] || 'default'}>{statusLabel[value] || value}</StatusTag>
           {(value === 'no_clock_record' || value === 'insufficient_clock_record') && (
             <Button size="small" type="link" onClick={() => handleOpenSuppModal(record)}>补卡</Button>
           )}
@@ -537,11 +538,11 @@ const OvertimeTab: React.FC = () => {
     { title: '最终调休(分钟)', dataIndex: 'effective_overtime_minutes', key: 'effective_overtime_minutes' },
     {
       title: '本地余额', dataIndex: 'local_balance_status', key: 'local_balance_status',
-      render: (value: string) => value ? <Tag color={localBalanceColor[value] || 'default'} style={{ borderRadius: 6 }}>{localBalanceLabel[value] || value}</Tag> : '-',
+      render: (value: string) => value ? <StatusTag color={localBalanceColor[value] || 'default'}>{localBalanceLabel[value] || value}</StatusTag> : '-',
     },
     {
       title: '钉钉同步', dataIndex: 'dingtalk_sync_status', key: 'dingtalk_sync_status',
-      render: (value: string) => value ? <Tag color={dingtalkSyncColor[value] || 'default'} style={{ borderRadius: 6 }}>{dingtalkSyncLabel[value] || value}</Tag> : '-',
+      render: (value: string) => value ? <StatusTag color={dingtalkSyncColor[value] || 'default'}>{dingtalkSyncLabel[value] || value}</StatusTag> : '-',
     },
     {
       title: '匹配说明', dataIndex: 'match_reason', key: 'match_reason',
@@ -678,26 +679,26 @@ const CompBalanceTab: React.FC = () => {
       {balance && (
         <Row gutter={[32, 20]}>
           <Col>
-            <div style={{ background: '#f0fdf4', borderRadius: 12, padding: '18px 24px', border: '1px solid #bbf7d0' }}>
-              <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: 500 }}>累计调休</Text>
+            <div style={{ background: '#f0fdf4', borderRadius: 'var(--radius-lg)', padding: '18px 24px', border: '1px solid #bbf7d0' }}>
+              <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>累计调休</Text>
               <div style={{ fontSize: 28, fontWeight: 700, color: '#15803d', marginTop: 4 }}>
-                {balance.total_credit_minutes ?? 0} <span style={{ fontSize: 14, fontWeight: 500 }}>分钟</span>
+                {balance.total_credit_minutes ?? 0} <span style={{ fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-medium)' }}>分钟</span>
               </div>
             </div>
           </Col>
           <Col>
-            <div style={{ background: '#fef2f2', borderRadius: 12, padding: '18px 24px', border: '1px solid #fecaca' }}>
-              <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: 500 }}>已用调休</Text>
+            <div style={{ background: '#fef2f2', borderRadius: 'var(--radius-lg)', padding: '18px 24px', border: '1px solid #fecaca' }}>
+              <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>已用调休</Text>
               <div style={{ fontSize: 28, fontWeight: 700, color: '#dc2626', marginTop: 4 }}>
-                {balance.total_debit_minutes ?? 0} <span style={{ fontSize: 14, fontWeight: 500 }}>分钟</span>
+                {balance.total_debit_minutes ?? 0} <span style={{ fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-medium)' }}>分钟</span>
               </div>
             </div>
           </Col>
           <Col>
-            <div style={{ background: '#eef2ff', borderRadius: 12, padding: '18px 24px', border: '1px solid #c7d2fe' }}>
-              <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: 500 }}>剩余调休</Text>
-              <div style={{ fontSize: 28, fontWeight: 700, color: '#4338ca', marginTop: 4 }}>
-                {balance.balance_minutes ?? 0} <span style={{ fontSize: 14, fontWeight: 500 }}>分钟（约 {((balance.balance_minutes ?? 0) / 60).toFixed(1)} 小时）</span>
+            <div style={{ background: '#eef2ff', borderRadius: 'var(--radius-lg)', padding: '18px 24px', border: '1px solid #c7d2fe' }}>
+              <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>剩余调休</Text>
+              <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--color-primary)', marginTop: 4 }}>
+                {balance.balance_minutes ?? 0} <span style={{ fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-medium)' }}>分钟（约 {((balance.balance_minutes ?? 0) / 60).toFixed(1)} 小时）</span>
               </div>
             </div>
           </Col>
@@ -740,11 +741,9 @@ const ConsumeTab: React.FC = () => {
     <div>
       <Row gutter={24}>
         <Col span={10}>
-          <Card
+          <PageCard
             size="small"
-            title={<span style={{ fontWeight: 600, fontSize: 14, color: '#1e1b4b' }}>手动录入年假消费</span>}
-            style={{ borderRadius: 12, border: '1px solid #e5e7eb' }}
-            styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+            title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>手动录入年假消费</span>}
           >
             <Form form={form} layout="vertical" onFinish={(values) => consumeMutation.mutate(values)}>
               <Form.Item name="user_id" label="员工" rules={[{ required: true, message: '请选择员工' }]}>
@@ -763,14 +762,12 @@ const ConsumeTab: React.FC = () => {
                 确认消费
               </Button>
             </Form>
-          </Card>
+          </PageCard>
         </Col>
         <Col span={14}>
-          <Card
+          <PageCard
             size="small"
-            title={<span style={{ fontWeight: 600, fontSize: 14, color: '#1e1b4b' }}>消费记录查询</span>}
-            style={{ borderRadius: 12, border: '1px solid #e5e7eb' }}
-            styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+            title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>消费记录查询</span>}
           >
             <Space style={{ marginBottom: 12 }}>
               <EmployeeSelect value={logUserID} onChange={(v) => setLogUserID(v ?? '')} />
@@ -779,7 +776,7 @@ const ConsumeTab: React.FC = () => {
               </Button>
             </Space>
             <Table columns={logColumns} dataSource={(logData as any)?.data || []} rowKey="id" loading={logFetching} pagination={{ pageSize: 10, showSizeChanger: false }} size="small" />
-          </Card>
+          </PageCard>
         </Col>
       </Row>
     </div>
@@ -796,23 +793,11 @@ const LeaveOvertime: React.FC = () => {
   ]
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: '#111827' }}>
-          <CalendarOutlined style={{ marginRight: 10, color: '#4338ca' }} />
-          年假与调休
-        </h2>
-        <Text style={{ color: '#6b7280', fontSize: 13.5 }}>
-          管理年假资格、发放、消费及加班调休匹配
-        </Text>
-      </div>
-      <Card
-        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
-      >
+    <PageContainer title="年假与调休" icon={<CalendarOutlined />} subtitle="管理年假资格、发放、消费及加班调休匹配">
+      <PageCard>
         <Tabs items={tabs} />
-      </Card>
-    </div>
+      </PageCard>
+    </PageContainer>
   )
 }
 

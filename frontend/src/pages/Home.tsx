@@ -1,11 +1,12 @@
 import React from 'react'
-import { Card, Row, Col, Statistic, Typography, Spin, Alert, Button } from 'antd'
+import { Row, Col, Typography, Spin, Alert, Button } from 'antd'
 import { UserOutlined, TeamOutlined, ClockCircleOutlined, FileOutlined, DashboardOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { userAPI, departmentAPI, attendanceAPI, approvalAPI } from '../services/api'
+import PageContainer from '../components/PageContainer'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 const statCards = [
   { key: 'users', title: '员工总数', icon: <UserOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', shadow: 'rgba(102,126,234,0.35)' },
@@ -49,7 +50,7 @@ const Home: React.FC = () => {
 
   if (isError) {
     return (
-      <div style={{ padding: 24, background: '#e4e8ee', minHeight: '100vh' }}>
+      <PageContainer>
         <Alert
           message="数据加载失败"
           description="请检查网络连接后重试"
@@ -57,7 +58,7 @@ const Home: React.FC = () => {
           showIcon
           action={<Button size="small" onClick={() => window.location.reload()}>重试</Button>}
         />
-      </div>
+      </PageContainer>
     )
   }
 
@@ -74,13 +75,13 @@ const Home: React.FC = () => {
   }
 
   return (
-    <div style={{ padding: '20px 28px', background: '#e4e8ee', minHeight: '100vh' }}>
+    <PageContainer>
       {/* 欢迎区 */}
       <div style={{
         background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 50%, #818cf8 100%)',
-        borderRadius: 16,
+        borderRadius: 'var(--radius-2xl)',
         padding: '28px 32px',
-        marginBottom: 24,
+        marginBottom: 'var(--space-6)',
         color: '#fff',
         display: 'flex',
         alignItems: 'center',
@@ -90,16 +91,16 @@ const Home: React.FC = () => {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
             <DashboardOutlined style={{ fontSize: 28 }} />
-            <Title level={3} style={{ margin: 0, color: '#fff', fontWeight: 700, fontSize: 22 }}>系统概览</Title>
+            <span style={{ margin: 0, color: '#fff', fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-xl)' }}>系统概览</span>
           </div>
-          <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>
+          <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 'var(--font-size-base)' }}>
             欢迎使用人事管理系统，以下是当前系统核心数据概况
           </Text>
         </div>
         <div style={{
           width: 64,
           height: 64,
-          borderRadius: 16,
+          borderRadius: 'var(--radius-2xl)',
           background: 'rgba(255,255,255,0.15)',
           display: 'flex',
           alignItems: 'center',
@@ -112,18 +113,18 @@ const Home: React.FC = () => {
 
       {/* 统计卡片 */}
       <Row gutter={[20, 20]}>
-        {statCards.map((card, idx) => (
+        {statCards.map((card) => (
           <Col xs={24} sm={12} lg={6} key={card.key}>
             <div style={{
-              background: '#fff',
-              borderRadius: 14,
+              background: 'var(--color-bg-card)',
+              borderRadius: 'var(--radius-xl)',
               padding: '22px 24px',
               boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-              border: '1px solid #e5e7eb',
+              border: '1px solid var(--color-border)',
               display: 'flex',
               alignItems: 'center',
               gap: 16,
-              transition: 'box-shadow 0.2s, transform 0.2s',
+              transition: 'var(--transition-normal)',
               cursor: 'default',
             }}
               onMouseEnter={(e) => {
@@ -138,7 +139,7 @@ const Home: React.FC = () => {
               <div style={{
                 width: 52,
                 height: 52,
-                borderRadius: 14,
+                borderRadius: 'var(--radius-xl)',
                 background: card.gradient,
                 display: 'flex',
                 alignItems: 'center',
@@ -151,11 +152,11 @@ const Home: React.FC = () => {
                 {card.icon}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: 500 }}>{card.title}</Text>
+                <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{card.title}</Text>
                 <div style={{
                   fontSize: 28,
-                  fontWeight: 700,
-                  color: '#111827',
+                  fontWeight: 'var(--font-weight-bold)',
+                  color: 'var(--color-text-title)',
                   lineHeight: 1.2,
                   marginTop: 4,
                 }}>
@@ -171,8 +172,8 @@ const Home: React.FC = () => {
       </Row>
 
       {/* 快捷入口 */}
-      <div style={{ marginTop: 24 }}>
-        <Title level={5} style={{ color: '#374151', fontWeight: 700, marginBottom: 16 }}>快捷入口</Title>
+      <div style={{ marginTop: 'var(--space-6)' }}>
+        <span style={{ color: '#374151', fontWeight: 'var(--font-weight-bold)', marginBottom: 'var(--space-4)', display: 'block', fontSize: 'var(--font-size-md)' }}>快捷入口</span>
         <Row gutter={[16, 16]}>
           {[
             { label: '组织架构', icon: <TeamOutlined />, color: '#4338ca', bg: '#eef2ff', path: '/department-tree' },
@@ -182,14 +183,14 @@ const Home: React.FC = () => {
           ].map((item) => (
             <Col xs={12} sm={6} key={item.label}>
               <div style={{
-                background: '#fff',
-                borderRadius: 12,
+                background: 'var(--color-bg-card)',
+                borderRadius: 'var(--radius-lg)',
                 padding: '20px 16px',
                 textAlign: 'center',
-                boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
-                border: '1px solid #f0f0f0',
+                boxShadow: 'var(--shadow-sm)',
+                border: '1px solid var(--color-border-light)',
                 cursor: 'pointer',
-                transition: 'box-shadow 0.2s, transform 0.2s',
+                transition: 'var(--transition-normal)',
               }}
                 onClick={() => navigate(item.path)}
                 onMouseEnter={(e) => {
@@ -197,31 +198,31 @@ const Home: React.FC = () => {
                   e.currentTarget.style.transform = 'translateY(-2px)'
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.04)'
+                  e.currentTarget.style.boxShadow = 'var(--shadow-sm)'
                   e.currentTarget.style.transform = 'translateY(0)'
                 }}
               >
                 <div style={{
                   width: 48,
                   height: 48,
-                  borderRadius: 12,
+                  borderRadius: 'var(--radius-lg)',
                   background: item.bg,
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: 22,
+                  fontSize: 'var(--font-size-xl)',
                   color: item.color,
                   marginBottom: 10,
                 }}>
                   {item.icon}
                 </div>
-                <div style={{ fontWeight: 600, fontSize: 14, color: '#1f2937' }}>{item.label}</div>
+                <div style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: '#1f2937' }}>{item.label}</div>
               </div>
             </Col>
           ))}
         </Row>
       </div>
-    </div>
+    </PageContainer>
   )
 }
 

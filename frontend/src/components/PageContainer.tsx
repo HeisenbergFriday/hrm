@@ -5,7 +5,7 @@ const { Text } = Typography
 
 interface PageContainerProps {
   title?: string
-  subtitle?: string
+  subtitle?: React.ReactNode
   icon?: React.ReactNode
   extra?: React.ReactNode
   children: React.ReactNode
@@ -45,9 +45,9 @@ const PageContainer: React.FC<PageContainerProps> = ({
               <h2
                 style={{
                   margin: '0 0 4px',
-                  fontSize: 'var(--font-size-title)',
-                  fontWeight: 'var(--font-weight-title)',
-                  color: 'var(--color-text-primary)',
+                  fontSize: 'var(--font-size-xl)',
+                  fontWeight: 'var(--font-weight-bold)',
+                  color: 'var(--color-text-title)',
                 }}
               >
                 {icon && (
@@ -59,7 +59,7 @@ const PageContainer: React.FC<PageContainerProps> = ({
               </h2>
             )}
             {subtitle && (
-              <Text style={{ color: 'var(--color-text-secondary)', fontSize: 13.5 }}>
+              <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)' }}>
                 {subtitle}
               </Text>
             )}
