@@ -614,6 +614,16 @@ func ConfirmManagerResultHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
+	go func() {
+		participant, err := svc.GetParticipant(strconv.Itoa(participantID))
+		if err == nil && participant != nil && participant.EmployeeID != "" {
+			if err := dingtalk.SendCorpMessageToUser(participant.EmployeeID,
+				"绩效结果锁定通知",
+				fmt.Sprintf("您的绩效结果已锁定，最终等级为 %s。", participant.FinalLevel)); err != nil {
+				logrus.Warnf("notify employee on manager confirm lock failed: %v", err)
+			}
+		}
+	}()
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "主管确认成功", Data: nil})
 }
 
@@ -734,6 +744,11 @@ func OpenEmployeeConfirmationHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
+	go func() {
+		if err := notifyParticipantsResultReady(activityID); err != nil {
+			logrus.Warnf("notify participants result ready failed: %v", err)
+		}
+	}()
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "员工确认已开启", Data: nil})
 }
 
@@ -764,6 +779,11 @@ func LockPerformanceActivityHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
+	go func() {
+		if err := notifyParticipantsResultLocked(activityID); err != nil {
+			logrus.Warnf("notify participants result locked failed: %v", err)
+		}
+	}()
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "活动已锁定", Data: nil})
 }
 
@@ -775,6 +795,11 @@ func ForceLockOverdueHRConfirmationHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
+	go func() {
+		if err := notifyParticipantsResultLocked(activityID); err != nil {
+			logrus.Warnf("notify participants result locked (force) failed: %v", err)
+		}
+	}()
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "逾期强制锁定已完成", Data: gin.H{"result": result}})
 }
 
@@ -1066,6 +1091,23 @@ func SubmitGoalSelfEvaluationHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: nil})
 }
 
+func AutoScoreGoalRecordsHandler(c *gin.Context) {
+	var req struct {
+		Items []service.AutoItemInput `json:"items" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: gin.H{"error": err.Error()}})
+		return
+	}
+	if len(req.Items) > 100 {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "单次自动评分不能超过 100 项", Data: nil})
+		return
+	}
+
+	result := service.CalculateAutoScores(req.Items)
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: result})
+}
+
 func SubmitGoalManagerEvaluationHandler(c *gin.Context) {
 	participantID, err := strconv.ParseUint(c.Param("participant_id"), 10, 32)
 	if err != nil {
@@ -1176,6 +1218,80 @@ func notifyParticipantsOnSelfEvaluationOpen(activityID string) error {
 	}
 
 	logrus.Infof("self evaluation notifications sent for activity %s: %d", activityID, sent)
+	return nil
+}
+
+// notifyParticipantsResultReady 通知所有参与者绩效结果已出，需登录确认
+func notifyParticipantsResultReady(activityID string) error {
+	svc := service.NewPerformanceService(database.DB)
+	activity, err := svc.GetActivity(activityID)
+	if err != nil || activity == nil {
+		return fmt.Errorf("活动不存在: %v", err)
+	}
+	var participants []database.PerformanceParticipant
+	if err := database.DB.
+		Where("activity_id = ? AND deleted_at IS NULL AND status = ?", activityID, "manager_submitted").
+		Find(&participants).Error; err != nil {
+		return err
+	}
+	if len(participants) == 0 {
+		return nil
+	}
+	var sent int
+	var failures []string
+	for _, p := range participants {
+		if !shouldNotifyParticipant(p) {
+			continue
+		}
+		if err := dingtalk.SendCorpMessageToUser(p.EmployeeID,
+			"绩效结果确认通知",
+			"您的绩效结果已出，请进入系统确认。"); err != nil {
+			failures = append(failures, fmt.Sprintf("%s(%s): %v", p.EmployeeName, p.EmployeeID, err))
+			continue
+		}
+		sent++
+	}
+	if len(failures) > 0 {
+		logrus.Warnf("result ready notifications partially failed: sent=%d failed=%d sample=%s", sent, len(failures), strings.Join(failures, "; "))
+	}
+	logrus.Infof("result ready notifications sent for activity %s: %d", activityID, sent)
+	return nil
+}
+
+// notifyParticipantsResultLocked 通知所有参与者绩效结果已锁定
+func notifyParticipantsResultLocked(activityID string) error {
+	svc := service.NewPerformanceService(database.DB)
+	activity, err := svc.GetActivity(activityID)
+	if err != nil || activity == nil {
+		return fmt.Errorf("活动不存在: %v", err)
+	}
+	var participants []database.PerformanceParticipant
+	if err := database.DB.
+		Where("activity_id = ? AND deleted_at IS NULL AND is_locked = ?", activityID, true).
+		Find(&participants).Error; err != nil {
+		return err
+	}
+	if len(participants) == 0 {
+		return nil
+	}
+	var sent int
+	var failures []string
+	for _, p := range participants {
+		if !shouldNotifyParticipant(p) {
+			continue
+		}
+		if err := dingtalk.SendCorpMessageToUser(p.EmployeeID,
+			"绩效结果锁定通知",
+			fmt.Sprintf("您的绩效结果已锁定，最终等级为 %s。", p.FinalLevel)); err != nil {
+			failures = append(failures, fmt.Sprintf("%s(%s): %v", p.EmployeeName, p.EmployeeID, err))
+			continue
+		}
+		sent++
+	}
+	if len(failures) > 0 {
+		logrus.Warnf("result locked notifications partially failed: sent=%d failed=%d sample=%s", sent, len(failures), strings.Join(failures, "; "))
+	}
+	logrus.Infof("result locked notifications sent for activity %s: %d", activityID, sent)
 	return nil
 }
 
