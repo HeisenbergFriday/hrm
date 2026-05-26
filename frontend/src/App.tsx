@@ -47,8 +47,6 @@ const ApprovalInstance = lazy(() => import('./pages/ApprovalInstance'))
 const ApprovalDetail = lazy(() => import('./pages/ApprovalDetail'))
 const ApprovalStats = lazy(() => import('./pages/ApprovalStats'))
 const RoleManagement = lazy(() => import('./pages/RoleManagement'))
-const MenuPermission = lazy(() => import('./pages/MenuPermission'))
-const DataPermission = lazy(() => import('./pages/DataPermission'))
 const SyncJobs = lazy(() => import('./pages/SyncJobs'))
 const AuditLogs = lazy(() => import('./pages/AuditLogs'))
 const PerformanceOverview = lazy(() => import('./pages/PerformanceOverview'))
@@ -314,17 +312,9 @@ function App() {
                 <Link to="/approval-stats">审批统计</Link>
               </Menu.Item>
             </Menu.SubMenu>
-            <Menu.SubMenu key="permission" icon={<KeyOutlined />} title="权限管理">
-              <Menu.Item key="/role-management" icon={<UserOutlined />}>
-                <Link to="/role-management">角色管理</Link>
-              </Menu.Item>
-              <Menu.Item key="/menu-permission" icon={<FileTextOutlined />}>
-                <Link to="/menu-permission">菜单权限</Link>
-              </Menu.Item>
-              <Menu.Item key="/data-permission" icon={<LockOutlined />}>
-                <Link to="/data-permission">数据权限</Link>
-              </Menu.Item>
-            </Menu.SubMenu>
+            <Menu.Item key="/role-management" icon={<KeyOutlined />}>
+              <Link to="/role-management">权限管理</Link>
+            </Menu.Item>
             <Menu.SubMenu key="jobs" icon={<SyncOutlined />} title="任务中心">
               <Menu.Item key="/sync-jobs" icon={<SyncOutlined />}>
                 <Link to="/sync-jobs">同步任务</Link>
@@ -378,8 +368,6 @@ function App() {
                 <Route path="/approval-detail/:id" element={<ApprovalDetail />} />
                 <Route path="/approval-stats" element={<ApprovalStats />} />
                 <Route path="/role-management" element={<RoleManagement />} />
-                <Route path="/menu-permission" element={<MenuPermission />} />
-                <Route path="/data-permission" element={<DataPermission />} />
                 <Route path="/sync-jobs" element={<SyncJobs />} />
                 <Route path="/audit-logs" element={<AuditLogs />} />
                 <Route path="/employee-profile" element={<EmployeeProfile />} />

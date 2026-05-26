@@ -1,47 +1,49 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-05-25T10:52:25.667Z
-> Files: 532 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-05-26T06:12:40.023Z
+> Files: 527 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ./
 
 - `.gitignore` — Git ignore rules (~106 tok)
-- `ARCHITECTURE.md` — 钉钉一体化人事后台系统架构设计 (~485 tok)
-- `BACKEND_API_DESIGN.md` — 钉钉一体化人事后台后端API设计 (~2541 tok)
-- `CLAUDE.md` — AI 项目协作规则 (~2326 tok)
-- `DATABASE_DESIGN.md` — 钉钉一体化人事后台数据库表结构设计 (~2439 tok)
-- `DEPLOYMENT.md` — 钉钉一体化人事后台联调说明 (~868 tok)
-- `ENVIRONMENT.md` — 环境变量清单 (~732 tok)
-- `FRONTEND_DESIGN.md` — 钉钉一体化人事后台前端设计 (~689 tok)
+- `ARCHITECTURE.md` — PeopleOps 架构设计 (~690 tok)
+- `BACKEND_API_DESIGN.md` — PeopleOps 后端 API 设计 (~1856 tok)
+- `CLAUDE.md` — AI 项目协作规则 (~2354 tok)
+- `DATABASE_DESIGN.md` — PeopleOps 数据库设计 (~1485 tok)
+- `DEPLOYMENT.md` — PeopleOps 联调与部署说明 (~792 tok)
+- `ENVIRONMENT.md` — 环境变量清单 (~763 tok)
+- `FRONTEND_DESIGN.md` — PeopleOps 前端设计 (~934 tok)
 - `go.mod` — Go module definition (~678 tok)
 - `go.sum` — Go dependency checksums (~4786 tok)
 - `package-lock.json` — npm lock file (~897 tok)
 - `package.json` — Node.js package manifest (~18 tok)
-- `PERFORMANCE.md` — 系统性能测试和优化 (~1056 tok)
+- `PERFORMANCE.md` — 系统性能测试和优化 (~1075 tok)
 - `query` (~2 tok)
-- `README.md` — Project documentation (~515 tok)
-- `TEST_PLAN.md` — 测试计划 (~791 tok)
+- `README.md` — Project documentation (~973 tok)
+- `TEST_PLAN.md` — 测试计划 (~782 tok)
 - `test-anthropic.js` — Anthropic: test (~253 tok)
 
 ## .ai/
 
-- `AI_WORKFLOW.md` — AI 开发工作流 (~7230 tok)
-- `ARCHITECTURE.md` — 架构设计 (~1260 tok)
-- `COMMANDS.md` — 常用命令 (~633 tok)
+- `AI_WORKFLOW.md` — AI 开发工作流 (~7836 tok)
+- `ARCHITECTURE.md` — 架构设计 (~1482 tok)
+- `COMMANDS.md` — 常用命令 (~673 tok)
 - `CONVENTIONS.md` — 编码规范 (~1582 tok)
-- `DESIGN_SYSTEM.md` — 设计规范 (~2120 tok)
-- `PROJECT_MAP.md` — 项目结构索引 (~1893 tok)
+- `DESIGN_SYSTEM.md` — 设计规范 (~2240 tok)
+- `PROJECT_MAP.md` — 项目结构索引 (~3053 tok)
 
 ## .ai/MODULES/
 
+- `approval.md` — 审批模块 (~398 tok)
 - `attendance.md` — 考勤模块 (~1333 tok)
-- `auth.md` — 认证模块 (~1646 tok)
-- `employee-profile.md` — 员工档案模块 (~3225 tok)
-- `leave-overtime.md` — 年假与调休模块 (~2126 tok)
+- `auth.md` — 认证模块 (~1644 tok)
+- `employee-profile.md` — 员工档案与入转调离 (~1550 tok)
+- `leave-overtime.md` — 年假与调休模块 (~2708 tok)
 - `org.md` — 组织架构模块 (~2508 tok)
-- `organization.md` — 组织模块 (~884 tok)
-- `performance.md` — 绩效管理模块 (~5000 tok)
-- `week-schedule.md` — 大小周排班模块 (~1589 tok)
+- `organization.md` — 组织模块 (~327 tok)
+- `performance.md` — 绩效管理模块 (~5977 tok)
+- `shift-config.md` — 员工下班时间配置 (~329 tok)
+- `week-schedule.md` — 大小周排班模块 (~1616 tok)
 
 ## .ai/plans/
 
@@ -677,40 +679,33 @@
 ## .gocache/2d/
 
 - `2d26f8ed83dc6de73bc9496e28d0e378ec6945d8641b2016bae22f9c0ddb929b-d` (~49 tok)
-- `2d3a21f2abc5a572f1d43ae56384b69eab76f19f38da8687d2883ccaf886ee36-d` (~10840 tok)
-- `2d5083b81a1444bbd6fde8b1721e71e7b04e61529e84e5a7be3f8c11c2d2384c-d` (~26 tok)
-- `2d53e61994dcdc283565e7b435710b4122570025648538b836795ecfe9e74148-a` (~47 tok)
 
-## C:/Users/吴列德/.claude/plans/
+## C:/Users/吴列德/.claude/
 
-- `happy-wobbling-wand.md` — 部门隔离 — 绩效数据仅本部门可见 (~808 tok)
+- `settings.json` (~180 tok)
 
-## frontend/src/components/
+## frontend/src/
 
-- `AttachmentUpload.tsx` — AttachmentUpload (~696 tok)
+- `App.tsx` — Login (~4859 tok)
 
 ## frontend/src/pages/
 
-- `PerformanceGoalSetting.tsx` — PerformanceGoalSetting (~7105 tok)
-- `PerformanceIndicatorLibrary.tsx` — isValidWeight (~11071 tok)
-- `PerformanceResultView.tsx` — LEVEL_COLOR — renders table (~10486 tok)
+- `MenuPermission.tsx` — MenuPermission (~1719 tok)
+- `RoleManagement.tsx` — RoleManagement — renders form (~5189 tok)
 
 ## frontend/src/services/
 
-- `api.ts` — API routes: POST, GET, PUT, DELETE (92 endpoints) (~10662 tok)
+- `api.ts` — API routes: POST, GET, PUT, DELETE (97 endpoints) (~10820 tok)
 
 ## internal/api/
 
-- `handlers.go` — Struct: Response (~24116 tok)
-- `performance_handlers.go` — GetPerformanceActivities, CreatePerformanceActivity, GetPerformanceActivity, UpdatePerformanceActivi (~22094 tok)
-- `router.go` — SetupRouter (~4213 tok)
+- `handlers.go` — Struct: Response (~24133 tok)
+- `router.go` — SetupRouter (~4193 tok)
 
 ## internal/repository/
 
-- `performance_indicator_repository.go` — Struct: PerformanceIndicatorLibraryRepository (~1575 tok)
-- `performance_repository.go` — Struct: PerformanceActivityRepository (~5500 tok)
+- `role_repository.go` — Struct: RoleRepository (~1063 tok)
 
 ## internal/service/
 
-- `performance_indicator_service.go` — Struct: PerformanceIndicatorService (~1702 tok)
-- `performance_service.go` — Struct: PerformanceService (~24178 tok)
+- `permission_service.go` — Struct: PermissionService (~757 tok)

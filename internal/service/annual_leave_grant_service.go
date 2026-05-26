@@ -408,6 +408,7 @@ func (s *AnnualLeaveGrantService) SyncAllGrantsToDingTalk() (*GrantOperationResu
 	}
 	return result, nil
 }
+
 // approvalRef 作为唯一键防止同一条审批重复扣减；传空时跳过去重检查（手动录入场景）。
 func (s *AnnualLeaveGrantService) ConsumeAnnualLeave(userID string, days float64, approvalRef, remark string) error {
 	if days <= 0 {

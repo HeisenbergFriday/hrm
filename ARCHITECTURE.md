@@ -1,135 +1,134 @@
-# 钉钉一体化人事后台系统架构设计
+# PeopleOps 架构设计
 
-## 1. 系统概述
+PeopleOps 是一个以钉钉为主数据来源的人事后台系统。系统同步组织、员工、考勤、审批等基础数据，并在本地扩展员工档案、年假调休、大小周排班、绩效管理、权限与审计能力。
 
-钉钉一体化人事后台是一个企业内部管理系统，集成钉钉数据，提供员工、部门、考勤、审批等管理功能。系统以钉钉作为唯一主数据源，实现数据的缓存、查询、统计、标签和权限映射。
-
-## 2. 技术栈
-
-### 前端
-- React 18+
-- Vite 6+
-- TypeScript 5+
-- Ant Design 5+
-- React Query 5+
-- Zustand 4+
+## 技术栈
 
 ### 后端
-- Go 1.20+
-- Gin 1.9+
-- PostgreSQL 15+
-- Redis 7+
-- GORM 1.25+
-- JWT 5+
 
-### API 文档
-- OpenAPI 3.0
-- Swagger UI
+- Go 1.20
+- Gin
+- GORM
+- MySQL
+- Redis 可选缓存
+- JWT
+- Logrus
+- 钉钉开放平台 API
 
-## 3. 系统架构
+### 前端
 
-### 3.1 后端架构
+- React 18
+- TypeScript
+- Vite 4
+- Ant Design 5
+- React Query
+- Zustand
+- Axios
 
-后端采用分层架构，包括：
+## 代码分层
 
-1. **Handler 层**：处理 HTTP 请求和响应
-2. **Service 层**：实现业务逻辑
-3. **Repository 层**：处理数据持久化
-4. **DingTalk Client 层**：与钉钉 API 交互
-5. **Job 层**：处理定时任务和异步任务
+```text
+cmd/main.go
+  -> internal/api/router.go
+      -> Handler: internal/api/*.go
+          -> Service: internal/service/*.go
+              -> Repository: internal/repository/*.go
+                  -> Model: internal/database/*.go
+```
 
-### 3.2 前端架构
+- `api`：Gin 路由与 HTTP handler。
+- `service`：业务逻辑、钉钉同步编排、规则计算。
+- `repository`：GORM 数据访问封装。
+- `database`：数据库初始化、迁移和 GORM 模型。
+- `dingtalk`：钉钉开放平台 API 封装。
+- `middleware`：JWT 鉴权。
+- `cache`：Redis 初始化与基础封装。
 
-前端采用组件化架构，包括：
+## 前端结构
 
-1. **页面组件**：实现完整的页面功能
-2. **业务组件**：实现可复用的业务逻辑
-3. **UI 组件**：基于 Ant Design 实现的通用 UI 组件
-4. **状态管理**：使用 Zustand 管理全局状态
-5. **API 调用**：使用 React Query 处理 API 调用和缓存
+```text
+frontend/src/App.tsx             # 主布局、菜单、路由、钉钉内免登
+frontend/src/main.tsx            # React Query Provider 与 BrowserRouter
+frontend/src/services/api.ts     # Axios API 封装，baseURL=/api/v1
+frontend/src/store/authStore.ts  # Zustand 登录态，localStorage key=peopleops-auth
+frontend/src/pages/              # 页面组件
+frontend/src/components/         # 公共组件
+```
 
-## 4. 模块划分
+前端本地开发端口是 `3000`，Vite 代理 `/api` 到 `http://localhost:8080`。生产或钉钉微应用部署时，推荐先构建 `frontend/dist`，再由 Go 服务统一托管。
 
-### 4.1 后端模块
+## 数据流
 
-1. **认证模块**：处理登录、登出、权限验证等
-2. **组织架构模块**：部门和员工管理
-3. **考勤模块**：考勤记录查询和统计
-4. **审批模块**：审批流程查询和管理
-5. **权限模块**：角色和权限管理
-6. **操作日志模块**：系统操作记录
-7. **同步模块**：与钉钉数据同步
+```text
+钉钉开放平台
+    ↓ 同步或回写
+后端服务
+    ↓ GORM
+MySQL
+    ↓ API
+前端页面
+```
 
-### 4.2 前端模块
+Redis 用于缓存和加速部分能力，连接失败不会阻止服务启动。
 
-1. **认证模块**：登录、登出页面
-2. **组织架构模块**：部门树、员工列表、员工详情
-3. **考勤模块**：考勤记录查询、考勤统计
-4. **审批模块**：审批列表、审批详情
-5. **权限模块**：角色管理、权限设置
-6. **操作日志模块**：日志查询、日志详情
+## 核心模块
 
-## 5. 数据流
+| 模块 | 说明 |
+|---|---|
+| 认证 | 账号密码登录、钉钉扫码、钉钉内免登、JWT |
+| 组织与员工 | 部门树、组织概览、员工列表、聚合员工详情、组织同步 |
+| 员工档案 | 档案、入职、调岗、离职、人才分析 |
+| 考勤 | 打卡同步、记录查询、异常统计、导出 |
+| 审批 | 模板、实例、详情、审批同步 |
+| 权限与审计 | 角色、权限、操作日志 |
+| 排班 | 大小周规则、法定节假日、钉钉班次、员工下班时间 |
+| 年假与调休 | 年假资格、季度发放、消费台账、加班匹配、调休余额 |
+| 绩效 | 活动、参与人、目标设定、自评、上级评分、三级确认、归档 |
 
-1. **数据同步**：定时从钉钉同步数据到本地数据库
-2. **数据查询**：前端通过 API 查询本地数据库中的数据
-3. **数据更新**：本地扩展字段的更新通过 API 保存到本地数据库
-4. **权限验证**：每次 API 请求都进行权限验证
-5. **操作日志**：记录所有系统操作
+## 后端运行时
 
-## 6. 技术实现要点
+1. `cmd/main.go` 加载 `.env`。
+2. 初始化 MySQL；失败时尝试创建数据库后重连。
+3. 执行 GORM `AutoMigrate` 和少量手写兼容迁移。
+4. 初始化 Redis；失败时继续运行。
+5. 初始化钉钉客户端；失败时继续运行。
+6. 注册 Gin 路由。
+7. 启动年假/调休定时任务。
+8. 监听 `PORT`，默认 `8080`。
 
-### 6.1 后端
+## API 约定
 
-- 使用 Gin 框架实现 RESTful API
-- 使用 GORM 操作 PostgreSQL 数据库
-- 使用 Redis 缓存钉钉 API 访问令牌和热点数据
-- 使用 JWT 实现无状态认证
-- 使用 Cron 实现定时任务
-- 使用 OpenAPI 规范生成 API 文档
+- 健康检查：`GET /health`
+- 业务接口前缀：`/api/v1`
+- 前端 API 封装：`frontend/src/services/api.ts`
+- 路由真实来源：`internal/api/router.go`
+- `api-docs/swagger.json` 当前只覆盖早期基础接口，不是完整 API 文档。
 
-### 6.2 前端
+## 认证与状态
 
-- 使用 React 18 的新特性（如 Suspense、Concurrent Mode）
-- 使用 TypeScript 确保类型安全
-- 使用 Ant Design 实现美观的 UI
-- 使用 React Query 处理 API 调用和缓存
-- 使用 Zustand 管理全局状态
-- 使用 Vite 提供快速的开发体验
+- JWT 使用 `Authorization: Bearer <token>`。
+- JWT Claims 包含 `user_id` 和 `user_name`。
+- 前端登录态通过 Zustand 持久化到 localStorage，key 为 `peopleops-auth`。
+- 401 响应会触发前端登出并跳转到 `/login`。
 
-## 7. 部署架构
+## 数据库约定
 
-- **开发环境**：本地开发环境
-- **测试环境**：独立的测试服务器
-- **生产环境**：云服务器或容器化部署
+- 主业务库为 MySQL。
+- GORM 模型主键当前使用 `uint` 自增。
+- JSON 扩展字段使用 MySQL JSON 类型。
+- 主要业务表使用软删除。
+- 迁移禁用自动外键约束，业务关联主要靠代码维护。
 
-## 8. 安全考虑
+## 部署约定
 
-- 使用 HTTPS 加密传输
-- 使用 JWT 进行身份验证
-- 实现基于角色的权限控制
-- 对敏感数据进行加密存储
-- 记录所有系统操作日志
-- 定期备份数据
+- 本地开发：后端 `8080`，前端 `3000`。
+- 钉钉微应用或生产联调：构建前端后由 Go 服务托管 `frontend/dist`。
+- 钉钉首页建议配置为 `http://your-host:8080/`。
+- 钉钉 OAuth 回调建议配置为 `http://your-host:8080/callback`。
 
-## 9. 性能优化
+## 维护原则
 
-- 使用 Redis 缓存热点数据
-- 实现数据库索引优化
-- 使用分页查询减少数据传输
-- 实现前端数据缓存
-- 优化 API 响应时间
-
-## 10. 扩展性考虑
-
-- 模块化设计，便于添加新功能
-- 支持插件机制，便于扩展功能
-- 预留接口，便于与其他系统集成
-- 支持多语言和国际化
-
-## 11. 监控和日志
-
-- 实现系统监控
-- 记录详细的操作日志
-- 实现错误监控和告警
-- 提供系统运行状态查询
+- 新增路由时同步更新 `BACKEND_API_DESIGN.md`、`.ai/PROJECT_MAP.md` 和对应模块文档。
+- 修改模型时同步更新 `DATABASE_DESIGN.md` 和 `.ai/PROJECT_MAP.md`。
+- 修改启动、部署、环境变量时同步更新 `README.md`、`DEPLOYMENT.md`、`ENVIRONMENT.md`、`.ai/COMMANDS.md`。
+- 不再把 PostgreSQL、UUID 主键、`backend/` 目录写成当前事实，除非代码也完成对应迁移。

@@ -1,236 +1,165 @@
-# 钉钉一体化人事后台联调说明
+# PeopleOps 联调与部署说明
 
-## 1. 环境准备
+本文描述当前仓库的实际启动方式。后端代码在项目根目录下，没有 `backend/` 子目录。
 
-### 1.1 后端环境
+## 环境准备
+
+### 后端
+
 - Go 1.20+
-- PostgreSQL 15+
-- Redis 7+
+- MySQL 5.7+ 或 8.x
+- Redis 7+ 可选
 
-### 1.2 前端环境
-- Node.js 16+
+### 前端
+
+- Node.js 18+ 推荐
 - npm 8+
 
-## 2. 配置说明
+## 本地配置
 
-### 2.1 后端配置
-编辑 `backend/.env` 文件：
+在项目根目录编辑 `.env`：
 
 ```env
-# 服务器配置
 PORT=8080
-
-# 数据库配置
-DATABASE_URL=postgres://postgres:password@localhost:5432/peopleops?sslmode=disable
-
-# Redis配置
+DATABASE_URL=root:password@tcp(localhost:3306)/peopleops?charset=utf8mb4&parseTime=True&loc=Local
 REDIS_URL=localhost:6379
 REDIS_PASSWORD=
 
-# 钉钉配置
 DINGTALK_APP_KEY=your_app_key
 DINGTALK_APP_SECRET=your_app_secret
+DINGTALK_CORP_ID=dingxxxxxxxx
+DINGTALK_AGENT_ID=123456
 
-# JWT配置
-JWT_SECRET=your_jwt_secret
+JWT_SECRET=change_me
 ```
 
-### 2.2 前端配置
-编辑 `frontend/vite.config.ts` 文件：
+注意：
 
-```typescript
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+- `DATABASE_URL` 是 MySQL DSN，不是 PostgreSQL URL。
+- `REDIS_URL` 使用 `host:port` 格式，例如 `localhost:6379`。
+- Redis 或钉钉客户端初始化失败时，后端仍会继续运行，相关能力会受影响。
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    port: 3000,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
-        changeOrigin: true
-      }
-    }
-  }
-})
+## 启动后端
+
+在项目根目录执行：
+
+```bash
+go mod download
+go run ./cmd/main.go
 ```
 
-## 3. 启动步骤
+健康检查：
 
-### 3.1 启动后端服务
+```bash
+curl http://localhost:8080/health
+```
 
-1. 进入后端目录：
-   ```bash
-   cd backend
-   ```
+也可以使用脚本：
 
-2. 安装依赖：
-   ```bash
-   go mod tidy
-   ```
+```bash
+scripts/run.bat
+```
 
-3. 启动服务：
-   ```bash
-   go run cmd/main.go
-   ```
+## 启动前端开发服务器
 
-   或者使用构建脚本：
-   ```bash
-   scripts/run.bat
-   ```
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-### 3.2 启动前端服务
+默认端口是 `3000`。`frontend/vite.config.ts` 会把 `/api` 代理到 `http://localhost:8080`。
 
-1. 进入前端目录：
-   ```bash
-   cd frontend
-   ```
+## 后端托管前端
 
-2. 安装依赖：
-   ```bash
-   npm install
-   ```
+需要钉钉微应用或统一端口访问时，先构建前端：
 
-3. 启动服务：
-   ```bash
-   npm run dev
-   ```
+```bash
+cd frontend
+npm run build
+cd ..
+go run ./cmd/main.go
+```
 
-## 4. API 调用方式
+构建产物在 `frontend/dist`。后端启动后可访问：
 
-### 4.1 认证
-- **登录**：`POST /api/v1/auth/login`
-- **钉钉登录**：`POST /api/v1/auth/dingtalk`
-- **登出**：`POST /api/v1/auth/logout`
-- **获取当前用户**：`GET /api/v1/auth/me`
+```text
+http://localhost:8080/
+```
 
-### 4.2 用户管理
-- **获取用户列表**：`GET /api/v1/users`
-- **获取用户详情**：`GET /api/v1/users/:id`
-- **更新用户信息**：`PUT /api/v1/users/:id`
+如果没有构建前端，访问非 API 路由时后端会提示 `frontend build not found`。
 
-### 4.3 部门管理
-- **获取部门列表**：`GET /api/v1/departments`
-- **获取部门详情**：`GET /api/v1/departments/:id`
+## 当前 API 入口
 
-### 4.4 同步管理
-- **同步部门**：`POST /api/v1/sync/departments`
-- **同步用户**：`POST /api/v1/sync/users`
-- **获取同步状态**：`GET /api/v1/sync/status`
+所有业务接口统一使用 `/api/v1` 前缀。
 
-## 5. 常见问题及解决方案
+| 模块 | 接口示例 |
+|---|---|
+| 认证 | `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me` |
+| 钉钉登录 | `GET /api/v1/auth/dingtalk/qr/start`、`POST /api/v1/auth/dingtalk/in-app`、`GET /api/v1/auth/dingtalk/callback`、`GET /api/v1/auth/dingtalk/config` |
+| 用户/部门 | `GET /api/v1/users`、`GET /api/v1/departments` |
+| 同步 | `POST /api/v1/sync/departments`、`POST /api/v1/sync/users`、`GET /api/v1/sync/status` |
+| 组织 | `GET /api/v1/org/overview`、`GET /api/v1/org/departments/tree`、`GET /api/v1/org/employees` |
+| 考勤 | `GET /api/v1/attendance/records`、`GET /api/v1/attendance/stats`、`POST /api/v1/attendance/sync` |
+| 审批 | `GET /api/v1/approvals/templates`、`GET /api/v1/approvals/instances`、`POST /api/v1/approvals/sync` |
+| 权限与审计 | `GET /api/v1/permission/roles`、`GET /api/v1/permission/permissions`、`GET /api/v1/audit/logs` |
+| 业务扩展 | `/api/v1/employee/*`、`/api/v1/talent/*`、`/api/v1/leave/*`、`/api/v1/overtime/*`、`/api/v1/week-schedule/*`、`/api/v1/performance/*` |
 
-### 5.1 数据库连接失败
-- **问题**：无法连接到 PostgreSQL 数据库
-- **解决方案**：
-  1. 确保 PostgreSQL 服务已启动
-  2. 检查数据库连接字符串是否正确
-  3. 确保数据库用户有足够的权限
+完整路由以 `internal/api/router.go` 为准。
 
-### 5.2 Redis 连接失败
-- **问题**：无法连接到 Redis 服务
-- **解决方案**：
-  1. 确保 Redis 服务已启动
-  2. 检查 Redis 连接字符串是否正确
-  3. 确保 Redis 服务可以正常访问
+## 默认账号
 
-### 5.3 钉钉 API 调用失败
-- **问题**：无法调用钉钉 API
-- **解决方案**：
-  1. 确保钉钉 App Key 和 App Secret 正确
-  2. 确保网络连接正常
-  3. 检查钉钉开发者平台的配置
+数据库初始化成功后，如果不存在管理员，会创建：
 
-### 5.4 前端代理配置错误
-- **问题**：前端无法访问后端 API
-- **解决方案**：
-  1. 检查 `vite.config.ts` 中的代理配置
-  2. 确保后端服务已启动
-  3. 检查后端服务的端口是否正确
+- 用户名：`admin`
+- 密码：`admin123`
 
-## 6. 测试账号
+## 钉钉部署补充
 
-### 6.1 管理员账号
-- **用户名**：admin
-- **密码**：123456
+如果使用钉钉扫码或钉钉内免登：
 
-### 6.2 测试用户账号
-- **用户名**：test
-- **密码**：123456
-
-## 7. 部署建议
-
-### 7.1 开发环境
-- 使用本地开发环境，直接启动前后端服务
-
-### 7.2 测试环境
-- 使用 Docker 容器化部署
-- 配置独立的测试数据库
-
-### 7.3 生产环境
-- 使用容器化部署
-- 配置高可用数据库
-- 使用 HTTPS 加密传输
-- 配置监控和告警
-
-## 8. 监控与日志
-
-### 8.1 后端日志
-- 日志文件：`backend/logs/app.log`
-- 日志级别：info, warn, error
-
-### 8.2 前端日志
-- 浏览器控制台
-- 前端错误监控
-
-## 9. 性能优化
-
-### 9.1 后端优化
-- 使用 Redis 缓存热点数据
-- 优化数据库查询
-- 使用连接池
-
-### 9.2 前端优化
-- 使用 React.lazy 和 Suspense 实现组件懒加载
-- 使用 React Query 缓存 API 响应
-- 优化图片资源
-
-## 10. 安全考虑
-
-### 10.1 后端安全
-- 使用 JWT 进行身份验证
-- 实现基于角色的权限控制
-- 对敏感数据进行加密存储
-- 防止 SQL 注入和 XSS 攻击
-
-### 10.2 前端安全
-- 防止 XSS 攻击
-- 防止 CSRF 攻击
-- 安全存储用户凭证
-
-## 11. 版本管理
-
-### 11.1 后端版本
-- 版本号：1.0.0
-- 主要功能：登录、组织架构同步、员工信息查询、考勤查询、审批查询、权限控制、操作日志
-
-### 11.2 前端版本
-- 版本号：1.0.0
-- 主要功能：登录、组织架构管理、考勤管理、审批管理、权限管理、操作日志、系统设置
-
-## 12. 联系方式
-
-- **开发团队**：People Ops 开发组
-- **联系邮箱**：dev@peopleops.com
-- **技术支持**：support@peopleops.com
-
-## 13. 钉钉登录部署补充
-
-如果当前版本不再使用本地账号密码登录，而是只保留钉钉扫码和钉钉内免登，请按下面方式部署：
-
-1. 先执行 `npm run build`，让后端通过 `frontend/dist` 提供前端页面。
-2. 启动 Go 服务后，统一从后端端口访问，例如 `http://your-host:8080/`。
+1. 执行 `cd frontend && npm run build`。
+2. 用 Go 服务统一托管页面，例如 `http://your-host:8080/`。
 3. 钉钉微应用首页配置为 `http://your-host:8080/`。
 4. 钉钉 OAuth 回调地址配置为 `http://your-host:8080/callback`。
-5. 不要再把钉钉首页或回调地址配置成 `http://your-host:3000/...`，因为 `3000` 只是本地前端开发端口，未运行时就会出现 `net::ERR_CONNECTION_REFUSED`。
+5. 不要把生产首页或回调地址配置成 `http://your-host:3000/...`，`3000` 只是本地 Vite 开发端口。
+
+## 常见问题
+
+### 数据库连接失败
+
+- 检查 MySQL 是否启动。
+- 检查 `DATABASE_URL` 是否为 MySQL DSN。
+- 检查数据库用户是否有建库和建表权限。
+
+### Redis 连接失败
+
+- 检查 `REDIS_URL` 是否为 `host:port` 格式。
+- 检查 Redis 是否启动。
+- Redis 失败不会阻止后端启动。
+
+### 前端无法访问后端
+
+- 检查后端是否启动：`curl http://localhost:8080/health`。
+- 检查 `frontend/vite.config.ts` 的代理目标是否仍是 `http://localhost:8080`。
+- 检查前端请求是否走 `/api/v1`。
+
+### 钉钉登录失败
+
+- 检查 `DINGTALK_APP_KEY`、`DINGTALK_APP_SECRET`、`DINGTALK_CORP_ID`、`DINGTALK_AGENT_ID`。
+- 检查钉钉后台首页和回调地址是否能被手机端访问。
+- 检查应用权限是否包含通讯录、考勤、审批等所需权限。
+
+## 验证命令
+
+```bash
+# 后端
+go test ./...
+go vet ./...
+
+# 前端
+cd frontend
+npm run build
+npm run lint
+npm run e2e
+```

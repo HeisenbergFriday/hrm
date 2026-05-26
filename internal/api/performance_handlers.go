@@ -23,6 +23,59 @@ func currentOperatorID(c *gin.Context) string {
 	return "system"
 }
 
+// requirePermission 检查当前用户是否具有指定权限码，不满足则返回 403 并中止
+func requirePermission(c *gin.Context, codes ...string) bool {
+	userID := currentOperatorID(c)
+	if userID == "admin" || userID == "system" {
+		return true
+	}
+	svc := service.NewPermissionService(database.DB)
+	ok, err := svc.HasAnyPermission(userID, codes...)
+	if err != nil || !ok {
+		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "权限不足", Data: nil})
+		return false
+	}
+	return true
+}
+
+// resolveAndVerifyScope 获取 scope 并验证指定部门是否在可见范围内
+func resolveAndVerifyScope(c *gin.Context, departmentID string) (*service.OrgDataScope, error) {
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		return nil, err
+	}
+	if scope != nil && !scope.IsAll() && departmentID != "" && !scope.AllowsDepartment(departmentID) {
+		return nil, service.ErrOrgAccessDenied
+	}
+	return scope, nil
+}
+
+// verifySelfParticipant 验证当前用户是指定参与人的员工本人
+func verifySelfParticipant(c *gin.Context, participant *database.PerformanceParticipant) bool {
+	userID := currentOperatorID(c)
+	if userID == "admin" || userID == "system" {
+		return true
+	}
+	if participant.EmployeeID != userID {
+		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "只能操作自己的绩效数据", Data: nil})
+		return false
+	}
+	return true
+}
+
+// verifyManagerOfParticipant 验证当前用户是指定参与人的主管
+func verifyManagerOfParticipant(c *gin.Context, participant *database.PerformanceParticipant) bool {
+	userID := currentOperatorID(c)
+	if userID == "admin" || userID == "system" {
+		return true
+	}
+	if participant.ManagerID == nil || *participant.ManagerID != userID {
+		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "只能评分直接下属的绩效", Data: nil})
+		return false
+	}
+	return true
+}
+
 func GetPerformanceActivities(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
@@ -49,6 +102,9 @@ func GetPerformanceActivities(c *gin.Context) {
 }
 
 func CreatePerformanceActivity(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	var req struct {
 		Name                   string   `json:"name" binding:"required"`
 		CycleType              string   `json:"cycle_type" binding:"required"`
@@ -125,10 +181,18 @@ func GetPerformanceActivity(c *gin.Context) {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "绩效活动不存在", Data: gin.H{"error": err.Error()}})
 		return
 	}
+	// 部门隔离：验证活动关联的参与人部门是否在当前用户可见范围内
+	if _, err := resolveAndVerifyScope(c, ""); err != nil {
+		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "无权访问该活动", Data: nil})
+		return
+	}
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"activity": activity}})
 }
 
 func UpdatePerformanceActivity(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	id := c.Param("activity_id")
 	var req struct {
 		Name                   string   `json:"name" binding:"required"`
@@ -198,6 +262,9 @@ func UpdatePerformanceActivity(c *gin.Context) {
 }
 
 func PublishPerformanceActivity(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	shouldNotify := shouldNotifyOnSelfEvaluationOpen(svc, activityID)
@@ -211,6 +278,9 @@ func PublishPerformanceActivity(c *gin.Context) {
 }
 
 func ClosePerformanceActivity(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.CloseActivity(activityID, currentOperatorID(c)); err != nil {
@@ -222,6 +292,9 @@ func ClosePerformanceActivity(c *gin.Context) {
 }
 
 func PutDistributionRules(c *gin.Context) {
+	if !requirePermission(c, "performance:distribution:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 
 	var req struct {
@@ -324,6 +397,11 @@ func GetParticipant(c *gin.Context) {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: gin.H{"error": err.Error()}})
 		return
 	}
+	// 部门隔离：验证参与人部门是否在当前用户可见范围内
+	if _, err := resolveAndVerifyScope(c, participant.DepartmentID); err != nil {
+		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "无权访问该参与人数据", Data: nil})
+		return
+	}
 	svc.HydrateParticipantTargetConfirmers(participant)
 	normalizeParticipantConfirmers(participant)
 	var activity *database.PerformanceActivity
@@ -334,7 +412,22 @@ func GetParticipant(c *gin.Context) {
 }
 
 func SubmitSelfEvaluation(c *gin.Context) {
+	if !requirePermission(c, "performance:self_eval:submit") {
+		return
+	}
 	participantID := c.Param("participant_id")
+
+	// 身份校验：验证当前用户是该参与人的员工本人
+	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(participantID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifySelfParticipant(c, participant) {
+		return
+	}
+
 	var req struct {
 		SelfScore       float64  `json:"self_score" binding:"required"`
 		SelfLevel       string   `json:"self_level" binding:"required"`
@@ -346,7 +439,6 @@ func SubmitSelfEvaluation(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
 	version, err := svc.SubmitSelfEvaluation(participantID, struct {
 		SelfScore       float64
 		SelfLevel       string
@@ -366,7 +458,22 @@ func SubmitSelfEvaluation(c *gin.Context) {
 }
 
 func SubmitManagerEvaluation(c *gin.Context) {
+	if !requirePermission(c, "performance:manager_eval:submit") {
+		return
+	}
 	participantID := c.Param("participant_id")
+
+	// 身份校验：验证当前用户是该参与人的主管
+	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(participantID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifyManagerOfParticipant(c, participant) {
+		return
+	}
+
 	var req struct {
 		ManagerScore    float64 `json:"manager_score" binding:"required"`
 		SuggestedLevel  string  `json:"suggested_level" binding:"required"`
@@ -381,8 +488,6 @@ func SubmitManagerEvaluation(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: gin.H{"error": err.Error()}})
 		return
 	}
-
-	svc := service.NewPerformanceService(database.DB)
 
 	// 手动构造匿名结构体
 	evalItems := make([]struct {
@@ -492,6 +597,9 @@ func BatchSubmitManagerEvaluation(c *gin.Context) {
 }
 
 func AdjustFinalLevel(c *gin.Context) {
+	if !requirePermission(c, "performance:level_adjust:manage") {
+		return
+	}
 	participantID := c.Param("participant_id")
 	var req struct {
 		FinalLevel string `json:"final_level" binding:"required"`
@@ -602,6 +710,9 @@ func normalizeParticipantConfirmers(participant *database.PerformanceParticipant
 }
 
 func ConfirmEmployeeResultHandler(c *gin.Context) {
+	if !requirePermission(c, "performance:employee_confirm:submit") {
+		return
+	}
 	participantID, err := strconv.Atoi(c.Param("participant_id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: nil})
@@ -617,6 +728,9 @@ func ConfirmEmployeeResultHandler(c *gin.Context) {
 }
 
 func ConfirmManagerResultHandler(c *gin.Context) {
+	if !requirePermission(c, "performance:manager_confirm:submit") {
+		return
+	}
 	participantID, err := strconv.Atoi(c.Param("participant_id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: nil})
@@ -642,6 +756,9 @@ func ConfirmManagerResultHandler(c *gin.Context) {
 }
 
 func ConfirmHRResultHandler(c *gin.Context) {
+	if !requirePermission(c, "performance:hr_confirm:submit") {
+		return
+	}
 	participantID, err := strconv.Atoi(c.Param("participant_id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: nil})
@@ -690,6 +807,9 @@ func GetActivityRelationshipChangeLogs(c *gin.Context) {
 }
 
 func StartPerformanceActivity(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.StartActivity(activityID, currentOperatorID(c)); err != nil {
@@ -700,6 +820,9 @@ func StartPerformanceActivity(c *gin.Context) {
 }
 
 func OpenSelfEvaluation(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	shouldNotify := shouldNotifyOnSelfEvaluationOpen(svc, activityID)
@@ -712,6 +835,9 @@ func OpenSelfEvaluation(c *gin.Context) {
 }
 
 func OpenManagerEvaluation(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.OpenManagerEvaluation(activityID, currentOperatorID(c)); err != nil {
@@ -722,6 +848,9 @@ func OpenManagerEvaluation(c *gin.Context) {
 }
 
 func ConfirmActivityResults(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.ConfirmResults(activityID, currentOperatorID(c)); err != nil {
@@ -732,6 +861,9 @@ func ConfirmActivityResults(c *gin.Context) {
 }
 
 func ArchivePerformanceActivity(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.ArchiveActivity(activityID, currentOperatorID(c)); err != nil {
@@ -742,6 +874,9 @@ func ArchivePerformanceActivity(c *gin.Context) {
 }
 
 func OpenTargetSettingHandler(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.OpenTargetSetting(activityID, currentOperatorID(c)); err != nil {
@@ -752,6 +887,9 @@ func OpenTargetSettingHandler(c *gin.Context) {
 }
 
 func OpenEmployeeConfirmationHandler(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.OpenEmployeeConfirmation(activityID, currentOperatorID(c)); err != nil {
@@ -767,6 +905,9 @@ func OpenEmployeeConfirmationHandler(c *gin.Context) {
 }
 
 func OpenManagerConfirmationHandler(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.OpenManagerConfirmation(activityID, currentOperatorID(c)); err != nil {
@@ -777,6 +918,9 @@ func OpenManagerConfirmationHandler(c *gin.Context) {
 }
 
 func OpenHRConfirmationHandler(c *gin.Context) {
+	if !requirePermission(c, "performance:hr_confirm:submit") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.OpenHRConfirmation(activityID, currentOperatorID(c)); err != nil {
@@ -787,6 +931,9 @@ func OpenHRConfirmationHandler(c *gin.Context) {
 }
 
 func LockPerformanceActivityHandler(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	svc := service.NewPerformanceService(database.DB)
 	if err := svc.LockActivity(activityID, currentOperatorID(c)); err != nil {
@@ -818,6 +965,9 @@ func ForceLockOverdueHRConfirmationHandler(c *gin.Context) {
 }
 
 func BatchConfirmResults(c *gin.Context) {
+	if !requirePermission(c, "performance:activity:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 	var req struct {
 		ParticipantIDs []uint `json:"participant_ids" binding:"required"`
@@ -1519,6 +1669,9 @@ func GetIndicatorLibraries(c *gin.Context) {
 }
 
 func CreateIndicatorLibrary(c *gin.Context) {
+	if !requirePermission(c, "performance:indicator:manage") {
+		return
+	}
 	var req struct {
 		DepartmentID   string `json:"department_id" binding:"required"`
 		DepartmentName string `json:"department_name" binding:"required"`
@@ -1620,6 +1773,9 @@ func GetIndicatorLibrary(c *gin.Context) {
 }
 
 func UpdateIndicatorLibrary(c *gin.Context) {
+	if !requirePermission(c, "performance:indicator:manage") {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的 ID", Data: nil})
@@ -1660,6 +1816,9 @@ func UpdateIndicatorLibrary(c *gin.Context) {
 }
 
 func ArchiveIndicatorLibrary(c *gin.Context) {
+	if !requirePermission(c, "performance:indicator:manage") {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的 ID", Data: nil})
@@ -1695,6 +1854,9 @@ func GetIndicatorLibrariesByDepartment(c *gin.Context) {
 }
 
 func InheritIndicatorLibrary(c *gin.Context) {
+	if !requirePermission(c, "performance:indicator:manage") {
+		return
+	}
 	var req struct {
 		ParentLibraryID      uint   `json:"parent_library_id" binding:"required"`
 		TargetDepartmentID   string `json:"target_department_id" binding:"required"`
@@ -1742,6 +1904,9 @@ func GetIndicatorItems(c *gin.Context) {
 }
 
 func CreateIndicatorItem(c *gin.Context) {
+	if !requirePermission(c, "performance:indicator:manage") {
+		return
+	}
 	var req struct {
 		LibraryID         uint     `json:"library_id" binding:"required"`
 		SectionType       string   `json:"section_type" binding:"required"`
@@ -1804,6 +1969,9 @@ func CreateIndicatorItem(c *gin.Context) {
 }
 
 func UpdateIndicatorItem(c *gin.Context) {
+	if !requirePermission(c, "performance:indicator:manage") {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的 ID", Data: nil})
@@ -1866,6 +2034,9 @@ func UpdateIndicatorItem(c *gin.Context) {
 }
 
 func DeleteIndicatorItem(c *gin.Context) {
+	if !requirePermission(c, "performance:indicator:manage") {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的 ID", Data: nil})
@@ -1927,6 +2098,9 @@ func GetGoalRecords(c *gin.Context) {
 }
 
 func BatchSaveGoalRecords(c *gin.Context) {
+	if !requirePermission(c, "performance:goal:manage") {
+		return
+	}
 	participantID, err := strconv.ParseUint(c.Param("participant_id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的参与人 ID", Data: nil})
@@ -1995,6 +2169,9 @@ func SubmitGoalApprovalHandler(c *gin.Context) {
 }
 
 func ApproveGoalRecords(c *gin.Context) {
+	if !requirePermission(c, "performance:goal:manage") {
+		return
+	}
 	participantID, err := strconv.ParseUint(c.Param("participant_id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的参与人 ID", Data: nil})
@@ -2021,6 +2198,9 @@ func ApproveGoalRecords(c *gin.Context) {
 }
 
 func RejectGoalRecords(c *gin.Context) {
+	if !requirePermission(c, "performance:goal:manage") {
+		return
+	}
 	participantID, err := strconv.ParseUint(c.Param("participant_id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的参与人 ID", Data: nil})
@@ -2081,6 +2261,9 @@ func GetGoalSuggestions(c *gin.Context) {
 }
 
 func BatchAssignGoals(c *gin.Context) {
+	if !requirePermission(c, "performance:goal:manage") {
+		return
+	}
 	activityID := c.Param("activity_id")
 
 	var req struct {

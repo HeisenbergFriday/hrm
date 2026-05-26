@@ -30,20 +30,22 @@ update_when:
 
 ```go
 type User struct {
-    ID           uint
-    UserID       string  // 钉钉用户 ID（唯一键）
-    Name         string
-    Email        string
-    Mobile       string
-    Password     string  // 密码哈希，JSON 不输出
-    DepartmentID string
-    Position     string
-    Avatar       string
-    Status       string
-    Extension    map[string]interface{}
-    CreatedAt    time.Time
-    UpdatedAt    time.Time
-    DeletedAt    gorm.DeletedAt
+    ID            uint
+    UserID        string  // 钉钉用户 ID 或本地账号 ID（唯一键）
+    Name          string
+    Email         string
+    Mobile        string
+    Password      string  // 密码哈希，JSON 不输出
+    DepartmentID  string
+    Position      string
+    Avatar        string
+    Status        string
+    ManagerUserID string
+    ManagerName   string
+    Extension     map[string]interface{}
+    CreatedAt     time.Time
+    UpdatedAt     time.Time
+    DeletedAt     gorm.DeletedAt
 }
 ```
 
@@ -53,7 +55,7 @@ type User struct {
 ```go
 type DingTalkBinding struct {
     ID             uint
-    LocalUserID    uint    // 本地用户 ID
+    UserID         string  // 本地用户 ID
     DingTalkUserID string  // 钉钉用户 ID
     UnionID        string
     OpenID         string
@@ -68,9 +70,12 @@ type DingTalkBinding struct {
 ```go
 type UserSession struct {
     ID        uint
-    UserID    uint
+    UserID    string
+    SessionID string
     Token     string
     ExpiresAt time.Time
+    IP        string
+    UserAgent string
     CreatedAt time.Time
     UpdatedAt time.Time
 }
@@ -81,12 +86,16 @@ type UserSession struct {
 
 ```go
 type LoginLog struct {
-    ID        uint
-    UserID    uint
-    LoginType string  // password / dingtalk_qr / dingtalk_in_app
-    IP        string
-    UserAgent string
-    CreatedAt time.Time
+    ID          uint
+    UserID      string
+    UserName    string
+    LoginType   string  // dingtalk_qr / dingtalk_in_app / dingtalk_account / local
+    LoginStatus string  // success / failed
+    IP          string
+    UserAgent   string
+    ErrorMsg    string
+    CreatedAt   time.Time
+    UpdatedAt   time.Time
 }
 ```
 
@@ -137,10 +146,12 @@ Response：
     "code": 200,
     "message": "success",
     "data": {
-        "id": 1,
-        "user_id": "admin",
-        "name": "管理员",
-        "email": "admin@example.com"
+        "user": {
+            "id": 1,
+            "user_id": "admin",
+            "name": "管理员",
+            "email": "admin@example.com"
+        }
     }
 }
 ```
@@ -158,7 +169,8 @@ Response：
     "code": 200,
     "message": "success",
     "data": {
-        "qr_url": "https://oapi.dingtalk.com/connect/qrconnect?..."
+        "qr_code_url": "https://oapi.dingtalk.com/connect/qrconnect?...",
+        "redirect_uri": "https://your-host/api/v1/auth/dingtalk/callback"
     }
 }
 ```
@@ -169,7 +181,7 @@ Response：
 Body：
 ```json
 {
-    "auth_code": "xxx"
+    "code": "xxx"
 }
 ```
 
@@ -272,15 +284,17 @@ func SomeHandler(c *gin.Context) {
 `frontend/src/pages/Login.tsx`
 
 功能：
-- 账号密码登录
 - 钉钉扫码登录
+- 钉钉内免登
+
+账号密码登录接口仍保留在后端和 `authAPI.login` 中，但当前登录页不再展示账号密码表单。
 
 ### 钉钉免登流程
 
-`frontend/src/App.tsx` 中实现：
+`frontend/src/pages/Login.tsx` 中实现：
 
-1. 检测是否在钉钉内（`dd.env.platform`）
-2. 调用 `dd.runtime.permission.requestAuthCode()` 获取 `authCode`
+1. 通过 User-Agent 判断是否在钉钉内
+2. 调用 `dd.runtime.permission.requestAuthCode()` 获取授权码
 3. 调用 `/api/v1/auth/dingtalk/in-app` 换取 token
 4. 存储到 `authStore`
 
@@ -291,7 +305,7 @@ func SomeHandler(c *gin.Context) {
 ```tsx
 interface AuthState {
     user: User | null;
-    token: string | null;
+    token: string;
     isLoggedIn: boolean;
     login: (user: User, token: string) => void;
     logout: () => void;
@@ -301,10 +315,10 @@ export const useAuthStore = create<AuthState>()(
     persist(
         (set) => ({
             user: null,
-            token: null,
+            token: '',
             isLoggedIn: false,
             login: (user, token) => set({ user, token, isLoggedIn: true }),
-            logout: () => set({ user: null, token: null, isLoggedIn: false }),
+            logout: () => set({ user: null, token: '', isLoggedIn: false }),
         }),
         {
             name: 'peopleops-auth',
@@ -329,7 +343,7 @@ api.interceptors.request.use((config) => {
 
 // 响应拦截：401 自动登出
 api.interceptors.response.use(
-    (response) => response,
+    (response) => response.data,
     (error) => {
         if (error.response?.status === 401) {
             useAuthStore.getState().logout();
@@ -366,7 +380,7 @@ api.interceptors.response.use(
 - 检查 `DINGTALK_REDIRECT_URI` 是否正确
 
 ### 钉钉内免登失败
-- 检查是否在钉钉内打开（`dd.env.platform`）
+- 检查是否在钉钉内打开（当前前端通过 User-Agent 是否包含 DingTalk 判断）
 - 检查 `DINGTALK_AGENT_ID` 是否正确
 - 检查钉钉应用权限（需要"获取用户信息"权限）
 

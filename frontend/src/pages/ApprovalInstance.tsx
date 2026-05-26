@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input, message } from 'antd'
 import { FileTextOutlined, SyncOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
@@ -57,6 +57,7 @@ const ApprovalInstance: React.FC = () => {
 
   const syncMutation = useMutation({
     mutationFn: () => approvalAPI.sync({
+      process_code: templateID,
       start_date: dateRange[0]?.format('YYYY-MM-DD'),
       end_date: dateRange[1]?.format('YYYY-MM-DD'),
     }),
@@ -67,6 +68,14 @@ const ApprovalInstance: React.FC = () => {
 
   const handleViewDetail = (id: string) => {
     navigate(`/approval-detail/${id}`)
+  }
+
+  const handleSync = () => {
+    if (!templateID) {
+      message.warning('请先选择审批模板/流程代码')
+      return
+    }
+    syncMutation.mutate()
   }
 
   const getStatusTag = (status: string) => {
@@ -180,7 +189,7 @@ const ApprovalInstance: React.FC = () => {
             </Button>
             <Button
               icon={<SyncOutlined />}
-              onClick={() => syncMutation.mutate()}
+              onClick={handleSync}
               loading={syncMutation.isPending}
             >
               同步数据

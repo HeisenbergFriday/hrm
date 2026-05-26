@@ -1298,6 +1298,7 @@ func GetOrgEmployeeDetail(c *gin.Context) {
 		Data:    gin.H{"detail": detail},
 	})
 }
+
 // GetDepartmentTree 获取部门树
 func GetDepartmentTree(c *gin.Context) {
 	departmentService := service.NewDepartmentService(database.DB)
@@ -1910,19 +1911,12 @@ func SyncApproval(c *gin.Context) {
 
 	syncService := service.NewSyncService(database.DB)
 
+	req.ProcessCode = strings.TrimSpace(req.ProcessCode)
 	if req.ProcessCode == "" {
-		// 没有指定审批模板代码，只更新同步状态
-		syncService.UpdateSyncStatus("approvals", "success", "请指定 process_code 以同步具体审批流程")
-		c.JSON(http.StatusOK, Response{
-			Code:    http.StatusOK,
-			Message: "success",
-			Data: gin.H{
-				"sync_status": gin.H{
-					"count":   0,
-					"status":  "success",
-					"message": "请在请求中提供 process_code 参数",
-				},
-			},
+		syncService.UpdateSyncStatus("approvals", "failed", "缺少 process_code，未执行审批同步")
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "请在请求中提供 process_code 参数",
 		})
 		return
 	}
@@ -1976,6 +1970,10 @@ func SyncApproval(c *gin.Context) {
 			existing.Status = inst.Status
 			existing.FinishTime = finishTime
 			existing.Content = content
+			existing.Extension = map[string]interface{}{
+				"result":       inst.Result,
+				"process_code": req.ProcessCode,
+			}
 			database.DB.Save(&existing)
 		}
 		count++
@@ -2056,6 +2054,49 @@ func CreateRole(c *gin.Context) {
 	})
 }
 
+// UpdateRole 更新角色
+func UpdateRole(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的角色ID"})
+		return
+	}
+
+	var req struct {
+		Name        string `json:"name" binding:"required"`
+		Description string `json:"description"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "参数错误",
+		})
+		return
+	}
+
+	role := &database.Role{
+		Name:        req.Name,
+		Description: req.Description,
+	}
+	role.ID = uint(id)
+
+	permService := service.NewPermissionService(database.DB)
+	if err := permService.UpdateRole(role); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "更新角色失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    gin.H{"role": role},
+	})
+}
+
 // GetPermissions 获取权限列表
 func GetPermissions(c *gin.Context) {
 	permService := service.NewPermissionService(database.DB)
@@ -2076,6 +2117,74 @@ func GetPermissions(c *gin.Context) {
 			"total": total,
 		},
 	})
+}
+
+// GetUserRoles 获取指定用户的角色列表
+func GetUserRoles(c *gin.Context) {
+	userID := c.Param("user_id")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 不能为空"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	roles, err := permService.GetUserRoles(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取用户角色失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"roles": roles}})
+}
+
+// AssignUserRole 给用户分配角色
+func AssignUserRole(c *gin.Context) {
+	var req struct {
+		UserID string `json:"user_id" binding:"required"`
+		RoleID uint   `json:"role_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	if err := permService.AssignUserRole(req.UserID, req.RoleID); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "分配角色失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "角色分配成功"})
+}
+
+// RemoveUserRole 移除用户角色
+func RemoveUserRole(c *gin.Context) {
+	var req struct {
+		UserID string `json:"user_id" binding:"required"`
+		RoleID uint   `json:"role_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	if err := permService.RemoveUserRole(req.UserID, req.RoleID); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "移除角色失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "角色移除成功"})
+}
+
+// GetUserPermissions 获取指定用户的权限码列表
+func GetUserPermissions(c *gin.Context) {
+	userID := c.Param("user_id")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 不能为空"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	permissions, err := permService.GetUserPermissions(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取用户权限失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"permissions": permissions}})
 }
 
 // GetAuditLogs 获取审计日志

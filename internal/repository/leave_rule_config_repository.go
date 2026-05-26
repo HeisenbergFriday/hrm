@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"peopleops/internal/database"
 
 	"gorm.io/gorm"
@@ -32,13 +33,18 @@ func (r *LeaveRuleConfigRepository) FindByKey(ruleKey string) (*database.LeaveRu
 func (r *LeaveRuleConfigRepository) Upsert(config *database.LeaveRuleConfig) error {
 	var existing database.LeaveRuleConfig
 	err := r.db.Where("rule_key = ?", config.RuleKey).First(&existing).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return r.db.Create(config).Error
 	}
 	if err != nil {
 		return err
 	}
-	config.ID = existing.ID
-	config.CreatedAt = existing.CreatedAt
-	return r.db.Save(config).Error
+	return r.db.Model(&existing).Updates(map[string]interface{}{
+		"rule_type":       config.RuleType,
+		"rule_name":       config.RuleName,
+		"rule_value_json": config.RuleValueJSON,
+		"status":          config.Status,
+		"effective_from":  config.EffectiveFrom,
+		"effective_to":    config.EffectiveTo,
+	}).Error
 }

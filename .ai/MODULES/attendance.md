@@ -196,7 +196,8 @@ Response：
                 "start_date": "2024-01-01",
                 "end_date": "2024-01-31",
                 "status": "completed",
-                "file_url": "https://..."
+                "file_name": "attendance-2026-05.xlsx",
+                "file_path": "uploads/attendance-2026-05.xlsx"
             }
         ]
     }

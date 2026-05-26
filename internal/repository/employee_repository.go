@@ -36,8 +36,8 @@ type EmployeeLifecycleLedgerItem struct {
 	LatestResignReason          string `json:"latest_resign_reason"`
 	LatestOnboardingStatus      string `json:"latest_onboarding_status"`
 	// 阶段 3B 新增字段：候选入职人员支持
-	IsCandidate             bool   `json:"is_candidate"`               // 是否候选入职人员（未建档）
-	OnboardingID            string `json:"onboarding_id"`              // 入职记录ID
+	IsCandidate             bool   `json:"is_candidate"`              // 是否候选入职人员（未建档）
+	OnboardingID            string `json:"onboarding_id"`             // 入职记录ID
 	OnboardingStatusDisplay string `json:"onboarding_status_display"` // 状态展示文本
 }
 

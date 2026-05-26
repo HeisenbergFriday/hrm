@@ -617,15 +617,122 @@ func seed() {
 	DB.Model(&Permission{}).Count(&count)
 	if count == 0 {
 		permissions := []Permission{
+			// 通用权限
 			{Name: "用户管理", Code: "user_manage", Description: "用户管理权限"},
 			{Name: "部门管理", Code: "department_manage", Description: "部门管理权限"},
 			{Name: "考勤管理", Code: "attendance_manage", Description: "考勤管理权限"},
 			{Name: "审批管理", Code: "approval_manage", Description: "审批管理权限"},
 			{Name: "权限管理", Code: "permission_manage", Description: "权限管理权限"},
+			// 绩效模块权限
+			{Name: "绩效活动管理", Code: "performance:activity:manage", Description: "创建/编辑/发布/启动/锁定/归档绩效活动"},
+			{Name: "绩效自评提交", Code: "performance:self_eval:submit", Description: "提交绩效自评"},
+			{Name: "绩效主管评分", Code: "performance:manager_eval:submit", Description: "主管绩效评分"},
+			{Name: "绩效员工确认", Code: "performance:employee_confirm:submit", Description: "员工确认绩效结果"},
+			{Name: "绩效主管确认", Code: "performance:manager_confirm:submit", Description: "主管确认绩效结果"},
+			{Name: "绩效HR确认", Code: "performance:hr_confirm:submit", Description: "HR确认绩效结果"},
+			{Name: "绩效等级调整", Code: "performance:level_adjust:manage", Description: "调整绩效最终等级"},
+			{Name: "绩效分布规则", Code: "performance:distribution:manage", Description: "设置绩效分布规则"},
+			{Name: "绩效指标库管理", Code: "performance:indicator:manage", Description: "指标库/指标项CRUD"},
+			{Name: "绩效目标管理", Code: "performance:goal:manage", Description: "目标设定/审批/分配"},
+			{Name: "绩效结果查看", Code: "performance:result:view", Description: "查看绩效结果"},
 		}
 		for _, perm := range permissions {
 			DB.Create(&perm)
 		}
 		log.Println("已创建默认权限数据")
+	}
+
+	// 创建角色-权限关联（如果不存在）
+	DB.Model(&RolePermission{}).Count(&count)
+	if count == 0 {
+		seedRolePermissions()
+		log.Println("已创建默认角色-权限关联数据")
+	}
+
+	// 创建用户-角色关联（如果不存在）
+	DB.Model(&UserRole{}).Count(&count)
+	if count == 0 {
+		seedUserRoles()
+		log.Println("已创建默认用户-角色关联数据")
+	}
+}
+
+func seedRolePermissions() {
+	// 查询角色
+	roleMap := make(map[string]uint)
+	var roles []Role
+	DB.Find(&roles)
+	for _, r := range roles {
+		roleMap[r.Name] = r.ID
+	}
+
+	// 查询权限
+	permMap := make(map[string]uint)
+	var permissions []Permission
+	DB.Find(&permissions)
+	for _, p := range permissions {
+		permMap[p.Code] = p.ID
+	}
+
+	// 所有权限码
+	allPermCodes := []string{
+		"user_manage", "department_manage", "attendance_manage", "approval_manage", "permission_manage",
+		"performance:activity:manage", "performance:self_eval:submit", "performance:manager_eval:submit",
+		"performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit",
+		"performance:level_adjust:manage", "performance:distribution:manage", "performance:indicator:manage",
+		"performance:goal:manage", "performance:result:view",
+	}
+
+	// 管理员 = 全部权限
+	if adminID, ok := roleMap["管理员"]; ok {
+		for _, code := range allPermCodes {
+			if permID, ok := permMap[code]; ok {
+				DB.Create(&RolePermission{RoleID: adminID, PermissionID: permID})
+			}
+		}
+	}
+
+	// 部门负责人权限
+	managerCodes := []string{
+		"performance:activity:manage", "performance:self_eval:submit", "performance:manager_eval:submit",
+		"performance:manager_confirm:submit", "performance:level_adjust:manage", "performance:distribution:manage",
+		"performance:indicator:manage", "performance:goal:manage", "performance:result:view",
+	}
+	if managerID, ok := roleMap["部门负责人"]; ok {
+		for _, code := range managerCodes {
+			if permID, ok := permMap[code]; ok {
+				DB.Create(&RolePermission{RoleID: managerID, PermissionID: permID})
+			}
+		}
+	}
+
+	// 普通员工权限
+	employeeCodes := []string{
+		"performance:self_eval:submit", "performance:employee_confirm:submit", "performance:result:view",
+	}
+	if employeeID, ok := roleMap["普通员工"]; ok {
+		for _, code := range employeeCodes {
+			if permID, ok := permMap[code]; ok {
+				DB.Create(&RolePermission{RoleID: employeeID, PermissionID: permID})
+			}
+		}
+	}
+}
+
+func seedUserRoles() {
+	// 查询角色
+	roleMap := make(map[string]uint)
+	var roles []Role
+	DB.Find(&roles)
+	for _, r := range roles {
+		roleMap[r.Name] = r.ID
+	}
+
+	// admin 分配管理员角色
+	if adminID, ok := roleMap["管理员"]; ok {
+		var admin User
+		if err := DB.Where("user_id = ?", "admin").First(&admin).Error; err == nil {
+			DB.Create(&UserRole{UserID: admin.UserID, RoleID: adminID})
+		}
 	}
 }

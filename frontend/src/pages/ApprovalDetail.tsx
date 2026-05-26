@@ -1,5 +1,5 @@
 import React from 'react'
-import { Typography, Descriptions, Timeline, Button, Spin, Alert, Divider, Empty } from 'antd'
+import { Typography, Descriptions, Timeline, Button, Spin, Alert, Divider, Empty, message } from 'antd'
 import { ArrowLeftOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, FileSearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -29,7 +29,7 @@ const ApprovalDetail: React.FC = () => {
   })
 
   const syncMutation = useMutation({
-    mutationFn: () => approvalAPI.sync(),
+    mutationFn: (processCode: string) => approvalAPI.sync({ process_code: processCode }),
     onSuccess: () => {
       refetch()
     },
@@ -70,6 +70,16 @@ const ApprovalDetail: React.FC = () => {
       default:
         return action
     }
+  }
+
+  const handleSync = () => {
+    const approval = approvalData?.data?.approval
+    const processCode = approval?.extension?.process_code || approval?.template_id
+    if (!processCode) {
+      message.warning('当前审批缺少 process_code，无法同步')
+      return
+    }
+    syncMutation.mutate(processCode)
   }
 
   return (
@@ -161,7 +171,7 @@ const ApprovalDetail: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <Button
                 icon={<SyncOutlined />}
-                onClick={() => syncMutation.mutate()}
+                onClick={handleSync}
                 loading={syncMutation.isPending}
               >
                 同步数据

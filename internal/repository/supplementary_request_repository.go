@@ -67,11 +67,11 @@ func (r *SupplementaryRequestRepository) FindByID(id uint) (*database.OvertimeSu
 func (r *SupplementaryRequestRepository) Approve(id uint, approvedBy string, clockIn, clockOut time.Time) error {
 	now := time.Now()
 	return r.db.Model(&database.OvertimeSupplementaryRequest{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"status":                   "approved",
-		"approved_by":              approvedBy,
-		"approved_at":              &now,
-		"supplementary_clock_in":   clockIn,
-		"supplementary_clock_out":  clockOut,
+		"status":                  "approved",
+		"approved_by":             approvedBy,
+		"approved_at":             &now,
+		"supplementary_clock_in":  clockIn,
+		"supplementary_clock_out": clockOut,
 	}).Error
 }
 

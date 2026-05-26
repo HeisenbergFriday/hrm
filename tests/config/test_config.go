@@ -9,11 +9,11 @@ import (
 
 // TestConfig 测试配置
 type TestConfig struct {
-	DatabaseURL string
-	DingTalkAppKey string
+	DatabaseURL       string
+	DingTalkAppKey    string
 	DingTalkAppSecret string
-	JWTSecret string
-	Port string
+	JWTSecret         string
+	Port              string
 }
 
 // LoadTestConfig 加载测试配置
@@ -28,11 +28,11 @@ func LoadTestConfig() (*TestConfig, error) {
 
 	// 加载默认配置
 	config := &TestConfig{
-		DatabaseURL: getEnv("DATABASE_URL", "root:password@tcp(localhost:3306)/peopleops_test?charset=utf8mb4&parseTime=True&loc=Local"),
-		DingTalkAppKey: getEnv("DINGTALK_APP_KEY", "test_app_key"),
+		DatabaseURL:       getEnv("DATABASE_URL", "root:password@tcp(localhost:3306)/peopleops_test?charset=utf8mb4&parseTime=True&loc=Local"),
+		DingTalkAppKey:    getEnv("DINGTALK_APP_KEY", "test_app_key"),
 		DingTalkAppSecret: getEnv("DINGTALK_APP_SECRET", "test_app_secret"),
-		JWTSecret: getEnv("JWT_SECRET", "test_jwt_secret"),
-		Port: getEnv("PORT", "8080"),
+		JWTSecret:         getEnv("JWT_SECRET", "test_jwt_secret"),
+		Port:              getEnv("PORT", "8080"),
 	}
 
 	return config, nil

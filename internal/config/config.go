@@ -13,7 +13,7 @@ func LoadEnv() error {
 type Config struct {
 	DefaultCheckIn  string `json:"default_check_in"`  // 默认上班时间
 	DefaultCheckOut string `json:"default_check_out"` // 默认下班时间
-	HolidaysFile    string `json:"holidays_file"`    // 节假日配置文件路径
+	HolidaysFile    string `json:"holidays_file"`     // 节假日配置文件路径
 }
 
 // LoadConfig 加载配置

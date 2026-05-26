@@ -120,76 +120,84 @@ func (s *LeaveJobScheduler) RunManualOvertimeMatch(startDate, endDate string) er
 }
 
 // VerifyNoOvertimeRuleConfigs 初始化默认规则（若不存在）
-func (s *LeaveJobScheduler) SeedDefaultRules() {
+func (s *LeaveJobScheduler) SeedDefaultRules() error {
 	ruleRepo := repository.NewOvertimeRuleConfigRepository(s.db)
 	leaveRuleRepo := repository.NewLeaveRuleConfigRepository(s.db)
 
-	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
-		RuleKey:       "overtime.min_threshold_minutes",
-		RuleName:      "加班最低时长（分钟）",
-		RuleValueJSON: `{"minutes": 30}`,
-		Status:        "active",
-	})
+	overtimeRules := []database.OvertimeRuleConfig{
+		{
+			RuleKey:       "overtime.min_threshold_minutes",
+			RuleName:      "加班最低时长（分钟）",
+			RuleValueJSON: `{"minutes": 30}`,
+			Status:        "active",
+		},
+		{
+			RuleKey:       "overtime.allow_approve_clock_record",
+			RuleName:      "是否允许补卡审批作为有效打卡",
+			RuleValueJSON: `{"enabled": false}`,
+			Status:        "active",
+		},
+		{
+			RuleKey:       "overtime.rest_day_break_enabled",
+			RuleName:      "休息日加班休息扣除开关",
+			RuleValueJSON: `{"enabled": true}`,
+			Status:        "active",
+		},
+		{
+			RuleKey:       "overtime.rest_day_break_threshold_minutes",
+			RuleName:      "休息日加班休息扣除阈值",
+			RuleValueJSON: `{"minutes": 360}`,
+			Status:        "active",
+		},
+		{
+			RuleKey:       "overtime.rest_day_break_minutes",
+			RuleName:      "休息日加班休息扣除分钟",
+			RuleValueJSON: `{"minutes": 30}`,
+			Status:        "active",
+		},
+		{
+			RuleKey:       "overtime.process_code",
+			RuleName:      "钉钉加班审批流程代码",
+			RuleValueJSON: `{"code": "overtime"}`,
+			Status:        "active",
+		},
+		{
+			RuleKey:       "overtime.max_compensatory_minutes",
+			RuleName:      "单次加班调休上限（分钟）",
+			RuleValueJSON: `{"minutes": 480}`,
+			Status:        "active",
+		},
+	}
+	for i := range overtimeRules {
+		if err := ruleRepo.Upsert(&overtimeRules[i]); err != nil {
+			return fmt.Errorf("初始化加班规则 %s 失败: %w", overtimeRules[i].RuleKey, err)
+		}
+	}
 
-	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
-		RuleKey:       "overtime.allow_approve_clock_record",
-		RuleName:      "是否允许补卡审批作为有效打卡",
-		RuleValueJSON: `{"enabled": false}`,
-		Status:        "active",
-	})
-
-	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
-		RuleKey:       "overtime.rest_day_break_enabled",
-		RuleName:      "休息日加班休息扣除开关",
-		RuleValueJSON: `{"enabled": true}`,
-		Status:        "active",
-	})
-
-	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
-		RuleKey:       "overtime.rest_day_break_threshold_minutes",
-		RuleName:      "休息日加班休息扣除阈值",
-		RuleValueJSON: `{"minutes": 360}`,
-		Status:        "active",
-	})
-
-	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
-		RuleKey:       "overtime.rest_day_break_minutes",
-		RuleName:      "休息日加班休息扣除分钟",
-		RuleValueJSON: `{"minutes": 30}`,
-		Status:        "active",
-	})
-
-	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
-		RuleKey:       "overtime.process_code",
-		RuleName:      "钉钉加班审批流程代码",
-		RuleValueJSON: `{"code": "overtime"}`,
-		Status:        "active",
-	})
-
-	_ = ruleRepo.Upsert(&database.OvertimeRuleConfig{
-		RuleKey:       "overtime.max_compensatory_minutes",
-		RuleName:      "单次加班调休上限（分钟）",
-		RuleValueJSON: `{"minutes": 480}`,
-		Status:        "active",
-	})
-
-	_ = leaveRuleRepo.Upsert(&database.LeaveRuleConfig{
-		RuleType:      "eligibility",
-		RuleKey:       "eligibility.retroactive_confirmation",
-		RuleName:      "转正追溯年假资格",
-		RuleValueJSON: `{"enabled": true}`,
-		Status:        "active",
-	})
-
-	_ = leaveRuleRepo.Upsert(&database.LeaveRuleConfig{
-		RuleType:      "grant",
-		RuleKey:       "grant.working_years_to_days",
-		RuleName:      "工龄对应年假天数",
-		RuleValueJSON: `[{"min_years":0,"days":5},{"min_years":1,"days":10},{"min_years":10,"days":15}]`,
-		Status:        "active",
-	})
+	leaveRules := []database.LeaveRuleConfig{
+		{
+			RuleType:      "eligibility",
+			RuleKey:       "eligibility.retroactive_confirmation",
+			RuleName:      "转正追溯年假资格",
+			RuleValueJSON: `{"enabled": true}`,
+			Status:        "active",
+		},
+		{
+			RuleType:      "grant",
+			RuleKey:       "grant.working_years_to_days",
+			RuleName:      "工龄对应年假天数",
+			RuleValueJSON: `[{"min_years":0,"days":5},{"min_years":1,"days":10},{"min_years":10,"days":15}]`,
+			Status:        "active",
+		},
+	}
+	for i := range leaveRules {
+		if err := leaveRuleRepo.Upsert(&leaveRules[i]); err != nil {
+			return fmt.Errorf("初始化年假规则 %s 失败: %w", leaveRules[i].RuleKey, err)
+		}
+	}
 
 	log.Println("[LeaveJobs] 默认规则初始化完成")
+	return nil
 }
 
 func (s *LeaveJobScheduler) nextQuarterStart() time.Time {

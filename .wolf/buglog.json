@@ -1408,6 +1408,182 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-05-25T10:52:25.690Z"
+    },
+    {
+      "id": "bug-089",
+      "timestamp": "2026-05-26T01:37:02.678Z",
+      "error_message": "Significant refactor of ",
+      "file": ".ai/PROJECT_MAP.md",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 50→110 lines (5 removed) | Also: | `/department-tree` | DepartmentTree.tsx | 部门树浏览 ; | `/employees` | EmployeeList.tsx | 员工列表 + 组织概览统计卡 | Also: 所有模型定义在 `internal/database/models.go`，按业务分组如下：; ### 基础模型",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-26T01:38:02.889Z"
+    },
+    {
+      "id": "bug-090",
+      "timestamp": "2026-05-26T01:38:47.068Z",
+      "error_message": "Significant refactor of ",
+      "file": ".ai/MODULES/performance.md",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 4→35 lines (2 removed) | Also: // 评价文本; SelfEvaluationComment    string `gorm:\"type:text\"  | Also: 绩效模板; ID               uint       `gorm:\"primaryKey\" jso",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-05-26T01:39:38.201Z"
+    },
+    {
+      "id": "bug-091",
+      "timestamp": "2026-05-26T02:00:34.965Z",
+      "error_message": "Wrong reference: dingtalk_vacation_service should be overtime_matching_service",
+      "file": ".ai/PROJECT_MAP.md",
+      "root_cause": "Used \"dingtalk_vacation_service\" instead of \"overtime_matching_service\"",
+      "fix": "Changed dingtalk_vacation_service → overtime_matching_service",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-26T02:00:34.965Z"
+    },
+    {
+      "id": "bug-092",
+      "timestamp": "2026-05-26T02:17:50.769Z",
+      "error_message": "Incorrect value in code",
+      "file": ".ai/PROJECT_MAP.md",
+      "root_cause": "Had `leave_handlers.go`",
+      "fix": "Changed to `handlers.go`",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-05-26T02:17:58.676Z"
+    },
+    {
+      "id": "bug-093",
+      "timestamp": "2026-05-26T03:25:38.270Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/permission_service.go",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 32→101 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-26T03:25:38.270Z"
+    },
+    {
+      "id": "bug-094",
+      "timestamp": "2026-05-26T03:55:52.303Z",
+      "error_message": "CSS fix: marginBottom, marginLeft",
+      "file": "frontend/src/pages/MenuPermission.tsx",
+      "root_cause": "marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' → 16; marginLeft: 'auto' → 8",
+      "fix": "Changed marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' → 16; marginLeft: 'auto' → 8",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-26T03:55:52.303Z"
+    },
+    {
+      "id": "bug-095",
+      "timestamp": "2026-05-26T03:56:15.409Z",
+      "error_message": "CSS fix: marginBottom, marginLeft",
+      "file": "frontend/src/pages/DataPermission.tsx",
+      "root_cause": "marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' → 16; marginLeft: 'auto' → 8",
+      "fix": "Changed marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' → 16; marginLeft: 'auto' → 8",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-26T03:56:15.409Z"
+    },
+    {
+      "id": "bug-096",
+      "timestamp": "2026-05-26T04:05:53.788Z",
+      "error_message": "Null/undefined access in ",
+      "file": "frontend/src/pages/MenuPermission.tsx",
+      "root_cause": "Property access on potentially null/undefined value",
+      "fix": "Added null safety (optional chaining or null check)",
+      "tags": [
+        "auto-detected",
+        "null-safety",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-26T04:05:53.788Z"
+    },
+    {
+      "id": "bug-097",
+      "timestamp": "2026-05-26T04:16:57.571Z",
+      "error_message": "Wrong reference: Button should be onClick",
+      "file": "frontend/src/pages/RoleManagement.tsx",
+      "root_cause": "Used \"Button\" instead of \"onClick\"",
+      "fix": "Changed Button → onClick",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-26T04:16:57.571Z"
+    },
+    {
+      "id": "bug-098",
+      "timestamp": "2026-05-26T04:17:06.177Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/RoleManagement.tsx",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 17→17 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-26T04:17:06.177Z"
+    },
+    {
+      "id": "bug-099",
+      "timestamp": "2026-05-26T06:11:49.115Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/App.tsx",
+      "root_cause": "8 lines replaced/restructured",
+      "fix": "Rewrote 11→3 lines (8 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-26T06:11:49.115Z"
     }
   ]
 }

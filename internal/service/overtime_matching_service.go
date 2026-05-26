@@ -225,12 +225,12 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 		}
 		if err := s.saveMatchResult(&approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "insufficient_clock_record",
 			fmt.Sprintf("审批已通过；加班窗口[%s~%s]内有效打卡仅%d次%s（不足2次）；无法计算打卡时长，本次加班视为无效，未生成调休",
-					approvalStart.Format("15:04"), approvalEnd.Format("15:04"), len(overtimeWindowAttendances), clockInfo)); err != nil {
-				return err
-			}
-			_ = s.createSupplementaryRequestIfNotExists(approval.ApplicantID, approvalDate, approval.ID)
-			return nil
-			}
+				approvalStart.Format("15:04"), approvalEnd.Format("15:04"), len(overtimeWindowAttendances), clockInfo)); err != nil {
+			return err
+		}
+		_ = s.createSupplementaryRequestIfNotExists(approval.ApplicantID, approvalDate, approval.ID)
+		return nil
+	}
 
 	// 取最早和最晚的打卡时间
 	checkin := overtimeWindowAttendances[0].CheckTime
