@@ -7,6 +7,7 @@ import StatusTag from '../components/StatusTag'
 import type { DataNode } from 'antd/es/tree'
 import { useNavigate } from 'react-router-dom'
 import { orgAPI } from '../services/api'
+import { formatDateTime } from '../utils/format'
 
 const { Title, Text } = Typography
 
@@ -306,13 +307,6 @@ const DepartmentTree: React.FC = () => {
       updated: 'blue',
     }
     return <StatusTag color={colors[value] || 'default'}>{labels[value] || value}</StatusTag>
-  }
-
-  const formatDateTime = (value?: string) => {
-    if (!value) {
-      return '-'
-    }
-    return value.replace('T', ' ').slice(0, 19)
   }
 
   return (

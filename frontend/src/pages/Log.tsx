@@ -6,6 +6,7 @@ import { auditAPI } from '../services/api'
 import dayjs from 'dayjs'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
+import { formatDateTime } from '../utils/format'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -39,7 +40,7 @@ const Log: React.FC = () => {
     { title: '操作类型', dataIndex: 'operation', key: 'operation' },
     { title: '操作资源', dataIndex: 'resource', key: 'resource' },
     { title: 'IP地址', dataIndex: 'ip', key: 'ip' },
-    { title: '操作时间', dataIndex: 'created_at', key: 'created_at' },
+    { title: '操作时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => formatDateTime(v) },
   ]
 
   return (

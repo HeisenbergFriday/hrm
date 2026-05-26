@@ -108,7 +108,10 @@ const AttendanceStats: React.FC = () => {
   }
 
   const abnormalColumns = [
-    { title: '异常类型', dataIndex: 'type', key: 'type' },
+    { title: '异常类型', dataIndex: 'type', key: 'type', render: (v: string) => {
+      const map: Record<string, string> = { late: '迟到', leave_early: '早退', absent: '缺勤' }
+      return map[v] || v
+    } },
     {
       title: '人数',
       dataIndex: 'count',

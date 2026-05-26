@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, message, Card, Space, Tag, Tabs, Tree, Select, Switch, Radio, Divider, Badge, Tooltip } from 'antd'
+import { formatDateTime } from '../utils/format'
 import {
   UsergroupAddOutlined,
   PlusOutlined,
@@ -329,10 +330,10 @@ const RoleManagement: React.FC = () => {
             <Input.TextArea value={selectedRole.description} readOnly rows={3} />
           </Form.Item>
           <Form.Item label="创建时间">
-            <Input value={selectedRole.created_at} readOnly />
+            <Input value={formatDateTime(selectedRole.created_at)} readOnly />
           </Form.Item>
           <Form.Item label="更新时间">
-            <Input value={selectedRole.updated_at} readOnly />
+            <Input value={formatDateTime(selectedRole.updated_at)} readOnly />
           </Form.Item>
         </Form>
       ) : (

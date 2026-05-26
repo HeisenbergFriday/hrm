@@ -4,6 +4,7 @@ import { CalendarOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
+import { formatDateTime } from '../utils/format'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -45,7 +46,7 @@ const Approval: React.FC = () => {
   }
 
   const getStatusText = (status: string) => {
-    switch (status) {
+    switch (status.toLowerCase()) {
       case 'approved': return '已通过'
       case 'pending': return '审批中'
       case 'rejected': return '已拒绝'
@@ -68,8 +69,8 @@ const Approval: React.FC = () => {
         <Badge status={getStatusColor(status)} text={<span style={{ fontWeight: 600 }}>{getStatusText(status)}</span>} />
       )
     },
-    { title: '创建时间', dataIndex: 'create_time', key: 'create_time' },
-    { title: '完成时间', dataIndex: 'finish_time', key: 'finish_time', render: (v: string) => v || '-' },
+    { title: '创建时间', dataIndex: 'create_time', key: 'create_time', render: (v: string) => formatDateTime(v) },
+    { title: '完成时间', dataIndex: 'finish_time', key: 'finish_time', render: (v: string) => v ? formatDateTime(v) : '-' },
   ]
 
   return (
