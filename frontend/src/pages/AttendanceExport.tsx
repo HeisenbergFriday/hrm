@@ -7,6 +7,7 @@ import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
+import { formatDateTime } from '../utils/format'
 
 const { Title } = Typography
 const { RangePicker } = DatePicker
@@ -99,7 +100,7 @@ const AttendanceExport: React.FC = () => {
           <p><strong>文件名:</strong> {record.file_name}</p>
           <p><strong>导出记录数:</strong> {record.record_count}</p>
           <p><strong>日期范围:</strong> {record.start_date} 至 {record.end_date}</p>
-          <p><strong>创建时间:</strong> {record.created_at}</p>
+          <p><strong>创建时间:</strong> {formatDateTime(record.created_at)}</p>
           {record.error_msg && (
             <p><strong>错误信息:</strong> {record.error_msg}</p>
           )}
@@ -135,7 +136,7 @@ const AttendanceExport: React.FC = () => {
     },
     { title: '开始日期', dataIndex: 'start_date', key: 'start_date' },
     { title: '结束日期', dataIndex: 'end_date', key: 'end_date' },
-    { title: '创建时间', dataIndex: 'created_at', key: 'created_at' },
+    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => formatDateTime(v) },
     {
       title: '操作',
       key: 'action',

@@ -372,6 +372,29 @@ export default function WeekSchedule() {
 
   const calendarItems = getItems<WeekCalendarItem>(calendarQuery.data)
   const holidayRecords = getItems<HolidayRecord>(holidaysQuery.data)
+
+  // 按名称分组合并连续日期
+  const groupedHolidays = useMemo(() => {
+    if (!holidayRecords.length) return []
+    const sorted = [...holidayRecords].sort((a, b) => a.date.localeCompare(b.date))
+    const groups: { name: string; startDate: string; endDate: string; type: HolidayType; ids: number[] }[] = []
+    for (const r of sorted) {
+      const last = groups[groups.length - 1]
+      if (last && last.name === r.name && last.type === r.type) {
+        last.endDate = r.date
+        last.ids.push(r.id)
+      } else {
+        groups.push({ name: r.name, startDate: r.date, endDate: r.date, type: r.type, ids: [r.id] })
+      }
+    }
+    return groups.map((g, i) => ({
+      id: i,
+      date: g.startDate === g.endDate ? g.startDate : `${g.startDate} ~ ${g.endDate}`,
+      name: g.name,
+      type: g.type,
+      ids: g.ids,
+    }))
+  }, [holidayRecords])
   const monthCalendarSections = useMemo(() => buildMonthCalendarSections(calendarItems), [calendarItems])
 
   const filteredMonthSections = useMemo(() => {
@@ -678,7 +701,7 @@ export default function WeekSchedule() {
       title: '更新时间',
       dataIndex: 'updated_at',
       width: 180,
-      render: (value) => dayjs(value).format('YYYY-MM-DD HH:mm'),
+      render: (value) => dayjs(value).format('YYYY年M月D日 HH:mm:ss'),
     },
     {
       title: '操作',
@@ -699,7 +722,7 @@ export default function WeekSchedule() {
     },
   ]
 
-  const holidayColumns: TableColumnsType<HolidayRecord> = [
+  const holidayColumns = [
     {
       title: '日期',
       dataIndex: 'date',
@@ -720,7 +743,10 @@ export default function WeekSchedule() {
       key: 'actions',
       width: 100,
       render: (_, record) => (
-        <Popconfirm title="确定删除这条节假日记录？" onConfirm={() => deleteHolidayMutation.mutate(record.id)}>
+        <Popconfirm title="确定删除这条节假日记录？" onConfirm={() => {
+          const ids = (record as any).ids || [record.id]
+          ids.forEach((id: number) => deleteHolidayMutation.mutate(id))
+        }}>
           <Button size="small" danger icon={<DeleteOutlined />} style={{ borderRadius: 8, fontWeight: 600 }}>
             删除
           </Button>
@@ -734,7 +760,7 @@ export default function WeekSchedule() {
       title: '时间',
       dataIndex: 'created_at',
       width: 110,
-      render: (value) => dayjs(value).format('MM-DD HH:mm'),
+      render: (value) => dayjs(value).format('YYYY年M月D日 HH:mm:ss'),
     },
     {
       title: '同步方向',
@@ -1072,7 +1098,7 @@ export default function WeekSchedule() {
           rowKey="id"
           loading={holidaysQuery.isLoading}
           columns={holidayColumns}
-          dataSource={holidayRecords}
+          dataSource={groupedHolidays}
           pagination={{ pageSize: 10, hideOnSinglePage: true }}
         />
       </Card>

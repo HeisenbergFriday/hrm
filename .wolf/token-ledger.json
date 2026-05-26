@@ -2,14 +2,14 @@
   "version": 1,
   "created_at": "2026-05-25T06:54:29.374Z",
   "lifetime": {
-    "total_tokens_estimated": 2357640,
-    "total_reads": 894,
-    "total_writes": 1163,
-    "total_sessions": 64,
-    "anatomy_hits": 339,
-    "anatomy_misses": 539,
-    "repeated_reads_blocked": 501,
-    "estimated_savings_vs_bare_cli": 3954167
+    "total_tokens_estimated": 2612196,
+    "total_reads": 1021,
+    "total_writes": 1451,
+    "total_sessions": 67,
+    "anatomy_hits": 347,
+    "anatomy_misses": 658,
+    "repeated_reads_blocked": 647,
+    "estimated_savings_vs_bare_cli": 4699542
   },
   "sessions": [
     {
@@ -13277,6 +13277,2455 @@
         "writes_count": 0,
         "repeated_reads_blocked": 0,
         "anatomy_lookups": 1
+      }
+    },
+    {
+      "id": "session-2026-05-26-1422",
+      "started": "2026-05-26T06:22:33.373Z",
+      "ended": "2026-05-26T06:31:40.472Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/COMMANDS.md",
+          "tokens_estimated": 673,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 673,
+        "output_tokens_estimated": 0,
+        "reads_count": 1,
+        "writes_count": 0,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 1
+      }
+    },
+    {
+      "id": "session-2026-05-26-1422",
+      "started": "2026-05-26T06:22:33.373Z",
+      "ended": "2026-05-26T06:31:54.914Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/COMMANDS.md",
+          "tokens_estimated": 673,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 673,
+        "output_tokens_estimated": 0,
+        "reads_count": 1,
+        "writes_count": 0,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 1
+      }
+    },
+    {
+      "id": "session-2026-05-26-1422",
+      "started": "2026-05-26T06:22:33.373Z",
+      "ended": "2026-05-26T06:33:40.673Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/COMMANDS.md",
+          "tokens_estimated": 673,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 673,
+        "output_tokens_estimated": 0,
+        "reads_count": 1,
+        "writes_count": 0,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 1
+      }
+    },
+    {
+      "id": "session-2026-05-26-1422",
+      "started": "2026-05-26T06:22:33.373Z",
+      "ended": "2026-05-26T06:35:08.801Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/COMMANDS.md",
+          "tokens_estimated": 673,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 673,
+        "output_tokens_estimated": 0,
+        "reads_count": 1,
+        "writes_count": 0,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 1
+      }
+    },
+    {
+      "id": "session-2026-05-26-1422",
+      "started": "2026-05-26T06:22:33.373Z",
+      "ended": "2026-05-26T06:36:15.723Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/COMMANDS.md",
+          "tokens_estimated": 673,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 673,
+        "output_tokens_estimated": 0,
+        "reads_count": 1,
+        "writes_count": 0,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 1
+      }
+    },
+    {
+      "id": "session-2026-05-26-1422",
+      "started": "2026-05-26T06:22:33.373Z",
+      "ended": "2026-05-26T06:36:49.309Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/COMMANDS.md",
+          "tokens_estimated": 673,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 673,
+        "output_tokens_estimated": 0,
+        "reads_count": 1,
+        "writes_count": 0,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 1
+      }
+    },
+    {
+      "id": "session-2026-05-26-1422",
+      "started": "2026-05-26T06:22:33.373Z",
+      "ended": "2026-05-26T06:38:08.165Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/COMMANDS.md",
+          "tokens_estimated": 673,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 673,
+        "output_tokens_estimated": 0,
+        "reads_count": 1,
+        "writes_count": 0,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 1
+      }
+    },
+    {
+      "id": "session-2026-05-26-1422",
+      "started": "2026-05-26T06:22:33.373Z",
+      "ended": "2026-05-26T06:46:16.727Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/COMMANDS.md",
+          "tokens_estimated": 673,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 673,
+        "output_tokens_estimated": 0,
+        "reads_count": 1,
+        "writes_count": 0,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 1
+      }
+    },
+    {
+      "id": "session-2026-05-26-1451",
+      "started": "2026-05-26T06:51:59.928Z",
+      "ended": "2026-05-26T07:06:12.384Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/DESIGN_SYSTEM.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 15960,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 9566,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceResultView.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/ai项目/frontend/src/utils/format.ts",
+          "tokens_estimated": 156,
+          "action": "create"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 34,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 228,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 90,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 64,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 22,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 40,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 29,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 3,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 25526,
+        "output_tokens_estimated": 1219,
+        "reads_count": 11,
+        "writes_count": 23,
+        "repeated_reads_blocked": 15,
+        "anatomy_lookups": 0
+      }
+    },
+    {
+      "id": "session-2026-05-26-1451",
+      "started": "2026-05-26T06:51:59.928Z",
+      "ended": "2026-05-26T07:06:32.243Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/DESIGN_SYSTEM.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 15960,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 9566,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceResultView.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/ai项目/frontend/src/utils/format.ts",
+          "tokens_estimated": 156,
+          "action": "create"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 34,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 228,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 90,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 64,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 22,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 40,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 29,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 3,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 25526,
+        "output_tokens_estimated": 1219,
+        "reads_count": 11,
+        "writes_count": 23,
+        "repeated_reads_blocked": 15,
+        "anatomy_lookups": 0
+      }
+    },
+    {
+      "id": "session-2026-05-26-1451",
+      "started": "2026-05-26T06:51:59.928Z",
+      "ended": "2026-05-26T07:18:02.225Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/DESIGN_SYSTEM.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 15960,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 2532,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 9566,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceResultView.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/ai项目/frontend/src/utils/format.ts",
+          "tokens_estimated": 156,
+          "action": "create"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 34,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 228,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 90,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 64,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 22,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 40,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 29,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 3,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 9,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 69,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 93,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 24,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 66,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 23,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 88,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 23,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 84,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 28058,
+        "output_tokens_estimated": 1959,
+        "reads_count": 17,
+        "writes_count": 40,
+        "repeated_reads_blocked": 19,
+        "anatomy_lookups": 0
+      }
+    },
+    {
+      "id": "session-2026-05-26-1451",
+      "started": "2026-05-26T06:51:59.928Z",
+      "ended": "2026-05-26T07:21:01.485Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/DESIGN_SYSTEM.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 15960,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 2532,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 9566,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceResultView.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/EmployeeProfile.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/ai项目/frontend/src/utils/format.ts",
+          "tokens_estimated": 156,
+          "action": "create"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 34,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 228,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 90,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 64,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 22,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 40,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 29,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 3,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 9,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 69,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 93,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 24,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 66,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 23,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 88,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 23,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 84,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/EmployeeProfile.tsx",
+          "tokens_estimated": 72,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 28058,
+        "output_tokens_estimated": 2031,
+        "reads_count": 18,
+        "writes_count": 41,
+        "repeated_reads_blocked": 19,
+        "anatomy_lookups": 0
+      }
+    },
+    {
+      "id": "session-2026-05-26-1451",
+      "started": "2026-05-26T06:51:59.928Z",
+      "ended": "2026-05-26T07:25:03.815Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/DESIGN_SYSTEM.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 15960,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 2532,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 9566,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceResultView.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 2906,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/EmployeeProfile.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/TalentAnalysis.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncLog.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/ai项目/frontend/src/utils/format.ts",
+          "tokens_estimated": 156,
+          "action": "create"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 34,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 228,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 90,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 64,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 22,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 40,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 29,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 3,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 9,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 69,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 93,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 24,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 66,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 23,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 88,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 23,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 84,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/EmployeeProfile.tsx",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/TalentAnalysis.tsx",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncLog.tsx",
+          "tokens_estimated": 33,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncLog.tsx",
+          "tokens_estimated": 30,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 68,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceStats.tsx",
+          "tokens_estimated": 58,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 30964,
+        "output_tokens_estimated": 2352,
+        "reads_count": 20,
+        "writes_count": 48,
+        "repeated_reads_blocked": 21,
+        "anatomy_lookups": 0
+      }
+    },
+    {
+      "id": "session-2026-05-26-1451",
+      "started": "2026-05-26T06:51:59.928Z",
+      "ended": "2026-05-26T07:37:08.242Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/DESIGN_SYSTEM.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 15960,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 2532,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 1855,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 9566,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 13224,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceResultView.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 2906,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 1289,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/EmployeeProfile.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/TalentAnalysis.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncLog.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/main.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/ai项目/frontend/src/utils/format.ts",
+          "tokens_estimated": 156,
+          "action": "create"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 34,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 228,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 90,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 64,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 22,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 40,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 29,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 3,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 9,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 69,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 93,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 24,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 66,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 23,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 88,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 23,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 84,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/EmployeeProfile.tsx",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/TalentAnalysis.tsx",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncLog.tsx",
+          "tokens_estimated": 33,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncLog.tsx",
+          "tokens_estimated": 30,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 68,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceStats.tsx",
+          "tokens_estimated": 58,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 134,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/main.tsx",
+          "tokens_estimated": 55,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 371,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 263,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 137,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 11,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 8,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 217,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 47332,
+        "output_tokens_estimated": 3548,
+        "reads_count": 21,
+        "writes_count": 56,
+        "repeated_reads_blocked": 28,
+        "anatomy_lookups": 0
+      }
+    },
+    {
+      "id": "session-2026-05-26-1451",
+      "started": "2026-05-26T06:51:59.928Z",
+      "ended": "2026-05-26T07:42:40.364Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/DESIGN_SYSTEM.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 15960,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 2532,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 2015,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 9566,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 13224,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceResultView.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 2906,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 1289,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/EmployeeProfile.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/TalentAnalysis.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncLog.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/src/main.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/ai项目/frontend/src/utils/format.ts",
+          "tokens_estimated": 156,
+          "action": "create"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 34,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 228,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 90,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/RoleManagement.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalTemplate.tsx",
+          "tokens_estimated": 64,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 22,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceExport.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 40,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Log.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 29,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/DepartmentTree.tsx",
+          "tokens_estimated": 3,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/LeaveOvertime.tsx",
+          "tokens_estimated": 26,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/App.tsx",
+          "tokens_estimated": 9,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 69,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalInstance.tsx",
+          "tokens_estimated": 93,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 24,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Approval.tsx",
+          "tokens_estimated": 66,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 23,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 88,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/ApprovalDetail.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 28,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 23,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 84,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/EmployeeProfile.tsx",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/TalentAnalysis.tsx",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncLog.tsx",
+          "tokens_estimated": 33,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncLog.tsx",
+          "tokens_estimated": 30,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 68,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AttendanceStats.tsx",
+          "tokens_estimated": 58,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/Attendance.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/SyncJobs.tsx",
+          "tokens_estimated": 134,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/main.tsx",
+          "tokens_estimated": 55,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 371,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 263,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 137,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 11,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/WeekSchedule.tsx",
+          "tokens_estimated": 8,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 217,
+          "action": "edit"
+        },
+        {
+          "file": "d:/ai项目/frontend/src/pages/AuditLogs.tsx",
+          "tokens_estimated": 340,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 47492,
+        "output_tokens_estimated": 3888,
+        "reads_count": 21,
+        "writes_count": 57,
+        "repeated_reads_blocked": 29,
+        "anatomy_lookups": 0
       }
     }
   ],

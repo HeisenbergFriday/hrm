@@ -6,6 +6,7 @@ import { jobAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
+import { formatDateTime } from '../utils/format'
 
 const { Text } = Typography
 
@@ -37,7 +38,7 @@ const SyncJobs: React.FC = () => {
   })
 
   const getStatusTag = (status: string) => {
-    switch (status) {
+    switch (status.toLowerCase()) {
       case 'idle':
         return <StatusTag color="blue">空闲</StatusTag>
       case 'running':
@@ -45,7 +46,8 @@ const SyncJobs: React.FC = () => {
       case 'failed':
         return <StatusTag color="red">失败</StatusTag>
       case 'completed':
-        return <StatusTag color="green">已完成</StatusTag>
+      case 'success':
+        return <StatusTag color="green">成功</StatusTag>
       default:
         return <StatusTag>{status}</StatusTag>
     }
@@ -87,11 +89,13 @@ const SyncJobs: React.FC = () => {
       title: '上次运行时间',
       dataIndex: 'last_run_time',
       key: 'last_run_time',
+      render: (v: string) => formatDateTime(v),
     },
     {
       title: '下次运行时间',
       dataIndex: 'next_run_time',
       key: 'next_run_time',
+      render: (v: string) => formatDateTime(v),
     },
     {
       title: '操作',

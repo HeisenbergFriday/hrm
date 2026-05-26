@@ -7,6 +7,7 @@ import { approvalAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
+import { formatDateTime } from '../utils/format'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -36,7 +37,7 @@ const ApprovalDetail: React.FC = () => {
   })
 
   const getStatusTag = (status: string) => {
-    switch (status) {
+    switch (status.toLowerCase()) {
       case 'completed':
         return <StatusTag color="green">已完成</StatusTag>
       case 'in_progress':
@@ -126,9 +127,9 @@ const ApprovalDetail: React.FC = () => {
 
             <Descriptions bordered column={1} style={{ marginBottom: 'var(--space-6)' }}>
               <Descriptions.Item label="发起人">{approvalData.data.approval.applicant_name}</Descriptions.Item>
-              <Descriptions.Item label="发起时间">{approvalData.data.approval.create_time}</Descriptions.Item>
+              <Descriptions.Item label="发起时间">{formatDateTime(approvalData.data.approval.create_time)}</Descriptions.Item>
               {approvalData.data.approval.finish_time && (
-                <Descriptions.Item label="结束时间">{approvalData.data.approval.finish_time}</Descriptions.Item>
+                <Descriptions.Item label="结束时间">{formatDateTime(approvalData.data.approval.finish_time)}</Descriptions.Item>
               )}
             </Descriptions>
 
@@ -161,7 +162,7 @@ const ApprovalDetail: React.FC = () => {
                         备注：{node.comment}
                       </Paragraph>
                     )}
-                    <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>{node.time}</Text>
+                    <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>{formatDateTime(node.time)}</Text>
                   </div>
                 ),
               })) || []}
