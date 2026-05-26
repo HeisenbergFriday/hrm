@@ -153,11 +153,11 @@ const SyncLog: React.FC = () => {
           {syncStatus && (
             <div style={{ display: 'flex', gap: 'var(--space-6)', marginTop: 'var(--space-2)' }}>
               <div>
-                <p>部门同步状态: {syncStatus.departments.status}</p>
+                <p>部门同步状态: {syncStatus.departments.status === 'success' ? '成功' : syncStatus.departments.status}</p>
                 <p>最后同步时间: {formatDateTime(syncStatus.departments.last_sync_time)}</p>
               </div>
               <div>
-                <p>员工同步状态: {syncStatus.users.status}</p>
+                <p>员工同步状态: {syncStatus.users.status === 'success' ? '成功' : syncStatus.users.status}</p>
                 <p>最后同步时间: {formatDateTime(syncStatus.users.last_sync_time)}</p>
               </div>
             </div>

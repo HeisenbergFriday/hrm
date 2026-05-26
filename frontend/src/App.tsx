@@ -1,5 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from 'react'
 import { Layout, Menu, ConfigProvider, theme, Spin, message } from 'antd'
+import zhCN from 'antd/locale/zh_CN'
 import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import {
   LoadingOutlined,
@@ -215,7 +216,7 @@ function App() {
 
   if (authPaths.includes(location.pathname)) {
     return (
-      <ConfigProvider>
+      <ConfigProvider locale={zhCN}>
         <AuthRoutes />
       </ConfigProvider>
     )
@@ -234,7 +235,7 @@ function App() {
     }
 
     return (
-      <ConfigProvider>
+      <ConfigProvider locale={zhCN}>
         <Suspense fallback={<PageLoading />}>
           <Login />
         </Suspense>
@@ -243,7 +244,7 @@ function App() {
   }
 
   return (
-    <ConfigProvider>
+    <ConfigProvider locale={zhCN}>
       <Layout>
         <Sider
           collapsible

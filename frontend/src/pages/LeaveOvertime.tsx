@@ -27,6 +27,7 @@ import { leaveAPI, orgAPI, overtimeAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
+import { formatDateTime } from '../utils/format'
 
 const { Title, Text } = Typography
 
@@ -35,11 +36,6 @@ const formatWorkingYears = (value?: number) =>
 
 const formatDays = (value?: number) =>
   `${Number.isFinite(value) ? Number(value) : 0} 天`
-
-const formatDateTime = (value?: string) =>
-  value && dayjs(value).isValid() && !value.startsWith('0001-01-01')
-    ? dayjs(value).format('YYYY-MM-DD HH:mm')
-    : '-'
 
 const EmployeeSelect: React.FC<{
   value?: string
@@ -557,7 +553,7 @@ const OvertimeTab: React.FC = () => {
         <DatePicker picker="month" value={selectedMonth} allowClear={false} onChange={(next) => next && setSelectedMonth(next.startOf('month'))} />
         <Button type="primary" icon={<SearchOutlined />} onClick={refreshOvertimeMatches} disabled={!userID}>查询</Button>
         <Button icon={<SyncOutlined />} onClick={() => runMatchMutation.mutate()} loading={runMatchMutation.isPending} disabled={!userID}>执行加班匹配</Button>
-        <Button icon={<ThunderboltOutlined />} onClick={handleWizardOpen}>ManualLeave 同步</Button>
+        <Button icon={<ThunderboltOutlined />} onClick={handleWizardOpen}>手动调休同步</Button>
         <Button icon={<ReloadOutlined />} onClick={handleClearRematch} loading={clearRematchMutation.isPending} disabled={!userID} danger>清空重匹配</Button>
         <Button icon={<DeleteOutlined />} onClick={handleDeleteMatches} loading={deleteMatchesMutation.isPending} disabled={!userID} danger>删除记录</Button>
       </Space>
