@@ -1,10 +1,11 @@
 import React from 'react'
-import { Row, Col, Typography, Spin, Alert, Button } from 'antd'
-import { UserOutlined, TeamOutlined, ClockCircleOutlined, FileOutlined, DashboardOutlined } from '@ant-design/icons'
+import { Row, Col, Typography, Spin, Alert, Button, Result } from 'antd'
+import { UserOutlined, TeamOutlined, ClockCircleOutlined, FileOutlined, DashboardOutlined, LockOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { userAPI, departmentAPI, attendanceAPI, approvalAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
+import { useAuthStore } from '../store/authStore'
 
 const { Text } = Typography
 
@@ -17,6 +18,54 @@ const statCards = [
 
 const Home: React.FC = () => {
   const navigate = useNavigate()
+  const { menuKeys } = useAuthStore()
+
+  // 未分配角色的用户不显示任何数据
+  if (menuKeys.length === 0) {
+    return (
+      <PageContainer>
+        <div style={{
+          background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 50%, #818cf8 100%)',
+          borderRadius: 'var(--radius-2xl)',
+          padding: '28px 32px',
+          marginBottom: 'var(--space-6)',
+          color: '#fff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          boxShadow: '0 4px 20px rgba(67,56,202,0.3)',
+        }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <DashboardOutlined style={{ fontSize: 28 }} />
+              <span style={{ margin: 0, color: '#fff', fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-xl)' }}>系统概览</span>
+            </div>
+            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 'var(--font-size-base)' }}>
+              欢迎使用人事管理系统
+            </Text>
+          </div>
+          <div style={{
+            width: 64,
+            height: 64,
+            borderRadius: 'var(--radius-2xl)',
+            background: 'rgba(255,255,255,0.15)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backdropFilter: 'blur(10px)',
+          }}>
+            <DashboardOutlined style={{ fontSize: 32, color: '#fff' }} />
+          </div>
+        </div>
+        <Result
+          icon={<LockOutlined style={{ color: '#4338ca' }} />}
+          title="暂无数据权限"
+          subTitle="您尚未被分配任何角色，请联系管理员配置权限后再使用系统功能。"
+        />
+      </PageContainer>
+    )
+  }
+
   const { data: usersData, isLoading: usersLoading, isError: usersError } = useQuery({
     queryKey: ['users'],
     queryFn: () => userAPI.getUsers({ page: 1, page_size: 1 })

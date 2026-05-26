@@ -23,6 +23,13 @@ func currentOperatorID(c *gin.Context) string {
 	return "system"
 }
 
+// resolvePerformanceScope 获取用户的数据范围（绩效模块专用）
+func resolvePerformanceScope(c *gin.Context) (*service.OrgDataScope, error) {
+	userID := currentOperatorID(c)
+	svc := service.NewPermissionService(database.DB)
+	return svc.GetUserPerformanceScope(userID)
+}
+
 // requirePermission 检查当前用户是否具有指定权限码，不满足则返回 403 并中止
 func requirePermission(c *gin.Context, codes ...string) bool {
 	userID := currentOperatorID(c)
@@ -40,7 +47,7 @@ func requirePermission(c *gin.Context, codes ...string) bool {
 
 // resolveAndVerifyScope 获取 scope 并验证指定部门是否在可见范围内
 func resolveAndVerifyScope(c *gin.Context, departmentID string) (*service.OrgDataScope, error) {
-	scope, err := resolveOrgScope(c)
+	scope, err := resolvePerformanceScope(c)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +92,7 @@ func GetPerformanceActivities(c *gin.Context) {
 	endDate := c.Query("end_date")
 
 	// 获取用户的数据范围（部门隔离）
-	scope, err := resolveOrgScope(c)
+	scope, err := resolvePerformanceScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
 		return
@@ -374,7 +381,7 @@ func GetPerformanceParticipants(c *gin.Context) {
 	employeeKeyword := c.Query("employee_keyword")
 
 	// 获取用户的数据范围（部门隔离）
-	scope, err := resolveOrgScope(c)
+	scope, err := resolvePerformanceScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
 		return
@@ -1651,7 +1658,7 @@ func GetIndicatorLibraries(c *gin.Context) {
 	status := c.Query("status")
 
 	// 获取用户的数据范围（部门隔离）
-	scope, err := resolveOrgScope(c)
+	scope, err := resolvePerformanceScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
 		return

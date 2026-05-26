@@ -76,6 +76,47 @@ func (r *PerformanceActivityRepository) FindAll(page, pageSize int, status, keyw
 	return items, total, nil
 }
 
+// FindAllByUserID 查询用户参与的绩效活动（普通员工场景）
+func (r *PerformanceActivityRepository) FindAllByUserID(page, pageSize int, status, keyword, startDate, endDate string, userIDs []string) ([]database.PerformanceActivity, int64, error) {
+	var items []database.PerformanceActivity
+	var total int64
+
+	query := r.db.Model(&database.PerformanceActivity{})
+	query = query.Where("deleted_at IS NULL")
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if keyword != "" {
+		like := "%" + strings.TrimSpace(keyword) + "%"
+		query = query.Where("name LIKE ? OR description LIKE ?", like, like)
+	}
+	if startDate != "" {
+		query = query.Where("start_date >= ?", startDate)
+	}
+	if endDate != "" {
+		query = query.Where("end_date <= ?", endDate)
+	}
+	// 只显示用户参与的活动
+	if len(userIDs) > 0 {
+		query = query.Where("id IN (SELECT DISTINCT activity_id FROM performance_participants WHERE employee_id IN ? AND deleted_at IS NULL)", userIDs)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	offset := (page - 1) * pageSize
+	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
 type PerformanceDistributionRuleRepository struct{ db *gorm.DB }
 
 func NewPerformanceDistributionRuleRepository(db *gorm.DB) *PerformanceDistributionRuleRepository {

@@ -118,6 +118,11 @@ export const permissionAPI = {
   assignUserRole: (data: { user_id: string; role_id: number }) => api.post('/permission/users/roles/assign', data),
   removeUserRole: (data: { user_id: string; role_id: number }) => api.post('/permission/users/roles/remove', data),
   getUserPermissions: (userId: string) => api.get(`/permission/users/${userId}/permissions`),
+  getRoleUsers: (roleId: number) => api.get(`/permission/roles/${roleId}/users`),
+  getMenuPermission: (roleId: number) => api.get(`/permission/roles/${roleId}/menu`),
+  saveMenuPermission: (roleId: number, menuKeys: string[]) => api.post(`/permission/roles/${roleId}/menu`, { menu_keys: JSON.stringify(menuKeys) }),
+  getDataPermission: (roleId: number) => api.get(`/permission/roles/${roleId}/data`),
+  saveDataPermission: (roleId: number, scope: string, departmentKeys: string[]) => api.post(`/permission/roles/${roleId}/data`, { scope, department_keys: JSON.stringify(departmentKeys) }),
 }
 
 export const auditAPI = {

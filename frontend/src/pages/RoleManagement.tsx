@@ -22,9 +22,11 @@ import {
   CloseSquareOutlined,
   SettingOutlined,
   KeyOutlined,
+  UserOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
-import { useQuery, useMutation } from '@tanstack/react-query'
-import { permissionAPI, orgAPI } from '../services/api'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { permissionAPI, orgAPI, userAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 
@@ -69,6 +71,12 @@ const RoleManagement: React.FC = () => {
   const [isAllDepartments, setIsAllDepartments] = useState(true)
   const [selectedDepartments, setSelectedDepartments] = useState<string[]>([])
 
+  // 用户分配相关状态
+  const [userSearchText, setUserSearchText] = useState('')
+  const [assignModalVisible, setAssignModalVisible] = useState(false)
+  const [selectedUserId, setSelectedUserId] = useState<string>('')
+  const queryClient = useQueryClient()
+
   // 查询数据
   const { data: rolesData, isLoading: rolesLoading, isError, refetch, error } = useQuery({
     queryKey: ['roles'],
@@ -78,6 +86,56 @@ const RoleManagement: React.FC = () => {
   const { data: departmentTreeData, isLoading: departmentsLoading } = useQuery({
     queryKey: ['department-tree'],
     queryFn: () => orgAPI.getDepartmentTree(),
+  })
+
+  // 获取角色下的用户列表
+  const { data: roleUsersData, isLoading: roleUsersLoading, refetch: refetchRoleUsers } = useQuery({
+    queryKey: ['role-users', selectedRoleId],
+    queryFn: () => permissionAPI.getRoleUsers(Number(selectedRoleId)),
+    enabled: !!selectedRoleId,
+  })
+
+  // 获取所有用户列表（用于分配，仅在弹窗打开时请求）
+  const { data: allUsersData, isLoading: allUsersLoading } = useQuery({
+    queryKey: ['all-users'],
+    queryFn: () => userAPI.getUsers({ page: 1, page_size: 1000 }),
+    enabled: assignModalVisible,
+  })
+
+  // 获取选中角色的菜单权限
+  const { data: menuPermData, isLoading: menuPermLoading } = useQuery({
+    queryKey: ['menu-permission', selectedRoleId],
+    queryFn: () => permissionAPI.getMenuPermission(Number(selectedRoleId)),
+    enabled: !!selectedRoleId,
+  })
+
+  // 获取选中角色的数据权限
+  const { data: dataPermData, isLoading: dataPermLoading } = useQuery({
+    queryKey: ['data-permission', selectedRoleId],
+    queryFn: () => permissionAPI.getDataPermission(Number(selectedRoleId)),
+    enabled: !!selectedRoleId,
+  })
+
+  // 保存菜单权限 mutation
+  const saveMenuPermMutation = useMutation({
+    mutationFn: (data: { roleId: number; menuKeys: string[] }) =>
+      permissionAPI.saveMenuPermission(data.roleId, data.menuKeys),
+    onSuccess: () => {
+      message.success('菜单权限保存成功')
+      queryClient.invalidateQueries({ queryKey: ['menu-permission', selectedRoleId] })
+    },
+    onError: () => message.error('菜单权限保存失败'),
+  })
+
+  // 保存数据权限 mutation
+  const saveDataPermMutation = useMutation({
+    mutationFn: (data: { roleId: number; scope: string; departmentKeys: string[] }) =>
+      permissionAPI.saveDataPermission(data.roleId, data.scope, data.departmentKeys),
+    onSuccess: () => {
+      message.success('数据权限保存成功')
+      queryClient.invalidateQueries({ queryKey: ['data-permission', selectedRoleId] })
+    },
+    onError: () => message.error('数据权限保存失败'),
   })
 
   // 获取选中的角色
@@ -204,14 +262,66 @@ const RoleManagement: React.FC = () => {
     onError: () => message.error('角色更新失败'),
   })
 
+  // 分配用户到角色
+  const assignUserMutation = useMutation({
+    mutationFn: (data: { user_id: string; role_id: number }) => permissionAPI.assignUserRole(data),
+    onSuccess: () => {
+      message.success('用户分配成功')
+      setAssignModalVisible(false)
+      setSelectedUserId('')
+      refetchRoleUsers()
+    },
+    onError: () => message.error('用户分配失败'),
+  })
+
+  // 从角色移除用户
+  const removeUserMutation = useMutation({
+    mutationFn: (data: { user_id: string; role_id: number }) => permissionAPI.removeUserRole(data),
+    onSuccess: () => {
+      message.success('用户移除成功')
+      refetchRoleUsers()
+    },
+    onError: () => message.error('用户移除失败'),
+  })
+
   // 处理函数
   const handleSelectRole = (roleId: string) => {
     setSelectedRoleId(roleId)
-    // 模拟加载角色权限数据
-    setMenuCheckedKeys(['home', 'organization', 'department-tree'])
+    // 重置状态（实际数据由 query 加载）
+    setMenuCheckedKeys([])
     setIsAllDepartments(true)
     setSelectedDepartments([])
   }
+
+  // 当菜单权限数据加载完成后，同步到本地状态
+  React.useEffect(() => {
+    if (menuPermData?.data?.menu_keys) {
+      try {
+        const keys = JSON.parse(menuPermData.data.menu_keys)
+        setMenuCheckedKeys(Array.isArray(keys) ? keys : [])
+      } catch {
+        setMenuCheckedKeys([])
+      }
+    }
+  }, [menuPermData])
+
+  // 当数据权限数据加载完成后，同步到本地状态
+  React.useEffect(() => {
+    if (dataPermData?.data) {
+      const { scope, department_keys } = dataPermData.data
+      setIsAllDepartments(scope === 'all')
+      if (scope === 'department' && department_keys) {
+        try {
+          const keys = JSON.parse(department_keys)
+          setSelectedDepartments(Array.isArray(keys) ? keys : [])
+        } catch {
+          setSelectedDepartments([])
+        }
+      } else {
+        setSelectedDepartments([])
+      }
+    }
+  }, [dataPermData])
 
   const handleCreateRole = () => {
     setEditingRole(null)
@@ -236,11 +346,40 @@ const RoleManagement: React.FC = () => {
   }
 
   const handleSaveMenuPermission = () => {
-    message.success('菜单权限保存成功')
+    if (!selectedRoleId) return
+    saveMenuPermMutation.mutate({ roleId: Number(selectedRoleId), menuKeys: menuCheckedKeys })
   }
 
   const handleSaveDataPermission = () => {
-    message.success('数据权限保存成功')
+    if (!selectedRoleId) return
+    saveDataPermMutation.mutate({
+      roleId: Number(selectedRoleId),
+      scope: isAllDepartments ? 'all' : 'department',
+      departmentKeys: selectedDepartments,
+    })
+  }
+
+  // 用户分配相关函数
+  const handleAssignUser = () => {
+    if (!selectedRoleId || !selectedUserId) {
+      message.warning('请选择用户')
+      return
+    }
+    assignUserMutation.mutate({ user_id: selectedUserId, role_id: Number(selectedRoleId) })
+  }
+
+  const handleRemoveUser = (userId: string) => {
+    if (!selectedRoleId) return
+    Modal.confirm({
+      title: '确认移除',
+      content: '确定要将该用户从当前角色中移除吗？',
+      okText: '确定',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: () => {
+        removeUserMutation.mutate({ user_id: userId, role_id: Number(selectedRoleId) })
+      },
+    })
   }
 
   const handleSelectAllMenu = () => {
@@ -347,7 +486,7 @@ const RoleManagement: React.FC = () => {
     <Card
       title={<Space><MenuOutlined /> <Text strong>菜单权限配置</Text></Space>}
       extra={
-        <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveMenuPermission} disabled={!selectedRole}>
+        <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveMenuPermission} disabled={!selectedRole} loading={saveMenuPermMutation.isPending}>
           保存
         </Button>
       }
@@ -412,7 +551,7 @@ const RoleManagement: React.FC = () => {
     <Card
       title={<Space><LockOutlined /> <Text strong>数据权限配置</Text></Space>}
       extra={
-        <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveDataPermission} disabled={!selectedRole}>
+        <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveDataPermission} disabled={!selectedRole} loading={saveDataPermMutation.isPending}>
           保存
         </Button>
       }
@@ -481,11 +620,146 @@ const RoleManagement: React.FC = () => {
     </Card>
   )
 
+  // 用户分配Tab
+  const renderUserAssignment = () => (
+    <Card
+      title={<Space><TeamOutlined /> <Text strong>用户分配</Text></Space>}
+      extra={
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setAssignModalVisible(true)} disabled={!selectedRole}>
+          添加用户
+        </Button>
+      }
+    >
+      {!selectedRole ? (
+        <Empty description="请先选择一个角色" />
+      ) : (
+        <>
+          {roleUsersLoading ? (
+            <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+          ) : (
+            <>
+              <div style={{ marginBottom: 16 }}>
+                <Input
+                  placeholder="搜索用户"
+                  prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
+                  value={userSearchText}
+                  onChange={(e) => setUserSearchText(e.target.value)}
+                  allowClear
+                  style={{ width: 300 }}
+                />
+              </div>
+
+              <Table
+                dataSource={(roleUsersData?.data?.users || []).filter((user: any) =>
+                  !userSearchText ||
+                  user.name?.toLowerCase().includes(userSearchText.toLowerCase()) ||
+                  user.user_id?.toLowerCase().includes(userSearchText.toLowerCase())
+                )}
+                columns={[
+                  {
+                    title: '用户ID',
+                    dataIndex: 'user_id',
+                    key: 'user_id',
+                  },
+                  {
+                    title: '姓名',
+                    dataIndex: 'name',
+                    key: 'name',
+                  },
+                  {
+                    title: '部门',
+                    dataIndex: 'department_name',
+                    key: 'department_name',
+                  },
+                  {
+                    title: '操作',
+                    key: 'action',
+                    render: (_: any, record: any) => (
+                      <Button
+                        type="link"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={() => handleRemoveUser(record.user_id)}
+                      >
+                        移除
+                      </Button>
+                    ),
+                  },
+                ]}
+                rowKey="user_id"
+                pagination={{ pageSize: 10 }}
+                locale={{ emptyText: '该角色下暂无用户' }}
+              />
+
+              <Divider style={{ margin: '16px 0' }} />
+              <Alert
+                message="用户分配说明"
+                description={
+                  <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
+                    <li>一个用户可以分配多个角色</li>
+                    <li>移除用户后，该用户将失去此角色的所有权限</li>
+                    <li>点击"添加用户"按钮可以为当前角色分配新用户</li>
+                  </ul>
+                }
+                type="info"
+                icon={<InfoCircleOutlined />}
+                showIcon
+              />
+            </>
+          )}
+        </>
+      )}
+
+      {/* 添加用户弹窗 */}
+      <Modal
+        title="添加用户到角色"
+        open={assignModalVisible}
+        onCancel={() => {
+          setAssignModalVisible(false)
+          setSelectedUserId('')
+        }}
+        onOk={handleAssignUser}
+        confirmLoading={assignUserMutation.isPending}
+        okText="确定"
+        cancelText="取消"
+      >
+        <Form layout="vertical">
+          <Form.Item label="选择用户" required>
+            <Select
+              showSearch
+              placeholder="请选择用户"
+              value={selectedUserId || undefined}
+              onChange={(value) => setSelectedUserId(value)}
+              filterOption={(input, option) =>
+                (option?.label ?? '').toString().toLowerCase().includes(input.toLowerCase())
+              }
+              options={(allUsersData?.data?.items || [])
+                .filter((user: any) => !(roleUsersData?.data?.users || []).some((u: any) => u.user_id === user.user_id))
+                .map((user: any) => ({
+                  label: `${user.name} (${user.user_id})`,
+                  value: user.user_id,
+                }))}
+              loading={allUsersLoading}
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
+        </Form>
+        <Alert
+          message="只能选择尚未分配当前角色的用户"
+          type="info"
+          showIcon
+          style={{ marginTop: 16 }}
+        />
+      </Modal>
+    </Card>
+  )
+
   // Tab配置
   const tabItems = [
     { key: 'basic', label: <Space><SettingOutlined /> 基本设置</Space>, children: renderBasicSettings() },
     { key: 'menu', label: <Space><MenuOutlined /> 菜单权限</Space>, children: renderMenuPermission() },
     { key: 'data', label: <Space><LockOutlined /> 数据权限</Space>, children: renderDataPermission() },
+    { key: 'users', label: <Space><TeamOutlined /> 用户分配</Space>, children: renderUserAssignment() },
   ]
 
   if (rolesLoading) {
