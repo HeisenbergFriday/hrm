@@ -2,14 +2,14 @@
   "version": 1,
   "created_at": "2026-05-25T06:54:29.374Z",
   "lifetime": {
-    "total_tokens_estimated": 2356967,
-    "total_reads": 893,
+    "total_tokens_estimated": 2357640,
+    "total_reads": 894,
     "total_writes": 1163,
     "total_sessions": 64,
-    "anatomy_hits": 338,
+    "anatomy_hits": 339,
     "anatomy_misses": 539,
     "repeated_reads_blocked": 501,
-    "estimated_savings_vs_bare_cli": 3953967
+    "estimated_savings_vs_bare_cli": 3954167
   },
   "sessions": [
     {
@@ -13255,6 +13255,28 @@
         "writes_count": 5,
         "repeated_reads_blocked": 0,
         "anatomy_lookups": 3
+      }
+    },
+    {
+      "id": "session-2026-05-26-1422",
+      "started": "2026-05-26T06:22:33.373Z",
+      "ended": "2026-05-26T06:26:48.058Z",
+      "reads": [
+        {
+          "file": "d:/ai项目/.ai/COMMANDS.md",
+          "tokens_estimated": 673,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 673,
+        "output_tokens_estimated": 0,
+        "reads_count": 1,
+        "writes_count": 0,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 1
       }
     }
   ],
