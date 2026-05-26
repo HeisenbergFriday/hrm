@@ -20,6 +20,30 @@ const Home: React.FC = () => {
   const navigate = useNavigate()
   const { menuKeys } = useAuthStore()
 
+  const { data: usersData, isLoading: usersLoading, isError: usersError } = useQuery({
+    queryKey: ['users'],
+    queryFn: () => userAPI.getUsers({ page: 1, page_size: 1 }),
+    enabled: menuKeys.length > 0
+  })
+
+  const { data: departmentsData, isLoading: deptsLoading, isError: deptsError } = useQuery({
+    queryKey: ['departments'],
+    queryFn: departmentAPI.getDepartments,
+    enabled: menuKeys.length > 0
+  })
+
+  const { data: attendanceData, isLoading: attendanceLoading, isError: attendanceError } = useQuery({
+    queryKey: ['attendanceStats'],
+    queryFn: () => attendanceAPI.getStats({}),
+    enabled: menuKeys.length > 0
+  })
+
+  const { data: approvalsData, isLoading: approvalsLoading, isError: approvalsError } = useQuery({
+    queryKey: ['approvals'],
+    queryFn: () => approvalAPI.getInstances({ page: 1, page_size: 1 }),
+    enabled: menuKeys.length > 0
+  })
+
   // 未分配角色的用户不显示任何数据
   if (menuKeys.length === 0) {
     return (
@@ -65,26 +89,6 @@ const Home: React.FC = () => {
       </PageContainer>
     )
   }
-
-  const { data: usersData, isLoading: usersLoading, isError: usersError } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => userAPI.getUsers({ page: 1, page_size: 1 })
-  })
-
-  const { data: departmentsData, isLoading: deptsLoading, isError: deptsError } = useQuery({
-    queryKey: ['departments'],
-    queryFn: departmentAPI.getDepartments
-  })
-
-  const { data: attendanceData, isLoading: attendanceLoading, isError: attendanceError } = useQuery({
-    queryKey: ['attendanceStats'],
-    queryFn: () => attendanceAPI.getStats({})
-  })
-
-  const { data: approvalsData, isLoading: approvalsLoading, isError: approvalsError } = useQuery({
-    queryKey: ['approvals'],
-    queryFn: () => approvalAPI.getInstances({ page: 1, page_size: 1 })
-  })
 
   const isLoading = usersLoading || deptsLoading || attendanceLoading || approvalsLoading
   const isError = usersError || deptsError || attendanceError || approvalsError
