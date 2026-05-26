@@ -458,6 +458,7 @@ AI 文档更新：
   `internal/database/models.go`、
   `internal/database/database.go`
 - **权限管理与路由守卫功能**：新增 `RouteGuard` 组件实现前端路由权限控制，菜单配置抽离至 `frontend/src/config/menu.tsx`，权限服务 `internal/service/permission_service.go` 支持细粒度菜单与按钮权限查询，角色仓储 `internal/repository/role_repository.go` 增强角色-权限关联查询，部门仓储 `internal/repository/department_repository.go` 新增部门层级查询方法
+- **前端代码质量修复**：修复 `Home.tsx` 中 React Hook 规则违规，将 `useQuery` hooks 移至条件返回之前并通过 `enabled` 参数控制查询执行
 
 ---
 
