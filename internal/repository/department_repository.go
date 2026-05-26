@@ -63,3 +63,52 @@ func (r *DepartmentRepository) FindByParent(parentID string) ([]database.Departm
 	}
 	return departments, nil
 }
+
+// FindAllChildDepartmentIDs 递归查询指定部门及其所有子部门的 ID 列表
+func (r *DepartmentRepository) FindAllChildDepartmentIDs(parentDepartmentID string) ([]string, error) {
+	var departmentIDs []string
+
+	// 使用递归 CTE 查询所有子部门
+	query := `
+		WITH RECURSIVE dept_tree AS (
+			SELECT department_id, parent_id
+			FROM departments
+			WHERE department_id = ?
+			UNION ALL
+			SELECT d.department_id, d.parent_id
+			FROM departments d
+			INNER JOIN dept_tree dt ON d.parent_id = dt.department_id
+		)
+		SELECT department_id FROM dept_tree
+	`
+
+	err := r.db.Raw(query, parentDepartmentID).Scan(&departmentIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	return departmentIDs, nil
+}
+
+// FindAllChildDepartmentIDsByParentID 通过内部 ID 递归查询子部门
+func (r *DepartmentRepository) FindAllChildDepartmentIDsByParentID(parentID string) ([]string, error) {
+	var departmentIDs []string
+
+	query := `
+		WITH RECURSIVE dept_tree AS (
+			SELECT department_id, parent_id
+			FROM departments
+			WHERE parent_id = ?
+			UNION ALL
+			SELECT d.department_id, d.parent_id
+			FROM departments d
+			INNER JOIN dept_tree dt ON d.parent_id = dt.department_id
+		)
+		SELECT department_id FROM dept_tree
+	`
+
+	err := r.db.Raw(query, parentID).Scan(&departmentIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	return departmentIDs, nil
+}

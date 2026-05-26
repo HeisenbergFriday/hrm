@@ -174,6 +174,8 @@ func migrate() error {
 		&Permission{},
 		&RolePermission{},
 		&UserRole{},
+		&MenuPermission{},
+		&DataPermission{},
 		&OperationLog{},
 		&SyncStatus{},
 		&DingTalkBinding{},

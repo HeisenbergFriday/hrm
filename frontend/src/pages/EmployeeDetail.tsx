@@ -15,6 +15,7 @@ import {
   Space,
   Spin,
   Statistic,
+  Tag,
   Timeline,
   Typography,
   message,

@@ -269,6 +269,11 @@ func (s *PerformanceService) CloseActivity(activityID, userID string) error {
 }
 
 func (s *PerformanceService) ListActivities(page, pageSize int, status, keyword, startDate, endDate string, scope *OrgDataScope) ([]database.PerformanceActivity, int64, error) {
+	// 普通员工（self 模式）只能看到自己参与的活动
+	if scope != nil && scope.IsSelf() {
+		return s.actRepo.FindAllByUserID(page, pageSize, status, keyword, startDate, endDate, scope.UserIDs)
+	}
+
 	var departmentIDs []string
 	if scope != nil && !scope.IsAll() {
 		departmentIDs = scope.DepartmentIDs

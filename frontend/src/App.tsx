@@ -1,28 +1,16 @@
 import { useEffect, useState, lazy, Suspense } from 'react'
-import { Layout, Menu, ConfigProvider, theme, Spin, message } from 'antd'
+import { Layout, Menu, ConfigProvider, theme, Spin, message, Button } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import {
   LoadingOutlined,
-  UserOutlined,
-  TeamOutlined,
-  ClockCircleOutlined,
-  FileOutlined,
-  KeyOutlined,
-  HistoryOutlined,
-  SettingOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   LogoutOutlined,
-  WarningOutlined,
-  FileExcelOutlined,
-  FileTextOutlined,
-  BarChartOutlined,
-  SyncOutlined,
-  LockOutlined,
-  SwapOutlined,
-  CalendarOutlined,
-  ScheduleOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
+import { menuConfig, logoutMenuItem, filterMenuByKeys } from './config/menu'
+import RouteGuard from './components/RouteGuard'
 
 const Login = lazy(() => import('./pages/Login'))
 const Callback = lazy(() => import('./pages/Callback'))
@@ -126,7 +114,7 @@ function App() {
   const [autoLogging, setAutoLogging] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
-  const { isLoggedIn, user, login, logout } = useAuthStore()
+  const { isLoggedIn, user, login, logout, menuKeys, setMenuKeys } = useAuthStore()
   const selectedMenuKey = location.pathname.startsWith('/employees/')
     ? '/employees'
     : location.pathname.startsWith('/performance/')
@@ -149,6 +137,42 @@ function App() {
       navigate('/login?mode=scan', { replace: true })
     }
   }
+
+  // 应用启动时刷新用户的菜单权限
+  useEffect(() => {
+    if (!isLoggedIn) return
+    axios.get('/api/v1/auth/me')
+      .then((res) => {
+        const keys = res.data?.data?.user?.menu_keys
+        if (Array.isArray(keys)) {
+          setMenuKeys(keys)
+        }
+      })
+      .catch(() => {})
+  }, [isLoggedIn])
+
+  // 定期检查权限变化，变更后自动刷新
+  useEffect(() => {
+    if (!isLoggedIn) return
+    const checkPermissionChange = async () => {
+      try {
+        const res = await axios.get('/api/v1/auth/me')
+        const newKeys = res.data?.data?.user?.menu_keys
+        if (Array.isArray(newKeys)) {
+          const currentKeysStr = JSON.stringify([...menuKeys].sort())
+          const newKeysStr = JSON.stringify([...newKeys].sort())
+          if (currentKeysStr !== newKeysStr && menuKeys.length > 0) {
+            message.info('权限已更新，正在刷新...')
+            setMenuKeys(newKeys)
+          }
+        }
+      } catch {
+        // 静默失败
+      }
+    }
+    const timer = setInterval(checkPermissionChange, 60000)
+    return () => clearInterval(timer)
+  }, [isLoggedIn, menuKeys])
 
   useEffect(() => {
     if (!isDingTalkEnv() || isLoggedIn || authPaths.includes(location.pathname)) {
@@ -249,141 +273,98 @@ function App() {
         <Sider
           collapsible
           collapsed={collapsed}
+          collapsedWidth={100}
           onCollapse={setCollapsed}
-          style={{ position: 'fixed', height: '100vh', overflow: 'auto', zIndex: 100, left: 0, top: 0 }}
+          trigger={null}
+          style={{ position: 'fixed', height: '100vh', overflow: 'auto', zIndex: 100, left: 0, top: 0, transition: 'all 0.3s ease' }}
         >
           <div
             className="logo"
-            style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 18, fontWeight: 'bold' }}
+            style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 16, fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden' }}
           >
             人事管理系统
           </div>
           <Menu theme="dark" mode="inline" selectedKeys={[selectedMenuKey]} defaultOpenKeys={location.pathname.startsWith('/performance/') ? ['performance'] : ['organization']}>
-            <Menu.Item key="/" icon={<UserOutlined />}>
-              <Link to="/">首页</Link>
-            </Menu.Item>
-            <Menu.SubMenu key="organization" icon={<TeamOutlined />} title="组织管理">
-              <Menu.Item key="/organization" icon={<TeamOutlined />}>
-                <Link to="/organization">人才管理驾驶舱</Link>
+            {filterMenuByKeys(menuConfig, menuKeys).map((item) => {
+              if (item.children) {
+                return (
+                  <Menu.SubMenu key={item.key} icon={item.icon} title={item.label}>
+                    {item.children.map((child) => (
+                      <Menu.Item key={child.key} icon={child.icon}>
+                        {child.label}
+                      </Menu.Item>
+                    ))}
+                  </Menu.SubMenu>
+                )
+              }
+              return (
+                <Menu.Item key={item.key} icon={item.icon}>
+                  {item.label}
+                </Menu.Item>
+              )
+            })}
+            {menuKeys.length > 0 && (
+              <Menu.Item key={logoutMenuItem.key} icon={logoutMenuItem.icon} onClick={handleLogout}>
+                {logoutMenuItem.label}
               </Menu.Item>
-              <Menu.Item key="/department-tree" icon={<TeamOutlined />}>
-                <Link to="/department-tree">组织架构</Link>
-              </Menu.Item>
-              <Menu.Item key="/employees" icon={<UserOutlined />}>
-                <Link to="/employees">组织花名册</Link>
-              </Menu.Item>
-              <Menu.Item key="/employee-profile" icon={<UserOutlined />}>
-                <Link to="/employee-profile">员工档案</Link>
-              </Menu.Item>
-              <Menu.Item key="/employee-flow" icon={<SwapOutlined />}>
-                <Link to="/employee-flow">入转调离</Link>
-              </Menu.Item>
-              <Menu.Item key="/talent-analysis" icon={<BarChartOutlined />}>
-                <Link to="/talent-analysis">人才分析</Link>
-              </Menu.Item>
-              <Menu.Item key="/sync-log" icon={<HistoryOutlined />}>
-                <Link to="/sync-log">同步日志</Link>
-              </Menu.Item>
-            </Menu.SubMenu>
-            <Menu.SubMenu key="attendance" icon={<ClockCircleOutlined />} title="考勤管理">
-              <Menu.Item key="/attendance" icon={<ClockCircleOutlined />}>
-                <Link to="/attendance">考勤查询</Link>
-              </Menu.Item>
-              <Menu.Item key="/attendance-stats" icon={<WarningOutlined />}>
-                <Link to="/attendance-stats">异常统计</Link>
-              </Menu.Item>
-              <Menu.Item key="/attendance-export" icon={<FileExcelOutlined />}>
-                <Link to="/attendance-export">导出记录</Link>
-              </Menu.Item>
-              <Menu.Item key="/week-schedule" icon={<CalendarOutlined />}>
-                <Link to="/week-schedule">大小周与节假日</Link>
-              </Menu.Item>
-              <Menu.Item key="/employee-shift-config" icon={<ClockCircleOutlined />}>
-                <Link to="/employee-shift-config">员工下班时间</Link>
-              </Menu.Item>
-            </Menu.SubMenu>
-            <Menu.SubMenu key="approval" icon={<FileOutlined />} title="审批管理">
-              <Menu.Item key="/approval-templates" icon={<FileTextOutlined />}>
-                <Link to="/approval-templates">审批模板</Link>
-              </Menu.Item>
-              <Menu.Item key="/approval-instances" icon={<FileOutlined />}>
-                <Link to="/approval-instances">审批实例</Link>
-              </Menu.Item>
-              <Menu.Item key="/approval-stats" icon={<BarChartOutlined />}>
-                <Link to="/approval-stats">审批统计</Link>
-              </Menu.Item>
-            </Menu.SubMenu>
-            <Menu.Item key="/role-management" icon={<KeyOutlined />}>
-              <Link to="/role-management">权限管理</Link>
-            </Menu.Item>
-            <Menu.SubMenu key="jobs" icon={<SyncOutlined />} title="任务中心">
-              <Menu.Item key="/sync-jobs" icon={<SyncOutlined />}>
-                <Link to="/sync-jobs">同步任务</Link>
-              </Menu.Item>
-            </Menu.SubMenu>
-            <Menu.SubMenu key="audit" icon={<HistoryOutlined />} title="审计日志">
-              <Menu.Item key="/audit-logs" icon={<HistoryOutlined />}>
-                <Link to="/audit-logs">操作日志</Link>
-              </Menu.Item>
-            </Menu.SubMenu>
-            <Menu.Item key="/leave-overtime" icon={<ScheduleOutlined />}>
-              <Link to="/leave-overtime">年假与调休</Link>
-            </Menu.Item>
-            <Menu.SubMenu key="performance" icon={<BarChartOutlined />} title="绩效管理">
-              <Menu.Item key="/performance-overview">
-                <Link to="/performance-overview">绩效活动</Link>
-              </Menu.Item>
-              <Menu.Item key="/performance-indicator-library">
-                <Link to="/performance-indicator-library">指标库管理</Link>
-              </Menu.Item>
-            </Menu.SubMenu>
-            <Menu.Item key="/setting" icon={<SettingOutlined />}>
-              <Link to="/setting">系统设置</Link>
-            </Menu.Item>
-            <Menu.Item key="/logout" icon={<LogoutOutlined />} onClick={handleLogout}>
-              退出登录
-            </Menu.Item>
+            )}
           </Menu>
+          <div
+            onClick={() => setCollapsed(!collapsed)}
+            style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'rgba(255,255,255,0.65)', background: 'rgba(0,0,0,0.15)', borderTop: '1px solid rgba(255,255,255,0.1)', transition: 'all 0.3s' }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.background = 'rgba(0,0,0,0.3)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; e.currentTarget.style.background = 'rgba(0,0,0,0.15)' }}
+          >
+            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+          </div>
         </Sider>
-        <Layout style={{ marginLeft: collapsed ? 80 : 200, transition: 'margin-left 0.2s' }}>
-          <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 24px' }}>
-            <div style={{ color: '#fff' }}>{user?.name || '管理员'}</div>
+        <Layout style={{ marginLeft: collapsed ? 100 : 200, transition: 'margin-left 0.3s ease' }}>
+          <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 24px', gap: 16 }}>
+            <span style={{ color: '#fff' }}>{user?.name || '管理员'}</span>
+            <Button
+              type="text"
+              icon={<LogoutOutlined />}
+              onClick={handleLogout}
+              style={{ color: '#fff' }}
+            >
+              退出
+            </Button>
           </Header>
           <Content style={{ margin: '24px 16px', padding: 24, minHeight: 280, background: colorBgContainer, borderRadius: borderRadiusLG }}>
             <Suspense fallback={<PageLoading />}>
               <Routes>
                 <Route path="/" element={<Home />} />
-                <Route path="/department-tree" element={<DepartmentTree />} />
-                <Route path="/employees" element={<EmployeeList />} />
-                <Route path="/employees/:id" element={<EmployeeDetail />} />
-                <Route path="/sync-log" element={<SyncLog />} />
-                <Route path="/organization" element={<Organization />} />
-                <Route path="/attendance" element={<Attendance />} />
-                <Route path="/attendance-stats" element={<AttendanceStats />} />
-                <Route path="/attendance-export" element={<AttendanceExport />} />
-                <Route path="/week-schedule" element={<WeekSchedule />} />
-                <Route path="/employee-shift-config" element={<EmployeeShiftConfig />} />
-                <Route path="/approval" element={<Approval />} />
-                <Route path="/approval-templates" element={<ApprovalTemplate />} />
-                <Route path="/approval-instances" element={<ApprovalInstance />} />
-                <Route path="/approval-detail/:id" element={<ApprovalDetail />} />
-                <Route path="/approval-stats" element={<ApprovalStats />} />
-                <Route path="/role-management" element={<RoleManagement />} />
-                <Route path="/sync-jobs" element={<SyncJobs />} />
-                <Route path="/audit-logs" element={<AuditLogs />} />
-                <Route path="/employee-profile" element={<EmployeeProfile />} />
-                <Route path="/employee-flow" element={<EmployeeFlow />} />
-                <Route path="/talent-analysis" element={<TalentAnalysis />} />
-                <Route path="/leave-overtime" element={<LeaveOvertime />} />
-                <Route path="/performance-overview" element={<PerformanceOverview />} />
-                <Route path="/performance-indicator-library" element={<PerformanceIndicatorLibrary />} />
-                <Route path="/performance-result/:activityId/:participantId" element={<PerformanceResultView />} />
-                <Route path="/performance-self-eval/:activityId/:participantId" element={<PerformanceSelfEval />} />
-                <Route path="/performance-manager-eval/:activityId/:participantId" element={<PerformanceManagerEval />} />
-                <Route path="/performance-goal-setting/:activityId/:participantId" element={<PerformanceGoalSetting />} />
-                <Route path="/permission" element={<Permission />} />
+                <Route path="/department-tree" element={<RouteGuard menuKey="department-tree"><DepartmentTree /></RouteGuard>} />
+                <Route path="/employees" element={<RouteGuard menuKey="employees"><EmployeeList /></RouteGuard>} />
+                <Route path="/employees/:id" element={<RouteGuard menuKey="employees"><EmployeeDetail /></RouteGuard>} />
+                <Route path="/sync-log" element={<RouteGuard menuKey="sync-log"><SyncLog /></RouteGuard>} />
+                <Route path="/organization" element={<RouteGuard menuKey="organization-dashboard"><Organization /></RouteGuard>} />
+                <Route path="/attendance" element={<RouteGuard menuKey="attendance"><Attendance /></RouteGuard>} />
+                <Route path="/attendance-stats" element={<RouteGuard menuKey="attendance-stats"><AttendanceStats /></RouteGuard>} />
+                <Route path="/attendance-export" element={<RouteGuard menuKey="attendance-export"><AttendanceExport /></RouteGuard>} />
+                <Route path="/week-schedule" element={<RouteGuard menuKey="week-schedule"><WeekSchedule /></RouteGuard>} />
+                <Route path="/employee-shift-config" element={<RouteGuard menuKey="employee-shift-config"><EmployeeShiftConfig /></RouteGuard>} />
+                <Route path="/approval" element={<RouteGuard menuKey="approval-templates"><Approval /></RouteGuard>} />
+                <Route path="/approval-templates" element={<RouteGuard menuKey="approval-templates"><ApprovalTemplate /></RouteGuard>} />
+                <Route path="/approval-instances" element={<RouteGuard menuKey="approval-instances"><ApprovalInstance /></RouteGuard>} />
+                <Route path="/approval-detail/:id" element={<RouteGuard menuKey="approval-instances"><ApprovalDetail /></RouteGuard>} />
+                <Route path="/approval-stats" element={<RouteGuard menuKey="approval-stats"><ApprovalStats /></RouteGuard>} />
+                <Route path="/role-management" element={<RouteGuard menuKey="permission"><RoleManagement /></RouteGuard>} />
+                <Route path="/sync-jobs" element={<RouteGuard menuKey="sync-jobs"><SyncJobs /></RouteGuard>} />
+                <Route path="/audit-logs" element={<RouteGuard menuKey="audit-logs"><AuditLogs /></RouteGuard>} />
+                <Route path="/employee-profile" element={<RouteGuard menuKey="employee-profile"><EmployeeProfile /></RouteGuard>} />
+                <Route path="/employee-flow" element={<RouteGuard menuKey="employee-flow"><EmployeeFlow /></RouteGuard>} />
+                <Route path="/talent-analysis" element={<RouteGuard menuKey="talent-analysis"><TalentAnalysis /></RouteGuard>} />
+                <Route path="/leave-overtime" element={<RouteGuard menuKey="leave-overtime"><LeaveOvertime /></RouteGuard>} />
+                <Route path="/performance-overview" element={<RouteGuard menuKey="performance-overview"><PerformanceOverview /></RouteGuard>} />
+                <Route path="/performance-indicator-library" element={<RouteGuard menuKey="performance-indicator-library"><PerformanceIndicatorLibrary /></RouteGuard>} />
+                <Route path="/performance-result/:activityId/:participantId" element={<RouteGuard menuKey="performance-overview"><PerformanceResultView /></RouteGuard>} />
+                <Route path="/performance-self-eval/:activityId/:participantId" element={<RouteGuard menuKey="performance-overview"><PerformanceSelfEval /></RouteGuard>} />
+                <Route path="/performance-manager-eval/:activityId/:participantId" element={<RouteGuard menuKey="performance-overview"><PerformanceManagerEval /></RouteGuard>} />
+                <Route path="/performance-goal-setting/:activityId/:participantId" element={<RouteGuard menuKey="performance-overview"><PerformanceGoalSetting /></RouteGuard>} />
+                <Route path="/permission" element={<RouteGuard menuKey="permission"><Permission /></RouteGuard>} />
                 <Route path="/log" element={<Log />} />
-                <Route path="/setting" element={<Setting />} />
+                <Route path="/setting" element={<RouteGuard menuKey="setting"><Setting /></RouteGuard>} />
               </Routes>
             </Suspense>
           </Content>

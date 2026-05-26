@@ -132,6 +132,16 @@ func generateToken(userID, userName string) (string, time.Time, error) {
 	return tokenString, expiresAt, err
 }
 
+// buildUserMenuKeys 聚合用户的菜单权限 key 列表
+func buildUserMenuKeys(userID string) []string {
+	permService := service.NewPermissionService(database.DB)
+	keys, err := permService.GetUserMenuKeys(userID)
+	if err != nil {
+		return []string{}
+	}
+	return keys
+}
+
 // Login 登录
 func Login(c *gin.Context) {
 	var req struct {
@@ -202,6 +212,7 @@ func Login(c *gin.Context) {
 				"position":      user.Position,
 				"avatar":        user.Avatar,
 				"status":        user.Status,
+				"menu_keys":     buildUserMenuKeys(user.UserID),
 			},
 			"expires_at": expiresAt,
 		},
@@ -651,6 +662,7 @@ func DingTalkInAppLogin(c *gin.Context) {
 				"position":      user.Position,
 				"avatar":        user.Avatar,
 				"status":        user.Status,
+				"menu_keys":     buildUserMenuKeys(user.UserID),
 			},
 			"expires_at": expiresAt,
 		},
@@ -826,6 +838,7 @@ func DingTalkCallback(c *gin.Context) {
 				"position":      user.Position,
 				"avatar":        user.Avatar,
 				"status":        user.Status,
+				"menu_keys":     buildUserMenuKeys(user.UserID),
 			},
 			"expires_at": expiresAt,
 		},
@@ -1031,6 +1044,7 @@ func GetCurrentUser(c *gin.Context) {
 				"position":      user.Position,
 				"avatar":        user.Avatar,
 				"status":        user.Status,
+				"menu_keys":     buildUserMenuKeys(user.UserID),
 			},
 		},
 	})
@@ -2145,6 +2159,10 @@ func AssignUserRole(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
 		return
 	}
+	if req.UserID == "" || req.RoleID == 0 {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 和 role_id 不能为空"})
+		return
+	}
 	permService := service.NewPermissionService(database.DB)
 	if err := permService.AssignUserRole(req.UserID, req.RoleID); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "分配角色失败"})
@@ -2163,12 +2181,37 @@ func RemoveUserRole(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
 		return
 	}
+	if req.UserID == "" || req.RoleID == 0 {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 和 role_id 不能为空"})
+		return
+	}
 	permService := service.NewPermissionService(database.DB)
 	if err := permService.RemoveUserRole(req.UserID, req.RoleID); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "移除角色失败"})
 		return
 	}
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "角色移除成功"})
+}
+
+// GetRoleUsers 获取指定角色下的用户列表
+func GetRoleUsers(c *gin.Context) {
+	roleIDStr := c.Param("role_id")
+	if roleIDStr == "" {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 不能为空"})
+		return
+	}
+	var roleID uint
+	if _, err := fmt.Sscanf(roleIDStr, "%d", &roleID); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	users, err := permService.GetRoleUsers(roleID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取角色用户失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"users": users}})
 }
 
 // GetUserPermissions 获取指定用户的权限码列表
@@ -2185,6 +2228,94 @@ func GetUserPermissions(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"permissions": permissions}})
+}
+
+// GetMenuPermission 获取角色的菜单权限
+func GetMenuPermission(c *gin.Context) {
+	roleIDStr := c.Param("role_id")
+	roleID, err := strconv.ParseUint(roleIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	menuKeys, err := permService.GetMenuPermission(uint(roleID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取菜单权限失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"menu_keys": menuKeys}})
+}
+
+// SaveMenuPermission 保存角色的菜单权限
+func SaveMenuPermission(c *gin.Context) {
+	roleIDStr := c.Param("role_id")
+	roleID, err := strconv.ParseUint(roleIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
+		return
+	}
+	var req struct {
+		MenuKeys string `json:"menu_keys" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	if err := permService.SaveMenuPermission(uint(roleID), req.MenuKeys); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "保存菜单权限失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "菜单权限保存成功"})
+}
+
+// GetDataPermission 获取角色的数据权限
+func GetDataPermission(c *gin.Context) {
+	roleIDStr := c.Param("role_id")
+	roleID, err := strconv.ParseUint(roleIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	scope, departmentKeys, err := permService.GetDataPermission(uint(roleID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据权限失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{
+		"scope":           scope,
+		"department_keys": departmentKeys,
+	}})
+}
+
+// SaveDataPermission 保存角色的数据权限
+func SaveDataPermission(c *gin.Context) {
+	roleIDStr := c.Param("role_id")
+	roleID, err := strconv.ParseUint(roleIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
+		return
+	}
+	var req struct {
+		Scope          string `json:"scope" binding:"required"`
+		DepartmentKeys string `json:"department_keys"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
+		return
+	}
+	if req.Scope != "all" && req.Scope != "department" {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "scope 值无效，仅支持 all 或 department"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	if err := permService.SaveDataPermission(uint(roleID), req.Scope, req.DepartmentKeys); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "保存数据权限失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "数据权限保存成功"})
 }
 
 // GetAuditLogs 获取审计日志

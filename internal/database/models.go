@@ -123,20 +123,43 @@ type Permission struct {
 
 // RolePermission 角色权限模型
 type RolePermission struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	RoleID       uint      `gorm:"not null" json:"role_id"`
-	PermissionID uint      `gorm:"not null" json:"permission_id"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           uint           `gorm:"primaryKey" json:"id"`
+	RoleID       uint           `gorm:"not null" json:"role_id"`
+	PermissionID uint           `gorm:"not null" json:"permission_id"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // UserRole 用户角色模型
 type UserRole struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	UserID    string    `gorm:"type:varchar(64);not null" json:"user_id"`
-	RoleID    uint      `gorm:"not null" json:"role_id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	UserID    string         `gorm:"type:varchar(64);not null" json:"user_id"`
+	RoleID    uint           `gorm:"not null" json:"role_id"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// MenuPermission 角色菜单权限模型（每角色一条记录，menu_keys 为 JSON 数组）
+type MenuPermission struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	RoleID    uint           `gorm:"uniqueIndex;not null" json:"role_id"`
+	MenuKeys  string         `gorm:"type:text;not null" json:"menu_keys"` // JSON array: ["home","organization",...]
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// DataPermission 角色数据权限模型（每角色一条记录）
+type DataPermission struct {
+	ID             uint           `gorm:"primaryKey" json:"id"`
+	RoleID         uint           `gorm:"uniqueIndex;not null" json:"role_id"`
+	Scope          string         `gorm:"type:varchar(32);not null;default:'all'" json:"scope"` // "all" or "department"
+	DepartmentKeys string         `gorm:"type:text" json:"department_keys"`                     // JSON array: ["dept1","dept2",...]
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // OperationLog 操作日志模型

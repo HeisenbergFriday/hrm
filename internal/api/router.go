@@ -126,8 +126,15 @@ func SetupRouter() *gin.Engine {
 				permission.GET("/users/:user_id/roles", GetUserRoles)
 				permission.POST("/users/roles/assign", AssignUserRole)
 				permission.POST("/users/roles/remove", RemoveUserRole)
+				permission.GET("/roles/:role_id/users", GetRoleUsers)
 				// 用户权限查询
 				permission.GET("/users/:user_id/permissions", GetUserPermissions)
+				// 菜单权限
+				permission.GET("/roles/:role_id/menu", GetMenuPermission)
+				permission.POST("/roles/:role_id/menu", SaveMenuPermission)
+				// 数据权限
+				permission.GET("/roles/:role_id/data", GetDataPermission)
+				permission.POST("/roles/:role_id/data", SaveDataPermission)
 			}
 
 			// 审计日志模块

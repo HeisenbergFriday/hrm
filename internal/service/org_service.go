@@ -21,6 +21,7 @@ type OrgDataScope struct {
 	DepartmentIDs     []string `json:"department_ids"`
 	DepartmentNames   []string `json:"department_names"`
 	RootDepartmentIDs []string `json:"root_department_ids"`
+	UserIDs           []string `json:"user_ids,omitempty"` // 普通员工模式下的用户ID列表
 
 	all             bool
 	departmentIDSet map[string]struct{}
@@ -39,6 +40,11 @@ func (s *OrgDataScope) init() {
 
 func (s *OrgDataScope) IsAll() bool {
 	return s == nil || s.all || strings.EqualFold(s.Mode, "all")
+}
+
+// IsSelf 判断是否为"只看自己"模式（普通员工场景）
+func (s *OrgDataScope) IsSelf() bool {
+	return s != nil && strings.EqualFold(s.Mode, "self")
 }
 
 func (s *OrgDataScope) AllowsDepartment(departmentID string) bool {
