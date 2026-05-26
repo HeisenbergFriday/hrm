@@ -6,6 +6,7 @@ import { auditAPI, userAPI } from '../services/api'
 import dayjs from 'dayjs'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
+import { formatDateTime } from '../utils/format'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -65,11 +66,45 @@ const AuditLogs: React.FC = () => {
       title: '操作',
       dataIndex: 'operation',
       key: 'operation',
+      render: (v: string) => {
+        const map: Record<string, string> = {
+          create_goal_template: '创建目标模板',
+          create_template: '创建模板',
+          update_template: '更新模板',
+          delete_template: '删除模板',
+          create_review: '创建评审',
+          update_review: '更新评审',
+          delete_review: '删除评审',
+          create_activity: '创建绩效活动',
+          update_activity: '更新绩效活动',
+          batch_confirm: '批量确认',
+          lock_activity: '锁定活动',
+          unlock_activity: '解锁活动',
+          archive_activity: '归档活动',
+          sync_attendance: '同步考勤',
+          sync_user: '同步用户',
+          sync_department: '同步部门',
+        }
+        return map[v] || v
+      },
     },
     {
       title: '资源',
       dataIndex: 'resource',
       key: 'resource',
+      render: (v: string) => {
+        const map: Record<string, string> = {
+          performance_template: '绩效模板',
+          performance_activity: '绩效活动',
+          performance_review: '绩效评审',
+          attendance: '考勤',
+          user: '用户',
+          department: '部门',
+        }
+        const prefix = v.split(':')[0]
+        const suffix = v.includes(':') ? v.slice(v.indexOf(':')) : ''
+        return (map[prefix] || prefix) + suffix
+      },
     },
     {
       title: 'IP地址',
@@ -80,15 +115,34 @@ const AuditLogs: React.FC = () => {
       title: '操作时间',
       dataIndex: 'created_at',
       key: 'created_at',
+      render: (v: string) => formatDateTime(v),
     },
     {
       title: '详情',
       key: 'details',
-      render: (_: any, record: AuditLog) => (
-        <Text type="secondary" ellipsis>
-          {JSON.stringify(record.details)}
-        </Text>
-      ),
+      render: (_: any, record: AuditLog) => {
+        const keyMap: Record<string, string> = {
+          applicable_cycles: '适用周期', department_id: '部门ID', department_name: '部门名称',
+          template_id: '模板ID', template_name: '模板名称', status: '状态',
+          activity_id: '活动ID', activity_name: '活动名称', user_id: '用户ID',
+          user_name: '用户名', score: '分数', level: '等级', comment: '评论',
+          review_id: '评审ID', goal_id: '目标ID', action: '操作', result: '结果',
+        }
+        const valMap: Record<string, string> = {
+          monthly: '月度', quarterly: '季度', annual: '年度', weekly: '周度',
+          active: '启用', inactive: '停用', draft: '草稿',
+        }
+        const translate = (obj: any): any => {
+          if (Array.isArray(obj)) return obj.map(translate)
+          if (obj && typeof obj === 'object') {
+            return Object.fromEntries(
+              Object.entries(obj).map(([k, v]) => [keyMap[k] || k, typeof v === 'string' ? (valMap[v] || v) : translate(v)])
+            )
+          }
+          return obj
+        }
+        return <Text type="secondary" ellipsis>{JSON.stringify(translate(record.details))}</Text>
+      },
     },
   ]
 

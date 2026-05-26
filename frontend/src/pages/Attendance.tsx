@@ -7,6 +7,7 @@ import dayjs from 'dayjs'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
+import { formatDateTime } from '../utils/format'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -90,9 +91,9 @@ const Attendance: React.FC = () => {
   const columns = [
     { title: '姓名', dataIndex: 'user_name', key: 'user_name', render: (v: string) => <span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text-heading)' }}>{v}</span> },
     { title: '员工ID', dataIndex: 'user_id', key: 'user_id', render: (v: string) => <span style={{ color: 'var(--color-text-secondary)' }}>{v}</span> },
-    { title: '打卡时间', dataIndex: 'check_time', key: 'check_time' },
+    { title: '打卡时间', dataIndex: 'check_time', key: 'check_time', render: (v: string) => formatDateTime(v) },
     { title: '打卡类型', dataIndex: 'check_type', key: 'check_type' },
-    { title: '打卡地点', dataIndex: 'location', key: 'location', render: (v: string) => v || '-' },
+    { title: '打卡地点', dataIndex: 'location', key: 'location', render: (v: string) => (v === 'Normal' ? '正常' : v) || '-' },
     {
       title: '状态', dataIndex: 'is_abnormal', key: 'is_abnormal',
       render: (isAbnormal: boolean, record: AttendanceRecord) => (
@@ -145,7 +146,7 @@ const Attendance: React.FC = () => {
             color: 'var(--color-text-secondary)',
             fontSize: 'var(--font-size-sm)',
           }}>
-            最近同步时间: <span style={{ color: 'var(--color-text-heading)', fontWeight: 'var(--font-weight-medium)' }}>{lastSyncData.data?.attendance?.last_sync_time || '暂无'}</span>
+            最近同步时间: <span style={{ color: 'var(--color-text-heading)', fontWeight: 'var(--font-weight-medium)' }}>{lastSyncData.data?.attendance?.last_sync_time ? formatDateTime(lastSyncData.data.attendance.last_sync_time) : '暂无'}</span>
             {lastSyncData.data?.attendance?.record_count !== undefined && (
               <span style={{ marginLeft: 20 }}>同步记录数: <span style={{ color: 'var(--color-text-heading)', fontWeight: 'var(--font-weight-medium)' }}>{lastSyncData.data.attendance.record_count}</span></span>
             )}
@@ -195,9 +196,9 @@ const Attendance: React.FC = () => {
             {[
               { label: '员工姓名', value: selectedRecord.user_name },
               { label: '员工ID', value: selectedRecord.user_id },
-              { label: '打卡时间', value: selectedRecord.check_time },
+              { label: '打卡时间', value: formatDateTime(selectedRecord.check_time) },
               { label: '打卡类型', value: selectedRecord.check_type },
-              { label: '打卡地点', value: selectedRecord.location || '-' },
+              { label: '打卡地点', value: (selectedRecord.location === 'Normal' ? '正常' : selectedRecord.location) || '-' },
               { label: '状态', value: selectedRecord.is_abnormal ? selectedRecord.abnormal_type || '异常' : '正常' },
             ].map((item) => (
               <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid var(--color-border-light)' }}>

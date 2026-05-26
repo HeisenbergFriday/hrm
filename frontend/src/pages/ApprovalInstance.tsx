@@ -8,6 +8,7 @@ import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
+import { formatDateTime } from '../utils/format'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -79,7 +80,7 @@ const ApprovalInstance: React.FC = () => {
   }
 
   const getStatusTag = (status: string) => {
-    switch (status) {
+    switch (status.toLowerCase()) {
       case 'completed':
         return <StatusTag color="green">已完成</StatusTag>
       case 'in_progress':
@@ -124,12 +125,13 @@ const ApprovalInstance: React.FC = () => {
       title: '发起时间',
       dataIndex: 'create_time',
       key: 'create_time',
+      render: (v: string) => formatDateTime(v),
     },
     {
       title: '结束时间',
       dataIndex: 'finish_time',
       key: 'finish_time',
-      render: (finishTime: string | null) => finishTime || '-',
+      render: (finishTime: string | null) => finishTime ? formatDateTime(finishTime) : '-',
     },
     {
       title: '操作',

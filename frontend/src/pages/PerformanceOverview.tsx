@@ -22,6 +22,7 @@ import {
 } from '../services/api'
 import PerformanceActivityEditor from '../components/PerformanceActivityEditor'
 import { BarChartOutlined, PlusOutlined } from '@ant-design/icons'
+import { getCycleLabel, formatDateTime } from '../utils/format'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -589,7 +590,7 @@ const PerformanceOverview: React.FC = () => {
   // 活动列表 columns
   const activityColumns: ColumnsType<PerformanceActivity> = [
     { title: '活动名称', dataIndex: 'name', key: 'name', width: 180, ellipsis: true },
-    { title: '周期', dataIndex: 'cycle_type', key: 'cycle_type', width: 80 },
+    { title: '周期', dataIndex: 'cycle_type', key: 'cycle_type', width: 80, render: (v: string) => getCycleLabel(v) },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 90,
       render: (status: string) => {
@@ -597,8 +598,8 @@ const PerformanceOverview: React.FC = () => {
         return <StatusTag color={s.color}>{s.label}</StatusTag>
       }
     },
-    { title: '自评时间', key: 'self_eval', width: 200, render: (_, r) => `${r.self_eval_start_at} ~ ${r.self_eval_end_at}` },
-    { title: '主管评分时间', key: 'mgr_eval', width: 200, render: (_, r) => `${r.manager_eval_start_at} ~ ${r.manager_eval_end_at}` },
+    { title: '自评时间', key: 'self_eval', width: 200, render: (_, r) => `${formatDateTime(r.self_eval_start_at)} ~ ${formatDateTime(r.self_eval_end_at)}` },
+    { title: '主管评分时间', key: 'mgr_eval', width: 200, render: (_, r) => `${formatDateTime(r.manager_eval_start_at)} ~ ${formatDateTime(r.manager_eval_end_at)}` },
     { title: '操作', key: 'actions', fixed: 'right', width: 220, render: (_, record) => (
       <Space size={2} wrap>{getActionButtons(record)}</Space>
     )},
@@ -891,11 +892,11 @@ const PerformanceOverview: React.FC = () => {
               <Descriptions.Item label="状态">
                 <StatusTag color={STATUS_MAP[currentActivity.status]?.color}>{STATUS_MAP[currentActivity.status]?.label}</StatusTag>
               </Descriptions.Item>
-              <Descriptions.Item label="周期类型">{currentActivity.cycle_type}</Descriptions.Item>
-              <Descriptions.Item label="绩效周期">{currentActivity.start_date} ~ {currentActivity.end_date}</Descriptions.Item>
-              <Descriptions.Item label="自评时间">{currentActivity.self_eval_start_at} ~ {currentActivity.self_eval_end_at}</Descriptions.Item>
-              <Descriptions.Item label="主管评分">{currentActivity.manager_eval_start_at} ~ {currentActivity.manager_eval_end_at}</Descriptions.Item>
-              <Descriptions.Item label="结果确认">{currentActivity.result_confirm_start_at} ~ {currentActivity.result_confirm_end_at}</Descriptions.Item>
+              <Descriptions.Item label="周期类型">{getCycleLabel(currentActivity.cycle_type)}</Descriptions.Item>
+              <Descriptions.Item label="绩效周期">{formatDateTime(currentActivity.start_date)} ~ {formatDateTime(currentActivity.end_date)}</Descriptions.Item>
+              <Descriptions.Item label="自评时间">{formatDateTime(currentActivity.self_eval_start_at)} ~ {formatDateTime(currentActivity.self_eval_end_at)}</Descriptions.Item>
+              <Descriptions.Item label="主管评分">{formatDateTime(currentActivity.manager_eval_start_at)} ~ {formatDateTime(currentActivity.manager_eval_end_at)}</Descriptions.Item>
+              <Descriptions.Item label="结果确认">{formatDateTime(currentActivity.result_confirm_start_at)} ~ {formatDateTime(currentActivity.result_confirm_end_at)}</Descriptions.Item>
             </Descriptions>
 
             {/* 操作按钮 - 紧凑布局 */}

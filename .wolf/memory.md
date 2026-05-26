@@ -961,3 +961,82 @@
 
 | Time | Action | File(s) | Outcome | ~Tokens |
 |------|--------|---------|---------|--------|
+
+## Session: 2026-05-26 14:49
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-05-26 14:51
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 14:57 | Created frontend/src/utils/format.ts | — | ~156 |
+| 14:57 | Edited frontend/src/pages/PerformanceOverview.tsx | added 1 import(s) | ~60 |
+| 14:57 | Edited frontend/src/pages/PerformanceOverview.tsx | inline fix | ~34 |
+| 14:58 | Edited frontend/src/pages/PerformanceOverview.tsx | 5→5 lines | ~228 |
+| 14:58 | Edited frontend/src/pages/PerformanceOverview.tsx | 2→2 lines | ~90 |
+| 14:58 | Edited frontend/src/pages/RoleManagement.tsx | added 1 import(s) | ~78 |
+| 14:58 | Edited frontend/src/pages/RoleManagement.tsx | 6→6 lines | ~78 |
+| 14:58 | Edited frontend/src/pages/ApprovalTemplate.tsx | added 1 import(s) | ~28 |
+| 14:58 | Edited frontend/src/pages/ApprovalTemplate.tsx | 2→2 lines | ~64 |
+| 14:58 | Edited frontend/src/pages/AttendanceExport.tsx | added 1 import(s) | ~35 |
+| 14:58 | Edited frontend/src/pages/AttendanceExport.tsx | inline fix | ~22 |
+| 14:58 | Edited frontend/src/pages/AttendanceExport.tsx | inline fix | ~31 |
+| 14:58 | Edited frontend/src/pages/AuditLogs.tsx | added 1 import(s) | ~43 |
+| 14:59 | Edited frontend/src/pages/AuditLogs.tsx | CSS: render, v | ~40 |
+| 14:59 | Edited frontend/src/pages/Log.tsx | added 1 import(s) | ~43 |
+| 14:59 | Edited frontend/src/pages/Log.tsx | inline fix | ~31 |
+| 15:00 | Edited frontend/src/pages/LeaveOvertime.tsx | modified Number() | ~26 |
+| 15:00 | Edited frontend/src/pages/WeekSchedule.tsx | CSS: mm | ~29 |
+| 15:00 | Edited frontend/src/pages/WeekSchedule.tsx | "MM-DD HH:mm" → "YYYY年M月D日 HH:mm:ss" | ~20 |
+| 15:00 | Edited frontend/src/pages/LeaveOvertime.tsx | added 1 import(s) | ~28 |
+| 15:01 | Edited frontend/src/pages/DepartmentTree.tsx | added 1 import(s) | ~26 |
+| 15:01 | Edited frontend/src/pages/DepartmentTree.tsx | removed 8 lines | ~3 |
+| 15:03 | Edited frontend/src/pages/LeaveOvertime.tsx | inline fix | ~26 |
+| 15:06 | Session end: 23 writes across 10 files (format.ts, PerformanceOverview.tsx, RoleManagement.tsx, ApprovalTemplate.tsx, AttendanceExport.tsx) | 11 reads | ~26745 tok |
+| 15:06 | Session end: 23 writes across 10 files (format.ts, PerformanceOverview.tsx, RoleManagement.tsx, ApprovalTemplate.tsx, AttendanceExport.tsx) | 11 reads | ~26745 tok |
+| 15:12 | Edited frontend/src/App.tsx | added 1 import(s) | ~49 |
+| 15:12 | Edited frontend/src/App.tsx | inline fix | ~9 |
+| 15:13 | Edited frontend/src/pages/ApprovalInstance.tsx | added 1 import(s) | ~35 |
+| 15:13 | Edited frontend/src/pages/ApprovalInstance.tsx | 6→6 lines | ~69 |
+| 15:13 | Edited frontend/src/pages/ApprovalInstance.tsx | CSS: v | ~93 |
+| 15:13 | Edited frontend/src/pages/Attendance.tsx | added 1 import(s) | ~28 |
+| 15:13 | Edited frontend/src/pages/Attendance.tsx | inline fix | ~31 |
+| 15:14 | Edited frontend/src/pages/Approval.tsx | added 1 import(s) | ~27 |
+| 15:14 | Edited frontend/src/pages/Approval.tsx | 2→2 lines | ~24 |
+| 15:14 | Edited frontend/src/pages/Approval.tsx | modified formatDateTime() | ~66 |
+| 15:15 | Edited frontend/src/pages/ApprovalDetail.tsx | added 1 import(s) | ~28 |
+| 15:15 | Edited frontend/src/pages/ApprovalDetail.tsx | 2→2 lines | ~23 |
+| 15:15 | Edited frontend/src/pages/ApprovalDetail.tsx | 3→3 lines | ~88 |
+| 15:15 | Edited frontend/src/pages/ApprovalDetail.tsx | inline fix | ~35 |
+| 15:15 | Edited frontend/src/pages/SyncJobs.tsx | added 1 import(s) | ~28 |
+| 15:15 | Edited frontend/src/pages/SyncJobs.tsx | 2→2 lines | ~23 |
+| 15:15 | Edited frontend/src/pages/SyncJobs.tsx | 10→12 lines | ~84 |
+| 15:18 | Session end: 40 writes across 16 files (format.ts, PerformanceOverview.tsx, RoleManagement.tsx, ApprovalTemplate.tsx, AttendanceExport.tsx) | 17 reads | ~30017 tok |
+| 15:20 | Edited frontend/src/pages/EmployeeProfile.tsx | CSS: map, active, inactive | ~72 |
+| 15:21 | Session end: 41 writes across 17 files (format.ts, PerformanceOverview.tsx, RoleManagement.tsx, ApprovalTemplate.tsx, AttendanceExport.tsx) | 18 reads | ~30089 tok |
+| 15:23 | Edited frontend/src/pages/TalentAnalysis.tsx | inline fix | ~20 |
+| 15:23 | Edited frontend/src/pages/SyncLog.tsx | inline fix | ~33 |
+| 15:23 | Edited frontend/src/pages/SyncLog.tsx | inline fix | ~30 |
+| 15:23 | Edited frontend/src/pages/Attendance.tsx | inline fix | ~68 |
+| 15:23 | Edited frontend/src/pages/Attendance.tsx | inline fix | ~35 |
+| 15:23 | Edited frontend/src/pages/AttendanceStats.tsx | 1→4 lines | ~58 |
+| 15:24 | Edited frontend/src/pages/Attendance.tsx | 3→3 lines | ~77 |
+| 15:25 | Session end: 48 writes across 20 files (format.ts, PerformanceOverview.tsx, RoleManagement.tsx, ApprovalTemplate.tsx, AttendanceExport.tsx) | 20 reads | ~33316 tok |
+| 15:28 | Edited frontend/src/pages/SyncJobs.tsx | 12→13 lines | ~134 |
+| 15:29 | Edited frontend/src/main.tsx | 4→8 lines | ~55 |
+| 15:29 | Edited frontend/src/pages/AuditLogs.tsx | expanded (+34 lines) | ~371 |
+| 15:30 | Edited frontend/src/pages/WeekSchedule.tsx | added 2 condition(s) | ~263 |
+| 15:31 | Edited frontend/src/pages/WeekSchedule.tsx | CSS: id | ~137 |
+| 15:31 | Edited frontend/src/pages/WeekSchedule.tsx | inline fix | ~11 |
+| 15:32 | Edited frontend/src/pages/WeekSchedule.tsx | inline fix | ~8 |
+| 15:36 | Edited frontend/src/pages/AuditLogs.tsx | expanded (+8 lines) | ~217 |
+| 15:37 | Session end: 56 writes across 21 files (format.ts, PerformanceOverview.tsx, RoleManagement.tsx, ApprovalTemplate.tsx, AttendanceExport.tsx) | 21 reads | ~50880 tok |
+| 15:40 | Edited frontend/src/pages/AuditLogs.tsx | added 2 condition(s) | ~340 |
+| 15:42 | Session end: 57 writes across 21 files (format.ts, PerformanceOverview.tsx, RoleManagement.tsx, ApprovalTemplate.tsx, AttendanceExport.tsx) | 21 reads | ~51380 tok |
+
+## Session: 2026-05-26 15:44
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|

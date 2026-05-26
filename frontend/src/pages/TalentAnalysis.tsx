@@ -190,7 +190,7 @@ const TalentAnalysis: React.FC = () => {
               <Text>{item.name}</Text>
               <Text>{item.value}人</Text>
             </div>
-            <Progress percent={(item.value / 11) * 100} />
+            <Progress percent={Math.round((item.value / 11) * 100)} />
           </div>
         ))}
       </div>

@@ -312,7 +312,10 @@ const EmployeeProfilePage: React.FC = () => {
       title: '档案状态',
       dataIndex: 'profile_status',
       key: 'profile_status',
-      render: (value?: string) => <StatusTag color={value === 'active' ? 'success' : 'default'}>{value || '未设置'}</StatusTag>,
+      render: (value?: string) => {
+        const map: Record<string, string> = { active: '在职', inactive: '离职/停用' }
+        return <StatusTag color={value === 'active' ? 'success' : 'default'}>{map[value || ''] || value || '未设置'}</StatusTag>
+      },
     },
     {
       title: '操作',

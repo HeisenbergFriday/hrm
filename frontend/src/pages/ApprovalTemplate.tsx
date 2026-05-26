@@ -6,6 +6,7 @@ import { approvalAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
+import { formatDateTime } from '../utils/format'
 
 const { Title, Text } = Typography
 
@@ -189,8 +190,8 @@ const ApprovalTemplate: React.FC = () => {
                 </StatusTag>
               </Descriptions.Item>
               <Descriptions.Item label="描述">{selectedTemplate.description}</Descriptions.Item>
-              <Descriptions.Item label="创建时间">{selectedTemplate.created_at}</Descriptions.Item>
-              <Descriptions.Item label="更新时间">{selectedTemplate.updated_at}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{formatDateTime(selectedTemplate.created_at)}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{formatDateTime(selectedTemplate.updated_at)}</Descriptions.Item>
             </Descriptions>
 
             <div style={{ marginTop: 'var(--space-6)' }}>
