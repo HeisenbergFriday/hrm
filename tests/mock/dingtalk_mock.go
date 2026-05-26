@@ -19,7 +19,7 @@ func NewDingTalkMock() *DingTalkMock {
 	// 模拟获取用户信息
 	handler.HandleFunc("/user/get", func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
-		
+
 		// 模拟不同场景
 		switch code {
 		case "success":
@@ -137,15 +137,15 @@ func NewDingTalkMock() *DingTalkMock {
 			"errmsg":  "success",
 			"recordresult": []map[string]interface{}{
 				{
-					"userid":     "user123",
-					"checkTime":  "2024-01-01 09:00:00",
-					"checkType":  "OnDuty",
+					"userid":         "user123",
+					"checkTime":      "2024-01-01 09:00:00",
+					"checkType":      "OnDuty",
 					"locationResult": "正常",
 				},
 				{
-					"userid":     "user123",
-					"checkTime":  "2024-01-01 18:00:00",
-					"checkType":  "OffDuty",
+					"userid":         "user123",
+					"checkTime":      "2024-01-01 18:00:00",
+					"checkType":      "OffDuty",
 					"locationResult": "正常",
 				},
 			},

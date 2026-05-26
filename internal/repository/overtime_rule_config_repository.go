@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"peopleops/internal/database"
 
 	"gorm.io/gorm"
@@ -32,13 +33,17 @@ func (r *OvertimeRuleConfigRepository) FindByKey(ruleKey string) (*database.Over
 func (r *OvertimeRuleConfigRepository) Upsert(config *database.OvertimeRuleConfig) error {
 	var existing database.OvertimeRuleConfig
 	err := r.db.Where("rule_key = ?", config.RuleKey).First(&existing).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return r.db.Create(config).Error
 	}
 	if err != nil {
 		return err
 	}
-	config.ID = existing.ID
-	config.CreatedAt = existing.CreatedAt
-	return r.db.Save(config).Error
+	return r.db.Model(&existing).Updates(map[string]interface{}{
+		"rule_name":       config.RuleName,
+		"rule_value_json": config.RuleValueJSON,
+		"status":          config.Status,
+		"effective_from":  config.EffectiveFrom,
+		"effective_to":    config.EffectiveTo,
+	}).Error
 }

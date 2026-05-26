@@ -38,7 +38,9 @@ func main() {
 
 	// 启动年假/调休定时任务
 	leaveJobs := service.NewLeaveJobScheduler(database.DB)
-	leaveJobs.SeedDefaultRules()
+	if err := leaveJobs.SeedDefaultRules(); err != nil {
+		log.Fatalf("初始化年假/调休默认规则失败: %v", err)
+	}
 	leaveJobs.Start()
 
 	// 启动服务器

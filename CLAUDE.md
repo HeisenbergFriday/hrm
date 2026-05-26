@@ -267,9 +267,10 @@ golangci-lint run
 
 # 前端
 cd frontend && npm run lint
-cd frontend && npm run type-check
 cd frontend && npm run build
 ```
+
+说明：当前没有单独的 `type-check` script，`npm run build` 会执行 `tsc && vite build`。
 
 **层级 2：单元测试（推荐）**
 ```bash
@@ -279,6 +280,8 @@ go test ./internal/service/... -v
 # 前端
 cd frontend && npm run test
 ```
+
+说明：前端单测使用 `frontend/vite.config.test.ts`，测试文件约定为 `src/**/*.{test,spec}.{ts,tsx}`。
 
 **层级 3：E2E 测试（关键路径）**
 ```bash

@@ -1,6 +1,6 @@
 ---
 purpose: 项目整体架构、数据流、核心设计约束
-last_updated: 2026-04-30
+last_updated: 2026-05-26
 source_of_truth:
   - go.mod（后端技术栈）
   - frontend/package.json（前端技术栈）
@@ -62,6 +62,9 @@ update_when:
 4. **年假发放**：本地计算 → 写入 `annual_leave_grants` → 同步到钉钉假期配置
 5. **加班匹配**：钉钉审批 + 本地打卡 → 计算有效加班时长 → 写入 `overtime_match_results` → 生成调休余额 → 同步到钉钉
 6. **大小周排班**：本地配置 `week_schedule_rules` → 计算每周班次 → 同步到钉钉考勤组
+7. **绩效管理**：活动创建 → 参与人刷新 → 目标设定与审批 → 员工自评 → 上级评分 → 三级确认 → 锁定 → 归档
+8. **员工全生命周期**：入职 → 档案管理 → 转岗 → 离职
+9. **补卡申请**：员工提交补卡 → 审批流程 → 钉钉同步
 
 ---
 
@@ -115,7 +118,7 @@ type Response struct {
 #### 幂等性设计
 - **年假消费**：`AnnualLeaveConsumeLog.request_ref` 唯一索引防重
 - **加班同步**：`OvertimeSyncHistory` 快照，避免重复同步
-- **加班匹配**：`OvertimeMatchResult` 唯一键 `user_id+work_date`
+- **加班匹配**：`OvertimeMatchResult.match_ref` 用于当前幂等，历史数据仍兼容 `user_id+work_date` 口径
 
 #### 数据库初始化
 - 启动时自动迁移（`AutoMigrate`）
@@ -173,6 +176,35 @@ type Response struct {
 2. 可手动覆盖特定周（`WeekScheduleOverride`）
 3. 同步到钉钉班次（`SyncWeekToDingTalk`）：按用户分配钉钉 Shift
 
+### 绩效管理流程
+1. **活动配置**：HR 创建绩效活动，设置时间范围、参与人范围、关联指标库
+2. **参与人刷新**：根据部门/员工范围筛选参与人
+3. **目标设定**：上级为下属设定目标，员工确认，支持审批流程
+4. **员工自评**：员工填写实际达成结果，系统计算自评总分
+5. **上级评分**：上级为下属评分，系统自动计算等级（S/A/B/C/D），实时检查强制分布
+6. **三级确认**：员工确认 → 上级确认（立即冻结结果）→ HR 确认
+7. **锁定归档**：活动锁定，防止修改，归档保存历史
+
+### 员工全生命周期
+1. **入职**：新员工入职流程，写入 `EmployeeOnboarding`
+2. **档案管理**：维护员工档案信息，写入 `EmployeeProfile`
+3. **转岗**：员工转岗流程，写入 `EmployeeTransfer`
+4. **离职**：员工离职流程，写入 `EmployeeResignation`
+
+### 权限管理
+- RBAC 模型：`Role` → `Permission` → `RolePermission` → `UserRole`
+- 支持菜单权限和数据权限
+- 前端页面：角色管理、权限管理、菜单权限、数据权限
+
+### 审计日志
+- 记录所有操作日志，写入 `OperationLog`
+- 支持按用户、操作类型、时间范围查询
+
+### 补卡申请
+1. 员工提交补卡申请，写入 `OvertimeSupplementaryRequest`
+2. 审批流程
+3. 同步到钉钉
+
 ---
 
 ## 环境变量
@@ -180,7 +212,7 @@ type Response struct {
 ### 基础运行
 - `PORT`：服务端口，默认 8080
 - `DATABASE_URL`：MySQL 连接串，格式 `user:pass@tcp(host:3306)/dbname?charset=utf8mb4&parseTime=True`
-- `REDIS_URL`：Redis 连接串，格式 `redis://localhost:6379`
+- `REDIS_URL`：Redis 地址，格式 `localhost:6379`（当前代码直接传给 `redis.Options.Addr`，不要带 `redis://` 前缀）
 - `REDIS_PASSWORD`：Redis 密码（可选）
 - `JWT_SECRET`：JWT 签名密钥
 

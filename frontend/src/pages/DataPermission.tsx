@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
-import { Typography, Table, Spin, Empty, Alert, Button, Select, Tree, message, Form, Switch } from 'antd'
-import { LockOutlined, ReloadOutlined, TeamOutlined } from '@ant-design/icons'
+import { Typography, Spin, Button, Select, Tree, message, Form, Switch, Card, Space, Tag, Alert, Divider, Radio } from 'antd'
+import { LockOutlined, SaveOutlined, SafetyOutlined, TeamOutlined, InfoCircleOutlined, GlobalOutlined, ApartmentOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { permissionAPI, orgAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
@@ -76,58 +76,113 @@ const DataPermission: React.FC = () => {
   return (
     <PageContainer title="数据权限" icon={<LockOutlined />} subtitle="配置角色的数据访问范围">
       <PageCard>
-        <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' }}>
-          <Text strong>选择角色：</Text>
-          <Select
-            style={{ width: 200 }}
-            value={selectedRole}
-            onChange={handleRoleChange}
-          >
-            {rolesData?.data?.items?.map((role: Role) => (
-              <Option key={role.id} value={role.id}>
-                {role.name}
-              </Option>
-            ))}
-          </Select>
-          <Button type="primary" onClick={handleSave} style={{ marginLeft: 'auto' }}>
-            保存权限
-          </Button>
-        </div>
+        <Card
+          style={{ marginBottom: 16 }}
+          styles={{ body: { padding: '16px 24px' } }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Space size="large" align="center">
+              <Text strong style={{ fontSize: 14 }}>选择角色：</Text>
+              <Select
+                style={{ width: 200 }}
+                value={selectedRole}
+                onChange={handleRoleChange}
+                placeholder="请选择角色"
+                suffixIcon={<SafetyOutlined style={{ color: 'var(--color-primary)' }} />}
+              >
+                {rolesData?.data?.items?.map((role: Role) => (
+                  <Option key={role.id} value={role.id}>
+                    <Space>
+                      <SafetyOutlined style={{ color: 'var(--color-primary)' }} />
+                      {role.name}
+                    </Space>
+                  </Option>
+                ))}
+              </Select>
+              <Tag
+                icon={isAllDepartments ? <GlobalOutlined /> : <ApartmentOutlined />}
+                color={isAllDepartments ? 'success' : 'processing'}
+                style={{ marginLeft: 8 }}
+              >
+                {isAllDepartments ? '全部部门' : `已选择 ${selectedDepartments.length} 个部门`}
+              </Tag>
+            </Space>
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              onClick={handleSave}
+              size="large"
+            >
+              保存权限
+            </Button>
+          </div>
+        </Card>
 
         <Form layout="vertical">
-          <Form.Item label="数据范围">
-            <Form.Item name="all_departments" valuePropName="checked" noStyle>
-              <Switch
-                checked={isAllDepartments}
-                onChange={handleAllDepartmentsChange}
-                checkedChildren="全部部门"
-                unCheckedChildren="指定部门"
-              />
+          <Card
+            title={
+              <Space>
+                <LockOutlined style={{ color: 'var(--color-primary)' }} />
+                <Text strong>数据范围设置</Text>
+              </Space>
+            }
+            style={{ marginBottom: 16 }}
+          >
+            <Form.Item label="数据范围">
+              <Radio.Group
+                value={isAllDepartments ? 'all' : 'custom'}
+                onChange={(e) => handleAllDepartmentsChange(e.target.value === 'all')}
+                optionType="button"
+                buttonStyle="solid"
+              >
+                <Radio.Button value="all">
+                  <Space>
+                    <GlobalOutlined />
+                    全部部门
+                  </Space>
+                </Radio.Button>
+                <Radio.Button value="custom">
+                  <Space>
+                    <ApartmentOutlined />
+                    指定部门
+                  </Space>
+                </Radio.Button>
+              </Radio.Group>
             </Form.Item>
-          </Form.Item>
 
-          {!isAllDepartments && (
-            <Form.Item label="指定部门">
-              <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 'var(--radius-xs)', padding: 16, minHeight: 400 }}>
-                <Tree
-                  checkable
-                  treeData={renderDepartmentTree(departmentTreeData?.data?.tree || [])}
-                  checkedKeys={selectedDepartments}
-                  onCheck={(checked) => setSelectedDepartments(checked as string[])}
-                  defaultExpandAll
-                />
-              </div>
-            </Form.Item>
-          )}
+            {!isAllDepartments && (
+              <>
+                <Divider orientation="left">选择部门</Divider>
+                <Card
+                  style={{ minHeight: 350, backgroundColor: 'var(--color-bg-container)' }}
+                  styles={{ body: { padding: 16 } }}
+                >
+                  <Tree
+                    checkable
+                    treeData={renderDepartmentTree(departmentTreeData?.data?.tree || [])}
+                    checkedKeys={selectedDepartments}
+                    onCheck={(checked) => setSelectedDepartments(checked as string[])}
+                    defaultExpandAll
+                    style={{ fontSize: 14 }}
+                  />
+                </Card>
+              </>
+            )}
+          </Card>
 
-          <div style={{ marginTop: 24, padding: 16, backgroundColor: 'var(--color-bg-container)', borderRadius: 'var(--radius-xs)' }}>
-            <Text strong>权限说明：</Text>
-            <ul style={{ marginTop: 8, marginLeft: 20 }}>
-              <li>全部部门：可以查看所有部门的数据</li>
-              <li>指定部门：只能查看选中部门及其子部门的数据</li>
-              <li>部门负责人：默认可以查看自己负责部门及其子部门的数据</li>
-            </ul>
-          </div>
+          <Alert
+            message="权限说明"
+            description={
+              <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
+                <li><Tag color="success" style={{ marginRight: 4 }}>全部部门</Tag>可以查看所有部门的数据</li>
+                <li><Tag color="processing" style={{ marginRight: 4 }}>指定部门</Tag>只能查看选中部门及其子部门的数据</li>
+                <li><Tag color="warning" style={{ marginRight: 4 }}>部门负责人</Tag>默认可以查看自己负责部门及其子部门的数据</li>
+              </ul>
+            }
+            type="info"
+            icon={<InfoCircleOutlined />}
+            showIcon
+          />
         </Form>
       </PageCard>
     </PageContainer>

@@ -91,7 +91,10 @@ npm run preview
 ```bash
 cd frontend
 npm run test
+npm run e2e
 ```
+
+说明：`npm run test` 使用 Vitest 配置 `vite.config.test.ts`；`npm run e2e` 使用 Playwright，通常需要前后端测试环境可用。
 
 ### 代码检查
 ```bash
@@ -99,10 +102,9 @@ cd frontend
 
 # Lint
 npm run lint
-
-# 类型检查
-npm run type-check
 ```
+
+说明：当前没有单独的 `type-check` script，类型检查由 `npm run build` 中的 `tsc` 执行。
 
 ### 依赖管理
 ```bash
@@ -172,7 +174,7 @@ go run main.go
 
 ### 重新同步调休
 ```bash
-go run tools/resync_comp_time.go
+go run tools/ops/resync_comp_time/main.go
 ```
 
 ---

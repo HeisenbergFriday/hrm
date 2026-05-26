@@ -1,63 +1,72 @@
 import { test, expect } from '@playwright/test';
 
+const qrStartRoute = '**/api/v1/auth/dingtalk/qr/start';
+const qrLoginUrl = 'https://login.dingtalk.test/qr?state=e2e';
+
 test.describe('登录模块', () => {
-  test('账号密码登录成功', async ({ page }) => {
-    // 导航到登录页面
-    await page.goto('/login');
+  test('显示钉钉扫码登录入口', async ({ page }) => {
+    await page.goto('/login?mode=scan');
 
-    // 输入用户名和密码
-    await page.fill('input[placeholder="用户名"]', 'admin');
-    await page.fill('input[placeholder="密码"]', '123456');
-
-    // 点击登录按钮
-    await page.click('button:has-text("登录")');
-
-    // 等待登录成功后跳转到首页
-    await expect(page).toHaveURL('/');
-    
-    // 检查首页是否显示
-    await expect(page).toHaveTitle('People Ops 后台系统');
+    await expect(page.getByRole('heading', { name: '钉钉一体化人事后台' })).toBeVisible();
+    await expect(page.getByText('当前将使用钉钉扫码登录')).toBeVisible();
+    await expect(page.getByRole('button', { name: /打开钉钉官方扫码登录页/ })).toBeVisible();
   });
 
-  test('账号密码登录失败', async ({ page }) => {
-    // 导航到登录页面
-    await page.goto('/login');
+  test('点击扫码登录会请求后端并跳转到钉钉登录页', async ({ page }) => {
+    let qrStartRequested = false;
 
-    // 输入错误的用户名和密码
-    await page.fill('input[placeholder="用户名"]', 'wrong');
-    await page.fill('input[placeholder="密码"]', 'wrong');
+    await page.route(qrStartRoute, async (route) => {
+      qrStartRequested = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 200,
+          message: 'success',
+          data: {
+            qr_code_url: qrLoginUrl,
+            redirect_uri: 'http://localhost:3000/api/v1/auth/dingtalk/callback',
+          },
+        }),
+      });
+    });
 
-    // 点击登录按钮
-    await page.click('button:has-text("登录")');
+    await page.route('https://login.dingtalk.test/**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<!doctype html><title>DingTalk Login Mock</title><main>DingTalk QR Mock</main>',
+      });
+    });
 
-    // 等待错误提示
-    await expect(page.locator('.ant-alert-error')).toBeVisible();
-    await expect(page.locator('.ant-alert-error')).toContainText('用户名或密码错误');
+    await page.goto('/login?mode=scan');
+    await page.getByRole('button', { name: /打开钉钉官方扫码登录页/ }).click();
+
+    await expect(page).toHaveURL(/login\.dingtalk\.test/);
+    await expect(page.getByText('DingTalk QR Mock')).toBeVisible();
+    expect(qrStartRequested).toBe(true);
   });
 
-  test('钉钉登录', async ({ page }) => {
-    // 导航到登录页面
-    await page.goto('/login');
+  test('后端未返回二维码地址时提示错误', async ({ page }) => {
+    await page.route(qrStartRoute, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 200,
+          message: 'success',
+          data: {
+            qr_code_url: '',
+            redirect_uri: 'http://localhost:3000/api/v1/auth/dingtalk/callback',
+          },
+        }),
+      });
+    });
 
-    // 点击钉钉登录按钮
-    await page.click('button:has-text("钉钉登录")');
+    await page.goto('/login?mode=scan');
+    await page.getByRole('button', { name: /打开钉钉官方扫码登录页/ }).click();
 
-    // 等待登录成功后跳转到首页
-    await expect(page).toHaveURL('/');
-    
-    // 检查首页是否显示
-    await expect(page).toHaveTitle('People Ops 后台系统');
-  });
-
-  test('表单验证', async ({ page }) => {
-    // 导航到登录页面
-    await page.goto('/login');
-
-    // 点击登录按钮，不输入任何内容
-    await page.click('button:has-text("登录")');
-
-    // 检查验证提示
-    await expect(page.locator('.ant-form-item-explain-error')).toContainText('请输入用户名');
-    await expect(page.locator('.ant-form-item-explain-error')).toContainText('请输入密码');
+    await expect(page.getByText('未获取到钉钉登录地址')).toBeVisible();
+    await expect(page).toHaveURL(/\/login\?mode=scan$/);
   });
 });

@@ -1,289 +1,191 @@
-# 钉钉一体化人事后台数据库表结构设计
+# PeopleOps 数据库设计
 
-## 1. 数据库选型
+本文按当前 GORM 模型维护。模型真实来源是 `internal/database/models.go` 和 `internal/database/performance_models.go`，迁移入口是 `internal/database/database.go`。
 
-- **数据库**：PostgreSQL 15+
-- **字符集**：UTF-8
-- **排序规则**：C
+## 数据库选型
 
-## 2. 表结构设计
+- 主业务库：MySQL
+- ORM：GORM
+- 主键：当前模型统一使用 `uint` 自增主键
+- JSON 字段：使用 MySQL JSON 类型，GORM tag 为 `type:json;serializer:json`
+- 软删除：主要业务模型使用 `gorm.DeletedAt`
+- 迁移方式：服务启动时执行 `AutoMigrate`，部分历史兼容字段和索引通过手写 DDL 补齐
 
-### 2.1 用户表 (`users`)
+## 初始化与迁移
 
-| 字段名 | 数据类型 | 约束 | 描述 | 类型 |
-|-------|---------|------|------|------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | 主键 | 本地字段 |
-| `user_id` | `VARCHAR(64)` | `UNIQUE NOT NULL` | 钉钉用户ID | 钉钉原始字段 |
-| `name` | `VARCHAR(128)` | `NOT NULL` | 姓名 | 钉钉原始字段 |
-| `email` | `VARCHAR(128)` | `UNIQUE` | 邮箱 | 钉钉原始字段 |
-| `mobile` | `VARCHAR(32)` | `UNIQUE` | 手机号 | 钉钉原始字段 |
-| `department_id` | `VARCHAR(64)` | `NOT NULL` | 部门ID | 钉钉原始字段 |
-| `position` | `VARCHAR(128)` | | 职位 | 钉钉原始字段 |
-| `avatar` | `VARCHAR(256)` | | 头像URL | 钉钉原始字段 |
-| `status` | `VARCHAR(32)` | `NOT NULL` | 状态 | 钉钉原始字段 |
-| `extension` | `JSONB` | `DEFAULT '{}'` | 本地扩展字段 | 本地扩展字段 |
-| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | | 删除时间 | 本地字段 |
+启动时 `database.Init()` 会执行：
 
-### 2.2 部门表 (`departments`)
+1. 读取 `DATABASE_URL`。
+2. 使用 MySQL driver 连接数据库。
+3. 如果连接失败，尝试按 DSN 中的库名自动创建数据库后重连。
+4. 执行手写兼容迁移，例如年假发放同步字段、用户直属主管字段、部分唯一索引修复。
+5. 执行 GORM `AutoMigrate`。
+6. 初始化默认管理员、默认部门、默认角色和默认权限。
 
-| 字段名 | 数据类型 | 约束 | 描述 | 类型 |
-|-------|---------|------|------|------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | 主键 | 本地字段 |
-| `department_id` | `VARCHAR(64)` | `UNIQUE NOT NULL` | 钉钉部门ID | 钉钉原始字段 |
-| `name` | `VARCHAR(128)` | `NOT NULL` | 部门名称 | 钉钉原始字段 |
-| `parent_id` | `VARCHAR(64)` | | 父部门ID | 钉钉原始字段 |
-| `order` | `INTEGER` | `DEFAULT 0` | 排序 | 钉钉原始字段 |
-| `extension` | `JSONB` | `DEFAULT '{}'` | 本地扩展字段 | 本地扩展字段 |
-| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | | 删除时间 | 本地字段 |
+默认管理员：
 
-### 2.3 考勤表 (`attendance`)
+| 字段 | 值 |
+|---|---|
+| 用户名 | `admin` |
+| 密码 | `admin123` |
 
-| 字段名 | 数据类型 | 约束 | 描述 | 类型 |
-|-------|---------|------|------|------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | 主键 | 本地字段 |
-| `user_id` | `VARCHAR(64)` | `NOT NULL` | 钉钉用户ID | 钉钉原始字段 |
-| `user_name` | `VARCHAR(128)` | `NOT NULL` | 用户名 | 钉钉原始字段 |
-| `check_time` | `TIMESTAMP` | `NOT NULL` | 打卡时间 | 钉钉原始字段 |
-| `check_type` | `VARCHAR(32)` | `NOT NULL` | 打卡类型 | 钉钉原始字段 |
-| `location` | `VARCHAR(256)` | | 打卡地点 | 钉钉原始字段 |
-| `extension` | `JSONB` | `DEFAULT '{}'` | 本地扩展字段 | 本地扩展字段 |
-| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | | 删除时间 | 本地字段 |
+## 基础主数据模型
 
-### 2.4 审批表 (`approvals`)
+| 模型 | 表 | 说明 | 关键唯一性 |
+|---|---|---|---|
+| `User` | `users` | 钉钉用户及本地登录用户 | `user_id` |
+| `Department` | `departments` | 钉钉部门 | `department_id` |
+| `DepartmentChangeLog` | `department_change_logs` | 部门变更历史 | 无 |
+| `Attendance` | `attendances` | 考勤打卡记录 | `user_id + check_time + check_type` |
+| `Approval` | `approvals` | 审批实例 | `process_id` |
+| `ApprovalTemplate` | `approval_templates` | 审批模板 | `template_id` |
+| `SyncStatus` | `sync_statuses` | 同步状态 | `type` |
 
-| 字段名 | 数据类型 | 约束 | 描述 | 类型 |
-|-------|---------|------|------|------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | 主键 | 本地字段 |
-| `process_id` | `VARCHAR(64)` | `UNIQUE NOT NULL` | 钉钉审批流程ID | 钉钉原始字段 |
-| `title` | `VARCHAR(256)` | `NOT NULL` | 审批标题 | 钉钉原始字段 |
-| `applicant_id` | `VARCHAR(64)` | `NOT NULL` | 申请人ID | 钉钉原始字段 |
-| `applicant_name` | `VARCHAR(128)` | `NOT NULL` | 申请人姓名 | 钉钉原始字段 |
-| `status` | `VARCHAR(32)` | `NOT NULL` | 审批状态 | 钉钉原始字段 |
-| `create_time` | `TIMESTAMP` | `NOT NULL` | 创建时间 | 钉钉原始字段 |
-| `finish_time` | `TIMESTAMP` | | 完成时间 | 钉钉原始字段 |
-| `content` | `JSONB` | `DEFAULT '{}'` | 审批内容 | 钉钉原始字段 |
-| `extension` | `JSONB` | `DEFAULT '{}'` | 本地扩展字段 | 本地扩展字段 |
-| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | | 删除时间 | 本地字段 |
+### User
 
-### 2.5 角色表 (`roles`)
+核心字段：
 
-| 字段名 | 数据类型 | 约束 | 描述 | 类型 |
-|-------|---------|------|------|------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | 主键 | 本地字段 |
-| `name` | `VARCHAR(64)` | `UNIQUE NOT NULL` | 角色名称 | 本地字段 |
-| `description` | `TEXT` | | 角色描述 | 本地字段 |
-| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | | 删除时间 | 本地字段 |
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | `uint` | 本地自增主键 |
+| `user_id` | `varchar(64)` | 钉钉用户 ID 或本地账号 ID |
+| `name` | `varchar(128)` | 姓名 |
+| `email` | `varchar(128)` | 邮箱 |
+| `mobile` | `varchar(32)` | 手机号 |
+| `password` | `varchar(256)` | 密码哈希，不输出到 JSON |
+| `department_id` | `varchar(64)` | 钉钉部门 ID |
+| `manager_user_id` | `varchar(64)` | 直属主管用户 ID |
+| `manager_name` | `varchar(128)` | 直属主管姓名快照 |
+| `extension` | `json` | 本地扩展字段 |
 
-### 2.6 权限表 (`permissions`)
+### Department
 
-| 字段名 | 数据类型 | 约束 | 描述 | 类型 |
-|-------|---------|------|------|------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | 主键 | 本地字段 |
-| `name` | `VARCHAR(64)` | `UNIQUE NOT NULL` | 权限名称 | 本地字段 |
-| `code` | `VARCHAR(64)` | `UNIQUE NOT NULL` | 权限代码 | 本地字段 |
-| `description` | `TEXT` | | 权限描述 | 本地字段 |
-| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | | 删除时间 | 本地字段 |
+核心字段：
 
-### 2.7 角色权限表 (`role_permissions`)
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | `uint` | 本地自增主键 |
+| `department_id` | `varchar(64)` | 钉钉部门 ID |
+| `name` | `varchar(128)` | 部门名称 |
+| `parent_id` | `varchar(64)` | 父部门钉钉 ID |
+| `order` | `int` | 排序 |
+| `extension` | `json` | 本地扩展字段 |
 
-| 字段名 | 数据类型 | 约束 | 描述 | 类型 |
-|-------|---------|------|------|------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | 主键 | 本地字段 |
-| `role_id` | `UUID` | `NOT NULL REFERENCES roles(id)` | 角色ID | 本地字段 |
-| `permission_id` | `UUID` | `NOT NULL REFERENCES permissions(id)` | 权限ID | 本地字段 |
-| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | 更新时间 | 本地字段 |
+## 认证、权限与审计模型
 
-### 2.8 用户角色表 (`user_roles`)
+| 模型 | 表 | 说明 |
+|---|---|---|
+| `Role` | `roles` | 角色 |
+| `Permission` | `permissions` | 权限 |
+| `RolePermission` | `role_permissions` | 角色权限关联 |
+| `UserRole` | `user_roles` | 用户角色关联 |
+| `OperationLog` | `operation_logs` | 操作审计日志 |
+| `DingTalkBinding` | `ding_talk_bindings` | 本地用户与钉钉账号绑定 |
+| `UserSession` | `user_sessions` | 会话记录 |
+| `LoginLog` | `login_logs` | 登录日志 |
 
-| 字段名 | 数据类型 | 约束 | 描述 | 类型 |
-|-------|---------|------|------|------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | 主键 | 本地字段 |
-| `user_id` | `VARCHAR(64)` | `NOT NULL` | 钉钉用户ID | 本地字段 |
-| `role_id` | `UUID` | `NOT NULL REFERENCES roles(id)` | 角色ID | 本地字段 |
-| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | 更新时间 | 本地字段 |
+当前权限 API 只开放角色列表、创建角色、权限列表等基础能力。菜单权限和数据权限页面仍使用同一批角色/权限数据作为入口。
 
-### 2.9 操作日志表 (`operation_logs`)
+## 员工档案与生命周期模型
 
-| 字段名 | 数据类型 | 约束 | 描述 | 类型 |
-|-------|---------|------|------|------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | 主键 | 本地字段 |
-| `user_id` | `VARCHAR(64)` | `NOT NULL` | 操作用户ID | 本地字段 |
-| `user_name` | `VARCHAR(128)` | `NOT NULL` | 操作用户名 | 本地字段 |
-| `operation` | `VARCHAR(128)` | `NOT NULL` | 操作类型 | 本地字段 |
-| `resource` | `VARCHAR(256)` | `NOT NULL` | 操作资源 | 本地字段 |
-| `ip` | `VARCHAR(64)` | `NOT NULL` | 操作IP | 本地字段 |
-| `details` | `JSONB` | `DEFAULT '{}'` | 操作详情 | 本地字段 |
-| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | 更新时间 | 本地字段 |
+| 模型 | 表 | 说明 |
+|---|---|---|
+| `EmployeeProfile` | `employee_profiles` | 员工档案 |
+| `EmployeeTransfer` | `employee_transfers` | 调岗记录 |
+| `EmployeeResignation` | `employee_resignations` | 离职记录 |
+| `EmployeeOnboarding` | `employee_onboardings` | 入职记录 |
+| `TalentAnalysis` | `talent_analyses` | 人才分析 |
 
-### 2.10 同步状态表 (`sync_status`)
+`EmployeeProfile` 是本地扩展数据的核心表，包含工号、用工类型、学历、职级、岗位序列、入职日期、计划转正日期、实际转正日期、合同、银行卡等字段。
 
-| 字段名 | 数据类型 | 约束 | 描述 | 类型 |
-|-------|---------|------|------|------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | 主键 | 本地字段 |
-| `type` | `VARCHAR(32)` | `UNIQUE NOT NULL` | 同步类型 | 本地字段 |
-| `last_sync_time` | `TIMESTAMP` | | 上次同步时间 | 本地字段 |
-| `status` | `VARCHAR(32)` | `NOT NULL` | 同步状态 | 本地字段 |
-| `message` | `TEXT` | | 同步消息 | 本地字段 |
-| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | 更新时间 | 本地字段 |
+当前 `employee_onboardings.employee_id` 是员工工号，不是 `users.user_id`。入转调离台账中候选入职人员通过工号和档案表匹配。
 
-## 3. 索引设计
+## 考勤导出与排班模型
 
-### 3.1 用户表索引
+| 模型 | 表 | 说明 | 关键唯一性 |
+|---|---|---|---|
+| `AttendanceExport` | `attendance_exports` | 考勤导出任务 | 无 |
+| `EmployeeShiftConfig` | `employee_shift_configs` | 员工自定义下班时间 | `user_id` |
+| `DingTalkShiftCatalog` | `ding_talk_shift_catalogs` | 钉钉班次缓存 | `shift_key` |
+| `WeekScheduleRule` | `week_schedule_rules` | 大小周规则 | `scope_type + scope_id` |
+| `WeekScheduleOverride` | `week_schedule_overrides` | 手动覆盖 | `scope_type + scope_id + week_start_date` |
+| `WeekScheduleSyncLog` | `week_schedule_sync_logs` | 排班同步日志 | 无 |
+| `StatutoryHoliday` | `statutory_holidays` | 法定节假日/调休上班日 | `date` |
 
-| 索引名 | 字段 | 类型 | 描述 |
-|-------|------|------|------|
-| `idx_users_user_id` | `user_id` | `UNIQUE` | 唯一索引，用于快速查找用户 |
-| `idx_users_email` | `email` | `UNIQUE` | 唯一索引，用于快速查找用户 |
-| `idx_users_mobile` | `mobile` | `UNIQUE` | 唯一索引，用于快速查找用户 |
-| `idx_users_department_id` | `department_id` | `BTREE` | 普通索引，用于快速查找部门下的用户 |
-| `idx_users_status` | `status` | `BTREE` | 普通索引，用于快速查找特定状态的用户 |
+`DingTalkShiftCatalog.shift_key` 是稳定签名，由班次名、上班时间、下班时间归一化得到，用于避免同名不同时间班次互相覆盖。
 
-### 3.2 部门表索引
+## 年假、加班与调休模型
 
-| 索引名 | 字段 | 类型 | 描述 |
-|-------|------|------|------|
-| `idx_departments_department_id` | `department_id` | `UNIQUE` | 唯一索引，用于快速查找部门 |
-| `idx_departments_parent_id` | `parent_id` | `BTREE` | 普通索引，用于快速查找子部门 |
-| `idx_departments_order` | `order` | `BTREE` | 普通索引，用于排序 |
+| 模型 | 表 | 说明 | 关键唯一性 |
+|---|---|---|---|
+| `LeaveRuleConfig` | `leave_rule_configs` | 年假规则配置 | `rule_type + rule_key` |
+| `AnnualLeaveEligibility` | `annual_leave_eligibilities` | 年假资格 | `user_id + year + quarter` |
+| `AnnualLeaveGrant` | `annual_leave_grants` | 年假发放台账 | `user_id + year + quarter + grant_type` |
+| `AnnualLeaveConsumeLog` | `annual_leave_consume_logs` | 年假消费台账 | `request_ref + grant_id` |
+| `OvertimeRuleConfig` | `overtime_rule_configs` | 加班规则配置 | `rule_key` |
+| `OvertimeMatchResult` | `overtime_match_results` | 加班审批与打卡匹配结果 | `match_ref`，历史上也按 `user_id + work_date` 约束 |
+| `OvertimeSyncHistory` | `overtime_sync_histories` | 加班同步快照 | `sync_request_id` |
+| `CompensatoryLeaveLedger` | `compensatory_leave_ledgers` | 调休余额台账 | 按业务引用防重复 |
+| `OvertimeSupplementaryRequest` | `overtime_supplementary_requests` | 补卡申请记录 | 无 |
 
-### 3.3 考勤表索引
+`AnnualLeaveGrant` 当前钉钉同步字段为：
 
-| 索引名 | 字段 | 类型 | 描述 |
-|-------|------|------|------|
-| `idx_attendance_user_id` | `user_id` | `BTREE` | 普通索引，用于快速查找用户的考勤记录 |
-| `idx_attendance_check_time` | `check_time` | `BTREE` | 普通索引，用于快速查找特定时间的考勤记录 |
-| `idx_attendance_user_id_check_time` | `user_id, check_time` | `BTREE` | 复合索引，用于快速查找用户在特定时间的考勤记录 |
+| 字段 | 说明 |
+|---|---|
+| `dingtalk_sync_status` | `pending / success / failed / skipped` |
+| `dingtalk_sync_error` | 同步错误信息 |
+| `dingtalk_synced_at` | 同步时间 |
 
-### 3.4 审批表索引
+## 绩效模型
 
-| 索引名 | 字段 | 类型 | 描述 |
-|-------|------|------|------|
-| `idx_approvals_process_id` | `process_id` | `UNIQUE` | 唯一索引，用于快速查找审批流程 |
-| `idx_approvals_applicant_id` | `applicant_id` | `BTREE` | 普通索引，用于快速查找申请人的审批记录 |
-| `idx_approvals_status` | `status` | `BTREE` | 普通索引，用于快速查找特定状态的审批记录 |
-| `idx_approvals_create_time` | `create_time` | `BTREE` | 普通索引，用于快速查找特定时间的审批记录 |
+绩效相关模型在 `internal/database/performance_models.go`。
 
-### 3.5 角色表索引
+| 模型 | 说明 |
+|---|---|
+| `PerformanceActivity` | 绩效活动 |
+| `PerformanceParticipant` | 活动参与人 |
+| `PerformanceGoalRecord` | 目标/指标记录 |
+| `PerformanceGoalApprovalLog` | 目标审批日志 |
+| `PerformanceIndicatorLibrary` | 部门指标库 |
+| `PerformanceIndicatorItem` | 指标项 |
+| `PerformanceTemplate` | 绩效模板 |
+| `PerformanceTemplateSection` | 模板评分维度 |
+| `PerformanceTemplateItem` | 模板评分项 |
+| `PerformanceReview` | 评审记录 |
+| `PerformanceReviewVersion` | 评审版本 |
+| `PerformanceDistributionRule` | 强制分布规则 |
+| `PerformanceDistributionException` | 强制分布例外 |
+| `PerformanceLevelRule` | 等级规则 |
+| `PerformanceLevelRuleItem` | 等级规则明细 |
+| `PerformanceRelationshipChangeLog` | 绩效关系变更日志 |
+| `PerformanceCompanyFinance` | 公司收支状态 |
 
-| 索引名 | 字段 | 类型 | 描述 |
-|-------|------|------|------|
-| `idx_roles_name` | `name` | `UNIQUE` | 唯一索引，用于快速查找角色 |
+活动状态流：
 
-### 3.6 权限表索引
+```text
+draft -> target_setting -> self_evaluation -> manager_evaluation -> employee_confirmation -> manager_confirmation -> hr_confirmation -> locked -> archived
+```
 
-| 索引名 | 字段 | 类型 | 描述 |
-|-------|------|------|------|
-| `idx_permissions_name` | `name` | `UNIQUE` | 唯一索引，用于快速查找权限 |
-| `idx_permissions_code` | `code` | `UNIQUE` | 唯一索引，用于快速查找权限 |
+## 关系与数据边界
 
-### 3.7 角色权限表索引
+- `users.user_id` 和 `departments.department_id` 保存钉钉原始 ID。
+- 本地表之间多使用钉钉 ID 或本地自增 ID 做业务关联，不强制依赖数据库外键。
+- `database.go` 设置了 `DisableForeignKeyConstraintWhenMigrating: true`，迁移时不自动创建外键约束。
+- 钉钉主数据以同步为主；员工档案、年假、调休、排班、绩效等是本地业务扩展数据。
 
-| 索引名 | 字段 | 类型 | 描述 |
-|-------|------|------|------|
-| `idx_role_permissions_role_id` | `role_id` | `BTREE` | 普通索引，用于快速查找角色的权限 |
-| `idx_role_permissions_permission_id` | `permission_id` | `BTREE` | 普通索引，用于快速查找权限的角色 |
-| `idx_role_permissions_role_id_permission_id` | `role_id, permission_id` | `UNIQUE` | 唯一索引，确保角色和权限的组合唯一 |
+## 备份建议
 
-### 3.8 用户角色表索引
+生产环境至少备份：
 
-| 索引名 | 字段 | 类型 | 描述 |
-|-------|------|------|------|
-| `idx_user_roles_user_id` | `user_id` | `BTREE` | 普通索引，用于快速查找用户的角色 |
-| `idx_user_roles_role_id` | `role_id` | `BTREE` | 普通索引，用于快速查找角色的用户 |
-| `idx_user_roles_user_id_role_id` | `user_id, role_id` | `UNIQUE` | 唯一索引，确保用户和角色的组合唯一 |
+- MySQL 主库。
+- 上传附件目录 `uploads/`。
+- 运行所需 `.env` 或密钥管理配置。
 
-### 3.9 操作日志表索引
+Redis 当前主要作为缓存使用，通常不作为核心持久数据源。
 
-| 索引名 | 字段 | 类型 | 描述 |
-|-------|------|------|------|
-| `idx_operation_logs_user_id` | `user_id` | `BTREE` | 普通索引，用于快速查找用户的操作日志 |
-| `idx_operation_logs_operation` | `operation` | `BTREE` | 普通索引，用于快速查找特定类型的操作日志 |
-| `idx_operation_logs_created_at` | `created_at` | `BTREE` | 普通索引，用于快速查找特定时间的操作日志 |
+## 性能与维护建议
 
-### 3.10 同步状态表索引
-
-| 索引名 | 字段 | 类型 | 描述 |
-|-------|------|------|------|
-| `idx_sync_status_type` | `type` | `UNIQUE` | 唯一索引，用于快速查找同步类型 |
-
-## 4. 关系设计
-
-### 4.1 用户与部门的关系
-- 用户属于一个部门（多对一）
-- 部门可以有多个用户（一对多）
-
-### 4.2 用户与角色的关系
-- 用户可以拥有多个角色（多对多）
-- 角色可以分配给多个用户（多对多）
-- 通过 `user_roles` 表实现
-
-### 4.3 角色与权限的关系
-- 角色可以拥有多个权限（多对多）
-- 权限可以分配给多个角色（多对多）
-- 通过 `role_permissions` 表实现
-
-### 4.4 用户与考勤的关系
-- 用户可以有多个考勤记录（一对多）
-- 考勤记录属于一个用户（多对一）
-
-### 4.5 用户与审批的关系
-- 用户可以发起多个审批（一对多）
-- 审批属于一个用户（多对一）
-
-## 5. 数据同步策略
-
-### 5.1 同步频率
-- 部门和用户：每小时同步一次
-- 考勤：每天同步一次
-- 审批：每小时同步一次
-
-### 5.2 同步方式
-- 增量同步：只同步新增和变更的数据
-- 全量同步：定期进行全量同步，确保数据一致性
-
-### 5.3 同步状态管理
-- 使用 `sync_status` 表记录同步状态
-- 同步失败时记录错误信息，便于排查
-
-## 6. 数据备份策略
-
-### 6.1 备份频率
-- 每日全量备份
-- 每小时增量备份
-
-### 6.2 备份存储
-- 本地备份
-- 云存储备份
-
-## 7. 数据库优化
-
-### 7.1 查询优化
-- 使用索引加速查询
-- 避免全表扫描
-- 使用分页减少数据传输
-
-### 7.2 存储优化
-- 合理使用数据类型
-- 定期清理过期数据
-- 优化表结构
-
-### 7.3 性能优化
-- 配置适当的连接池
-- 优化 PostgreSQL 配置
-- 使用读写分离
+- 常用列表接口保留分页。
+- 修改模型时同步检查 `database.go` 中的手写迁移和唯一索引兼容逻辑。
+- 修改钉钉同步、年假发放、加班匹配、绩效锁定等流程时，需要同时核对幂等键。
+- 不要再引入 PostgreSQL 专用类型或 UUID 迁移说明，除非代码实际完成数据库迁移。

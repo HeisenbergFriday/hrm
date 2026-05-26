@@ -1,25 +1,52 @@
-# 钉钉一体化人事后台后端API设计
+# PeopleOps 后端 API 设计
 
-## 1. 技术栈
+本文按当前代码实现维护。完整路由注册入口是 `internal/api/router.go`，前端调用封装入口是 `frontend/src/services/api.ts`。`api-docs/swagger.json` 目前只覆盖早期基础接口，不是完整 API 清单。
 
-- Go 1.20+
-- Gin 1.9+
-- PostgreSQL 15+
-- Redis 7+
-- GORM 1.25+
-- JWT 5+
+## 技术栈
 
-## 2. API 设计原则
+- Go 1.20
+- Gin 1.9
+- GORM
+- MySQL
+- Redis 可选缓存
+- JWT Bearer Token
+- 钉钉开放平台 API
 
-- **RESTful 风格**：使用 HTTP 方法和 URL 表示资源和操作
-- **版本控制**：API 路径包含版本号，如 `/api/v1`
-- **统一响应格式**：所有 API 返回统一的 JSON 格式
-- **错误处理**：统一的错误码和错误信息
-- **分页设计**：支持分页查询，使用 `page` 和 `page_size` 参数
-- **排序设计**：支持排序，使用 `sort` 参数
-- **过滤设计**：支持过滤，使用查询参数
+## 通用约定
 
-## 3. 统一响应格式
+### API 前缀
+
+除健康检查和前端静态资源外，业务接口统一使用：
+
+```text
+/api/v1
+```
+
+健康检查：
+
+```text
+GET /health
+```
+
+文件访问：
+
+```text
+GET /api/v1/files/:filename
+```
+
+### 统一响应格式
+
+后端通用响应结构：
+
+```go
+type Response struct {
+    Code    int         `json:"code"`
+    Message string      `json:"message"`
+    Data    interface{} `json:"data,omitempty"`
+}
+```
+
+示例：
 
 ```json
 {
@@ -29,260 +56,226 @@
 }
 ```
 
-- **code**：HTTP 状态码
-- **message**：响应消息
-- **data**：响应数据
+### 分页约定
 
-## 4. API 接口设计
+列表接口通常使用：
 
-### 4.1 认证模块
+| 参数 | 默认值 | 说明 |
+|---|---:|---|
+| `page` | `1` | 页码 |
+| `page_size` | `10` 或 `20` | 每页数量，具体以 handler 为准 |
 
-| API 路径 | 方法 | 功能描述 | 请求体 (JSON) | 响应体 (JSON) |
-|---------|------|---------|--------------|---------------|
-| `/api/v1/auth/login` | `POST` | 账号密码登录 | `{"username": "admin", "password": "123456"}` | `{"code": 200, "message": "success", "data": {"token": "...", "user": {...}}}` |
-| `/api/v1/auth/dingtalk` | `POST` | 钉钉登录 | `{"code": "..."}` | `{"code": 200, "message": "success", "data": {"token": "...", "user": {...}}}` |
-| `/api/v1/auth/logout` | `POST` | 登出 | N/A | `{"code": 200, "message": "success"}` |
-| `/api/v1/auth/me` | `GET` | 获取当前用户信息 | N/A | `{"code": 200, "message": "success", "data": {"user": {...}}}` |
+分页响应通常包含：
 
-### 4.2 组织架构模块
+```json
+{
+  "items": [],
+  "total": 0
+}
+```
 
-| API 路径 | 方法 | 功能描述 | 请求体 (JSON) | 响应体 (JSON) |
-|---------|------|---------|--------------|---------------|
-| `/api/v1/departments` | `GET` | 获取部门列表 | N/A | `{"code": 200, "message": "success", "data": {"departments": [...]}}` |
-| `/api/v1/departments/:id` | `GET` | 获取部门详情 | N/A | `{"code": 200, "message": "success", "data": {"department": {...}}}` |
-| `/api/v1/users` | `GET` | 获取用户列表 | N/A | `{"code": 200, "message": "success", "data": {"users": [...], "total": 100}}` |
-| `/api/v1/users/:id` | `GET` | 获取用户详情 | N/A | `{"code": 200, "message": "success", "data": {"user": {...}}}` |
-| `/api/v1/users/:id` | `PUT` | 更新用户信息（本地扩展字段） | `{"extension": {...}}` | `{"code": 200, "message": "success", "data": {"user": {...}}}` |
+部分旧接口使用 `PagedResponse`，字段仍是 `items` 与 `total`。
 
-### 4.3 考勤模块
+### 认证约定
 
-| API 路径 | 方法 | 功能描述 | 请求体 (JSON) | 响应体 (JSON) |
-|---------|------|---------|--------------|---------------|
-| `/api/v1/attendance` | `GET` | 获取考勤记录 | N/A | `{"code": 200, "message": "success", "data": {"attendance": [...], "total": 100}}` |
-| `/api/v1/attendance/statistics` | `GET` | 获取考勤统计 | N/A | `{"code": 200, "message": "success", "data": {"statistics": {...}}}` |
+- 登录接口返回 JWT。
+- 受保护接口需要请求头：`Authorization: Bearer <token>`。
+- JWT 中间件会把 `userID` 和 `userName` 写入 Gin context。
+- 当前除了登录、钉钉登录配置/回调、健康检查、文件访问外，大多数业务接口都需要 JWT。
 
-### 4.4 审批模块
+## 路由分组
 
-| API 路径 | 方法 | 功能描述 | 请求体 (JSON) | 响应体 (JSON) |
-|---------|------|---------|--------------|---------------|
-| `/api/v1/approvals` | `GET` | 获取审批列表 | N/A | `{"code": 200, "message": "success", "data": {"approvals": [...], "total": 100}}` |
-| `/api/v1/approvals/:id` | `GET` | 获取审批详情 | N/A | `{"code": 200, "message": "success", "data": {"approval": {...}}}` |
+### 认证
 
-### 4.5 权限模块
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/v1/auth/login` | 账号密码登录 |
+| `POST` | `/api/v1/auth/logout` | 登出 |
+| `GET` | `/api/v1/auth/me` | 获取当前用户 |
+| `GET` | `/api/v1/auth/dingtalk/qr/start` | 获取钉钉扫码登录地址 |
+| `POST` | `/api/v1/auth/dingtalk/in-app` | 钉钉内免登，body 使用 `code` |
+| `GET` | `/api/v1/auth/dingtalk/callback` | 钉钉 OAuth 回调 |
+| `GET` | `/api/v1/auth/dingtalk/config` | 获取钉钉前端配置 |
 
-| API 路径 | 方法 | 功能描述 | 请求体 (JSON) | 响应体 (JSON) |
-|---------|------|---------|--------------|---------------|
-| `/api/v1/roles` | `GET` | 获取角色列表 | N/A | `{"code": 200, "message": "success", "data": {"roles": [...]}}` |
-| `/api/v1/roles` | `POST` | 创建角色 | `{"name": "管理员", "permissions": [...]}` | `{"code": 201, "message": "success", "data": {"role": {...}}}` |
-| `/api/v1/roles/:id` | `PUT` | 更新角色 | `{"name": "管理员", "permissions": [...]}` | `{"code": 200, "message": "success", "data": {"role": {...}}}` |
-| `/api/v1/roles/:id` | `DELETE` | 删除角色 | N/A | `{"code": 200, "message": "success"}` |
-| `/api/v1/permissions` | `GET` | 获取权限列表 | N/A | `{"code": 200, "message": "success", "data": {"permissions": [...]}}` |
-| `/api/v1/users/:id/roles` | `GET` | 获取用户角色 | N/A | `{"code": 200, "message": "success", "data": {"roles": [...]}}` |
-| `/api/v1/users/:id/roles` | `POST` | 分配角色给用户 | `{"roles": [...]}` | `{"code": 200, "message": "success"}` |
+登录请求示例：
 
-### 4.6 操作日志模块
+```json
+{
+  "username": "admin",
+  "password": "admin123"
+}
+```
 
-| API 路径 | 方法 | 功能描述 | 请求体 (JSON) | 响应体 (JSON) |
-|---------|------|---------|--------------|---------------|
-| `/api/v1/logs` | `GET` | 获取操作日志 | N/A | `{"code": 200, "message": "success", "data": {"logs": [...], "total": 100}}` |
-| `/api/v1/logs/:id` | `GET` | 获取日志详情 | N/A | `{"code": 200, "message": "success", "data": {"log": {...}}}` |
+钉钉内免登请求示例：
 
-### 4.7 同步模块
+```json
+{
+  "code": "code_from_dingtalk_js_sdk"
+}
+```
 
-| API 路径 | 方法 | 功能描述 | 请求体 (JSON) | 响应体 (JSON) |
-|---------|------|---------|--------------|---------------|
-| `/api/v1/sync/departments` | `POST` | 同步部门 | N/A | `{"code": 200, "message": "success", "data": {"count": 10}}` |
-| `/api/v1/sync/users` | `POST` | 同步用户 | N/A | `{"code": 200, "message": "success", "data": {"count": 100}}` |
-| `/api/v1/sync/attendance` | `POST` | 同步考勤 | `{"start_date": "2024-01-01", "end_date": "2024-01-31"}` | `{"code": 200, "message": "success", "data": {"count": 1000}}` |
-| `/api/v1/sync/approvals` | `POST` | 同步审批 | `{"start_date": "2024-01-01", "end_date": "2024-01-31"}` | `{"code": 200, "message": "success", "data": {"count": 100}}` |
-| `/api/v1/sync/status` | `GET` | 获取同步状态 | N/A | `{"code": 200, "message": "success", "data": {"status": {...}}}` |
+### 用户、部门与基础同步
 
-## 5. 数据模型设计
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/users` | 用户列表 |
+| `GET` | `/api/v1/users/:id` | 用户详情 |
+| `PUT` | `/api/v1/users/:id` | 更新用户本地扩展字段 |
+| `GET` | `/api/v1/departments` | 当前可见部门列表 |
+| `GET` | `/api/v1/departments/:id` | 部门详情 |
+| `POST` | `/api/v1/sync/departments` | 同步钉钉部门 |
+| `POST` | `/api/v1/sync/users` | 同步钉钉用户 |
+| `GET` | `/api/v1/sync/status` | 基础同步状态 |
 
-### 5.1 用户模型 (User)
+### 组织与员工
 
-| 字段名 | 数据类型 | 描述 | 类型 |
-|-------|---------|------|------|
-| `id` | `UUID` | 主键 | 本地字段 |
-| `user_id` | `VARCHAR(64)` | 钉钉用户ID | 钉钉原始字段 |
-| `name` | `VARCHAR(128)` | 姓名 | 钉钉原始字段 |
-| `email` | `VARCHAR(128)` | 邮箱 | 钉钉原始字段 |
-| `mobile` | `VARCHAR(32)` | 手机号 | 钉钉原始字段 |
-| `department_id` | `VARCHAR(64)` | 部门ID | 钉钉原始字段 |
-| `position` | `VARCHAR(128)` | 职位 | 钉钉原始字段 |
-| `avatar` | `VARCHAR(256)` | 头像URL | 钉钉原始字段 |
-| `status` | `VARCHAR(32)` | 状态 | 钉钉原始字段 |
-| `extension` | `JSONB` | 本地扩展字段 | 本地扩展字段 |
-| `created_at` | `TIMESTAMP` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | 删除时间 | 本地字段 |
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/org/overview` | 组织概览 |
+| `GET` | `/api/v1/org/departments/tree` | 部门树 |
+| `GET` | `/api/v1/org/departments/:id/history` | 部门变更历史 |
+| `GET` | `/api/v1/org/employees` | 组织员工列表 |
+| `GET` | `/api/v1/org/employees/:id` | 聚合员工详情 |
+| `POST` | `/api/v1/org/sync` | 组织数据同步 |
+| `GET` | `/api/v1/employee/profiles` | 员工档案列表 |
+| `GET` | `/api/v1/employee/profiles/:id` | 员工档案详情 |
+| `POST` | `/api/v1/employee/profiles` | 创建员工档案 |
+| `PUT` | `/api/v1/employee/profiles/:id` | 更新员工档案 |
+| `GET` | `/api/v1/employee/ledger` | 入转调离台账 |
+| `GET` | `/api/v1/employee/transfers` | 调岗记录 |
+| `POST` | `/api/v1/employee/transfers` | 创建调岗记录 |
+| `GET` | `/api/v1/employee/resignations` | 离职记录 |
+| `POST` | `/api/v1/employee/resignations` | 创建离职记录 |
+| `GET` | `/api/v1/employee/onboardings` | 入职记录 |
+| `POST` | `/api/v1/employee/onboardings` | 创建入职记录 |
+| `GET` | `/api/v1/talent/analysis` | 人才分析列表 |
+| `GET` | `/api/v1/talent/analysis/:id` | 人才分析详情 |
+| `POST` | `/api/v1/talent/analysis` | 创建人才分析 |
 
-### 5.2 部门模型 (Department)
+### 考勤与审批
 
-| 字段名 | 数据类型 | 描述 | 类型 |
-|-------|---------|------|------|
-| `id` | `UUID` | 主键 | 本地字段 |
-| `department_id` | `VARCHAR(64)` | 钉钉部门ID | 钉钉原始字段 |
-| `name` | `VARCHAR(128)` | 部门名称 | 钉钉原始字段 |
-| `parent_id` | `VARCHAR(64)` | 父部门ID | 钉钉原始字段 |
-| `order` | `INTEGER` | 排序 | 钉钉原始字段 |
-| `extension` | `JSONB` | 本地扩展字段 | 本地扩展字段 |
-| `created_at` | `TIMESTAMP` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | 删除时间 | 本地字段 |
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/attendance/records` | 考勤记录 |
+| `GET` | `/api/v1/attendance/stats` | 考勤统计 |
+| `POST` | `/api/v1/attendance/sync` | 同步考勤 |
+| `POST` | `/api/v1/attendance/export` | 创建考勤导出任务 |
+| `GET` | `/api/v1/attendance/exports` | 查询导出任务 |
+| `GET` | `/api/v1/attendance/last-sync` | 最近同步时间 |
+| `GET` | `/api/v1/approvals/templates` | 审批模板 |
+| `GET` | `/api/v1/approvals/instances` | 审批实例 |
+| `GET` | `/api/v1/approvals/:id` | 审批详情 |
+| `POST` | `/api/v1/approvals/sync` | 同步审批，body 必须包含 `process_code` |
 
-### 5.3 考勤模型 (Attendance)
+`/api/v1/approvals/sync` 请求示例：
 
-| 字段名 | 数据类型 | 描述 | 类型 |
-|-------|---------|------|------|
-| `id` | `UUID` | 主键 | 本地字段 |
-| `user_id` | `VARCHAR(64)` | 钉钉用户ID | 钉钉原始字段 |
-| `user_name` | `VARCHAR(128)` | 用户名 | 钉钉原始字段 |
-| `check_time` | `TIMESTAMP` | 打卡时间 | 钉钉原始字段 |
-| `check_type` | `VARCHAR(32)` | 打卡类型 | 钉钉原始字段 |
-| `location` | `VARCHAR(256)` | 打卡地点 | 钉钉原始字段 |
-| `extension` | `JSONB` | 本地扩展字段 | 本地扩展字段 |
-| `created_at` | `TIMESTAMP` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | 删除时间 | 本地字段 |
+```json
+{
+  "process_code": "PROC-OVERTIME",
+  "start_date": "2026-05-01",
+  "end_date": "2026-05-26"
+}
+```
 
-### 5.4 审批模型 (Approval)
+缺少 `process_code` 时返回 `400`，不会执行同步。
 
-| 字段名 | 数据类型 | 描述 | 类型 |
-|-------|---------|------|------|
-| `id` | `UUID` | 主键 | 本地字段 |
-| `process_id` | `VARCHAR(64)` | 钉钉审批流程ID | 钉钉原始字段 |
-| `title` | `VARCHAR(256)` | 审批标题 | 钉钉原始字段 |
-| `applicant_id` | `VARCHAR(64)` | 申请人ID | 钉钉原始字段 |
-| `applicant_name` | `VARCHAR(128)` | 申请人姓名 | 钉钉原始字段 |
-| `status` | `VARCHAR(32)` | 审批状态 | 钉钉原始字段 |
-| `create_time` | `TIMESTAMP` | 创建时间 | 钉钉原始字段 |
-| `finish_time` | `TIMESTAMP` | 完成时间 | 钉钉原始字段 |
-| `content` | `JSONB` | 审批内容 | 钉钉原始字段 |
-| `extension` | `JSONB` | 本地扩展字段 | 本地扩展字段 |
-| `created_at` | `TIMESTAMP` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | 删除时间 | 本地字段 |
+### 权限、审计与任务
 
-### 5.5 角色模型 (Role)
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/permission/roles` | 角色列表 |
+| `POST` | `/api/v1/permission/roles` | 创建角色 |
+| `GET` | `/api/v1/permission/permissions` | 权限列表 |
+| `GET` | `/api/v1/audit/logs` | 审计日志 |
+| `GET` | `/api/v1/jobs` | 任务列表 |
+| `POST` | `/api/v1/jobs/:id/run` | 运行任务 |
 
-| 字段名 | 数据类型 | 描述 | 类型 |
-|-------|---------|------|------|
-| `id` | `UUID` | 主键 | 本地字段 |
-| `name` | `VARCHAR(64)` | 角色名称 | 本地字段 |
-| `description` | `TEXT` | 角色描述 | 本地字段 |
-| `created_at` | `TIMESTAMP` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | 删除时间 | 本地字段 |
+### 排班、年假与调休
 
-### 5.6 权限模型 (Permission)
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/week-schedule/rules` | 大小周规则 |
+| `POST` | `/api/v1/week-schedule/rules` | 创建大小周规则 |
+| `POST` | `/api/v1/week-schedule/rules/batch` | 批量设置规则 |
+| `PUT` | `/api/v1/week-schedule/rules/:id` | 更新规则 |
+| `DELETE` | `/api/v1/week-schedule/rules/:id` | 删除规则 |
+| `GET` | `/api/v1/week-schedule/shifts` | 钉钉班次 |
+| `POST` | `/api/v1/week-schedule/shifts` | 创建钉钉班次 |
+| `GET` | `/api/v1/week-schedule/debug/attendance-groups` | 调试钉钉考勤组 |
+| `GET` | `/api/v1/week-schedule/calendar` | 周历 |
+| `POST` | `/api/v1/week-schedule/overrides` | 手动覆盖某周大小周 |
+| `DELETE` | `/api/v1/week-schedule/overrides/:id` | 删除手动覆盖 |
+| `POST` | `/api/v1/week-schedule/sync/to-dingtalk` | 同步排班到钉钉 |
+| `POST` | `/api/v1/week-schedule/sync/from-dingtalk` | 从钉钉同步排班 |
+| `GET` | `/api/v1/week-schedule/sync/logs` | 排班同步日志 |
+| `GET` | `/api/v1/week-schedule/holidays` | 法定节假日 |
+| `POST` | `/api/v1/week-schedule/holidays` | 创建节假日 |
+| `POST` | `/api/v1/week-schedule/holidays/batch` | 批量创建节假日 |
+| `POST` | `/api/v1/week-schedule/holidays/sync/from-juhe` | 从聚合数据同步节假日 |
+| `DELETE` | `/api/v1/week-schedule/holidays/:id` | 删除节假日 |
+| `GET` | `/api/v1/shift-config/list` | 员工下班时间配置 |
+| `POST` | `/api/v1/shift-config/preview` | 配置预览 |
+| `POST` | `/api/v1/shift-config/set` | 保存配置 |
+| `POST` | `/api/v1/shift-config/apply` | 应用配置到钉钉 |
+| `GET` | `/api/v1/leave/eligibility` | 年假资格 |
+| `POST` | `/api/v1/leave/eligibility/recalculate` | 重新计算年假资格 |
+| `GET` | `/api/v1/leave/grants` | 年假发放记录 |
+| `POST` | `/api/v1/leave/grants/run-quarter` | 运行季度发放 |
+| `POST` | `/api/v1/leave/grants/regrant` | 补发年假 |
+| `POST` | `/api/v1/leave/grants/sync-to-dingtalk` | 同步年假到钉钉 |
+| `GET` | `/api/v1/leave/vacation-types` | 钉钉假期类型 |
+| `POST` | `/api/v1/leave/consume` | 消费年假 |
+| `GET` | `/api/v1/leave/consume-log` | 年假消费台账 |
+| `GET` | `/api/v1/overtime/matches` | 加班匹配记录 |
+| `POST` | `/api/v1/overtime/matches/run` | 运行加班匹配 |
+| `POST` | `/api/v1/overtime/matches/force` | 强制匹配 |
+| `POST` | `/api/v1/overtime/matches/clear-rematch` | 清空并重新匹配 |
+| `POST` | `/api/v1/overtime/matches/delete` | 删除匹配记录 |
+| `POST` | `/api/v1/overtime/sync-and-match` | 同步审批并匹配 |
+| `POST` | `/api/v1/overtime/reset-manual-leave` | 重置钉钉 ManualLeave 余额 |
+| `POST` | `/api/v1/overtime/resync-overtime` | 重新同步加班到钉钉 |
+| `POST` | `/api/v1/overtime/supplementary/submit` | 提交加班补卡 |
+| `POST` | `/api/v1/overtime/supplementary/approve` | 审批加班补卡 |
+| `GET` | `/api/v1/overtime/supplementary/list` | 加班补卡列表 |
+| `POST` | `/api/v1/overtime/supplementary/sync-dingtalk` | 从钉钉同步补卡审批，当前返回 501 |
+| `GET` | `/api/v1/comp-time/balance` | 调休余额 |
+| `POST` | `/api/v1/comp-time/manual-grant` | 手动发放调休 |
+| `POST` | `/api/v1/upload` | 文件上传 |
 
-| 字段名 | 数据类型 | 描述 | 类型 |
-|-------|---------|------|------|
-| `id` | `UUID` | 主键 | 本地字段 |
-| `name` | `VARCHAR(64)` | 权限名称 | 本地字段 |
-| `code` | `VARCHAR(64)` | 权限代码 | 本地字段 |
-| `description` | `TEXT` | 权限描述 | 本地字段 |
-| `created_at` | `TIMESTAMP` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | 更新时间 | 本地字段 |
-| `deleted_at` | `TIMESTAMP` | 删除时间 | 本地字段 |
+### 绩效
 
-### 5.7 角色权限模型 (RolePermission)
+绩效接口统一在 `/api/v1/performance` 下，当前覆盖绩效活动、参与人、目标设定、自评、上级评分、强制分布、三级确认、指标库、模板、收支规则、提醒与归档。
 
-| 字段名 | 数据类型 | 描述 | 类型 |
-|-------|---------|------|------|
-| `id` | `UUID` | 主键 | 本地字段 |
-| `role_id` | `UUID` | 角色ID | 本地字段 |
-| `permission_id` | `UUID` | 权限ID | 本地字段 |
-| `created_at` | `TIMESTAMP` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | 更新时间 | 本地字段 |
+常用入口：
 
-### 5.8 用户角色模型 (UserRole)
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/performance/activities` | 活动列表 |
+| `POST` | `/api/v1/performance/activities` | 创建活动 |
+| `GET` | `/api/v1/performance/activities/:activity_id` | 活动详情 |
+| `PUT` | `/api/v1/performance/activities/:activity_id` | 更新活动 |
+| `POST` | `/api/v1/performance/activities/:activity_id/open-target-setting` | 开启目标设定 |
+| `POST` | `/api/v1/performance/activities/:activity_id/open-self-evaluation` | 开启自评 |
+| `POST` | `/api/v1/performance/activities/:activity_id/open-manager-evaluation` | 开启上级评分 |
+| `POST` | `/api/v1/performance/activities/:activity_id/lock` | 锁定活动 |
+| `POST` | `/api/v1/performance/activities/:activity_id/batch-confirm` | 批量确认结果 |
+| `GET` | `/api/v1/performance/activities/:activity_id/participants` | 参与人列表 |
+| `GET` | `/api/v1/performance/participants/:participant_id` | 参与人详情 |
+| `POST` | `/api/v1/performance/goal-records/:participant_id` | 保存目标记录 |
+| `POST` | `/api/v1/performance/goal-records/:participant_id/submit` | 提交目标审批 |
+| `POST` | `/api/v1/performance/reviews/:participant_id/self-evaluation` | Review 版自评 |
+| `POST` | `/api/v1/performance/reviews/:participant_id/manager-evaluation` | Review 版上级评分 |
+| `POST` | `/api/v1/performance/goal-reviews/:participant_id/bonus-penalty` | 目标绩效加减分 |
+| `GET` | `/api/v1/performance/indicator-libraries` | 指标库 |
+| `GET` | `/api/v1/performance/indicator-items` | 指标项 |
+| `GET` | `/api/v1/performance/templates` | 绩效模板 |
 
-| 字段名 | 数据类型 | 描述 | 类型 |
-|-------|---------|------|------|
-| `id` | `UUID` | 主键 | 本地字段 |
-| `user_id` | `VARCHAR(64)` | 钉钉用户ID | 本地字段 |
-| `role_id` | `UUID` | 角色ID | 本地字段 |
-| `created_at` | `TIMESTAMP` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | 更新时间 | 本地字段 |
+完整绩效路由请查看 `internal/api/router.go` 中 `performance := authRequired.Group("/performance")` 代码块。
 
-### 5.9 操作日志模型 (OperationLog)
+## 安全与现状说明
 
-| 字段名 | 数据类型 | 描述 | 类型 |
-|-------|---------|------|------|
-| `id` | `UUID` | 主键 | 本地字段 |
-| `user_id` | `VARCHAR(64)` | 操作用户ID | 本地字段 |
-| `user_name` | `VARCHAR(128)` | 操作用户名 | 本地字段 |
-| `operation` | `VARCHAR(128)` | 操作类型 | 本地字段 |
-| `resource` | `VARCHAR(256)` | 操作资源 | 本地字段 |
-| `ip` | `VARCHAR(64)` | 操作IP | 本地字段 |
-| `details` | `JSONB` | 操作详情 | 本地字段 |
-| `created_at` | `TIMESTAMP` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | 更新时间 | 本地字段 |
-
-### 5.10 同步状态模型 (SyncStatus)
-
-| 字段名 | 数据类型 | 描述 | 类型 |
-|-------|---------|------|------|
-| `id` | `UUID` | 主键 | 本地字段 |
-| `type` | `VARCHAR(32)` | 同步类型 | 本地字段 |
-| `last_sync_time` | `TIMESTAMP` | 上次同步时间 | 本地字段 |
-| `status` | `VARCHAR(32)` | 同步状态 | 本地字段 |
-| `message` | `TEXT` | 同步消息 | 本地字段 |
-| `created_at` | `TIMESTAMP` | 创建时间 | 本地字段 |
-| `updated_at` | `TIMESTAMP` | 更新时间 | 本地字段 |
-
-## 6. 错误码设计
-
-| 错误码 | 描述 |
-|-------|------|
-| 200 | 成功 |
-| 400 | 请求参数错误 |
-| 401 | 未授权 |
-| 403 | 禁止访问 |
-| 404 | 资源不存在 |
-| 500 | 服务器内部错误 |
-| 501 | 功能未实现 |
-| 502 | 网关错误 |
-| 503 | 服务不可用 |
-
-## 7. 分页参数
-
-| 参数名 | 类型 | 描述 | 默认值 |
-|-------|------|------|--------|
-| `page` | `integer` | 页码 | 1 |
-| `page_size` | `integer` | 每页大小 | 10 |
-
-## 8. 排序参数
-
-| 参数名 | 类型 | 描述 | 默认值 |
-|-------|------|------|--------|
-| `sort` | `string` | 排序字段，如 `created_at:desc` | `created_at:desc` |
-
-## 9. 过滤参数
-
-根据不同的API接口，支持不同的过滤参数，如：
-
-- `user_id`：用户ID
-- `department_id`：部门ID
-- `start_date`：开始日期
-- `end_date`：结束日期
-- `status`：状态
-
-## 10. 安全设计
-
-- **JWT 认证**：使用 JWT 进行身份验证
-- **HTTPS**：使用 HTTPS 加密传输
-- **CORS**：配置 CORS 策略
-- **SQL 注入防护**：使用参数化查询
-- **XSS 防护**：对输入进行过滤
-- **CSRF 防护**：使用 CSRF Token
-
-## 11. 性能优化
-
-- **缓存**：使用 Redis 缓存热点数据
-- **索引**：为常用查询字段创建索引
-- **分页**：使用分页减少数据传输
-- **批量操作**：支持批量同步和查询
-- **异步处理**：使用异步任务处理耗时操作
+- 已实现 JWT 鉴权和基础 CORS。
+- 数据库访问通过 GORM，避免手写拼接 SQL 的主要风险。
+- 没有全局 CSRF Token 机制。
+- 没有自动生成的完整 OpenAPI 文档。
+- 生产 HTTPS、网关限流、统一审计策略等需要由部署层和后续代码配合实现。

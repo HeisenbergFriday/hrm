@@ -33,7 +33,7 @@ api.interceptors.response.use(
 
 export const authAPI = {
   login: (data: { username: string; password: string }) => api.post('/auth/login', data),
-  dingtalkLogin: (data: { code: string }) => api.post('/auth/dingtalk', data),
+  dingtalkLogin: (data: { code: string }) => api.post('/auth/dingtalk/in-app', data),
   logout: () => api.post('/auth/logout'),
   getCurrentUser: () => api.get('/auth/me'),
 }
@@ -106,13 +106,18 @@ export const approvalAPI = {
     end_date?: string
   }) => api.get('/approvals/instances', { params }),
   getApproval: (id: string) => api.get(`/approvals/${id}`),
-  sync: (data?: { start_date?: string; end_date?: string }) => api.post('/approvals/sync', data),
+  sync: (data: { process_code: string; start_date?: string; end_date?: string }) => api.post('/approvals/sync', data),
 }
 
 export const permissionAPI = {
   getRoles: () => api.get('/permission/roles'),
   createRole: (data: { name: string; description: string }) => api.post('/permission/roles', data),
+  updateRole: (id: number, data: { name: string; description: string }) => api.put(`/permission/roles/${id}`, data),
   getPermissions: () => api.get('/permission/permissions'),
+  getUserRoles: (userId: string) => api.get(`/permission/users/${userId}/roles`),
+  assignUserRole: (data: { user_id: string; role_id: number }) => api.post('/permission/users/roles/assign', data),
+  removeUserRole: (data: { user_id: string; role_id: number }) => api.post('/permission/users/roles/remove', data),
+  getUserPermissions: (userId: string) => api.get(`/permission/users/${userId}/permissions`),
 }
 
 export const auditAPI = {
@@ -266,7 +271,7 @@ export const overtimeAPI = {
 }
 
 // ============= 绩效模块 API =============
-// 注意：后端当前无模板 CRUD，以下模板相关接口为前端本地管理，待后端实现后补充
+// 注意：后端已提供模板 CRUD；以下接口直接对接后端绩效模板与指标库能力
 
 export type PerformanceActivityStatus = 'draft' | 'target_setting' | 'self_evaluation' | 'manager_evaluation' | 'employee_confirmation' | 'manager_confirmation' | 'hr_confirmation' | 'locked' | 'result_confirmed' | 'archived'
 

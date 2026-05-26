@@ -1,12 +1,12 @@
-import React, { useState } from 'react'
-import { Typography, Table, Spin, Empty, Alert, Button, Select, Tree, message } from 'antd'
-import { MenuOutlined, ReloadOutlined } from '@ant-design/icons'
+import React, { useState, useEffect } from 'react'
+import { Typography, Spin, Button, Select, Tree, message, Card, Space, Tag, Alert, Divider } from 'antd'
+import { MenuOutlined, SaveOutlined, CheckCircleOutlined, SafetyOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { permissionAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 
-const { Text } = Typography
+const { Text, Title } = Typography
 const { Option } = Select
 
 interface Permission {
@@ -25,7 +25,7 @@ interface MenuItem {
 }
 
 const MenuPermission: React.FC = () => {
-  const [selectedRole, setSelectedRole] = useState<string>('1')
+  const [selectedRole, setSelectedRole] = useState<string>('')
   const [checkedKeys, setCheckedKeys] = useState<string[]>([])
 
   const { data: rolesData, isLoading: rolesLoading } = useQuery({
@@ -37,6 +37,13 @@ const MenuPermission: React.FC = () => {
     queryKey: ['permissions'],
     queryFn: () => permissionAPI.getPermissions(),
   })
+
+  // 默认选中第一个角色
+  useEffect(() => {
+    if (rolesData?.data?.items?.length && !selectedRole) {
+      setSelectedRole(rolesData.data.items[0].id)
+    }
+  }, [rolesData, selectedRole])
 
   const menuItems: MenuItem[] = [
     {
@@ -118,33 +125,78 @@ const MenuPermission: React.FC = () => {
   return (
     <PageContainer title="菜单权限" icon={<MenuOutlined />} subtitle="配置角色的菜单访问权限">
       <PageCard>
-        <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' }}>
-          <Text strong>选择角色：</Text>
-          <Select
-            style={{ width: 200 }}
-            value={selectedRole}
-            onChange={handleRoleChange}
-          >
-            {rolesData?.data?.items?.map((role: any) => (
-              <Option key={role.id} value={role.id}>
-                {role.name}
-              </Option>
-            ))}
-          </Select>
-          <Button type="primary" onClick={handleSave} style={{ marginLeft: 'auto' }}>
-            保存权限
-          </Button>
-        </div>
+        <Card
+          style={{ marginBottom: 16 }}
+          styles={{ body: { padding: '16px 24px' } }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Space size="large" align="center">
+              <Text strong style={{ fontSize: 14 }}>选择角色：</Text>
+              <Select
+                style={{ width: 200 }}
+                value={selectedRole}
+                onChange={handleRoleChange}
+                placeholder="请选择角色"
+                suffixIcon={<SafetyOutlined style={{ color: 'var(--color-primary)' }} />}
+              >
+                {rolesData?.data?.items?.map((role: any) => (
+                  <Option key={role.id} value={role.id}>
+                    <Space>
+                      <SafetyOutlined style={{ color: 'var(--color-primary)' }} />
+                      {role.name}
+                    </Space>
+                  </Option>
+                ))}
+              </Select>
+              <Tag icon={<CheckCircleOutlined />} color="success" style={{ marginLeft: 8 }}>
+                已选择 {checkedKeys.length} 项权限
+              </Tag>
+            </Space>
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              onClick={handleSave}
+              size="large"
+            >
+              保存权限
+            </Button>
+          </div>
+        </Card>
 
-        <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 'var(--radius-xs)', padding: 16, minHeight: 400 }}>
-          <Tree
-            checkable
-            treeData={menuItems}
-            checkedKeys={checkedKeys}
-            onCheck={(checked, info) => setCheckedKeys(checked as string[])}
-            defaultExpandAll
+        <Card
+          title={
+            <Space>
+              <MenuOutlined style={{ color: 'var(--color-primary)' }} />
+              <Text strong>菜单列表</Text>
+            </Space>
+          }
+          extra={
+            <Button
+              type="link"
+              onClick={() => setCheckedKeys(menuItems.flatMap(item => [item.key, ...(item.children?.map(c => c.key) || [])]))}
+            >
+              全选
+            </Button>
+          }
+          style={{ minHeight: 400 }}
+        >
+          <Alert
+            message="勾选菜单后，对应角色将拥有访问权限"
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
           />
-        </div>
+          <div style={{ minHeight: 350 }}>
+            <Tree
+              checkable
+              treeData={menuItems}
+              checkedKeys={checkedKeys}
+              onCheck={(checked, info) => setCheckedKeys(checked as string[])}
+              defaultExpandAll
+              style={{ fontSize: 14 }}
+            />
+          </div>
+        </Card>
       </PageCard>
     </PageContainer>
   )

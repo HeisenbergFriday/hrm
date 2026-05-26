@@ -1,182 +1,128 @@
 # 测试计划
 
-## 测试分层结构
+最后更新：2026-05-26
 
-### 1. 前端单测
-- **技术栈**：Vitest + React Testing Library
-- **测试范围**：
-  - 组件渲染测试
-  - 状态管理测试
-  - 表单验证测试
-  - 模拟API调用测试
-- **测试文件位置**：`frontend/src/**/*.test.tsx`
-- **测试覆盖率目标**：80%以上
+## 当前测试资产
 
-### 2. 后端单测/集成测试
-- **技术栈**：Go testing + testify
-- **测试范围**：
-  - 服务层逻辑测试
-  - 数据访问层测试
-  - 中间件测试
-  - 集成测试（API层）
-- **测试文件位置**：`internal/**/*_test.go`
-- **测试覆盖率目标**：75%以上
+### 已落地
 
-### 3. API契约测试
-- **技术栈**：基于OpenAPI/Swagger
-- **测试范围**：
-  - 接口响应结构验证
-  - 状态码验证
-  - 错误码验证
-  - 请求参数验证
-- **测试文件位置**：`tests/api-contract-test.go`
-- **测试覆盖率目标**：100% API接口
+- 后端测试：`go test ./...`
+  - `internal/database/database_test.go`
+  - `internal/dingtalk/dingtalk_test.go`
+  - `internal/repository/user_repository_test.go`
+  - `internal/repository/week_schedule_repository_test.go`
+  - `internal/service/*_test.go`
+- 前端单测配置：`frontend/vite.config.test.ts`
+  - 技术栈：Vitest + React Testing Library + jsdom
+  - 命令：`cd frontend && npm run test`
+  - 当前配置允许无前端单测文件时通过，用于保持验证命令可执行。
+- 前端 E2E：`cd frontend && npm run e2e`
+  - `frontend/tests/e2e/login.spec.ts`
+  - `frontend/tests/e2e/organization.spec.ts`
+  - `frontend/tests/e2e/attendance.spec.ts`
+- 测试辅助设施
+  - `tests/config/test_config.go`
+  - `tests/database/init_test_db.go`
+  - `tests/mock/dingtalk_mock.go`
+  - `tests/reports/acceptance-report.md`
+  - `tests/reports/acceptance-requirements-matrix.md`
+- 前端报告脚本：`cd frontend && npm run generate-report`
 
-### 4. E2E验收测试
-- **技术栈**：Playwright
-- **测试范围**：
-  - 核心业务流程测试
-  - 页面交互测试
-  - 端到端流程测试
-- **测试文件位置**：`frontend/tests/e2e/**/*.spec.ts`
-- **测试覆盖率目标**：核心流程100%
+### 待补齐
 
-### 5. 权限测试
-- **测试范围**：
-  - 不同角色的菜单权限
-  - 接口权限
-  - 数据权限
-- **测试文件位置**：
-  - 前端：`frontend/src/pages/**/*-permission.test.tsx`
-  - 后端：`internal/api/handlers-permission_test.go`
-- **测试覆盖率目标**：所有权限点
+- 前端业务单测文件：`frontend/src/**/*.test.tsx` 或 `frontend/src/**/*.spec.tsx`
+- 权限专项测试：当前没有 `*-permission.test.tsx` 或 `handlers_permission_test.go`
+- 回归专项测试目录：当前尚未建立
+- Redis mock、通用 test-utils、测试种子数据：当前未落地独立文件
+- API 契约测试：`tests/api-contract-test.go` 已存在，但不是标准 `_test.go` 命名，且期望状态码需要结合当前鉴权和路由行为重新校准后再纳入必跑测试
+- 覆盖率门禁：当前未配置强制覆盖率阈值；前端覆盖率还需要确认 coverage provider 依赖
 
-### 6. 任务与日志测试
-- **测试范围**：
-  - 同步任务成功与失败场景
-  - 登录日志记录
-  - 审计日志记录
-  - 任务运行日志
-- **测试文件位置**：
-  - 前端：`frontend/src/pages/SyncJobs.test.tsx`
-  - 后端：`internal/service/sync_service_test.go`
-- **测试覆盖率目标**：100% 任务和日志功能
+## 分层策略
 
-### 7. 回归测试
-- **测试范围**：
-  - 登录流程
-  - 组织员工管理
-  - 考勤管理
-  - 审批管理
-  - 权限中心
-- **测试文件位置**：
-  - 前端：`frontend/tests/regression/**/*.spec.ts`
-  - 后端：`tests/regression/**/*_test.go`
-- **测试覆盖率目标**：核心主链路100%
+### 1. 后端单元与服务测试
 
-## 测试基础设施
+- 技术栈：Go testing + testify
+- 覆盖范围：数据库初始化、钉钉客户端、Repository、Service 业务逻辑
+- 必跑命令：`go test ./...`
+- 目标：新增服务逻辑优先补充同包 `_test.go`，避免只依赖接口层或人工验证
 
-### 1. 测试环境配置
-- **配置文件**：`tests/config/test_config.go`
-- **环境变量**：`tests/.env.test`
-- **测试数据库**：使用内存数据库或测试专用数据库
+### 2. 前端单元测试
 
-### 2. 测试替身
-- **钉钉API Mock**：`tests/mock/dingtalk_mock.go`
-- **Redis Mock**：`tests/mock/redis_mock.go`
-- **数据库Mock**：使用GORM的Mock功能
+- 技术栈：Vitest + React Testing Library
+- 覆盖范围：页面组件、表单校验、状态变化、接口 mock 后的渲染逻辑
+- 必跑命令：`cd frontend && npm run test`
+- 文件约定：`frontend/src/**/*.{test,spec}.{ts,tsx}`
+- 目标：先覆盖登录、组织、考勤、审批等主流程页面，再扩展到通用组件
 
-### 3. 测试辅助函数
-- **前端**：`frontend/src/utils/test-utils.ts`
-- **后端**：`tests/utils/test_utils.go`
+### 3. 前端 E2E 验收测试
 
-### 4. 测试数据
-- **种子数据**：`tests/database/seed.go`
-- **测试用例数据**：`tests/data/test_data.go`
+- 技术栈：Playwright
+- 覆盖范围：登录、组织架构、考勤等用户主链路
+- 必跑命令：`cd frontend && npm run e2e`
+- 文件约定：`frontend/tests/e2e/**/*.spec.ts`
+- 说明：E2E 依赖前后端服务和测试账号数据，CI 中应单独准备环境
 
-## 测试执行策略
+### 4. API 契约测试
 
-### 1. 本地开发测试
-- 前端单测：`npm test`
-- 后端单测：`go test ./...`
-- E2E测试：`npm run e2e`
+- 目标范围：响应结构、状态码、错误码、鉴权行为、参数校验
+- 当前状态：存在草稿文件 `tests/api-contract-test.go`，尚未纳入可靠必跑集合
+- 后续要求：重命名为标准 `_test.go` 文件后，根据 `internal/api/router.go` 的真实路由与中间件更新用例
 
-### 2. CI/CD测试
-- 提交代码时自动运行前端单测和后端单测
-- 合并PR时运行完整测试套件
-- 部署前运行E2E测试和回归测试
+### 5. 权限与回归测试
 
-## 测试报告
+- 权限测试目标：菜单权限、接口权限、数据权限
+- 回归测试目标：登录、组织员工、考勤、审批、权限中心主链路
+- 当前状态：专项目录和专项测试文件未落地
+- 后续要求：从高风险接口和页面开始补齐，不在文档中引用尚不存在的路径作为已落地资产
 
-### 1. 覆盖率报告
-- 前端：`npm run test:coverage`
-- 后端：`go test ./... -coverprofile=coverage.out && go tool cover -html=coverage.out`
+## 本地验证命令
 
-### 2. 验收报告
-- 自动生成：`node scripts/generate-report.js`
-- 报告位置：`tests/reports/acceptance-report.md`
+```bash
+go test ./...
 
-## 测试用例设计
+cd frontend
+npm run build
+npm run lint
+npm run test
+npm run e2e
+```
 
-### 1. 通用测试场景
-- **Happy Path**：正常流程测试
-- **Empty State**：空数据场景测试
-- **Error State**：错误场景测试
-- **Retry**：重试机制测试
-- **Unauthorized/Forbidden**：未授权场景测试
-- **参数非法**：参数验证测试
-- **幂等性**：重复操作测试
-- **分页/筛选**：分页和筛选功能测试
-- **审计日志写入**：操作日志记录测试
-- **同步任务成功与失败**：任务执行测试
+说明：`npm run build` 已包含 TypeScript 编译。`npm run e2e` 需要可访问的前后端测试环境；只做快速静态验证时可先运行 build、lint、unit test。
 
-### 2. 模块特定测试场景
-- **登录认证**：账号密码错误、钉钉登录失败、扫码超时
-- **组织架构**：部门树渲染、员工列表筛选、同步失败
-- **考勤管理**：考勤记录查询、统计数据计算、导出失败
-- **审批管理**：审批实例查询、审批详情展示、同步失败
-- **权限管理**：角色创建、权限分配、无权限访问
-- **审计日志**：操作记录完整性、日志查询筛选
-- **任务中心**：任务运行状态、失败重试
-- **员工档案**：档案创建、更新、查询
-- **入转调离**：申请创建、状态更新、审批流程
-- **人才分析**：分析数据计算、报告生成
+## 覆盖率与报告
 
-## 风险评估
+- 后端覆盖率：`go test ./... -coverprofile=coverage.out && go tool cover -html=coverage.out`
+- 前端覆盖率：待补齐 coverage provider 后再作为稳定命令纳入 CI
+- 验收报告：`cd frontend && npm run generate-report`
+- 报告目录：`tests/reports/`
 
-### 1. 潜在风险
-- 钉钉API依赖：需要模拟钉钉接口，确保测试不依赖真实环境
-- 数据库依赖：需要确保测试数据隔离，避免影响生产数据
-- 性能测试：需要评估系统在高并发下的表现
-- 安全性测试：需要测试权限控制和数据安全
+## 通用测试场景
 
-### 2. 风险缓解措施
-- 使用Mock服务模拟第三方依赖
-- 使用测试专用数据库
-- 实施性能测试计划
-- 进行安全性测试和代码审计
+- Happy Path：正常流程
+- Empty State：空数据
+- Error State：接口失败、解析失败、保存失败
+- Unauthorized/Forbidden：未登录、无权限、权限过期
+- 参数非法：必填、格式、边界值
+- 幂等性：重复提交、重复同步、重复审批
+- 分页与筛选：页码、关键字、状态、日期范围
+- 审计日志：关键操作的日志写入和查询
+- 同步任务：成功、失败、重试、部分成功
 
-## 测试交付物
+## 模块测试重点
 
-1. 测试计划文档
-2. 测试用例设计文档
-3. 测试代码实现
-4. 测试覆盖率报告
-5. 验收测试报告
-6. 回归测试报告
+- 登录认证：账号密码登录、钉钉内免登、扫码登录失败、会话过期
+- 组织架构：部门树、员工列表、员工详情、同步失败
+- 考勤管理：记录查询、统计计算、导出、最近同步时间
+- 请假与加班：审批同步、加班匹配、补录审批、手工重置
+- 审批管理：模板、实例列表、详情、同步任务
+- 权限管理：角色创建、权限分配、无权限访问
+- 员工档案：档案创建、更新、查询；入转调离列表、创建、详情
+- 人才分析：分析创建、详情、列表统计
+- 周排班与班次：班次配置、周计划生成、发布与查询
 
-## 测试时间计划
+## 风险与约束
 
-1. **测试设计阶段**：2天
-2. **测试代码实现**：5天
-3. **测试执行**：2天
-4. **报告生成**：1天
-5. **问题修复**：2天
-
-## 测试团队职责
-
-1. **测试架构师**：设计测试框架和策略
-2. **前端测试工程师**：实现前端单测和E2E测试
-3. **后端测试工程师**：实现后端单测和集成测试
-4. **QA负责人**：协调测试活动和质量保证
-5. **开发工程师**：协助编写测试代码和修复测试问题
+- 钉钉 API 依赖应通过 mock 或测试环境隔离，避免本地测试依赖真实外部服务。
+- 数据库测试应使用测试库或隔离数据源，避免污染生产数据。
+- E2E 需要明确测试账号、后端地址和基础数据。
+- 覆盖率阈值应在测试资产稳定后再启用，避免用空阈值制造假安全感。

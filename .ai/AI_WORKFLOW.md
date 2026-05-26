@@ -949,7 +949,7 @@ golangci-lint run               # Lint（如有配置）
 # 前端
 cd d:/ai项目/frontend
 npm run lint                    # ESLint
-npm run type-check              # TypeScript 类型检查
+npm run build                   # TypeScript 类型检查 + 构建
 npm run build                   # 构建验证
 ```
 
@@ -1001,8 +1001,7 @@ npx playwright test tests/xxx.spec.ts           # 指定场景
 层级 1：基础验证（必选）
     ├── go fmt + go vet + golangci-lint
     ├── npm run lint
-    ├── npm run type-check
-    └── npm run build
+    └── npm run build（含 TypeScript 类型检查）
     ↓ 通过
 层级 2：单元测试（推荐）
     ├── go test ./internal/service/...
@@ -1033,7 +1032,7 @@ npx playwright test tests/xxx.spec.ts           # 指定场景
 1. go fmt ./... → ✅ 通过
 2. go vet ./... → ✅ 通过
 3. npm run lint → ✅ 通过
-4. npm run type-check → ✅ 通过
+4. npm run build → ✅ 通过（含 TypeScript 类型检查）
 5. npm run build → ✅ 通过
 6. go test ./internal/service/... → ✅ 通过（5/5）
 7. npm run test → ✅ 通过（12/12）
@@ -1266,7 +1265,7 @@ UI/交互：
 
 前端：
 - [ ] npm run lint 通过
-- [ ] npm run type-check 通过
+- [ ] npm run build 通过（含 TypeScript 类型检查）
 - [ ] npm run build 成功
 - [ ] 所有测试通过
 - [ ] 无 console.log 残留
@@ -1721,7 +1720,7 @@ golangci-lint run               # Lint（如有配置）
 # 前端
 cd d:/ai项目/frontend
 npm run lint                    # ESLint
-npm run type-check              # TypeScript 类型检查
+npm run build                   # TypeScript 类型检查 + 构建
 npm run build                   # 构建验证
 ```
 
@@ -1773,8 +1772,7 @@ npx playwright test tests/xxx.spec.ts           # 指定场景
 层级 1：基础验证（必选）
     ├── go fmt + go vet + golangci-lint
     ├── npm run lint
-    ├── npm run type-check
-    └── npm run build
+    └── npm run build（含 TypeScript 类型检查）
     ↓ 通过
 层级 2：单元测试（推荐）
     ├── go test ./internal/service/...
@@ -1805,7 +1803,7 @@ npx playwright test tests/xxx.spec.ts           # 指定场景
 1. go fmt ./... → ✅ 通过
 2. go vet ./... → ✅ 通过
 3. npm run lint → ✅ 通过
-4. npm run type-check → ✅ 通过
+4. npm run build → ✅ 通过（含 TypeScript 类型检查）
 5. npm run build → ✅ 通过
 6. go test ./internal/service/... → ✅ 通过（5/5）
 7. npm run test → ✅ 通过（12/12）
@@ -1985,7 +1983,7 @@ UI/交互：
 
 前端：
 - [ ] npm run lint 通过
-- [ ] npm run type-check 通过
+- [ ] npm run build 通过（含 TypeScript 类型检查）
 - [ ] npm run build 成功
 - [ ] 所有测试通过
 - [ ] 无 console.log 残留

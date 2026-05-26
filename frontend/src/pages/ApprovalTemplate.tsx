@@ -39,13 +39,13 @@ const ApprovalTemplate: React.FC = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<ApprovalTemplate | null>(null)
   const [modalVisible, setModalVisible] = useState(false)
 
-  const { data: templatesData, isLoading, isError, refetch, error } = useQuery({
+  const { data: templatesData, isLoading, isError, isFetching, refetch, error } = useQuery({
     queryKey: ['approval-templates'],
     queryFn: () => approvalAPI.getTemplates(),
   })
 
   const syncMutation = useMutation({
-    mutationFn: () => approvalAPI.sync(),
+    mutationFn: (processCode: string) => approvalAPI.sync({ process_code: processCode }),
     onSuccess: () => {
       refetch()
     },
@@ -106,6 +106,14 @@ const ApprovalTemplate: React.FC = () => {
           >
             查看
           </Button>
+          <Button
+            type="link"
+            icon={<SyncOutlined />}
+            onClick={() => syncMutation.mutate(record.template_id)}
+            loading={syncMutation.isPending && syncMutation.variables === record.template_id}
+          >
+            同步实例
+          </Button>
         </Space>
       ),
     },
@@ -118,10 +126,10 @@ const ApprovalTemplate: React.FC = () => {
       extra={
         <Button
           icon={<SyncOutlined />}
-          onClick={() => syncMutation.mutate()}
-          loading={syncMutation.isPending}
+          onClick={() => refetch()}
+          loading={isFetching}
         >
-          同步模板
+          刷新
         </Button>
       }
     >

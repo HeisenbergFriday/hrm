@@ -2,7 +2,7 @@
 purpose: 大小周排班模块业务规则说明
 last_updated: 2026-04-30
 source_of_truth:
-  - internal/api/leave_handlers.go（排班相关 handler）
+  - internal/api/handlers.go（排班相关 handler）
   - internal/database/models.go（WeekScheduleRule、WeekScheduleOverride、WeekScheduleSyncLog、StatutoryHoliday 模型）
   - frontend/src/pages/WeekSchedule.tsx（排班管理页面）
 update_when:
@@ -28,12 +28,13 @@ update_when:
 ```go
 type WeekScheduleRule struct {
     ID           uint
-    Scope        string  // company / department / user
-    TargetID     string  // 公司ID/部门ID/用户ID
-    TargetName   string
-    BaseWeek     string  // YYYY-Www（基准周，ISO 8601）
-    Pattern      string  // 5,6（大周5天小周6天）
-    Enabled      bool
+    ScopeType    string  // company / department / user
+    ScopeID      string  // 空=全公司，或部门ID/用户ID
+    ScopeName    string
+    BaseDate     string  // 基准日期，格式 YYYY-MM-DD
+    Pattern      string  // big_first 等模式
+    ShiftID      int64
+    Status       string  // active / inactive
     CreatedAt    time.Time
     UpdatedAt    time.Time
 }
@@ -44,13 +45,14 @@ type WeekScheduleRule struct {
 
 ```go
 type WeekScheduleOverride struct {
-    ID         uint
-    UserID     string
-    WeekNumber string  // YYYY-Www
-    WorkDays   int     // 覆盖后的工作天数
-    Remark     string
-    CreatedAt  time.Time
-    UpdatedAt  time.Time
+    ID            uint
+    ScopeType     string  // company / department / user
+    ScopeID       string
+    WeekStartDate string  // 该周周一，YYYY-MM-DD
+    WeekType      string  // big / small
+    Reason        string
+    CreatedAt     time.Time
+    UpdatedAt     time.Time
 }
 ```
 
@@ -59,13 +61,13 @@ type WeekScheduleOverride struct {
 
 ```go
 type StatutoryHoliday struct {
-    ID          uint
-    Date        string  // YYYY-MM-DD
-    Name        string  // 节假日名称
-    Type        string  // holiday / workday
-    Description string
-    CreatedAt   time.Time
-    UpdatedAt   time.Time
+    ID        uint
+    Date      string  // YYYY-MM-DD
+    Name      string  // 节假日名称
+    Type      string  // holiday / workday
+    Year      int
+    CreatedAt time.Time
+    UpdatedAt time.Time
 }
 ```
 
@@ -78,8 +80,8 @@ type StatutoryHoliday struct {
 type WeekScheduleSyncLog struct {
     ID         uint
     SyncType   string  // to_dingtalk / from_dingtalk
-    StartDate  string
-    EndDate    string
+    TargetDate string
+    UserCount  int
     Status     string  // success / failed
     Message    string
     CreatedAt  time.Time
@@ -92,8 +94,11 @@ type WeekScheduleSyncLog struct {
 ```go
 type DingTalkShiftCatalog struct {
     ID        uint
-    ShiftName string  // 班次名称
-    ShiftID   string  // 钉钉班次 ID
+    Name      string  // 班次名称
+    ShiftKey  string  // 稳定签名
+    ShiftID   int64   // 钉钉班次 ID
+    CheckIn   string
+    CheckOut  string
     CreatedAt time.Time
     UpdatedAt time.Time
 }
@@ -109,8 +114,7 @@ type DingTalkShiftCatalog struct {
 查询大小周规则
 
 Query 参数：
-- `scope`：范围（可选，company/department/user）
-- `target_id`：目标 ID（可选）
+当前实现返回全部规则；筛选在前端完成。
 
 #### POST /api/v1/week-schedule/rules
 创建大小周规则
@@ -118,12 +122,13 @@ Query 参数：
 Body：
 ```json
 {
-    "scope": "department",
-    "target_id": "2",
-    "target_name": "技术部",
-    "base_week": "2024-W01",
-    "pattern": "5,6",
-    "enabled": true
+    "scope_type": "department",
+    "scope_id": "2",
+    "scope_name": "技术部",
+    "base_date": "2024-01-01",
+    "pattern": "big_first",
+    "shift_id": 0,
+    "status": "active"
 }
 ```
 
@@ -133,15 +138,12 @@ Body：
 Body：
 ```json
 {
-    "rules": [
-        {
-            "scope": "user",
-            "target_id": "xxx",
-            "target_name": "张三",
-            "base_week": "2024-W01",
-            "pattern": "5,6"
-        }
-    ]
+    "user_ids": ["xxx"],
+    "base_date": "2024-01-01",
+    "pattern": "big_first",
+    "shift_id": 0,
+    "conflict_mode": "overwrite",
+    "dry_run": false
 }
 ```
 
@@ -151,9 +153,10 @@ Body：
 Body：
 ```json
 {
-    "base_week": "2024-W02",
-    "pattern": "6,5",
-    "enabled": true
+    "base_date": "2024-01-08",
+    "pattern": "small_first",
+    "shift_id": 0,
+    "status": "active"
 }
 ```
 
@@ -209,24 +212,27 @@ Body：
 
 Query 参数：
 - `user_id`：用户 ID
-- `start_date`：开始日期（YYYY-MM-DD）
-- `end_date`：结束日期（YYYY-MM-DD）
+- `department_id`：部门 ID
+- `weeks`：返回周数，默认 8
+- `start_date`：起始日期（YYYY-MM-DD，会归一到该周周一）
 
 Response：
 ```json
 {
     "code": 200,
     "message": "success",
-    "data": [
-        {
-            "date": "2024-01-15",
-            "week_number": "2024-W03",
-            "is_workday": true,
-            "is_holiday": false,
-            "work_days_in_week": 5,
-            "override": null
-        }
-    ]
+    "data": {
+        "items": [
+            {
+                "week_start": "2024-01-15",
+                "week_end": "2024-01-21",
+                "week_type": "big",
+                "is_override": false,
+                "saturday_work": false,
+                "holidays": []
+            }
+        ]
+    }
 }
 ```
 
@@ -236,10 +242,11 @@ Response：
 Body：
 ```json
 {
-    "user_id": "xxx",
-    "week_number": "2024-W03",
-    "work_days": 6,
-    "remark": "临时调整"
+    "scope_type": "user",
+    "scope_id": "xxx",
+    "week_start_date": "2024-01-15",
+    "week_type": "small",
+    "reason": "临时调整"
 }
 ```
 
@@ -256,22 +263,14 @@ Body：
 Body：
 ```json
 {
-    "start_date": "2024-01-01",
-    "end_date": "2024-01-31",
-    "user_ids": ["xxx"]
+    "weeks": 4
 }
 ```
 
 #### POST /api/v1/week-schedule/sync/from-dingtalk
 从钉钉同步
 
-Body：
-```json
-{
-    "start_date": "2024-01-01",
-    "end_date": "2024-01-31"
-}
-```
+无请求体；服务会保守拉取钉钉排班信号。
 
 #### GET /api/v1/week-schedule/sync/logs
 查询同步日志
@@ -296,7 +295,7 @@ Body：
     "date": "2024-01-01",
     "name": "元旦",
     "type": "holiday",
-    "description": "元旦假期"
+    "year": 2024
 }
 ```
 
@@ -340,11 +339,11 @@ Body：
    - 找到最匹配的规则
 
 2. **计算周数**
-   - 基准周：`base_week`（例如 `2024-W01`）
-   - 当前周：`current_week`
-   - 周差：`week_diff = current_week - base_week`
-   - Pattern：`5,6`（大周 5 天，小周 6 天）
-   - 当前周工作天数：`pattern[week_diff % len(pattern)]`
+   - 基准日期：`base_date`（某个大周/小周的周一）
+   - 当前周起始日期：`week_start`
+   - 周差：`week_diff = (week_start - base_date) / 7`
+   - Pattern：`big_first` / `small_first`
+   - 当前周类型：按周差奇偶在大周、小周之间切换
 
 3. **应用覆盖**
    - 检查是否有手动覆盖（`WeekScheduleOverride`）
@@ -373,7 +372,7 @@ Body：
 
 | Service | 文件 | 说明 |
 |---|---|---|
-| `WeekScheduleService` | （待确认） | 大小周管理 |
+| `WeekScheduleService` | `week_schedule_service.go` | 大小周管理 |
 
 ---
 
@@ -402,8 +401,8 @@ Body：
 ## 常见问题
 
 ### 大小周计算不对
-- 检查 `base_week` 是否正确
-- 检查 `pattern` 格式是否正确（例如 `5,6`）
+- 检查 `base_date` 是否为一个周一
+- 检查 `pattern` 是否为 `big_first` 或 `small_first`
 - 检查是否有手动覆盖
 
 ### 同步到钉钉失败

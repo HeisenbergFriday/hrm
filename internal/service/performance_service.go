@@ -1995,21 +1995,21 @@ func (s *PerformanceService) BatchSaveGoalRecords(participantID uint, records []
 				attachJSON, _ := json.Marshal(r.Attachments)
 				if err := tx.Model(&database.PerformanceGoalRecord{}).Where("id = ? AND deleted_at IS NULL", r.ID).
 					Updates(map[string]interface{}{
-						"section_type":    r.SectionType,
-						"item_name":       r.ItemName,
-						"item_definition": r.ItemDefinition,
-						"weight":          r.Weight,
-						"red_line_value":  r.RedLineValue,
-						"target_value":    r.TargetValue,
-						"challenge_value": r.ChallengeValue,
-						"scoring_rule":    r.ScoringRule,
-						"actual_result":   r.ActualResult,
-						"attachments":     string(attachJSON),
-						"self_score":      r.SelfScore,
-						"manager_score":   r.ManagerScore,
+						"section_type":     r.SectionType,
+						"item_name":        r.ItemName,
+						"item_definition":  r.ItemDefinition,
+						"weight":           r.Weight,
+						"red_line_value":   r.RedLineValue,
+						"target_value":     r.TargetValue,
+						"challenge_value":  r.ChallengeValue,
+						"scoring_rule":     r.ScoringRule,
+						"actual_result":    r.ActualResult,
+						"attachments":      string(attachJSON),
+						"self_score":       r.SelfScore,
+						"manager_score":    r.ManagerScore,
 						"is_from_superior": r.IsFromSuperior,
-						"sort_order":      sortOrder,
-						"updated_at":      now,
+						"sort_order":       sortOrder,
+						"updated_at":       now,
 					}).Error; err != nil {
 					return err
 				}

@@ -1,12 +1,15 @@
 ---
 purpose: 绩效管理模块业务规则说明
-last_updated: 2026-05-22
+last_updated: 2026-05-26
 source_of_truth:
   - internal/api/performance_handlers.go（绩效相关 handler）
   - internal/service/performance_service.go（绩效服务）
   - internal/service/performance_indicator_service.go（指标库服务）
+  - internal/service/scoring_engine.go（自动评分引擎）
   - internal/repository/performance_repository.go（绩效数据访问）
   - internal/repository/performance_indicator_repository.go（指标库数据访问）
+  - internal/repository/performance_goal_record_repository.go（目标记录数据访问）
+  - internal/repository/performance_goal_approval_repository.go（目标审批日志数据访问）
   - internal/database/performance_models.go（绩效相关模型）
   - frontend/src/pages/PerformanceOverview.tsx（绩效总览页面）
 update_when:
@@ -15,6 +18,8 @@ update_when:
   - 修改强制分布逻辑时
   - 新增绩效相关 API 时
   - 修改前端绩效页面时
+  - 新增自动评分引擎时
+  - 新增 Review 版接口时
 ---
 
 # 绩效管理模块
@@ -35,8 +40,39 @@ update_when:
 
 ### 绩效模板（PerformanceTemplate）
 - 定义评分维度和评分项的模板
-- 支持部门级模板和继承关系
-- 包含模板快照功能
+- 简单结构：名称、描述、状态
+- 评分维度通过 `PerformanceTemplateSection` 关联
+- 评分项通过 `PerformanceTemplateItem` 关联
+
+### 模板评分维度（PerformanceTemplateSection）
+- 绩效模板的评分维度（如：业绩、能力、态度）
+- 包含权重配置
+
+### 模板评分项（PerformanceTemplateItem）
+- 维度下的具体评分项
+- 包含评分标准和说明
+
+### 评审记录（PerformanceReview）
+- 员工在评审阶段的评分记录
+- 支持多版本（通过 `PerformanceReviewVersion` 追踪）
+
+### 评审版本（PerformanceReviewVersion）
+- 评审记录的版本链
+- 记录每次修改的历史
+
+### 强制分布规则（PerformanceDistributionRule）
+- 定义各绩效等级的比例要求
+- 支持部门级配置
+
+### 强制分布例外（PerformanceDistributionException）
+- 例外于强制分布规则的参与人记录
+
+### 绩效等级规则（PerformanceLevelRule）
+- 定义绩效等级的划分标准
+- 关联 `PerformanceLevelRuleItem` 细分规则
+
+### 关系变更日志（PerformanceRelationshipChangeLog）
+- 记录参与人主管关系变更的历史
 
 ### 指标库（PerformanceIndicatorLibrary）
 - 部门级指标库，支持继承
@@ -67,27 +103,29 @@ type PerformanceActivity struct {
     CycleType string `gorm:"type:varchar(32);not null" json:"cycle_type"` // monthly, quarterly, annual
     StartDate string `gorm:"type:varchar(32);not null" json:"start_date"`
     EndDate   string `gorm:"type:varchar(32);not null" json:"end_date"`
-    
-    // 关联模板和指标库
-    TemplateID        *uint `gorm:"index" json:"template_id"`
+
+    // 关联指标库
     IndicatorLibraryID *uint `gorm:"index" json:"indicator_library_id"`
-    
+
+    // 附加分控制
+    EnableBonusScore bool `gorm:"default:false" json:"enable_bonus_score"` // 附加分是否计入总分并影响等级
+
     // 目标设定阶段
     TargetSetStartAt string `gorm:"type:varchar(32)" json:"target_set_start_at"`
     TargetSetEndAt   string `gorm:"type:varchar(32)" json:"target_set_end_at"`
-    
+
     // 自评阶段
     SelfEvalStartAt string `gorm:"type:varchar(32);not null" json:"self_eval_start_at"`
     SelfEvalEndAt   string `gorm:"type:varchar(32);not null" json:"self_eval_end_at"`
-    
+
     // 上级评分阶段
     ManagerEvalStartAt string `gorm:"type:varchar(32);not null" json:"manager_eval_start_at"`
     ManagerEvalEndAt   string `gorm:"type:varchar(32);not null" json:"manager_eval_end_at"`
-    
+
     // 结果确认阶段
     ResultConfirmStartAt string `gorm:"type:varchar(32);not null" json:"result_confirm_start_at"`
     ResultConfirmEndAt   string `gorm:"type:varchar(32);not null" json:"result_confirm_end_at"`
-    
+
     // 三级确认阶段
     EmployeeConfirmStartAt string `gorm:"type:varchar(32)" json:"employee_confirm_start_at"`
     EmployeeConfirmEndAt   string `gorm:"type:varchar(32)" json:"employee_confirm_end_at"`
@@ -96,14 +134,14 @@ type PerformanceActivity struct {
     HRConfirmStartAt       string `gorm:"type:varchar(32)" json:"hr_confirm_start_at"`
     HRConfirmEndAt         string `gorm:"type:varchar(32)" json:"hr_confirm_end_at"`
     HRConfirmDeadline      string `gorm:"type:varchar(32)" json:"hr_confirm_deadline"`
-    
+
     Status      string `gorm:"type:varchar(32);not null;index" json:"status"`
     Description string `gorm:"type:text" json:"description"`
-    
+
     // 参与人范围筛选
     TargetDepartmentIDs []string `gorm:"type:json;serializer:json" json:"target_department_ids"`
     TargetEmployeeIDs   []string `gorm:"type:json;serializer:json" json:"target_employee_ids"`
-    
+
     CreatedAt time.Time  `json:"created_at"`
     UpdatedAt time.Time  `json:"updated_at"`
     DeletedAt *time.Time `gorm:"index" json:"-"`
@@ -126,12 +164,12 @@ type PerformanceParticipant struct {
     Position       string `gorm:"type:varchar(128)" json:"position"`
     Level          string `gorm:"type:varchar(32)" json:"level"`
     EmployeeStatus string `gorm:"type:varchar(32)" json:"employee_status"`
-    
+
     ManagerID   *string `gorm:"type:varchar(64)" json:"manager_id"`
     ManagerName *string `gorm:"type:varchar(128)" json:"manager_name"`
-    
+
     Status string `gorm:"type:varchar(32);not null;index" json:"status"`
-    
+
     // 评分相关
     SelfScore      float64 `gorm:"default:0" json:"self_score"`
     SelfLevel      string  `gorm:"type:varchar(32)" json:"self_level"`
@@ -141,38 +179,52 @@ type PerformanceParticipant struct {
     SuggestedLevel string  `gorm:"type:varchar(32)" json:"suggested_level"`
     FinalLevel     string  `gorm:"type:varchar(32)" json:"final_level"`
     AdjustReason   string  `gorm:"type:text" json:"adjust_reason"`
-    
-    // 评价文本
-    SelfEvaluationComment    string `gorm:"type:text" json:"self_evaluation_comment"`
-    ManagerEvaluationComment string `gorm:"type:text" json:"manager_evaluation_comment"`
-    
+
+    // 评价文本（拆分评价）
+    SelfEvaluationComment        string `gorm:"type:text" json:"self_evaluation_comment"`
+    SelfEvaluationGood           string `gorm:"type:text" json:"self_evaluation_good"`          // 自评亮点
+    SelfEvaluationImprovement    string `gorm:"type:text" json:"self_evaluation_improvement"`   // 自评改进
+    ManagerEvaluationComment     string `gorm:"type:text" json:"manager_evaluation_comment"`
+    ManagerEvaluationGood        string `gorm:"type:text" json:"manager_evaluation_good"`       // 主管评亮点
+    ManagerEvaluationImprovement string `gorm:"type:text" json:"manager_evaluation_improvement"` // 主管评改进
+
     // 系统计算总分
     TotalSelfScore    float64 `gorm:"default:0" json:"total_self_score"`
     TotalManagerScore float64 `gorm:"default:0" json:"total_manager_score"`
-    
+
     // 附加项
     BonusScore    float64 `gorm:"default:0" json:"bonus_score"`
     PenaltyScore  float64 `gorm:"default:0" json:"penalty_score"`
     AdjustedScore float64 `gorm:"default:0" json:"adjusted_score"`
-    
+
     // 收支系数
     RevenueCoefficient float64 `gorm:"default:1" json:"revenue_coefficient"`
-    
-    // 三级确认
+
+    // 目标确认（三级）
+    EmployeeTargetConfirmedAt *time.Time `json:"employee_target_confirmed_at"`
+    EmployeeTargetConfirmedBy string     `gorm:"type:varchar(64)" json:"employee_target_confirmed_by"`
+    ManagerTargetConfirmedAt  *time.Time `json:"manager_target_confirmed_at"`
+    ManagerTargetConfirmedBy  string     `gorm:"type:varchar(64)" json:"manager_target_confirmed_by"`
+    HRTargetConfirmedAt       *time.Time `json:"hr_target_confirmed_at"`
+    HRTargetConfirmedBy       string     `gorm:"type:varchar(64)" json:"hr_target_confirmed_by"`
+
+    // 结果确认（三级）
     EmployeeConfirmedAt *time.Time `json:"employee_confirmed_at"`
     EmployeeConfirmedBy string     `gorm:"type:varchar(64)" json:"employee_confirmed_by"`
     ManagerConfirmedAt  *time.Time `json:"manager_confirmed_at"`
     ManagerConfirmedBy  string     `gorm:"type:varchar(64)" json:"manager_confirmed_by"`
     HRConfirmedAt       *time.Time `json:"hr_confirmed_at"`
     HRConfirmedBy       string     `gorm:"type:varchar(64)" json:"hr_confirmed_by"`
-    
+    ConfirmedAt         *time.Time `json:"confirmed_at"`         // 兼容旧接口
+    ConfirmedBy         string     `gorm:"type:varchar(64)" json:"confirmed_by"` // 兼容旧接口
+
     // 锁定
     IsLocked          bool       `gorm:"default:false" json:"is_locked"`
     LockedAt          *time.Time `json:"locked_at"`
     LockedBy          string     `gorm:"type:varchar(64)" json:"locked_by"`
     ForceLocked       bool       `gorm:"default:false" json:"force_locked"`
     ForceLockedReason string     `gorm:"type:varchar(256)" json:"force_locked_reason"`
-    
+
     CreatedAt time.Time  `json:"created_at"`
     UpdatedAt time.Time  `json:"updated_at"`
     DeletedAt *time.Time `gorm:"index" json:"-"`
@@ -214,24 +266,50 @@ type PerformanceGoalRecord struct {
 ```
 
 ### PerformanceTemplate
-绩效模板
+绩效模板（简单结构，评分维度和评分项通过关联表管理）
 
 ```go
 type PerformanceTemplate struct {
-    ID               uint       `gorm:"primaryKey" json:"id"`
-    Name             string     `gorm:"type:varchar(128);not null;index" json:"name"`
-    Description      string     `gorm:"type:text" json:"description"`
-    DepartmentID     string     `gorm:"type:varchar(64);index" json:"department_id"`
-    DepartmentName   string     `gorm:"type:varchar(128)" json:"department_name"`
-    ApplicableCycles []string   `gorm:"type:json;serializer:json" json:"applicable_cycles"`
-    Status           string     `gorm:"type:varchar(32);not null;index;default:draft" json:"status"`
-    ParentTemplateID *uint      `gorm:"index" json:"parent_template_id"`
-    IsSnapshot       bool       `gorm:"default:false" json:"is_snapshot"`
-    CreatedAt        time.Time  `json:"created_at"`
-    UpdatedAt        time.Time  `json:"updated_at"`
-    DeletedAt        *time.Time `gorm:"index" json:"-"`
-    CreatedBy        string     `gorm:"type:varchar(64)" json:"created_by"`
-    UpdatedBy        string     `gorm:"type:varchar(64)" json:"updated_by"`
+    ID          uint       `gorm:"primaryKey" json:"id"`
+    Name        string     `gorm:"type:varchar(128);not null;index" json:"name"`
+    Description string     `gorm:"type:text" json:"description"`
+    Status      string     `gorm:"type:varchar(32);not null;index;default:draft" json:"status"`
+    CreatedAt   time.Time  `json:"created_at"`
+    UpdatedAt   time.Time  `json:"updated_at"`
+    DeletedAt   *time.Time `gorm:"index" json:"-"`
+    CreatedBy   string     `gorm:"type:varchar(64)" json:"created_by"`
+    UpdatedBy   string     `gorm:"type:varchar(64)" json:"updated_by"`
+}
+```
+
+### PerformanceTemplateSection
+模板评分维度
+
+```go
+type PerformanceTemplateSection struct {
+    ID           uint   `gorm:"primaryKey" json:"id"`
+    TemplateID   uint   `gorm:"not null;index" json:"template_id"`
+    Name         string `gorm:"type:varchar(128);not null" json:"name"`
+    Weight       float64 `gorm:"default:0" json:"weight"`
+    SortOrder    int    `gorm:"default:0" json:"sort_order"`
+    CreatedAt    time.Time  `json:"created_at"`
+    UpdatedAt    time.Time  `json:"updated_at"`
+}
+```
+
+### PerformanceTemplateItem
+模板评分项
+
+```go
+type PerformanceTemplateItem struct {
+    ID           uint   `gorm:"primaryKey" json:"id"`
+    SectionID    uint   `gorm:"not null;index" json:"section_id"`
+    Name         string `gorm:"type:varchar(128);not null" json:"name"`
+    Description  string `gorm:"type:text" json:"description"`
+    Weight       float64 `gorm:"default:0" json:"weight"`
+    SortOrder    int    `gorm:"default:0" json:"sort_order"`
+    CreatedAt    time.Time  `json:"created_at"`
+    UpdatedAt    time.Time  `json:"updated_at"`
 }
 ```
 
@@ -320,8 +398,8 @@ Body：
     "result_confirm_start_at": "2026-04-15",
     "result_confirm_end_at": "2026-04-21",
     "status": "draft",
-    "template_id": 1,
     "indicator_library_id": 1,
+    "enable_bonus_score": false,
     "description": "季度绩效考核",
     "target_department_ids": ["1", "2"],
     "target_employee_ids": []
@@ -372,6 +450,9 @@ Body：
 #### POST /activities/:activity_id/lock
 锁定绩效活动
 
+#### POST /activities/:activity_id/force-lock-overdue-hr
+逾期强制锁定 HR 确认
+
 ### 参与人管理
 
 #### POST /activities/:activity_id/refresh-participants
@@ -382,6 +463,15 @@ Body：
 
 #### GET /participants/:participant_id
 获取参与人详情
+
+#### GET /participants/:participant_id/versions
+获取参与人版本记录
+
+#### GET /participants/:participant_id/relationship-change-logs
+获取参与人关系变更日志
+
+#### GET /activities/:activity_id/relationship-change-logs
+获取活动关系变更日志
 
 ### 目标设定
 
@@ -421,13 +511,25 @@ Body：
 批量提交上级评分
 
 #### POST /goal-reviews/:participant_id/self-evaluation
-提交目标自评
+提交目标自评（基础版）
 
 #### POST /goal-reviews/:participant_id/manager-evaluation
-提交目标上级评分
+提交目标上级评分（基础版）
 
 #### POST /goal-reviews/:participant_id/bonus-penalty
 设置附加分
+
+#### POST /reviews/:participant_id/self-evaluation
+提交目标自评（Review 版，带钉钉审批同步）
+
+#### POST /reviews/:participant_id/manager-evaluation
+提交目标上级评分（Review 版，带钉钉审批同步）
+
+#### POST /participants/:participant_id/bonus-penalty
+设置附加分（单独注册接口）
+
+#### POST /auto-score
+自动评分（基于 scoring_engine.go 三种算法）
 
 ### 确认链
 
@@ -441,7 +543,10 @@ Body：
 人力确认结果
 
 #### POST /activities/:activity_id/batch-confirm
-批量确认
+批量确认（别名）
+
+#### POST /activities/:activity_id/batch-confirm-results
+批量确认结果
 
 ### 强制分布
 
@@ -633,7 +738,7 @@ Body：
 |---|---|---|
 | `PerformanceService` | `performance_service.go` | 绩效核心服务 |
 | `PerformanceIndicatorService` | `performance_indicator_service.go` | 指标库服务 |
-| `PerformanceTemplateSupport` | `performance_template_support.go` | 模板支持服务 |
+| `ScoringEngine` | `scoring_engine.go` | 自动评分引擎（三种算法：区间插值/达标制/比率制） |
 
 ---
 
@@ -649,15 +754,58 @@ Body：
 - 强制分布设置
 - 结果查看与确认
 
-### 个人绩效结果页
+### 绩效指标库管理
+`frontend/src/pages/PerformanceIndicatorLibrary.tsx`
+
+功能：
+- 指标库列表与详情
+- 指标项 CRUD
+- 部门级指标继承
+- 指标搜索与匹配
+
+### 绩效目标设定
+`frontend/src/pages/PerformanceGoalSetting.tsx`
+
+功能：
+- 员工目标填写与提交
+- 上级目标下发
+- 目标审批流程
+- 目标模板建议
+
+### 员工自评
+`frontend/src/pages/PerformanceSelfEval.tsx`
+
+功能：
+- 自评表单填写
+- 实际达成结果录入
+- 自评提交与保存
+
+### 上级评分
+`frontend/src/pages/PerformanceManagerEval.tsx`
+
+功能：
+- 下属评分明细
+- 强制分布实时配额显示
+- 等级调整与评分提交
+- 批量评分操作
+
+### 个人绩效结果
 `frontend/src/pages/PerformanceResultView.tsx`
 
 功能：
 - 个人评分明细、附加考核项、自评与上级评价展示
 - 员工、主管、人力三级确认进度展示与确认操作
-- Excel 风格“个人绩效考核表”归档展示
+- Excel 风格”个人绩效考核表”归档展示
 - 基于浏览器打印能力支持打印 / PDF 保存
 - 基于 HTML 表格 Blob 下载 `.xls`，用于一人一表线下复核
+
+### 绩效活动编辑器（组件）
+`frontend/src/components/PerformanceActivityEditor.tsx`
+
+功能：
+- 活动创建/编辑表单
+- 时间范围配置
+- 参与人范围筛选
 
 ---
 
