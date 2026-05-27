@@ -20,12 +20,32 @@ api.interceptors.request.use(
   (error) => Promise.reject(error),
 )
 
+// 刷新菜单权限（通过 api 实例自动带 token，并用锁避免重复刷新）
+let isRefreshingMenuKeys = false
+export function refreshMenuKeys() {
+  if (isRefreshingMenuKeys) return
+  isRefreshingMenuKeys = true
+
+  api.get('/auth/me')
+    .then((res: any) => {
+      const keys = res?.data?.user?.menu_keys
+      if (Array.isArray(keys)) useAuthStore.getState().setMenuKeys(keys)
+    })
+    .catch(() => {})
+    .finally(() => {
+      isRefreshingMenuKeys = false
+    })
+}
+
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response?.status === 401) {
       useAuthStore.getState().logout()
       window.location.href = '/login'
+    }
+    if (error.response?.status === 403) {
+      refreshMenuKeys()
     }
     return Promise.reject(error)
   },
