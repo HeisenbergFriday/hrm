@@ -10,7 +10,9 @@ import {
 } from '@ant-design/icons'
 import axios from 'axios'
 import { menuConfig, logoutMenuItem, filterMenuByKeys } from './config/menu'
+import { refreshMenuKeys } from './services/api'
 import RouteGuard from './components/RouteGuard'
+import ErrorBoundary from './components/ErrorBoundary'
 
 const Login = lazy(() => import('./pages/Login'))
 const Callback = lazy(() => import('./pages/Callback'))
@@ -98,14 +100,17 @@ function getAxiosErrorMessage(error: unknown, fallback: string): string {
 }
 
 function AuthRoutes() {
+  const location = useLocation()
   return (
-    <Suspense fallback={<PageLoading />}>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/callback" element={<Callback />} />
-        <Route path="/login-error" element={<LoginError />} />
-      </Routes>
-    </Suspense>
+    <ErrorBoundary resetKey={location.pathname}>
+      <Suspense fallback={<PageLoading />}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/callback" element={<Callback />} />
+          <Route path="/login-error" element={<LoginError />} />
+        </Routes>
+      </Suspense>
+    </ErrorBoundary>
   )
 }
 
@@ -114,7 +119,7 @@ function App() {
   const [autoLogging, setAutoLogging] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
-  const { isLoggedIn, user, login, logout, menuKeys, setMenuKeys } = useAuthStore()
+  const { isLoggedIn, user, login, logout, menuKeys } = useAuthStore()
   const selectedMenuKey = location.pathname.startsWith('/employees/')
     ? '/employees'
     : location.pathname.startsWith('/performance/')
@@ -138,41 +143,18 @@ function App() {
     }
   }
 
-  // 应用启动时刷新用户的菜单权限
+  // 刷新菜单权限（启动时 + 页面获焦时）
   useEffect(() => {
     if (!isLoggedIn) return
-    axios.get('/api/v1/auth/me')
-      .then((res) => {
-        const keys = res.data?.data?.user?.menu_keys
-        if (Array.isArray(keys)) {
-          setMenuKeys(keys)
-        }
-      })
-      .catch(() => {})
-  }, [isLoggedIn])
 
-  // 定期检查权限变化，变更后自动刷新
-  useEffect(() => {
-    if (!isLoggedIn) return
-    const checkPermissionChange = async () => {
-      try {
-        const res = await axios.get('/api/v1/auth/me')
-        const newKeys = res.data?.data?.user?.menu_keys
-        if (Array.isArray(newKeys)) {
-          const currentKeysStr = JSON.stringify([...menuKeys].sort())
-          const newKeysStr = JSON.stringify([...newKeys].sort())
-          if (currentKeysStr !== newKeysStr && menuKeys.length > 0) {
-            message.info('权限已更新，正在刷新...')
-            setMenuKeys(newKeys)
-          }
-        }
-      } catch {
-        // 静默失败
-      }
+    refreshMenuKeys()
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshMenuKeys()
     }
-    const timer = setInterval(checkPermissionChange, 60000)
-    return () => clearInterval(timer)
-  }, [isLoggedIn, menuKeys])
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [isLoggedIn])
 
   useEffect(() => {
     if (!isDingTalkEnv() || isLoggedIn || authPaths.includes(location.pathname)) {
@@ -260,9 +242,11 @@ function App() {
 
     return (
       <ConfigProvider locale={zhCN}>
-        <Suspense fallback={<PageLoading />}>
-          <Login />
-        </Suspense>
+        <ErrorBoundary resetKey={location.pathname}>
+          <Suspense fallback={<PageLoading />}>
+            <Login />
+          </Suspense>
+        </ErrorBoundary>
       </ConfigProvider>
     )
   }
@@ -331,8 +315,9 @@ function App() {
             </Button>
           </Header>
           <Content style={{ margin: '24px 16px', padding: 24, minHeight: 280, background: colorBgContainer, borderRadius: borderRadiusLG }}>
-            <Suspense fallback={<PageLoading />}>
-              <Routes>
+            <ErrorBoundary resetKey={location.pathname}>
+              <Suspense fallback={<PageLoading />}>
+                <Routes>
                 <Route path="/" element={<Home />} />
                 <Route path="/department-tree" element={<RouteGuard menuKey="department-tree"><DepartmentTree /></RouteGuard>} />
                 <Route path="/employees" element={<RouteGuard menuKey="employees"><EmployeeList /></RouteGuard>} />
@@ -367,6 +352,7 @@ function App() {
                 <Route path="/setting" element={<RouteGuard menuKey="setting"><Setting /></RouteGuard>} />
               </Routes>
             </Suspense>
+            </ErrorBoundary>
           </Content>
         </Layout>
       </Layout>
