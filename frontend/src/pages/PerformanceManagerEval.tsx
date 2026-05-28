@@ -9,6 +9,7 @@ import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { ArrowLeftOutlined, CheckCircleOutlined, PaperClipOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { performanceAPI, PerformanceGoalRecord, PerformanceParticipant, TeamQuotaStatus } from '../services/api'
+import { withFileAccessToken } from '../utils/authFileUrl'
 
 const { Title, Text } = Typography
 const { TextArea } = Input
@@ -491,7 +492,7 @@ const PerformanceManagerEval: React.FC = () => {
                               {attachments.map((url: string, idx: number) => (
                                 <Image
                                   key={idx}
-                                  src={url}
+                                  src={withFileAccessToken(url)}
                                   width={48}
                                   height={48}
                                   style={{ objectFit: 'cover', borderRadius: 4 }}
@@ -570,7 +571,7 @@ const PerformanceManagerEval: React.FC = () => {
         <div style={{ maxHeight: 400, overflow: 'auto' }}>
           {previewAttachments.attachments.map((url, idx) => (
             <div key={idx} style={{ marginBottom: 8 }}>
-              <a href={url} target="_blank" rel="noopener noreferrer">
+              <a href={withFileAccessToken(url)} target="_blank" rel="noopener noreferrer">
                 <PaperClipOutlined /> 附件 {idx + 1}
               </a>
             </div>

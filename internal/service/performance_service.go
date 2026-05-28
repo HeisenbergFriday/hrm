@@ -87,6 +87,7 @@ type CreateActivityRequest struct {
 	IndicatorLibraryID     *uint
 	Description            string
 	EnableBonusScore       bool
+	StrictTimeMode         bool
 }
 
 func resolveManagerInfo(user database.User) (string, string) {
@@ -126,6 +127,32 @@ func firstNonEmptyString(extension map[string]interface{}, keys ...string) strin
 	return ""
 }
 
+// checkTimeWindow 校验当前时间是否在指定阶段的时间窗口内（严格模式下）
+func checkTimeWindow(activity *database.PerformanceActivity, stage string) error {
+	if !activity.StrictTimeMode {
+		return nil
+	}
+	now := time.Now().Format("2006-01-02")
+	var startAt, endAt string
+	switch stage {
+	case "self_evaluation":
+		startAt, endAt = activity.SelfEvalStartAt, activity.SelfEvalEndAt
+	case "manager_evaluation":
+		startAt, endAt = activity.ManagerEvalStartAt, activity.ManagerEvalEndAt
+	case "result_confirm":
+		startAt, endAt = activity.ResultConfirmStartAt, activity.ResultConfirmEndAt
+	case "target_setting":
+		startAt, endAt = activity.TargetSetStartAt, activity.TargetSetEndAt
+	}
+	if startAt != "" && now < startAt {
+		return fmt.Errorf("该阶段尚未开始，开始时间为 %s", startAt)
+	}
+	if endAt != "" && now > endAt {
+		return fmt.Errorf("该阶段已截止，截止时间为 %s", endAt)
+	}
+	return nil
+}
+
 func (s *PerformanceService) CreateActivity(req CreateActivityRequest, createdBy string) (*database.PerformanceActivity, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, errors.New("name 不能为空")
@@ -163,6 +190,7 @@ func (s *PerformanceService) CreateActivity(req CreateActivityRequest, createdBy
 		TargetEmployeeIDs:      req.TargetEmployeeIDs,
 		Description:            req.Description,
 		EnableBonusScore:       req.EnableBonusScore,
+		StrictTimeMode:         req.StrictTimeMode,
 		CreatedBy:              createdBy,
 	}
 
@@ -209,6 +237,7 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 	activity.TargetEmployeeIDs = req.TargetEmployeeIDs
 	activity.Description = req.Description
 	activity.EnableBonusScore = req.EnableBonusScore
+	activity.StrictTimeMode = req.StrictTimeMode
 	activity.UpdatedBy = updatedBy
 
 	if err := s.actRepo.Update(activity); err != nil {
@@ -804,10 +833,15 @@ func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*Re
 
 func (s *PerformanceService) ListParticipants(activityID string, page, pageSize int, departmentID, managerID, status, employeeKeyword string, scope *OrgDataScope) ([]database.PerformanceParticipant, int64, error) {
 	var visibleDepartmentIDs []string
+	var visibleUserIDs []string
 	if scope != nil && !scope.IsAll() {
-		visibleDepartmentIDs = scope.DepartmentIDs
+		if scope.IsSelf() {
+			visibleUserIDs = scope.UserIDs
+		} else {
+			visibleDepartmentIDs = scope.DepartmentIDs
+		}
 	}
-	return s.participantR.FindAll(activityID, page, pageSize, departmentID, managerID, status, employeeKeyword, visibleDepartmentIDs)
+	return s.participantR.FindAll(activityID, page, pageSize, departmentID, managerID, status, employeeKeyword, visibleDepartmentIDs, visibleUserIDs)
 }
 
 func (s *PerformanceService) validateActivityIndicatorLibraryCycle(indicatorLibraryID *uint, cycleType string) error {
@@ -904,7 +938,7 @@ func (s *PerformanceService) HydrateParticipantTargetConfirmers(participant *dat
 }
 
 func (s *PerformanceService) GetRealtimeDistributionCheck(activityID string) ([]TeamQuotaStatus, error) {
-	participants, _, err := s.participantR.FindAll(activityID, 1, 5000, "", "", "", "", nil)
+	participants, _, err := s.participantR.FindAll(activityID, 1, 5000, "", "", "", "", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2360,6 +2394,9 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 		if activity.Status != "self_evaluation" {
 			return fmt.Errorf("当前活动状态不允许提交自评，活动状态为: %s", activity.Status)
 		}
+		if err := checkTimeWindow(&activity, "self_evaluation"); err != nil {
+			return err
+		}
 
 		var records []database.PerformanceGoalRecord
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -2452,6 +2489,9 @@ func (s *PerformanceService) SubmitGoalManagerEvaluation(participantID uint, ite
 		// 检查活动状态是否允许主管评分
 		if activity.Status != "manager_evaluation" {
 			return fmt.Errorf("当前活动状态不允许提交主管评分，活动状态为: %s", activity.Status)
+		}
+		if err := checkTimeWindow(&activity, "manager_evaluation"); err != nil {
+			return err
 		}
 
 		var records []database.PerformanceGoalRecord

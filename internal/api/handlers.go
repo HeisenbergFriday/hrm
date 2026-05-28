@@ -1,6 +1,9 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -13,6 +16,7 @@ import (
 	"peopleops/internal/service"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -20,11 +24,80 @@ import (
 	"gorm.io/gorm"
 )
 
+// 钉钉登录 state 存储（防 CSRF）
+var (
+	dingtalkStates   = make(map[string]time.Time)
+	dingtalkStatesMu sync.Mutex
+	dingtalkStateTTL = 5 * time.Minute
+)
+
+func generateLoginState() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto random unavailable: %v", err))
+	}
+	state := hex.EncodeToString(b)
+	dingtalkStatesMu.Lock()
+	dingtalkStates[state] = time.Now()
+	dingtalkStatesMu.Unlock()
+	return state
+}
+
+func validateLoginState(state string) bool {
+	if state == "" {
+		return false
+	}
+	dingtalkStatesMu.Lock()
+	defer dingtalkStatesMu.Unlock()
+	expiry, ok := dingtalkStates[state]
+	if !ok {
+		return false
+	}
+	delete(dingtalkStates, state)
+	return time.Since(expiry) < dingtalkStateTTL
+}
+
+func cleanupOldStates() {
+	dingtalkStatesMu.Lock()
+	defer dingtalkStatesMu.Unlock()
+	for state, expiry := range dingtalkStates {
+		if time.Since(expiry) > dingtalkStateTTL {
+			delete(dingtalkStates, state)
+		}
+	}
+}
+
 // 统一响应结构
 type Response struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
 	Data    interface{} `json:"data"`
+}
+
+func isAllowedUploadExtension(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSafeUploadFilename(filename string) bool {
+	filename = strings.TrimSpace(filename)
+	if filename == "" || filename != filepath.Base(filename) {
+		return false
+	}
+	if strings.Contains(filename, "..") || strings.ContainsAny(filename, `/\`) {
+		return false
+	}
+	for _, ch := range filename {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-' {
+			continue
+		}
+		return false
+	}
+	return isAllowedUploadExtension(filepath.Ext(filename))
 }
 
 // 分页响应结构
@@ -61,6 +134,127 @@ func respondOrgAccessDenied(c *gin.Context) {
 		Code:    http.StatusForbidden,
 		Message: "当前账号无权访问该组织数据",
 	})
+}
+
+func currentUserHasAnyPermission(c *gin.Context, permissionCodes ...string) bool {
+	userID := strings.TrimSpace(c.GetString("userID"))
+	if userID == "" || len(permissionCodes) == 0 {
+		return false
+	}
+	permService := service.NewPermissionService(database.DB)
+	ok, err := permService.HasAnyPermission(userID, permissionCodes...)
+	return err == nil && ok
+}
+
+func resolveScopeAndApplyFilters(c *gin.Context, filters map[string]string) (*service.OrgDataScope, bool) {
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "鑾峰彇缁勭粐鑼冨洿澶辫触",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return nil, false
+	}
+	applyOrgScopeToFilters(scope, filters)
+	return scope, true
+}
+
+func applyOrgScopeToFilters(scope *service.OrgDataScope, filters map[string]string) {
+	if scope == nil || scope.IsAll() {
+		return
+	}
+	if scope.IsSelf() {
+		if len(scope.UserIDs) > 0 {
+			filters["user_id"] = scope.UserIDs[0]
+		} else {
+			filters["user_id"] = "__scope_no_user__"
+		}
+		delete(filters, "department_id")
+		delete(filters, "department_ids")
+		return
+	}
+
+	if len(scope.DepartmentIDs) == 0 {
+		filters["department_id"] = "__scope_no_department__"
+		return
+	}
+	if requestedDepartmentID := strings.TrimSpace(filters["department_id"]); requestedDepartmentID != "" {
+		if !scope.AllowsDepartment(requestedDepartmentID) {
+			filters["department_id"] = "__scope_no_department__"
+		}
+		return
+	}
+	filters["department_ids"] = strings.Join(scope.DepartmentIDs, ",")
+}
+
+func csvFilterValues(value string) []string {
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
+}
+
+func canAccessUserByScope(scope *service.OrgDataScope, user *database.User) bool {
+	if scope == nil || scope.IsAll() {
+		return true
+	}
+	if scope.IsSelf() {
+		return scope.AllowsUser(user)
+	}
+	return scope.AllowsDepartment(user.DepartmentID)
+}
+
+func loadUserByUserID(userID string) (*database.User, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+
+	var user database.User
+	if err := database.DB.Where("user_id = ? AND deleted_at IS NULL", userID).First(&user).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func ensureCanAccessAttendanceUser(c *gin.Context, userID string) (*database.User, bool) {
+	user, err := loadUserByUserID(userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondOrgAccessDenied(c)
+			return nil, false
+		}
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取员工信息失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return nil, false
+	}
+
+	if currentUserHasAnyPermission(c, "attendance_manage") {
+		return user, true
+	}
+
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取组织范围失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return nil, false
+	}
+	if !canAccessUserByScope(scope, user) {
+		respondOrgAccessDenied(c)
+		return nil, false
+	}
+	return user, true
 }
 
 func dingtalkDepartmentsToOrgSyncItems(depts []dingtalk.DeptInfo) []service.OrgDepartmentSyncItem {
@@ -127,8 +321,11 @@ func generateToken(userID, userName string) (string, time.Time, error) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	secret := os.Getenv("JWT_SECRET")
-	tokenString, err := token.SignedString([]byte(secret))
+	secret, err := middleware.JWTSecret()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	tokenString, err := token.SignedString(secret)
 	return tokenString, expiresAt, err
 }
 
@@ -140,6 +337,31 @@ func buildUserMenuKeys(userID string) []string {
 		return []string{}
 	}
 	return keys
+}
+
+func buildUserPermissions(userID string) []string {
+	permService := service.NewPermissionService(database.DB)
+	permissions, err := permService.GetUserPermissions(userID)
+	if err != nil {
+		return []string{}
+	}
+	return permissions
+}
+
+func buildAuthUserPayload(user *database.User) gin.H {
+	return gin.H{
+		"id":            user.ID,
+		"user_id":       user.UserID,
+		"name":          user.Name,
+		"email":         user.Email,
+		"mobile":        user.Mobile,
+		"department_id": user.DepartmentID,
+		"position":      user.Position,
+		"avatar":        user.Avatar,
+		"status":        user.Status,
+		"menu_keys":     buildUserMenuKeys(user.UserID),
+		"permissions":   buildUserPermissions(user.UserID),
+	}
 }
 
 // Login 登录
@@ -201,19 +423,8 @@ func Login(c *gin.Context) {
 		Code:    http.StatusOK,
 		Message: "success",
 		Data: gin.H{
-			"token": tokenString,
-			"user": gin.H{
-				"id":            user.ID,
-				"user_id":       user.UserID,
-				"name":          user.Name,
-				"email":         user.Email,
-				"mobile":        user.Mobile,
-				"department_id": user.DepartmentID,
-				"position":      user.Position,
-				"avatar":        user.Avatar,
-				"status":        user.Status,
-				"menu_keys":     buildUserMenuKeys(user.UserID),
-			},
+			"token":      tokenString,
+			"user":       buildAuthUserPayload(user),
 			"expires_at": expiresAt,
 		},
 	})
@@ -223,6 +434,42 @@ func Login(c *gin.Context) {
 func GetUsers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	if !currentUserHasAnyPermission(c, "user_manage", "permission_manage") {
+		scope, err := resolveOrgScope(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "鑾峰彇缁勭粐鑼冨洿澶辫触",
+				Data:    gin.H{"error": err.Error()},
+			})
+			return
+		}
+		orgService := service.NewOrgService(database.DB)
+		users, total, err := orgService.ListEmployees(scope, page, pageSize, service.OrgEmployeeFilters{
+			DepartmentID: c.Query("department_id"),
+			Search:       c.Query("search"),
+			Status:       c.Query("status"),
+		})
+		if err != nil {
+			if errors.Is(err, service.ErrOrgAccessDenied) {
+				respondOrgAccessDenied(c)
+				return
+			}
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "鑾峰彇鐢ㄦ埛鍒楄〃澶辫触",
+				Data:    gin.H{"error": err.Error()},
+			})
+			return
+		}
+		c.JSON(http.StatusOK, Response{
+			Code:    http.StatusOK,
+			Message: "success",
+			Data:    PagedResponse{Items: users, Total: total},
+		})
+		return
+	}
 
 	userService := service.NewUserService(database.DB)
 	users, total, err := userService.GetUsers(page, pageSize)
@@ -255,6 +502,21 @@ func GetUser(c *gin.Context) {
 			Data:    gin.H{"error": err.Error()},
 		})
 		return
+	}
+	if !currentUserHasAnyPermission(c, "user_manage", "permission_manage") {
+		scope, err := resolveOrgScope(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "鑾峰彇缁勭粐鑼冨洿澶辫触",
+				Data:    gin.H{"error": err.Error()},
+			})
+			return
+		}
+		if !canAccessUserByScope(scope, user) {
+			respondOrgAccessDenied(c)
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, Response{
@@ -505,7 +767,7 @@ func GetDingTalkConfig(c *gin.Context) {
 
 // DingTalkQRLoginStart 閽夐拤鎵爜鐧诲綍寮€濮?
 func DingTalkQRLoginStart(c *gin.Context) {
-	state := "test_state"
+	state := generateLoginState()
 	redirectURI := resolveDingTalkRedirectURI(c)
 	log.Printf("[dingtalk/qr/start] host=%s forwarded_host=%s redirect_uri=%s ua=%s", c.Request.Host, c.GetHeader("X-Forwarded-Host"), redirectURI, c.GetHeader("User-Agent"))
 
@@ -651,19 +913,8 @@ func DingTalkInAppLogin(c *gin.Context) {
 		Code:    http.StatusOK,
 		Message: "success",
 		Data: gin.H{
-			"token": tokenString,
-			"user": gin.H{
-				"id":            user.ID,
-				"user_id":       user.UserID,
-				"name":          user.Name,
-				"email":         user.Email,
-				"mobile":        user.Mobile,
-				"department_id": user.DepartmentID,
-				"position":      user.Position,
-				"avatar":        user.Avatar,
-				"status":        user.Status,
-				"menu_keys":     buildUserMenuKeys(user.UserID),
-			},
+			"token":      tokenString,
+			"user":       buildAuthUserPayload(user),
 			"expires_at": expiresAt,
 		},
 	})
@@ -675,7 +926,21 @@ func DingTalkCallback(c *gin.Context) {
 	if code == "" {
 		code = c.Query("code")
 	}
-	log.Printf("[dingtalk/callback] host=%s raw_query=%s has_code=%t ua=%s", c.Request.Host, c.Request.URL.RawQuery, code != "", c.GetHeader("User-Agent"))
+	state := c.Query("state")
+	log.Printf("[dingtalk/callback] host=%s has_code=%t has_state=%t ua=%s", c.Request.Host, code != "", state != "", c.GetHeader("User-Agent"))
+
+	// 校验 state（防 CSRF）
+	if !validateLoginState(state) {
+		log.Printf("[dingtalk/callback] invalid or expired state")
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "无效或过期的登录状态，请重新扫码",
+		})
+		return
+	}
+
+	// 清理过期 state
+	cleanupOldStates()
 
 	if code == "" {
 		c.JSON(http.StatusBadRequest, Response{
@@ -693,11 +958,11 @@ func DingTalkCallback(c *gin.Context) {
 		})
 		return
 	}
-	log.Printf("[dingtalk/callback] user_info=%v", userInfo)
-
 	associatedUserID := getStringByKeys(userInfo, "associated_user_id", "associatedUserId", "userid", "userId")
 	unionID := getStringByKeys(userInfo, "unionId", "unionid", "union_id")
 	openID := getStringByKeys(userInfo, "openId", "openid", "open_id")
+	log.Printf("[dingtalk/callback] user_info_received associated_user_id=%t unionid=%t", associatedUserID != "", unionID != "")
+
 	dtUserID := associatedUserID
 	if dtUserID == "" && unionID != "" {
 		resolvedUserID, resolveErr := dingtalk.GetUserIDByUnionID(unionID)
@@ -827,19 +1092,8 @@ func DingTalkCallback(c *gin.Context) {
 		Code:    http.StatusOK,
 		Message: "success",
 		Data: gin.H{
-			"token": tokenString,
-			"user": gin.H{
-				"id":            user.ID,
-				"user_id":       user.UserID,
-				"name":          user.Name,
-				"email":         user.Email,
-				"mobile":        user.Mobile,
-				"department_id": user.DepartmentID,
-				"position":      user.Position,
-				"avatar":        user.Avatar,
-				"status":        user.Status,
-				"menu_keys":     buildUserMenuKeys(user.UserID),
-			},
+			"token":      tokenString,
+			"user":       buildAuthUserPayload(user),
 			"expires_at": expiresAt,
 		},
 	})
@@ -1034,18 +1288,7 @@ func GetCurrentUser(c *gin.Context) {
 		Code:    200,
 		Message: "success",
 		Data: gin.H{
-			"user": gin.H{
-				"id":            user.ID,
-				"user_id":       user.UserID,
-				"name":          user.Name,
-				"email":         user.Email,
-				"mobile":        user.Mobile,
-				"department_id": user.DepartmentID,
-				"position":      user.Position,
-				"avatar":        user.Avatar,
-				"status":        user.Status,
-				"menu_keys":     buildUserMenuKeys(user.UserID),
-			},
+			"user": buildAuthUserPayload(user),
 		},
 	})
 }
@@ -1158,6 +1401,30 @@ func GetScopedDepartments(c *gin.Context) {
 }
 
 func GetOrgDepartmentTree(c *gin.Context) {
+	// ?all=true 跳过 scope 过滤，用于配置数据权限时展示全部部门
+	if c.Query("all") == "true" {
+		if !currentUserHasAnyPermission(c, "permission_manage", "user_manage") {
+			respondOrgAccessDenied(c)
+			return
+		}
+		orgService := service.NewOrgService(database.DB)
+		tree, err := orgService.GetDepartmentTree(nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "获取部门树失败",
+				Data:    gin.H{"error": err.Error()},
+			})
+			return
+		}
+		c.JSON(http.StatusOK, Response{
+			Code:    http.StatusOK,
+			Message: "success",
+			Data:    gin.H{"tree": tree, "scope": nil},
+		})
+		return
+	}
+
 	scope, err := resolveOrgScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -1544,6 +1811,11 @@ func GetAttendanceRecords(c *gin.Context) {
 		"start_date":    c.Query("start_date"),
 		"end_date":      c.Query("end_date"),
 	}
+	if !currentUserHasAnyPermission(c, "attendance_manage") {
+		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
+			return
+		}
+	}
 
 	attendanceService := service.NewAttendanceService(database.DB)
 	records, total, err := attendanceService.GetRecords(page, pageSize, filters)
@@ -1571,6 +1843,11 @@ func GetAttendanceStats(c *gin.Context) {
 		"start_date":    c.Query("start_date"),
 		"end_date":      c.Query("end_date"),
 		"department_id": c.Query("department_id"),
+	}
+	if !currentUserHasAnyPermission(c, "attendance_manage") {
+		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
+			return
+		}
 	}
 
 	attendanceService := service.NewAttendanceService(database.DB)
@@ -1816,7 +2093,21 @@ func GetLastSyncTime(c *gin.Context) {
 	}
 
 	var count int64
-	database.DB.Model(&database.Attendance{}).Count(&count)
+	countQuery := database.DB.Model(&database.Attendance{})
+	if !currentUserHasAnyPermission(c, "attendance_manage") {
+		filters := map[string]string{}
+		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
+			return
+		}
+		if userID := strings.TrimSpace(filters["user_id"]); userID != "" {
+			countQuery = countQuery.Where("user_id = ?", userID)
+		} else if departmentID := strings.TrimSpace(filters["department_id"]); departmentID != "" {
+			countQuery = countQuery.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", departmentID)
+		} else if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
+			countQuery = countQuery.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+		}
+	}
+	countQuery.Count(&count)
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
@@ -2070,7 +2361,7 @@ func CreateRole(c *gin.Context) {
 
 // UpdateRole 更新角色
 func UpdateRole(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("role_id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的角色ID"})
 		return
@@ -2239,12 +2530,26 @@ func GetMenuPermission(c *gin.Context) {
 		return
 	}
 	permService := service.NewPermissionService(database.DB)
-	menuKeys, err := permService.GetMenuPermission(uint(roleID))
+	// 从功能权限码派生菜单 keys（不再读 menu_permissions 旧表）
+	menuKeys, err := permService.GetRoleMenuKeys(uint(roleID))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取菜单权限失败"})
 		return
 	}
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"menu_keys": menuKeys}})
+}
+
+func parseMenuKeysPayload(payload json.RawMessage) ([]string, error) {
+	var keys []string
+	if err := json.Unmarshal(payload, &keys); err == nil {
+		return keys, nil
+	}
+
+	var encoded string
+	if err := json.Unmarshal(payload, &encoded); err != nil {
+		return nil, err
+	}
+	return service.ParseMenuKeys(encoded)
 }
 
 // SaveMenuPermission 保存角色的菜单权限
@@ -2256,14 +2561,19 @@ func SaveMenuPermission(c *gin.Context) {
 		return
 	}
 	var req struct {
-		MenuKeys string `json:"menu_keys" binding:"required"`
+		MenuKeys json.RawMessage `json:"menu_keys" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
 		return
 	}
+	menuKeys, err := parseMenuKeysPayload(req.MenuKeys)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "menu_keys 必须是 JSON 数组"})
+		return
+	}
 	permService := service.NewPermissionService(database.DB)
-	if err := permService.SaveMenuPermission(uint(roleID), req.MenuKeys); err != nil {
+	if err := permService.SaveMenuPermissionKeys(uint(roleID), menuKeys); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "保存菜单权限失败"})
 		return
 	}
@@ -2295,6 +2605,7 @@ func SaveDataPermission(c *gin.Context) {
 	roleIDStr := c.Param("role_id")
 	roleID, err := strconv.ParseUint(roleIDStr, 10, 32)
 	if err != nil {
+		log.Printf("[SaveDataPermission] role_id 格式错误: %s", roleIDStr)
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
 		return
 	}
@@ -2303,11 +2614,13 @@ func SaveDataPermission(c *gin.Context) {
 		DepartmentKeys string `json:"department_keys"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("[SaveDataPermission] 参数绑定错误: %v, roleID: %d", err, roleID)
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
 		return
 	}
-	if req.Scope != "all" && req.Scope != "department" {
-		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "scope 值无效，仅支持 all 或 department"})
+	log.Printf("[SaveDataPermission] roleID: %d, scope: %s, department_keys: %s", roleID, req.Scope, req.DepartmentKeys)
+	if req.Scope != "all" && req.Scope != "department" && req.Scope != "self" {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "scope 值无效，仅支持 all、department 或 self"})
 		return
 	}
 	permService := service.NewPermissionService(database.DB)
@@ -2420,6 +2733,11 @@ func GetEmployeeProfiles(c *gin.Context) {
 		"department_id": c.Query("department_id"),
 		"status":        c.Query("status"),
 	}
+	if !currentUserHasAnyPermission(c, "user_manage") {
+		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
+			return
+		}
+	}
 
 	employeeService := service.NewEmployeeService(database.DB)
 	profiles, total, err := employeeService.GetProfiles(page, pageSize, filters)
@@ -2453,6 +2771,22 @@ func GetEmployeeProfile(c *gin.Context) {
 			Message: "档案不存在",
 		})
 		return
+	}
+	if !currentUserHasAnyPermission(c, "user_manage") {
+		scope, err := resolveOrgScope(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "鑾峰彇缁勭粐鑼冨洿澶辫触",
+				Data:    gin.H{"error": err.Error()},
+			})
+			return
+		}
+		var user database.User
+		if err := database.DB.Where("user_id = ? AND deleted_at IS NULL", profile.UserID).First(&user).Error; err != nil || !canAccessUserByScope(scope, &user) {
+			respondOrgAccessDenied(c)
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, Response{
@@ -2541,6 +2875,11 @@ func GetEmployeeLifecycleLedger(c *gin.Context) {
 		"status":        c.Query("status"),
 		"keyword":       strings.TrimSpace(c.Query("keyword")),
 	}
+	if !currentUserHasAnyPermission(c, "user_manage") {
+		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
+			return
+		}
+	}
 
 	employeeService := service.NewEmployeeService(database.DB)
 	items, total, err := employeeService.GetLifecycleLedger(page, pageSize, filters)
@@ -2563,10 +2902,15 @@ func GetEmployeeLifecycleLedger(c *gin.Context) {
 func GetTransfers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	status := c.Query("status")
+	filters := map[string]string{"status": c.Query("status")}
+	if !currentUserHasAnyPermission(c, "user_manage") {
+		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
+			return
+		}
+	}
 
 	employeeService := service.NewEmployeeService(database.DB)
-	transfers, total, err := employeeService.GetTransfers(page, pageSize, status)
+	transfers, total, err := employeeService.GetTransfers(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -2617,10 +2961,15 @@ func CreateTransfer(c *gin.Context) {
 func GetResignations(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	status := c.Query("status")
+	filters := map[string]string{"status": c.Query("status")}
+	if !currentUserHasAnyPermission(c, "user_manage") {
+		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
+			return
+		}
+	}
 
 	employeeService := service.NewEmployeeService(database.DB)
-	resignations, total, err := employeeService.GetResignations(page, pageSize, status)
+	resignations, total, err := employeeService.GetResignations(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -2671,10 +3020,15 @@ func CreateResignation(c *gin.Context) {
 func GetOnboardings(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	status := c.Query("status")
+	filters := map[string]string{"status": c.Query("status")}
+	if !currentUserHasAnyPermission(c, "user_manage") {
+		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
+			return
+		}
+	}
 
 	employeeService := service.NewEmployeeService(database.DB)
-	onboardings, total, err := employeeService.GetOnboardings(page, pageSize, status)
+	onboardings, total, err := employeeService.GetOnboardings(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -3148,8 +3502,8 @@ func CreateDingTalkShift(c *gin.Context) {
 	})
 }
 func GetWeekCalendar(c *gin.Context) {
-	userID := c.Query("user_id")
-	departmentID := c.Query("department_id")
+	userID := strings.TrimSpace(c.Query("user_id"))
+	departmentID := strings.TrimSpace(c.Query("department_id"))
 	weeksStr := c.DefaultQuery("weeks", "8")
 	startDate := c.Query("start_date")
 
@@ -3157,6 +3511,42 @@ func GetWeekCalendar(c *gin.Context) {
 	fmt.Sscanf(weeksStr, "%d", &weeks)
 	if weeks <= 0 {
 		weeks = 8
+	}
+
+	if !currentUserHasAnyPermission(c, "attendance_manage") {
+		scope, err := resolveOrgScope(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "获取组织范围失败",
+				Data:    gin.H{"error": err.Error()},
+			})
+			return
+		}
+
+		if userID != "" {
+			user, ok := ensureCanAccessAttendanceUser(c, userID)
+			if !ok {
+				return
+			}
+			departmentID = user.DepartmentID
+		} else if departmentID != "" {
+			if !scope.IsAll() && !scope.AllowsDepartment(departmentID) {
+				respondOrgAccessDenied(c)
+				return
+			}
+		} else if scope.IsSelf() && len(scope.UserIDs) > 0 {
+			userID = scope.UserIDs[0]
+			if user, err := loadUserByUserID(userID); err == nil {
+				departmentID = user.DepartmentID
+			}
+		} else if !scope.IsAll() {
+			if len(scope.DepartmentIDs) != 1 {
+				respondOrgAccessDenied(c)
+				return
+			}
+			departmentID = scope.DepartmentIDs[0]
+		}
 	}
 
 	svc := service.NewWeekScheduleService(database.DB)
@@ -3455,6 +3845,39 @@ func GetShiftConfigs(c *gin.Context) {
 		})
 		return
 	}
+	if !currentUserHasAnyPermission(c, "attendance_manage") {
+		scope, err := resolveOrgScope(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "获取组织范围失败",
+				Data:    gin.H{"error": err.Error()},
+			})
+			return
+		}
+		filtered := make([]service.EmployeeShiftItem, 0, len(items))
+		allowedUsers := make(map[string]struct{}, len(scope.UserIDs))
+		if scope.IsSelf() {
+			for _, userID := range scope.UserIDs {
+				userID = strings.TrimSpace(userID)
+				if userID != "" {
+					allowedUsers[userID] = struct{}{}
+				}
+			}
+		}
+		for _, item := range items {
+			if scope.IsSelf() {
+				if _, ok := allowedUsers[item.UserID]; ok {
+					filtered = append(filtered, item)
+				}
+				continue
+			}
+			if scope.IsAll() || scope.AllowsDepartment(item.DepartmentID) {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
 		Message: "success",
@@ -3628,6 +4051,16 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
+	// 文件类型白名单
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	if !isAllowedUploadExtension(ext) {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "不支持的文件类型，允许: jpg/png/gif/webp/pdf/doc/xls/ppt/txt/csv",
+		})
+		return
+	}
+
 	// 检查上传目录
 	uploadDir := "uploads"
 	if err := os.MkdirAll(uploadDir, 0755); err != nil {
@@ -3638,12 +4071,16 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
-	// 生成唯一文件名
-	ext := filepath.Ext(file.Filename)
-	if ext == "" {
-		ext = ".bin"
+	// 生成随机唯一文件名（避免时间戳可预测）
+	randBytes := make([]byte, 16)
+	if _, err := rand.Read(randBytes); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "生成文件名失败",
+		})
+		return
 	}
-	filename := fmt.Sprintf("%s%s", time.Now().Format("20060102150405"), ext)
+	filename := fmt.Sprintf("%s%s", hex.EncodeToString(randBytes), ext)
 	filePath := filepath.Join(uploadDir, filename)
 
 	// 保存文件
@@ -3671,9 +4108,8 @@ func UploadFile(c *gin.Context) {
 
 // ServeFile 提供文件访问
 func ServeFile(c *gin.Context) {
-	filename := c.Param("filename")
-	// 防止路径穿越
-	if strings.Contains(filename, "..") || strings.Contains(filename, "/") {
+	filename := strings.TrimSpace(c.Param("filename"))
+	if !isSafeUploadFilename(filename) {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
 			Message: "无效的文件名",
@@ -3690,5 +4126,13 @@ func ServeFile(c *gin.Context) {
 		return
 	}
 
+	ext := strings.ToLower(filepath.Ext(filename))
+	disposition := "attachment"
+	if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".webp" || ext == ".pdf" {
+		disposition = "inline"
+	}
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Referrer-Policy", "no-referrer")
+	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, filename))
 	c.File(filePath)
 }

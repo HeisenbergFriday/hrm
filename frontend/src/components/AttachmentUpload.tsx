@@ -1,10 +1,9 @@
 import React from 'react'
-import { Upload, Button, message, Space, Typography } from 'antd'
-import { UploadOutlined, PaperClipOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Upload, Button, message } from 'antd'
+import { UploadOutlined } from '@ant-design/icons'
 import type { UploadFile, UploadProps } from 'antd'
 import { useAuthStore } from '../store/authStore'
-
-const { Text } = Typography
+import { withFileAccessToken } from '../utils/authFileUrl'
 
 interface AttachmentUploadProps {
   value?: string[]
@@ -23,7 +22,8 @@ const AttachmentUpload: React.FC<AttachmentUploadProps> = ({
     uid: `-${index}`,
     name: url.split('/').pop() || `附件${index + 1}`,
     status: 'done',
-    url,
+    url: withFileAccessToken(url),
+    response: { data: { url } },
   }))
 
   const handleUpload: UploadProps['customRequest'] = async (options) => {
@@ -64,7 +64,7 @@ const AttachmentUpload: React.FC<AttachmentUploadProps> = ({
   }
 
   const handleRemove = (file: UploadFile) => {
-    const url = file.url || file.response?.data?.url
+    const url = file.response?.data?.url || value.find((item) => withFileAccessToken(item) === file.url) || file.url
     if (url) {
       const newUrls = value.filter((u) => u !== url)
       onChange?.(newUrls)

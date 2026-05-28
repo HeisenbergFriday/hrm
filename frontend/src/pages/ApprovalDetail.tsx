@@ -4,6 +4,7 @@ import { ArrowLeftOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlin
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import { approvalAPI } from '../services/api'
+import { hasPermission } from '../utils/permission'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
@@ -174,6 +175,7 @@ const ApprovalDetail: React.FC = () => {
                 icon={<SyncOutlined />}
                 onClick={handleSync}
                 loading={syncMutation.isPending}
+                disabled={!hasPermission('approval:sync')}
               >
                 同步数据
               </Button>

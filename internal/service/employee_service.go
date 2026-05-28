@@ -45,8 +45,8 @@ func (s *EmployeeService) UpdateProfile(profile *database.EmployeeProfile) error
 
 // Transfer
 
-func (s *EmployeeService) GetTransfers(page, pageSize int, status string) ([]database.EmployeeTransfer, int64, error) {
-	return s.employeeRepo.FindAllTransfers(page, pageSize, status)
+func (s *EmployeeService) GetTransfers(page, pageSize int, filters map[string]string) ([]database.EmployeeTransfer, int64, error) {
+	return s.employeeRepo.FindAllTransfers(page, pageSize, filters)
 }
 
 func (s *EmployeeService) CreateTransfer(transfer *database.EmployeeTransfer) error {
@@ -55,8 +55,8 @@ func (s *EmployeeService) CreateTransfer(transfer *database.EmployeeTransfer) er
 
 // Resignation
 
-func (s *EmployeeService) GetResignations(page, pageSize int, status string) ([]database.EmployeeResignation, int64, error) {
-	return s.employeeRepo.FindAllResignations(page, pageSize, status)
+func (s *EmployeeService) GetResignations(page, pageSize int, filters map[string]string) ([]database.EmployeeResignation, int64, error) {
+	return s.employeeRepo.FindAllResignations(page, pageSize, filters)
 }
 
 func (s *EmployeeService) CreateResignation(resignation *database.EmployeeResignation) error {
@@ -65,8 +65,8 @@ func (s *EmployeeService) CreateResignation(resignation *database.EmployeeResign
 
 // Onboarding
 
-func (s *EmployeeService) GetOnboardings(page, pageSize int, status string) ([]database.EmployeeOnboarding, int64, error) {
-	return s.employeeRepo.FindAllOnboardings(page, pageSize, status)
+func (s *EmployeeService) GetOnboardings(page, pageSize int, filters map[string]string) ([]database.EmployeeOnboarding, int64, error) {
+	return s.employeeRepo.FindAllOnboardings(page, pageSize, filters)
 }
 
 func (s *EmployeeService) CreateOnboarding(onboarding *database.EmployeeOnboarding) error {

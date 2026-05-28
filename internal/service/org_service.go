@@ -55,6 +55,24 @@ func (s *OrgDataScope) AllowsDepartment(departmentID string) bool {
 	return ok
 }
 
+func (s *OrgDataScope) AllowsUser(user *database.User) bool {
+	if s == nil || s.IsAll() {
+		return true
+	}
+	if user == nil || len(s.UserIDs) == 0 {
+		return false
+	}
+	userID := strings.TrimSpace(user.UserID)
+	numericID := strconv.FormatUint(uint64(user.ID), 10)
+	for _, allowedID := range s.UserIDs {
+		allowedID = strings.TrimSpace(allowedID)
+		if allowedID != "" && (allowedID == userID || allowedID == numericID) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *OrgDataScope) clone() *OrgDataScope {
 	if s == nil {
 		scope := &OrgDataScope{Mode: "all", all: true}
@@ -67,6 +85,7 @@ func (s *OrgDataScope) clone() *OrgDataScope {
 		DepartmentIDs:     append([]string(nil), s.DepartmentIDs...),
 		DepartmentNames:   append([]string(nil), s.DepartmentNames...),
 		RootDepartmentIDs: append([]string(nil), s.RootDepartmentIDs...),
+		UserIDs:           append([]string(nil), s.UserIDs...),
 		all:               s.all,
 	}
 	cloned.init()
@@ -259,6 +278,45 @@ func (s *OrgService) ResolveScopeForUser(currentUserID string) (*OrgDataScope, e
 		return scope, nil
 	}
 
+	// 优先从 data_permissions 表读取统一配置
+	permService := NewPermissionService(s.db)
+	scope, err := permService.ResolveUserScope(currentUserID)
+	if err == nil && scope != nil {
+		// ResolveUserScope 返回了受限范围（department 或 self），直接使用
+		if scope.Mode == "self" || scope.Mode == "department" {
+			_, departmentMap, childMap, graphErr := s.loadDepartmentGraph()
+			if graphErr == nil {
+				if scope.Mode == "department" && len(scope.DepartmentIDs) > 0 {
+					// department 模式需要展开子部门并填充名称
+					expandedIDs := make([]string, 0)
+					for _, deptID := range scope.DepartmentIDs {
+						if _, ok := departmentMap[deptID]; !ok {
+							continue
+						}
+						expandedIDs = append(expandedIDs, collectDescendantIDs(deptID, childMap)...)
+					}
+					scope.DepartmentIDs = uniqueStrings(expandedIDs)
+					scope.DepartmentNames = departmentNamesByIDs(scope.DepartmentIDs, departmentMap)
+				} else if scope.Mode == "self" {
+					// self 模式：填入当前用户 user_id，花名册等模块据此只返回自己
+					var user database.User
+					if err := s.db.Where("id = ? AND deleted_at IS NULL", currentUserID).First(&user).Error; err == nil {
+						scope.UserIDs = []string{user.UserID}
+						if strings.TrimSpace(user.DepartmentID) != "" {
+							scope.DepartmentIDs = []string{user.DepartmentID}
+							scope.DepartmentNames = departmentNamesByIDs(scope.DepartmentIDs, departmentMap)
+							scope.RootDepartmentIDs = append([]string(nil), scope.DepartmentIDs...)
+						}
+					}
+				}
+			}
+			scope.init()
+			return scope, nil
+		}
+		// scope == nil 表示全量权限，继续到下面的 fallback
+	}
+
+	// fallback: 保持向后兼容，从 User.Extension 读取
 	var currentUser database.User
 	if err := s.db.Where("id = ? AND deleted_at IS NULL", currentUserID).First(&currentUser).Error; err != nil {
 		return nil, err
@@ -285,6 +343,20 @@ func (s *OrgService) ResolveScopeForUser(currentUserID string) (*OrgDataScope, e
 	_, departmentMap, childMap, err := s.loadDepartmentGraph()
 	if err != nil {
 		return nil, err
+	}
+
+	if mode == "self" {
+		scope := &OrgDataScope{
+			Mode:    "self",
+			UserIDs: []string{currentUser.UserID},
+		}
+		if strings.TrimSpace(currentUser.DepartmentID) != "" {
+			scope.DepartmentIDs = []string{currentUser.DepartmentID}
+			scope.DepartmentNames = departmentNamesByIDs(scope.DepartmentIDs, departmentMap)
+			scope.RootDepartmentIDs = append([]string(nil), scope.DepartmentIDs...)
+		}
+		scope.init()
+		return scope, nil
 	}
 
 	rootDepartmentIDs := firstStringSliceValue(
@@ -315,17 +387,17 @@ func (s *OrgService) ResolveScopeForUser(currentUserID string) (*OrgDataScope, e
 	}
 	visibleDepartmentIDs = uniqueStrings(visibleDepartmentIDs)
 
-	scope := &OrgDataScope{
+	fallbackScope := &OrgDataScope{
 		Mode:              "department",
 		DepartmentIDs:     visibleDepartmentIDs,
 		DepartmentNames:   departmentNamesByIDs(rootDepartmentIDs, departmentMap),
 		RootDepartmentIDs: uniqueStrings(rootDepartmentIDs),
 	}
 	if len(visibleDepartmentIDs) == 0 {
-		scope.Mode = "none"
+		fallbackScope.Mode = "none"
 	}
-	scope.init()
-	return scope, nil
+	fallbackScope.init()
+	return fallbackScope, nil
 }
 
 func (s *OrgService) GetVisibleDepartments(scope *OrgDataScope) ([]database.Department, error) {
@@ -448,6 +520,21 @@ func (s *OrgService) GetDepartmentHistory(scope *OrgDataScope, departmentID stri
 }
 
 func (s *OrgService) ListEmployees(scope *OrgDataScope, page, pageSize int, filters OrgEmployeeFilters) ([]database.User, int64, error) {
+	// self 模式：只返回当前用户自己
+	if scope != nil && scope.IsSelf() && len(scope.UserIDs) > 0 {
+		var user database.User
+		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", scope.UserIDs[0]).First(&user).Error; err != nil {
+			return []database.User{}, 0, nil
+		}
+		if page <= 0 {
+			page = 1
+		}
+		if pageSize <= 0 {
+			pageSize = 10
+		}
+		return []database.User{user}, 1, nil
+	}
+
 	departmentIDs, _, err := s.resolveDepartmentFilter(scope, filters.DepartmentID)
 	if err != nil {
 		return nil, 0, err
@@ -491,6 +578,38 @@ func (s *OrgService) ListEmployees(scope *OrgDataScope, page, pageSize int, filt
 }
 
 func (s *OrgService) GetOverview(scope *OrgDataScope, departmentID string) (*OrgOverview, error) {
+	// self 模式：只返回当前用户的概览
+	if scope != nil && scope.IsSelf() && len(scope.UserIDs) > 0 {
+		var user database.User
+		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", scope.UserIDs[0]).First(&user).Error; err != nil {
+			return &OrgOverview{Scope: scope, Summary: OrgOverviewSummary{}, Warnings: []OrgWarningItem{}, Trends: []OrgTrendPoint{}, DepartmentStats: []OrgDepartmentStat{}, EmployeeTypeDistribution: []OrgDistributionItem{}, JobLevelDistribution: []OrgDistributionItem{}, JobFamilyDistribution: []OrgDistributionItem{}}, nil
+		}
+		snapshots, err := s.listEmployeeSnapshots([]string{user.DepartmentID})
+		if err != nil {
+			return nil, err
+		}
+		// 只保留当前用户
+		filtered := make([]orgEmployeeSnapshot, 0)
+		for _, snap := range snapshots {
+			if snap.UserID == scope.UserIDs[0] {
+				filtered = append(filtered, snap)
+			}
+		}
+		scopeCopy := scope.clone()
+		_, departmentMap, _, _ := s.loadDepartmentGraph()
+		summary, _ := s.buildOverviewSummary(filtered, departmentMap)
+		return &OrgOverview{
+			Scope:                    scopeCopy,
+			Summary:                  summary,
+			Warnings:                 []OrgWarningItem{},
+			Trends:                   []OrgTrendPoint{},
+			DepartmentStats:          []OrgDepartmentStat{},
+			EmployeeTypeDistribution: buildDistributionItems(filtered, func(s orgEmployeeSnapshot) string { return s.EmploymentType }),
+			JobLevelDistribution:     buildDistributionItems(filtered, func(s orgEmployeeSnapshot) string { return s.JobLevel }),
+			JobFamilyDistribution:    buildDistributionItems(filtered, func(s orgEmployeeSnapshot) string { return s.JobFamily }),
+		}, nil
+	}
+
 	filteredDepartmentIDs, departmentMap, err := s.resolveDepartmentFilter(scope, departmentID)
 	if err != nil {
 		return nil, err
@@ -579,6 +698,22 @@ func (s *OrgService) GetDepartmentTree(scope *OrgDataScope) ([]*OrgDepartmentTre
 	if err != nil {
 		return nil, err
 	}
+	if scope != nil && scope.IsSelf() {
+		allowedUsers := make(map[string]struct{}, len(scope.UserIDs))
+		for _, userID := range scope.UserIDs {
+			userID = strings.TrimSpace(userID)
+			if userID != "" {
+				allowedUsers[userID] = struct{}{}
+			}
+		}
+		filteredSnapshots := make([]orgEmployeeSnapshot, 0, len(allowedUsers))
+		for _, snapshot := range snapshots {
+			if _, ok := allowedUsers[snapshot.UserID]; ok {
+				filteredSnapshots = append(filteredSnapshots, snapshot)
+			}
+		}
+		snapshots = filteredSnapshots
+	}
 
 	directCounts := make(map[string]*OrgDepartmentTreeNode)
 	for _, snapshot := range snapshots {
@@ -639,8 +774,15 @@ func (s *OrgService) GetEmployeeAggregate(scope *OrgDataScope, id string) (*Empl
 	if err := s.db.Where("id = ? AND deleted_at IS NULL", id).First(&user).Error; err != nil {
 		return nil, err
 	}
-	if scope != nil && !scope.IsAll() && !scope.AllowsDepartment(user.DepartmentID) {
-		return nil, ErrOrgAccessDenied
+	if scope != nil && !scope.IsAll() {
+		// self 模式：只允许查看自己
+		if scope.IsSelf() {
+			if !scope.AllowsUser(&user) {
+				return nil, ErrOrgAccessDenied
+			}
+		} else if !scope.AllowsDepartment(user.DepartmentID) {
+			return nil, ErrOrgAccessDenied
+		}
 	}
 
 	var profile database.EmployeeProfile
@@ -1159,6 +1301,9 @@ func buildDistributionItems(snapshots []orgEmployeeSnapshot, selector func(orgEm
 func (s *OrgService) buildOrgRelation(scope *OrgDataScope, user *database.User, departmentMap map[string]database.Department) (EmployeeOrgRelation, error) {
 	relation := EmployeeOrgRelation{
 		DirectReports: []EmployeeMemberRef{},
+	}
+	if scope != nil && scope.IsSelf() {
+		return relation, nil
 	}
 
 	managerUserID := firstStringValue(user.Extension, "manager_user_id", "leader_user_id", "supervisor_user_id")

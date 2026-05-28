@@ -11,6 +11,7 @@ import (
 	"peopleops/internal/repository"
 	"peopleops/internal/service"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -27,6 +28,9 @@ func GetLeaveEligibility(c *gin.Context) {
 	year, err := strconv.Atoi(yearStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "year 格式错误"})
+		return
+	}
+	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
 		return
 	}
 	svc := service.NewAnnualLeaveService(database.DB)
@@ -69,6 +73,9 @@ func GetLeaveGrants(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "year 格式错误"})
 		return
 	}
+	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
+		return
+	}
 	svc := service.NewAnnualLeaveGrantService(database.DB)
 	records, err := svc.GetGrantLedger(userID, year)
 	if err != nil {
@@ -106,6 +113,9 @@ func GetCompensatoryLeaveBalance(c *gin.Context) {
 	userID := c.Query("user_id")
 	if userID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id 必填"})
+		return
+	}
+	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
 		return
 	}
 	svc := service.NewCompensatoryLeaveService(database.DB)
@@ -235,6 +245,9 @@ func GetConsumeLog(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id 必填"})
 		return
 	}
+	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
+		return
+	}
 	svc := service.NewAnnualLeaveGrantService(database.DB)
 	logs, err := svc.GetConsumeLog(userID)
 	if err != nil {
@@ -250,6 +263,9 @@ func GetOvertimeMatches(c *gin.Context) {
 	endDate := c.Query("end_date")
 	if userID == "" || startDate == "" || endDate == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id, start_date, end_date 必填"})
+		return
+	}
+	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
 		return
 	}
 	svc := service.NewOvertimeMatchingService(database.DB)
@@ -607,9 +623,12 @@ func ResyncOvertimeToDingTalk(c *gin.Context) {
 // ========== 调休余额 ==========
 
 func GetCompTimeBalance(c *gin.Context) {
-	userID := c.Query("user_id")
+	userID := strings.TrimSpace(c.Query("user_id"))
 	if userID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id 必填"})
+		return
+	}
+	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
 		return
 	}
 	svc := service.NewCompensatoryLeaveService(database.DB)

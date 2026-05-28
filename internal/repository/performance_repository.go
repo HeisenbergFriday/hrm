@@ -293,7 +293,7 @@ func (r *PerformanceParticipantRepository) GetByID(participantID string) (*datab
 	return &p, nil
 }
 
-func (r *PerformanceParticipantRepository) FindAll(activityID string, page, pageSize int, departmentID, managerID, status, employeeKeyword string, visibleDepartmentIDs []string) ([]database.PerformanceParticipant, int64, error) {
+func (r *PerformanceParticipantRepository) FindAll(activityID string, page, pageSize int, departmentID, managerID, status, employeeKeyword string, visibleDepartmentIDs []string, visibleUserIDs []string) ([]database.PerformanceParticipant, int64, error) {
 	var items []database.PerformanceParticipant
 	var total int64
 
@@ -317,6 +317,10 @@ func (r *PerformanceParticipantRepository) FindAll(activityID string, page, page
 	// 部门隔离：只显示可见部门的参与人
 	if len(visibleDepartmentIDs) > 0 {
 		query = query.Where("department_id IN ?", visibleDepartmentIDs)
+	}
+	// 自我隔离：只显示自己的参与记录
+	if len(visibleUserIDs) > 0 {
+		query = query.Where("employee_id IN ?", visibleUserIDs)
 	}
 
 	if err := query.Count(&total).Error; err != nil {

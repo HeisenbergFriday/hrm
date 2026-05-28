@@ -29,6 +29,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { permissionAPI, orgAPI, userAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
+import { menuConfig, toTreeData, type TreeNode } from '../config/menu'
+import { hasPermission } from '../utils/permission'
 
 const { Text, Title } = Typography
 const { Option } = Select
@@ -41,11 +43,8 @@ interface Role {
   updated_at: string
 }
 
-interface MenuItem {
-  title: string
-  key: string
-  children?: MenuItem[]
-}
+// 使用 config/menu 中定义的 TreeNode 类型
+type MenuItem = TreeNode
 
 interface Department {
   id: string
@@ -55,6 +54,7 @@ interface Department {
 }
 
 const RoleManagement: React.FC = () => {
+  const canManagePermission = hasPermission('permission_manage')
   // 角色相关状态
   const [selectedRoleId, setSelectedRoleId] = useState<string>('')
   const [roleSearchText, setRoleSearchText] = useState('')
@@ -68,7 +68,7 @@ const RoleManagement: React.FC = () => {
   const [menuExpandAll, setMenuExpandAll] = useState(true)
 
   // 数据权限相关状态
-  const [isAllDepartments, setIsAllDepartments] = useState(true)
+  const [dataScope, setDataScope] = useState<string>('all')
   const [selectedDepartments, setSelectedDepartments] = useState<string[]>([])
 
   // 用户分配相关状态
@@ -84,8 +84,9 @@ const RoleManagement: React.FC = () => {
   })
 
   const { data: departmentTreeData, isLoading: departmentsLoading } = useQuery({
-    queryKey: ['department-tree'],
-    queryFn: () => orgAPI.getDepartmentTree(),
+    queryKey: ['department-tree-all'],
+    queryFn: () => orgAPI.getDepartmentTree({ all: true }),
+    enabled: canManagePermission,
   })
 
   // 获取角色下的用户列表
@@ -99,7 +100,7 @@ const RoleManagement: React.FC = () => {
   const { data: allUsersData, isLoading: allUsersLoading } = useQuery({
     queryKey: ['all-users'],
     queryFn: () => userAPI.getUsers({ page: 1, page_size: 1000 }),
-    enabled: assignModalVisible,
+    enabled: assignModalVisible && canManagePermission,
   })
 
   // 获取选中角色的菜单权限
@@ -116,17 +117,6 @@ const RoleManagement: React.FC = () => {
     enabled: !!selectedRoleId,
   })
 
-  // 保存菜单权限 mutation
-  const saveMenuPermMutation = useMutation({
-    mutationFn: (data: { roleId: number; menuKeys: string[] }) =>
-      permissionAPI.saveMenuPermission(data.roleId, data.menuKeys),
-    onSuccess: () => {
-      message.success('菜单权限保存成功')
-      queryClient.invalidateQueries({ queryKey: ['menu-permission', selectedRoleId] })
-    },
-    onError: () => message.error('菜单权限保存失败'),
-  })
-
   // 保存数据权限 mutation
   const saveDataPermMutation = useMutation({
     mutationFn: (data: { roleId: number; scope: string; departmentKeys: string[] }) =>
@@ -136,6 +126,17 @@ const RoleManagement: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['data-permission', selectedRoleId] })
     },
     onError: () => message.error('数据权限保存失败'),
+  })
+
+  // 保存菜单权限 mutation
+  const saveMenuPermMutation = useMutation({
+    mutationFn: (data: { roleId: number; menuKeys: string[] }) =>
+      permissionAPI.saveMenuPermission(data.roleId, data.menuKeys),
+    onSuccess: () => {
+      message.success('菜单权限保存成功')
+      queryClient.invalidateQueries({ queryKey: ['menu-permission', selectedRoleId] })
+    },
+    onError: () => message.error('菜单权限保存失败'),
   })
 
   // 获取选中的角色
@@ -154,56 +155,8 @@ const RoleManagement: React.FC = () => {
     )
   }, [rolesData, roleSearchText])
 
-  // 菜单项配置
-  const menuItems: MenuItem[] = [
-    { title: '首页', key: 'home' },
-    {
-      title: '组织管理',
-      key: 'organization',
-      children: [
-        { title: '部门树', key: 'department-tree' },
-        { title: '员工列表', key: 'employees' },
-        { title: '同步日志', key: 'sync-log' },
-      ],
-    },
-    {
-      title: '考勤管理',
-      key: 'attendance',
-      children: [
-        { title: '考勤查询', key: 'attendance-records' },
-        { title: '异常统计', key: 'attendance-stats' },
-        { title: '导出记录', key: 'attendance-export' },
-      ],
-    },
-    {
-      title: '审批管理',
-      key: 'approval',
-      children: [
-        { title: '审批模板', key: 'approval-templates' },
-        { title: '审批实例', key: 'approval-instances' },
-        { title: '审批统计', key: 'approval-stats' },
-      ],
-    },
-    {
-      title: '权限管理',
-      key: 'permission',
-      children: [
-        { title: '角色管理', key: 'role-management' },
-        { title: '菜单权限', key: 'menu-permission' },
-        { title: '数据权限', key: 'data-permission' },
-      ],
-    },
-    {
-      title: '任务中心',
-      key: 'jobs',
-      children: [{ title: '同步任务', key: 'sync-jobs' }],
-    },
-    {
-      title: '审计日志',
-      key: 'audit',
-      children: [{ title: '操作日志', key: 'audit-logs' }],
-    },
-  ]
+  // 菜单项配置（统一从 config/menu.tsx 导入）
+  const menuItems: MenuItem[] = useMemo(() => toTreeData(menuConfig), [])
 
   // 计算所有菜单key
   const allMenuKeys = useMemo(() => {
@@ -216,7 +169,7 @@ const RoleManagement: React.FC = () => {
     }
     collectKeys(menuItems)
     return keys
-  }, [])
+  }, [menuItems])
 
   // 过滤菜单树（支持搜索）
   const filteredMenuItems = useMemo(() => {
@@ -235,7 +188,7 @@ const RoleManagement: React.FC = () => {
         .filter(Boolean) as MenuItem[]
     }
     return filterTree(menuItems)
-  }, [menuSearchText])
+  }, [menuItems, menuSearchText])
 
   // Mutations
   const createRoleMutation = useMutation({
@@ -287,17 +240,21 @@ const RoleManagement: React.FC = () => {
   // 处理函数
   const handleSelectRole = (roleId: string) => {
     setSelectedRoleId(roleId)
-    // 重置状态（实际数据由 query 加载）
     setMenuCheckedKeys([])
-    setIsAllDepartments(true)
+    setDataScope('all')
     setSelectedDepartments([])
   }
 
   // 当菜单权限数据加载完成后，同步到本地状态
   React.useEffect(() => {
-    if (menuPermData?.data?.menu_keys) {
+    const rawMenuKeys = menuPermData?.data?.menu_keys
+    if (Array.isArray(rawMenuKeys)) {
+      setMenuCheckedKeys(rawMenuKeys)
+      return
+    }
+    if (typeof rawMenuKeys === 'string' && rawMenuKeys) {
       try {
-        const keys = JSON.parse(menuPermData.data.menu_keys)
+        const keys = JSON.parse(rawMenuKeys)
         setMenuCheckedKeys(Array.isArray(keys) ? keys : [])
       } catch {
         setMenuCheckedKeys([])
@@ -309,7 +266,7 @@ const RoleManagement: React.FC = () => {
   React.useEffect(() => {
     if (dataPermData?.data) {
       const { scope, department_keys } = dataPermData.data
-      setIsAllDepartments(scope === 'all')
+      setDataScope(scope || 'all')
       if (scope === 'department' && department_keys) {
         try {
           const keys = JSON.parse(department_keys)
@@ -324,18 +281,21 @@ const RoleManagement: React.FC = () => {
   }, [dataPermData])
 
   const handleCreateRole = () => {
+    if (!canManagePermission) return
     setEditingRole(null)
     form.resetFields()
     setModalVisible(true)
   }
 
   const handleEditRole = (role: Role) => {
+    if (!canManagePermission) return
     setEditingRole(role)
     form.setFieldsValue({ name: role.name, description: role.description })
     setModalVisible(true)
   }
 
   const handleSubmit = () => {
+    if (!canManagePermission) return
     form.validateFields().then((values) => {
       if (editingRole) {
         updateRoleMutation.mutate({ id: Number(editingRole.id), ...values })
@@ -345,22 +305,33 @@ const RoleManagement: React.FC = () => {
     })
   }
 
+  const handleSaveDataPermission = () => {
+    if (!selectedRoleId || !canManagePermission) return
+    saveDataPermMutation.mutate({
+      roleId: Number(selectedRoleId),
+      scope: dataScope,
+      departmentKeys: dataScope === 'department' ? selectedDepartments : [],
+    })
+  }
+
   const handleSaveMenuPermission = () => {
-    if (!selectedRoleId) return
+    if (!selectedRoleId || !canManagePermission) return
     saveMenuPermMutation.mutate({ roleId: Number(selectedRoleId), menuKeys: menuCheckedKeys })
   }
 
-  const handleSaveDataPermission = () => {
-    if (!selectedRoleId) return
-    saveDataPermMutation.mutate({
-      roleId: Number(selectedRoleId),
-      scope: isAllDepartments ? 'all' : 'department',
-      departmentKeys: selectedDepartments,
-    })
+  const handleSelectAllMenu = () => {
+    if (!canManagePermission) return
+    setMenuCheckedKeys(allMenuKeys)
+  }
+
+  const handleDeselectAllMenu = () => {
+    if (!canManagePermission) return
+    setMenuCheckedKeys([])
   }
 
   // 用户分配相关函数
   const handleAssignUser = () => {
+    if (!canManagePermission) return
     if (!selectedRoleId || !selectedUserId) {
       message.warning('请选择用户')
       return
@@ -369,7 +340,7 @@ const RoleManagement: React.FC = () => {
   }
 
   const handleRemoveUser = (userId: string) => {
-    if (!selectedRoleId) return
+    if (!selectedRoleId || !canManagePermission) return
     Modal.confirm({
       title: '确认移除',
       content: '确定要将该用户从当前角色中移除吗？',
@@ -380,14 +351,6 @@ const RoleManagement: React.FC = () => {
         removeUserMutation.mutate({ user_id: userId, role_id: Number(selectedRoleId) })
       },
     })
-  }
-
-  const handleSelectAllMenu = () => {
-    setMenuCheckedKeys(allMenuKeys)
-  }
-
-  const handleDeselectAllMenu = () => {
-    setMenuCheckedKeys([])
   }
 
   // 渲染部门树
@@ -411,9 +374,11 @@ const RoleManagement: React.FC = () => {
           allowClear
           style={{ marginBottom: 12 }}
         />
-        <Button type="primary" icon={<PlusOutlined />} block onClick={handleCreateRole}>
-          新建角色
-        </Button>
+        {canManagePermission && (
+          <Button type="primary" icon={<PlusOutlined />} block onClick={handleCreateRole}>
+            新建角色
+          </Button>
+        )}
       </div>
       <div style={{ flex: 1, overflow: 'auto' }}>
         {filteredRoles.map((role: Role) => (
@@ -436,17 +401,19 @@ const RoleManagement: React.FC = () => {
                   <Text type="secondary" style={{ fontSize: 12 }}>{role.description || '暂无描述'}</Text>
                 </div>
               </Space>
-              <Tooltip title="编辑">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<EditOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleEditRole(role)
-                  }}
-                />
-              </Tooltip>
+              {canManagePermission && (
+                <Tooltip title="编辑">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<EditOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleEditRole(role)
+                    }}
+                  />
+                </Tooltip>
+              )}
             </div>
           </Card>
         ))}
@@ -481,12 +448,12 @@ const RoleManagement: React.FC = () => {
     </Card>
   )
 
-  // 菜单权限Tab
+  // 菜单权限Tab（可编辑 Tree，保存到 menu_permissions 表）
   const renderMenuPermission = () => (
     <Card
       title={<Space><MenuOutlined /> <Text strong>菜单权限配置</Text></Space>}
       extra={
-        <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveMenuPermission} disabled={!selectedRole} loading={saveMenuPermMutation.isPending}>
+        <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveMenuPermission} disabled={!selectedRole || !canManagePermission} loading={saveMenuPermMutation.isPending}>
           保存
         </Button>
       }
@@ -511,18 +478,16 @@ const RoleManagement: React.FC = () => {
                   onClick={() => setMenuExpandAll(!menuExpandAll)}
                 />
               </Tooltip>
-            </Space>
-            <Space>
               <Tooltip title="全选">
-                <Button icon={<CheckSquareOutlined />} onClick={handleSelectAllMenu}>全选</Button>
+                <Button icon={<CheckSquareOutlined />} onClick={handleSelectAllMenu} disabled={!canManagePermission}>全选</Button>
               </Tooltip>
               <Tooltip title="全不选">
-                <Button icon={<CloseSquareOutlined />} onClick={handleDeselectAllMenu}>全不选</Button>
+                <Button icon={<CloseSquareOutlined />} onClick={handleDeselectAllMenu} disabled={!canManagePermission}>全不选</Button>
               </Tooltip>
-              <Badge count={menuCheckedKeys.length} showZero style={{ backgroundColor: '#4338ca' }}>
-                <Tag color="processing">已选权限</Tag>
-              </Badge>
             </Space>
+            <Badge count={menuCheckedKeys.length} showZero style={{ backgroundColor: '#4338ca' }}>
+              <Tag color="processing">已选菜单</Tag>
+            </Badge>
           </div>
           <Divider style={{ margin: '12px 0' }} />
           <div style={{ minHeight: 300, maxHeight: 400, overflow: 'auto' }}>
@@ -532,12 +497,13 @@ const RoleManagement: React.FC = () => {
               checkedKeys={menuCheckedKeys}
               onCheck={(checked) => setMenuCheckedKeys(checked as string[])}
               defaultExpandAll={menuExpandAll}
+              disabled={!canManagePermission}
               style={{ fontSize: 14 }}
             />
           </div>
           <Divider style={{ margin: '12px 0' }} />
           <Alert
-            message="勾选菜单后，对应角色将拥有访问权限"
+            message="勾选菜单后保存，对应角色将拥有页面访问权限"
             type="info"
             showIcon
           />
@@ -551,7 +517,7 @@ const RoleManagement: React.FC = () => {
     <Card
       title={<Space><LockOutlined /> <Text strong>数据权限配置</Text></Space>}
       extra={
-        <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveDataPermission} disabled={!selectedRole} loading={saveDataPermMutation.isPending}>
+        <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveDataPermission} disabled={!selectedRole || !canManagePermission} loading={saveDataPermMutation.isPending}>
           保存
         </Button>
       }
@@ -563,22 +529,31 @@ const RoleManagement: React.FC = () => {
           <Form layout="vertical">
             <Form.Item label="数据范围">
               <Radio.Group
-                value={isAllDepartments ? 'all' : 'custom'}
-                onChange={(e) => setIsAllDepartments(e.target.value === 'all')}
+                value={dataScope}
+                onChange={(e) => {
+                  setDataScope(e.target.value)
+                  if (e.target.value !== 'department') {
+                    setSelectedDepartments([])
+                  }
+                }}
                 optionType="button"
                 buttonStyle="solid"
+                disabled={!canManagePermission}
               >
                 <Radio.Button value="all">
                   <Space><GlobalOutlined /> 全部部门</Space>
                 </Radio.Button>
-                <Radio.Button value="custom">
+                <Radio.Button value="department">
                   <Space><ApartmentOutlined /> 指定部门</Space>
+                </Radio.Button>
+                <Radio.Button value="self">
+                  <Space><UserOutlined /> 仅本人</Space>
                 </Radio.Button>
               </Radio.Group>
             </Form.Item>
           </Form>
 
-          {!isAllDepartments && (
+          {dataScope === 'department' && (
             <>
               <Divider orientation="left">选择部门</Divider>
               <Card
@@ -594,6 +569,7 @@ const RoleManagement: React.FC = () => {
                     checkedKeys={selectedDepartments}
                     onCheck={(checked) => setSelectedDepartments(checked as string[])}
                     defaultExpandAll
+                    disabled={!canManagePermission}
                     style={{ fontSize: 14 }}
                   />
                 )}
@@ -608,7 +584,7 @@ const RoleManagement: React.FC = () => {
               <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
                 <li><Tag color="success" style={{ marginRight: 4 }}>全部部门</Tag>可以查看所有部门的数据</li>
                 <li><Tag color="processing" style={{ marginRight: 4 }}>指定部门</Tag>只能查看选中部门及其子部门的数据</li>
-                <li><Tag color="warning" style={{ marginRight: 4 }}>部门负责人</Tag>默认可以查看自己负责部门及其子部门的数据</li>
+                <li><Tag color="warning" style={{ marginRight: 4 }}>仅本人</Tag>只能查看自己的数据，适用于普通员工</li>
               </ul>
             }
             type="info"
@@ -625,7 +601,7 @@ const RoleManagement: React.FC = () => {
     <Card
       title={<Space><TeamOutlined /> <Text strong>用户分配</Text></Space>}
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setAssignModalVisible(true)} disabled={!selectedRole}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setAssignModalVisible(true)} disabled={!selectedRole || !canManagePermission}>
           添加用户
         </Button>
       }
@@ -674,7 +650,7 @@ const RoleManagement: React.FC = () => {
                   {
                     title: '操作',
                     key: 'action',
-                    render: (_: any, record: any) => (
+                    render: (_: any, record: any) => canManagePermission ? (
                       <Button
                         type="link"
                         danger
@@ -683,7 +659,7 @@ const RoleManagement: React.FC = () => {
                       >
                         移除
                       </Button>
-                    ),
+                    ) : null,
                   },
                 ]}
                 rowKey="user_id"
@@ -720,6 +696,7 @@ const RoleManagement: React.FC = () => {
         }}
         onOk={handleAssignUser}
         confirmLoading={assignUserMutation.isPending}
+        okButtonProps={{ disabled: !canManagePermission }}
         okText="确定"
         cancelText="取消"
       >
@@ -819,6 +796,7 @@ const RoleManagement: React.FC = () => {
             type="primary"
             onClick={handleSubmit}
             loading={createRoleMutation.isPending || updateRoleMutation.isPending}
+            disabled={!canManagePermission}
           >
             确认
           </Button>,

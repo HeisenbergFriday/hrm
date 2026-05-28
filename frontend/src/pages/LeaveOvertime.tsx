@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   Alert,
   Button,
@@ -23,13 +23,18 @@ import {
 import { ClockCircleOutlined, DeleteOutlined, GiftOutlined, MinusCircleOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, ThunderboltOutlined, CalendarOutlined } from '@ant-design/icons'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { leaveAPI, orgAPI, overtimeAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { formatDateTime } from '../utils/format'
+import { hasPermission } from '../utils/permission'
 
 const { Title, Text } = Typography
+
+dayjs.locale('zh-cn')
 
 const formatWorkingYears = (value?: number) =>
   Number.isFinite(value) ? Number(value).toFixed(1) : '0.0'
@@ -49,6 +54,12 @@ const EmployeeSelect: React.FC<{
   })
 
   const employees: any[] = (data as any)?.data?.items ?? []
+
+  useEffect(() => {
+    if (!value && employees.length === 1 && employees[0]?.user_id) {
+      onChange?.(employees[0].user_id)
+    }
+  }, [employees, onChange, value])
 
   return (
     <Select
@@ -72,6 +83,7 @@ const EmployeeSelect: React.FC<{
 }
 
 const EligibilityTab: React.FC = () => {
+  const canManageAttendance = hasPermission('attendance_manage')
   const [userID, setUserID] = useState('')
   const [year, setYear] = useState(dayjs().year())
   const [queryKey, setQueryKey] = useState<{ user_id: string; year: number } | null>(null)
@@ -124,9 +136,11 @@ const EligibilityTab: React.FC = () => {
         <Button type="primary" icon={<SearchOutlined />} onClick={() => setQueryKey({ user_id: userID, year })} disabled={!userID}>
           查询
         </Button>
-        <Button icon={<SyncOutlined />} onClick={() => recalcMutation.mutate()} loading={recalcMutation.isPending} disabled={!userID}>
-          重算资格
-        </Button>
+        {canManageAttendance && (
+          <Button icon={<SyncOutlined />} onClick={() => recalcMutation.mutate()} loading={recalcMutation.isPending} disabled={!userID}>
+            重算资格
+          </Button>
+        )}
       </Space>
       <Table columns={columns} dataSource={(data as any)?.data || []} rowKey="quarter" loading={isFetching} pagination={false} />
     </div>
@@ -141,6 +155,7 @@ const syncStatusLabel: Record<string, string> = {
 }
 
 const GrantTab: React.FC = () => {
+  const canManageAttendance = hasPermission('attendance_manage')
   const [userID, setUserID] = useState('')
   const [year, setYear] = useState(dayjs().year())
   const [queryKey, setQueryKey] = useState<{ user_id: string; year: number } | null>(null)
@@ -225,13 +240,17 @@ const GrantTab: React.FC = () => {
         <Button type="primary" icon={<SearchOutlined />} onClick={() => setQueryKey({ user_id: userID, year })} disabled={!userID}>
           查询
         </Button>
-        <Button icon={<GiftOutlined />} onClick={() => setBatchModalOpen(true)}>手动发放季度年假</Button>
-        <Button icon={<SyncOutlined />} onClick={() => regrantMutation.mutate()} loading={regrantMutation.isPending} disabled={!userID}>
-          追溯补发
-        </Button>
-        <Button icon={<SyncOutlined />} onClick={handleSyncToDingTalk} loading={syncMutation.isPending}>
-          同步到钉钉
-        </Button>
+        {canManageAttendance && (
+          <>
+            <Button icon={<GiftOutlined />} onClick={() => setBatchModalOpen(true)}>手动发放季度年假</Button>
+            <Button icon={<SyncOutlined />} onClick={() => regrantMutation.mutate()} loading={regrantMutation.isPending} disabled={!userID}>
+              追溯补发
+            </Button>
+            <Button icon={<SyncOutlined />} onClick={handleSyncToDingTalk} loading={syncMutation.isPending}>
+              同步到钉钉
+            </Button>
+          </>
+        )}
       </Space>
       <Table columns={columns} dataSource={(data as any)?.data || []} rowKey="id" loading={isFetching} pagination={false} />
       <Modal
@@ -264,6 +283,7 @@ const GrantTab: React.FC = () => {
 }
 
 const OvertimeTab: React.FC = () => {
+  const canManageAttendance = hasPermission('attendance_manage')
   const [userID, setUserID] = useState('')
   const [selectedMonth, setSelectedMonth] = useState(dayjs().startOf('month'))
   const [queryKey, setQueryKey] = useState<{ user_id: string; start_date: string; end_date: string } | null>(null)
@@ -507,11 +527,12 @@ const OvertimeTab: React.FC = () => {
   const dingtalkSyncColor: Record<string, string> = { success: 'blue', failed: 'red', skipped: 'default', pending: 'orange' }
 
   const columns = [
-    { title: '员工', dataIndex: 'user_name', key: 'user_name', render: (value: string, record: any) => value || record.user_id },
-    { title: '加班日期', dataIndex: 'work_date', key: 'work_date' },
-    { title: '审批ID', dataIndex: 'approval_id', key: 'approval_id' },
+    { title: '员工', dataIndex: 'user_name', key: 'user_name', width: 96, fixed: 'left' as const, render: (value: string, record: any) => value || record.user_id },
+    { title: '加班日期', dataIndex: 'work_date', key: 'work_date', width: 112, fixed: 'left' as const },
+    { title: '审批ID', dataIndex: 'approval_id', key: 'approval_id', width: 96 },
     {
       title: '状态', dataIndex: 'match_status', key: 'match_status',
+      width: 132,
       render: (value: string, record: any) => (
         <Space size={4}>
           <StatusTag color={statusColor[value] || 'default'}>{statusLabel[value] || value}</StatusTag>
@@ -521,43 +542,68 @@ const OvertimeTab: React.FC = () => {
         </Space>
       ),
     },
-    { title: '提交时间', dataIndex: 'approval_start_time', key: 'approval_start_time', render: formatDateTime },
-    { title: '通过时间', dataIndex: 'approval_end_time', key: 'approval_end_time', render: formatDateTime },
-    { title: '审批耗时(分钟)', dataIndex: 'approval_duration_minutes', key: 'approval_duration_minutes' },
-    { title: '预计加班开始', dataIndex: 'overtime_start_time', key: 'overtime_start_time', render: formatDateTime },
-    { title: '预计加班结束', dataIndex: 'overtime_end_time', key: 'overtime_end_time', render: formatDateTime },
-    { title: '预计时长(分钟)', dataIndex: 'overtime_duration_minutes', key: 'overtime_duration_minutes' },
-    { title: '首次实际打卡', dataIndex: 'actual_first_clock_time', key: 'actual_first_clock_time', render: formatDateTime },
-    { title: '末次实际打卡', dataIndex: 'actual_last_clock_time', key: 'actual_last_clock_time', render: formatDateTime },
-    { title: '打卡跨度(分钟)', dataIndex: 'actual_clock_span_minutes', key: 'actual_clock_span_minutes' },
-    { title: '休息扣除(分钟)', dataIndex: 'break_deduct_minutes', key: 'break_deduct_minutes' },
-    { title: '最终调休(分钟)', dataIndex: 'effective_overtime_minutes', key: 'effective_overtime_minutes' },
+    { title: '提交时间', dataIndex: 'approval_start_time', key: 'approval_start_time', width: 160, render: formatDateTime },
+    { title: '通过时间', dataIndex: 'approval_end_time', key: 'approval_end_time', width: 160, render: formatDateTime },
+    { title: '审批耗时(分钟)', dataIndex: 'approval_duration_minutes', key: 'approval_duration_minutes', width: 132 },
+    { title: '预计加班开始', dataIndex: 'overtime_start_time', key: 'overtime_start_time', width: 160, render: formatDateTime },
+    { title: '预计加班结束', dataIndex: 'overtime_end_time', key: 'overtime_end_time', width: 160, render: formatDateTime },
+    { title: '预计时长(分钟)', dataIndex: 'overtime_duration_minutes', key: 'overtime_duration_minutes', width: 132 },
+    { title: '首次实际打卡', dataIndex: 'actual_first_clock_time', key: 'actual_first_clock_time', width: 160, render: formatDateTime },
+    { title: '末次实际打卡', dataIndex: 'actual_last_clock_time', key: 'actual_last_clock_time', width: 160, render: formatDateTime },
+    { title: '打卡跨度(分钟)', dataIndex: 'actual_clock_span_minutes', key: 'actual_clock_span_minutes', width: 132 },
+    { title: '休息扣除(分钟)', dataIndex: 'break_deduct_minutes', key: 'break_deduct_minutes', width: 132 },
+    { title: '最终调休(分钟)', dataIndex: 'effective_overtime_minutes', key: 'effective_overtime_minutes', width: 132 },
     {
       title: '本地余额', dataIndex: 'local_balance_status', key: 'local_balance_status',
+      width: 112,
       render: (value: string) => value ? <StatusTag color={localBalanceColor[value] || 'default'}>{localBalanceLabel[value] || value}</StatusTag> : '-',
     },
     {
       title: '钉钉同步', dataIndex: 'dingtalk_sync_status', key: 'dingtalk_sync_status',
+      width: 112,
       render: (value: string) => value ? <StatusTag color={dingtalkSyncColor[value] || 'default'}>{dingtalkSyncLabel[value] || value}</StatusTag> : '-',
     },
     {
       title: '匹配说明', dataIndex: 'match_reason', key: 'match_reason',
+      width: 220,
       render: (value: string) => value ? <Tooltip title={value}><span style={{ cursor: 'help' }}>{value.length > 30 ? value.slice(0, 30) + '…' : value}</span></Tooltip> : '-',
     },
   ]
 
   return (
-    <div>
-      <Space style={{ marginBottom: 16 }} wrap>
-        <EmployeeSelect value={userID} onChange={(next) => setUserID(next ?? '')} />
-        <DatePicker picker="month" value={selectedMonth} allowClear={false} onChange={(next) => next && setSelectedMonth(next.startOf('month'))} />
+    <div className="leave-overtime-panel">
+      <div className="leave-overtime-toolbar">
+        <EmployeeSelect value={userID} onChange={(next) => setUserID(next ?? '')} style={{ width: 180 }} />
+        <DatePicker
+          picker="month"
+          locale={datePickerZhCN}
+          value={selectedMonth}
+          allowClear={false}
+          format="YYYY年MM月"
+          onChange={(next) => next && setSelectedMonth(next.locale('zh-cn').startOf('month'))}
+          style={{ width: 150 }}
+        />
         <Button type="primary" icon={<SearchOutlined />} onClick={refreshOvertimeMatches} disabled={!userID}>查询</Button>
-        <Button icon={<SyncOutlined />} onClick={() => runMatchMutation.mutate()} loading={runMatchMutation.isPending} disabled={!userID}>执行加班匹配</Button>
-        <Button icon={<ThunderboltOutlined />} onClick={handleWizardOpen}>手动调休同步</Button>
-        <Button icon={<ReloadOutlined />} onClick={handleClearRematch} loading={clearRematchMutation.isPending} disabled={!userID} danger>清空重匹配</Button>
-        <Button icon={<DeleteOutlined />} onClick={handleDeleteMatches} loading={deleteMatchesMutation.isPending} disabled={!userID} danger>删除记录</Button>
-      </Space>
-      <Table columns={columns} dataSource={(data as any)?.data || []} rowKey="id" loading={isFetching} scroll={{ x: 1600 }} pagination={{ pageSize: 20, showSizeChanger: false }} />
+        {canManageAttendance && (
+          <>
+            <Button icon={<SyncOutlined />} onClick={() => runMatchMutation.mutate()} loading={runMatchMutation.isPending} disabled={!userID}>执行加班匹配</Button>
+            <Button icon={<ThunderboltOutlined />} onClick={handleWizardOpen}>手动调休同步</Button>
+            <Button icon={<ReloadOutlined />} onClick={handleClearRematch} loading={clearRematchMutation.isPending} disabled={!userID} danger>清空重匹配</Button>
+            <Button icon={<DeleteOutlined />} onClick={handleDeleteMatches} loading={deleteMatchesMutation.isPending} disabled={!userID} danger>删除记录</Button>
+          </>
+        )}
+      </div>
+      <Table
+        className="leave-overtime-table"
+        columns={columns}
+        dataSource={(data as any)?.data || []}
+        rowKey="id"
+        loading={isFetching}
+        size="middle"
+        scroll={{ x: 2450 }}
+        pagination={{ pageSize: 20, showSizeChanger: false }}
+        locale={{ emptyText: '暂无加班匹配数据' }}
+      />
 
       <Modal
         title="ManualLeave 同步向导"
@@ -705,6 +751,7 @@ const CompBalanceTab: React.FC = () => {
 }
 
 const ConsumeTab: React.FC = () => {
+  const canManageAttendance = hasPermission('attendance_manage')
   const [logUserID, setLogUserID] = useState('')
   const [logQueryKey, setLogQueryKey] = useState('')
   const [form] = Form.useForm()
@@ -736,31 +783,33 @@ const ConsumeTab: React.FC = () => {
   return (
     <div>
       <Row gutter={24}>
-        <Col span={10}>
-          <PageCard
-            size="small"
-            title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>手动录入年假消费</span>}
-          >
-            <Form form={form} layout="vertical" onFinish={(values) => consumeMutation.mutate(values)}>
-              <Form.Item name="user_id" label="员工" rules={[{ required: true, message: '请选择员工' }]}>
-                <EmployeeSelect />
-              </Form.Item>
-              <Form.Item name="days" label="消费天数" rules={[{ required: true, message: '请输入天数' }]}>
-                <InputNumber min={0.5} step={0.5} style={{ width: '100%' }} placeholder="如 1 或 0.5" />
-              </Form.Item>
-              <Form.Item name="approval_ref" label="审批单号（可选，填入可防重复）">
-                <Input placeholder="钉钉审批流程ID" />
-              </Form.Item>
-              <Form.Item name="remark" label="备注">
-                <Input placeholder="如：2025年春节年假" />
-              </Form.Item>
-              <Button type="primary" htmlType="submit" icon={<MinusCircleOutlined />} loading={consumeMutation.isPending} block>
-                确认消费
-              </Button>
-            </Form>
-          </PageCard>
-        </Col>
-        <Col span={14}>
+        {canManageAttendance && (
+          <Col span={10}>
+            <PageCard
+              size="small"
+              title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>手动录入年假消费</span>}
+            >
+              <Form form={form} layout="vertical" onFinish={(values) => consumeMutation.mutate(values)}>
+                <Form.Item name="user_id" label="员工" rules={[{ required: true, message: '请选择员工' }]}>
+                  <EmployeeSelect />
+                </Form.Item>
+                <Form.Item name="days" label="消费天数" rules={[{ required: true, message: '请输入天数' }]}>
+                  <InputNumber min={0.5} step={0.5} style={{ width: '100%' }} placeholder="如 1 或 0.5" />
+                </Form.Item>
+                <Form.Item name="approval_ref" label="审批单号（可选，填入可防重复）">
+                  <Input placeholder="钉钉审批流程ID" />
+                </Form.Item>
+                <Form.Item name="remark" label="备注">
+                  <Input placeholder="如：2025年春节年假" />
+                </Form.Item>
+                <Button type="primary" htmlType="submit" icon={<MinusCircleOutlined />} loading={consumeMutation.isPending} block>
+                  确认消费
+                </Button>
+              </Form>
+            </PageCard>
+          </Col>
+        )}
+        <Col span={canManageAttendance ? 14 : 24}>
           <PageCard
             size="small"
             title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>消费记录查询</span>}
@@ -789,8 +838,13 @@ const LeaveOvertime: React.FC = () => {
   ]
 
   return (
-    <PageContainer title="年假与调休" icon={<CalendarOutlined />} subtitle="管理年假资格、发放、消费及加班调休匹配">
-      <PageCard>
+    <PageContainer
+      title="年假与调休"
+      icon={<CalendarOutlined />}
+      subtitle="管理年假资格、发放、消费及加班调休匹配"
+      style={{ padding: '16px 20px 20px' }}
+    >
+      <PageCard className="leave-overtime-card">
         <Tabs items={tabs} />
       </PageCard>
     </PageContainer>

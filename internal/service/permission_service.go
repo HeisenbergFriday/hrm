@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"peopleops/internal/database"
 	"peopleops/internal/repository"
+	"sort"
+	"strings"
 
+	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
 
@@ -48,9 +51,39 @@ func (s *PermissionService) GetPermissions() ([]database.Permission, int64, erro
 	return s.permissionRepo.FindAll()
 }
 
+func (s *PermissionService) normalizeUserID(userID string) string {
+	normalized := strings.TrimSpace(userID)
+	if normalized == "" {
+		return normalized
+	}
+	// 先按 user_id 字段查询（钉钉 userId 等字符串标识，即使外观像数字）
+	if user, err := s.userRepo.FindByUserID(normalized); err == nil && user.UserID != "" {
+		return user.UserID
+	}
+	// 再按主键 id 查询（JWT 中可能直接传数字主键）
+	if looksNumericID(normalized) {
+		if user, err := s.userRepo.FindByID(normalized); err == nil && user.UserID != "" {
+			return user.UserID
+		}
+	}
+	return normalized
+}
+
+func looksNumericID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // GetUserPermissions 返回用户通过角色获得的所有权限码
 func (s *PermissionService) GetUserPermissions(userID string) ([]string, error) {
-	perms, err := s.rolePermissionRepo.FindByUserRole(userID)
+	perms, err := s.rolePermissionRepo.FindByUserRole(s.normalizeUserID(userID))
 	if err != nil {
 		return nil, err
 	}
@@ -95,17 +128,17 @@ func (s *PermissionService) HasAnyPermission(userID string, codes ...string) (bo
 
 // GetUserRoles 获取用户的角色列表
 func (s *PermissionService) GetUserRoles(userID string) ([]database.Role, error) {
-	return s.userRoleRepo.FindByUserID(userID)
+	return s.userRoleRepo.FindByUserID(s.normalizeUserID(userID))
 }
 
 // AssignUserRole 给用户分配角色
 func (s *PermissionService) AssignUserRole(userID string, roleID uint) error {
-	return s.userRoleRepo.Assign(userID, roleID)
+	return s.userRoleRepo.Assign(s.normalizeUserID(userID), roleID)
 }
 
 // RemoveUserRole 移除用户角色
 func (s *PermissionService) RemoveUserRole(userID string, roleID uint) error {
-	return s.userRoleRepo.Remove(userID, roleID)
+	return s.userRoleRepo.Remove(s.normalizeUserID(userID), roleID)
 }
 
 // GetRoleUsers 获取角色下的所有用户
@@ -115,74 +148,44 @@ func (s *PermissionService) GetRoleUsers(roleID uint) ([]database.User, error) {
 
 // HasUserRole 检查用户是否有某角色
 func (s *PermissionService) HasUserRole(userID string, roleName string) (bool, error) {
-	return s.userRoleRepo.HasRole(userID, roleName)
+	return s.userRoleRepo.HasRole(s.normalizeUserID(userID), roleName)
 }
 
-// GetUserPerformanceScope 根据用户角色返回绩效数据可见范围
+// GetUserPerformanceScope 根据 data_permissions 配置返回绩效数据可见范围
 // 返回 nil 表示全量权限，返回非 nil 的 OrgDataScope 表示受限范围
-// 对于普通员工，返回 Mode="self" 的 scope，调用方需特殊处理
 func (s *PermissionService) GetUserPerformanceScope(userID string) (*OrgDataScope, error) {
-	// 1. admin 用户全量权限
-	if userID == "admin" {
-		return nil, nil
-	}
-
-	// 2. 管理员角色 → 全量权限
-	isAdmin, err := s.HasUserRole(userID, "管理员")
-	if err != nil {
-		return nil, err
-	}
-	if isAdmin {
-		return nil, nil
-	}
-
-	// 3. 部门负责人角色 → 递归查询部门范围
-	isManager, err := s.HasUserRole(userID, "部门负责人")
-	if err != nil {
-		return nil, err
-	}
-
-	if isManager {
-		// 获取用户所属部门
-		user, err := s.userRepo.FindByUserID(userID)
-		if err != nil {
-			return nil, err
-		}
-
-		// 递归查询该部门及所有子部门 ID
-		departmentIDs, err := s.deptRepo.FindAllChildDepartmentIDs(user.DepartmentID)
-		if err != nil {
-			return nil, err
-		}
-
-		return &OrgDataScope{
-			Mode:          "department",
-			DepartmentIDs: departmentIDs,
-		}, nil
-	}
-
-	// 4. 普通员工 → 只能看自己（Mode="self"）
-	return &OrgDataScope{
-		Mode:          "self",
-		DepartmentIDs: []string{},
-	}, nil
+	return s.ResolveUserScope(userID)
 }
 
 // GetMenuPermission 获取角色的菜单权限
 func (s *PermissionService) GetMenuPermission(roleID uint) (string, error) {
-	mp, err := s.menuPermRepo.FindByRoleID(roleID)
+	keys, err := s.GetRoleMenuKeys(roleID)
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return "[]", nil
-		}
 		return "", err
 	}
-	return mp.MenuKeys, nil
+	payload, err := json.Marshal(keys)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
 }
 
 // SaveMenuPermission 保存角色的菜单权限
 func (s *PermissionService) SaveMenuPermission(roleID uint, menuKeys string) error {
-	return s.menuPermRepo.Save(roleID, menuKeys)
+	keys, err := ParseMenuKeys(menuKeys)
+	if err != nil {
+		return err
+	}
+	return s.SaveMenuPermissionKeys(roleID, keys)
+}
+
+// SaveMenuPermissionKeys 保存角色的菜单权限。
+func (s *PermissionService) SaveMenuPermissionKeys(roleID uint, menuKeys []string) error {
+	payload, err := json.Marshal(NormalizeMenuPermissionKeys(menuKeys))
+	if err != nil {
+		return err
+	}
+	return s.menuPermRepo.Save(roleID, string(payload))
 }
 
 // GetDataPermission 获取角色的数据权限
@@ -202,29 +205,194 @@ func (s *PermissionService) SaveDataPermission(roleID uint, scope string, depart
 	return s.dataPermRepo.Save(roleID, scope, departmentKeys)
 }
 
-// GetUserMenuKeys 聚合用户所有角色的菜单权限，返回去重后的 menu key 列表
+// GetUserMenuKeys 根据用户角色从 menu_permissions 表聚合菜单权限。
 func (s *PermissionService) GetUserMenuKeys(userID string) ([]string, error) {
-	roles, err := s.userRoleRepo.FindByUserID(userID)
+	records, err := s.menuPermRepo.FindByUserRole(s.normalizeUserID(userID))
 	if err != nil {
 		return nil, err
 	}
+
 	keySet := make(map[string]struct{})
-	for _, role := range roles {
-		mp, err := s.menuPermRepo.FindByRoleID(role.ID)
+	for _, record := range records {
+		keys, err := ParseMenuKeys(record.MenuKeys)
 		if err != nil {
-			continue // 该角色未配置菜单权限，跳过
+			return nil, err
 		}
-		var keys []string
-		if err := json.Unmarshal([]byte(mp.MenuKeys), &keys); err != nil {
+		for _, key := range NormalizeMenuPermissionKeys(keys) {
+			keySet[key] = struct{}{}
+		}
+	}
+	return sortedKeys(keySet), nil
+}
+
+// GetRoleMenuKeys 从 menu_permissions 表读取角色菜单权限。
+func (s *PermissionService) GetRoleMenuKeys(roleID uint) ([]string, error) {
+	mp, err := s.menuPermRepo.FindByRoleID(roleID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	keys, err := ParseMenuKeys(mp.MenuKeys)
+	if err != nil {
+		return nil, err
+	}
+	return NormalizeMenuPermissionKeys(keys), nil
+}
+
+// HasMenuPermission 检查用户是否具有指定菜单权限。
+func (s *PermissionService) HasMenuPermission(userID string, menuKey string) (bool, error) {
+	keys, err := s.GetUserMenuKeys(userID)
+	if err != nil {
+		return false, err
+	}
+	needle := NormalizeMenuPermissionKey(menuKey)
+	for _, key := range keys {
+		if key == needle {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ResolveUserScope 根据 data_permissions 表统一解析用户的数据可见范围。
+// 优先级：all > department > self。多个角色取最宽松的合并结果。
+// 返回 nil 表示全量权限（admin 或 all scope）。
+func (s *PermissionService) ResolveUserScope(userID string) (*OrgDataScope, error) {
+	// admin 用户全量权限
+	if userID == "admin" {
+		return nil, nil
+	}
+
+	// JWT token 存的是数字主键 ID，需要转换为 user_id 字段
+	// user_roles.user_id 和 users.user_id 存的是字符串标识
+	stringUserID := userID
+	// 先按 user_id 字段查询（钉钉 userId 等字符串标识，即使外观像数字）
+	if user, err := s.userRepo.FindByUserID(userID); err == nil && user.UserID != "" {
+		stringUserID = user.UserID
+	} else if looksNumericID(userID) {
+		// 再按主键 id 查询
+		if user, err := s.userRepo.FindByID(userID); err == nil && user.UserID != "" {
+			stringUserID = user.UserID
+		}
+	}
+	logrus.WithFields(logrus.Fields{"numericID": userID, "stringUserID": stringUserID}).Debug("ResolveUserScope: ID转换")
+
+	// 获取用户所有角色
+	roles, err := s.userRoleRepo.FindByUserID(stringUserID)
+	if err != nil {
+		return nil, err
+	}
+	if len(roles) == 0 {
+		logrus.WithField("stringUserID", stringUserID).Debug("ResolveUserScope: 无角色，返回self")
+		return &OrgDataScope{Mode: "self", DepartmentIDs: []string{}, UserIDs: []string{stringUserID}}, nil
+	}
+
+	// 遍历角色，聚合数据权限
+	hasAll := false
+	mergedDeptIDs := make(map[string]struct{})
+	hasAnyConfig := false
+
+	for _, role := range roles {
+		dp, err := s.dataPermRepo.FindByRoleID(role.ID)
+		if err != nil {
+			logrus.WithField("roleID", role.ID).Debug("ResolveUserScope: 角色无数据权限配置")
+			continue // 该角色未配置数据权限，跳过
+		}
+		hasAnyConfig = true
+		logrus.WithFields(logrus.Fields{"roleID": role.ID, "roleName": role.Name, "scope": dp.Scope}).Debug("ResolveUserScope: 角色数据权限")
+
+		switch dp.Scope {
+		case "all":
+			hasAll = true
+		case "self":
+			// 不改变合并结果，仅标记已配置
+		case "department":
+			var keys []string
+			if err := json.Unmarshal([]byte(dp.DepartmentKeys), &keys); err == nil {
+				for _, k := range keys {
+					mergedDeptIDs[k] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// 没有任何角色配置了数据权限 → 仅看自己（最小权限）
+	if !hasAnyConfig {
+		logrus.WithField("stringUserID", stringUserID).Debug("ResolveUserScope: 无任何配置，返回self")
+		return &OrgDataScope{Mode: "self", DepartmentIDs: []string{}, UserIDs: []string{stringUserID}}, nil
+	}
+
+	// all 最高优先级
+	if hasAll {
+		logrus.Debug("ResolveUserScope: 有all权限，返回nil")
+		return nil, nil
+	}
+
+	// 有 department 配置
+	if len(mergedDeptIDs) > 0 {
+		deptIDs := make([]string, 0, len(mergedDeptIDs))
+		for id := range mergedDeptIDs {
+			deptIDs = append(deptIDs, id)
+		}
+		logrus.WithField("deptIDs", deptIDs).Debug("ResolveUserScope: 返回department")
+		return &OrgDataScope{
+			Mode:          "department",
+			DepartmentIDs: deptIDs,
+		}, nil
+	}
+
+	// 全部角色都是 self
+	logrus.WithField("stringUserID", stringUserID).Debug("ResolveUserScope: 全部角色self，返回self")
+	return &OrgDataScope{Mode: "self", DepartmentIDs: []string{}, UserIDs: []string{stringUserID}}, nil
+}
+
+const menuPermissionPrefix = "menu:"
+
+// NormalizeMenuPermissionKey 将前端菜单 key 规范化为 menu:* 权限码。
+func NormalizeMenuPermissionKey(key string) string {
+	normalized := strings.TrimSpace(key)
+	if normalized == "" {
+		return normalized
+	}
+	if strings.HasPrefix(normalized, menuPermissionPrefix) {
+		return normalized
+	}
+	return menuPermissionPrefix + normalized
+}
+
+// NormalizeMenuPermissionKeys 去重、规范化并排序菜单权限码。
+func NormalizeMenuPermissionKeys(keys []string) []string {
+	keySet := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		normalized := NormalizeMenuPermissionKey(key)
+		if normalized == "" {
 			continue
 		}
-		for _, k := range keys {
-			keySet[k] = struct{}{}
-		}
+		keySet[normalized] = struct{}{}
 	}
-	result := make([]string, 0, len(keySet))
-	for k := range keySet {
-		result = append(result, k)
+	return sortedKeys(keySet)
+}
+
+// ParseMenuKeys 解析 menu_permissions.menu_keys 中的 JSON 数组。
+func ParseMenuKeys(menuKeys string) ([]string, error) {
+	raw := strings.TrimSpace(menuKeys)
+	if raw == "" {
+		return []string{}, nil
 	}
-	return result, nil
+	var keys []string
+	if err := json.Unmarshal([]byte(raw), &keys); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+func sortedKeys(keySet map[string]struct{}) []string {
+	keys := make([]string, 0, len(keySet))
+	for key := range keySet {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

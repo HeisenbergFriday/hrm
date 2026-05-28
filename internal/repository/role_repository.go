@@ -161,6 +161,15 @@ func (r *MenuPermissionRepository) FindByRoleID(roleID uint) (*database.MenuPerm
 	return &mp, nil
 }
 
+func (r *MenuPermissionRepository) FindByUserRole(userID string) ([]database.MenuPermission, error) {
+	var menuPermissions []database.MenuPermission
+	err := r.db.
+		Joins("JOIN user_roles ON user_roles.role_id = menu_permissions.role_id AND user_roles.deleted_at IS NULL").
+		Where("user_roles.user_id = ? AND menu_permissions.deleted_at IS NULL", userID).
+		Find(&menuPermissions).Error
+	return menuPermissions, err
+}
+
 func (r *MenuPermissionRepository) Save(roleID uint, menuKeys string) error {
 	var existing database.MenuPermission
 	err := r.db.Where("role_id = ? AND deleted_at IS NULL", roleID).First(&existing).Error

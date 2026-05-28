@@ -1,6 +1,7 @@
 import React from 'react'
 import { Result, Button } from 'antd'
 import { useAuthStore } from '../store/authStore'
+import { menuPermissionKey } from '../config/menu'
 
 interface RouteGuardProps {
   menuKey: string
@@ -9,6 +10,8 @@ interface RouteGuardProps {
 
 export default function RouteGuard({ menuKey, children }: RouteGuardProps) {
   const { menuKeys } = useAuthStore()
+  const normalizedMenuKey = menuPermissionKey(menuKey)
+  const normalizedMenuKeys = new Set(menuKeys.map(menuPermissionKey))
 
   if (menuKeys.length === 0) {
     return (
@@ -21,7 +24,7 @@ export default function RouteGuard({ menuKey, children }: RouteGuardProps) {
     )
   }
 
-  if (!menuKeys.includes(menuKey)) {
+  if (!normalizedMenuKeys.has(normalizedMenuKey)) {
     return (
       <Result
         status="403"

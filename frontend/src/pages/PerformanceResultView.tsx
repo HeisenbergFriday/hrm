@@ -8,6 +8,7 @@ import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { ArrowLeftOutlined, CheckCircleOutlined, LockOutlined, EditOutlined, PrinterOutlined, FileExcelOutlined, FileTextOutlined } from '@ant-design/icons'
 import { performanceAPI, PerformanceActivity, PerformanceGoalRecord, PerformanceParticipant } from '../services/api'
+import { withFileAccessToken } from '../utils/authFileUrl'
 
 const { Title, Text } = Typography
 
@@ -797,7 +798,7 @@ const PerformanceResultView: React.FC = () => {
                               {attachments.map((url: string, idx: number) => (
                                 <Image
                                   key={idx}
-                                  src={url}
+                                  src={withFileAccessToken(url)}
                                   width={48}
                                   height={48}
                                   style={{ objectFit: 'cover', borderRadius: 4 }}

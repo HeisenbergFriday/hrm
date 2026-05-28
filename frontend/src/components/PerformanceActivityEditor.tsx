@@ -400,6 +400,16 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={12}>
+                  <Form.Item
+                    name="strict_time_mode"
+                    label="严格时间模式"
+                    valuePropName="checked"
+                    extra="开启后超过截止时间将禁止提交自评/评分"
+                  >
+                    <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
                   <Form.Item name="hr_confirm_deadline" label="HR确认截止日">
                     <DatePicker placeholder="请选择截止日" style={{ width: '100%' }} />
                   </Form.Item>

@@ -3,6 +3,7 @@ import { Typography, DatePicker, Spin, Empty, Alert, Button, Row, Col, Statistic
 import { BarChartOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { approvalAPI } from '../services/api'
+import { hasPermission } from '../utils/permission'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
@@ -169,6 +170,7 @@ const ApprovalStats: React.FC = () => {
             icon={<SyncOutlined />}
             onClick={handleSync}
             loading={syncMutation.isPending}
+            disabled={!hasPermission('approval:sync')}
           >
             同步数据
           </Button>

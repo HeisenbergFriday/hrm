@@ -1,5 +1,5 @@
 import { useEffect, useState, lazy, Suspense } from 'react'
-import { Layout, Menu, ConfigProvider, theme, Spin, message, Button } from 'antd'
+import { Layout, Menu, ConfigProvider, Spin, message, Button } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import {
@@ -9,7 +9,7 @@ import {
   LogoutOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
-import { menuConfig, logoutMenuItem, filterMenuByKeys } from './config/menu'
+import { menuConfig, logoutMenuItem, filterMenuByKeys, menuPermissionKey } from './config/menu'
 import { refreshMenuKeys } from './services/api'
 import RouteGuard from './components/RouteGuard'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -76,6 +76,43 @@ const appTheme = {
 
 const authPaths = ['/login', '/callback', '/login-error']
 
+const routeMenuKeys: Record<string, string> = {
+  '/': menuPermissionKey('home'),
+  '/organization': menuPermissionKey('organization-dashboard'),
+  '/department-tree': menuPermissionKey('department-tree'),
+  '/employees': menuPermissionKey('employees'),
+  '/sync-log': menuPermissionKey('sync-log'),
+  '/attendance': menuPermissionKey('attendance'),
+  '/attendance-stats': menuPermissionKey('attendance-stats'),
+  '/attendance-export': menuPermissionKey('attendance-export'),
+  '/week-schedule': menuPermissionKey('week-schedule'),
+  '/employee-shift-config': menuPermissionKey('employee-shift-config'),
+  '/approval': menuPermissionKey('approval-templates'),
+  '/approval-templates': menuPermissionKey('approval-templates'),
+  '/approval-instances': menuPermissionKey('approval-instances'),
+  '/approval-stats': menuPermissionKey('approval-stats'),
+  '/role-management': menuPermissionKey('permission'),
+  '/sync-jobs': menuPermissionKey('sync-jobs'),
+  '/audit-logs': menuPermissionKey('audit-logs'),
+  '/employee-profile': menuPermissionKey('employee-profile'),
+  '/employee-flow': menuPermissionKey('employee-flow'),
+  '/talent-analysis': menuPermissionKey('talent-analysis'),
+  '/leave-overtime': menuPermissionKey('leave-overtime'),
+  '/performance-overview': menuPermissionKey('performance-overview'),
+  '/performance-indicator-library': menuPermissionKey('performance-indicator-library'),
+  '/permission': menuPermissionKey('permission'),
+  '/setting': menuPermissionKey('setting'),
+}
+
+function selectedMenuKeyForPath(pathname: string) {
+  if (pathname.startsWith('/employees/')) return menuPermissionKey('employees')
+  if (pathname.startsWith('/approval-detail/')) return menuPermissionKey('approval-instances')
+  if (pathname.startsWith('/performance-result/') || pathname.startsWith('/performance-self-eval/') || pathname.startsWith('/performance-manager-eval/') || pathname.startsWith('/performance-goal-setting/')) {
+    return menuPermissionKey('performance-overview')
+  }
+  return routeMenuKeys[pathname] || ''
+}
+
 function PageLoading() {
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 200 }}>
@@ -120,17 +157,7 @@ function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const { isLoggedIn, user, login, logout, menuKeys } = useAuthStore()
-  const selectedMenuKey = location.pathname.startsWith('/employees/')
-    ? '/employees'
-    : location.pathname.startsWith('/performance/')
-      ? location.pathname.includes('/indicator-library')
-        ? '/performance-indicator-library'
-        : '/performance-overview'
-      : location.pathname
-
-  const {
-    token: { colorBgContainer, borderRadiusLG },
-  } = theme.useToken()
+  const selectedMenuKey = selectedMenuKeyForPath(location.pathname)
 
   const handleLogout = async () => {
     try {
@@ -255,12 +282,13 @@ function App() {
     <ConfigProvider locale={zhCN}>
       <Layout>
         <Sider
+          className={collapsed ? 'app-sider app-sider-collapsed' : 'app-sider'}
           collapsible
           collapsed={collapsed}
-          collapsedWidth={100}
+          collapsedWidth={80}
           onCollapse={setCollapsed}
           trigger={null}
-          style={{ position: 'fixed', height: '100vh', overflow: 'auto', zIndex: 100, left: 0, top: 0, transition: 'all 0.3s ease' }}
+          style={{ position: 'fixed', height: '100vh', overflow: 'hidden', zIndex: 100, left: 0, top: 0, transition: 'all 0.3s ease' }}
         >
           <div
             className="logo"
@@ -268,41 +296,43 @@ function App() {
           >
             人事管理系统
           </div>
-          <Menu theme="dark" mode="inline" selectedKeys={[selectedMenuKey]} defaultOpenKeys={location.pathname.startsWith('/performance/') ? ['performance'] : ['organization']}>
-            {filterMenuByKeys(menuConfig, menuKeys).map((item) => {
-              if (item.children) {
+          <div className="app-sider-menu-scroll">
+            <Menu theme="dark" mode="inline" selectedKeys={[selectedMenuKey]} defaultOpenKeys={location.pathname.startsWith('/performance') ? [menuPermissionKey('performance-group')] : [menuPermissionKey('organization-group')]}>
+              {filterMenuByKeys(menuConfig, menuKeys).map((item) => {
+                if (item.children) {
+                  return (
+                    <Menu.SubMenu key={item.key} icon={item.icon} title={item.label}>
+                      {item.children.map((child) => (
+                        <Menu.Item key={child.key} icon={child.icon}>
+                          {child.label}
+                        </Menu.Item>
+                      ))}
+                    </Menu.SubMenu>
+                  )
+                }
                 return (
-                  <Menu.SubMenu key={item.key} icon={item.icon} title={item.label}>
-                    {item.children.map((child) => (
-                      <Menu.Item key={child.key} icon={child.icon}>
-                        {child.label}
-                      </Menu.Item>
-                    ))}
-                  </Menu.SubMenu>
+                  <Menu.Item key={item.key} icon={item.icon}>
+                    {item.label}
+                  </Menu.Item>
                 )
-              }
-              return (
-                <Menu.Item key={item.key} icon={item.icon}>
-                  {item.label}
+              })}
+              {menuKeys.length > 0 && (
+                <Menu.Item key={logoutMenuItem.key} icon={logoutMenuItem.icon} onClick={handleLogout}>
+                  {logoutMenuItem.label}
                 </Menu.Item>
-              )
-            })}
-            {menuKeys.length > 0 && (
-              <Menu.Item key={logoutMenuItem.key} icon={logoutMenuItem.icon} onClick={handleLogout}>
-                {logoutMenuItem.label}
-              </Menu.Item>
-            )}
-          </Menu>
+              )}
+            </Menu>
+          </div>
           <div
+            className="app-sider-trigger"
             onClick={() => setCollapsed(!collapsed)}
-            style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'rgba(255,255,255,0.65)', background: 'rgba(0,0,0,0.15)', borderTop: '1px solid rgba(255,255,255,0.1)', transition: 'all 0.3s' }}
             onMouseEnter={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.background = 'rgba(0,0,0,0.3)' }}
             onMouseLeave={(e) => { e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; e.currentTarget.style.background = 'rgba(0,0,0,0.15)' }}
           >
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           </div>
         </Sider>
-        <Layout style={{ marginLeft: collapsed ? 100 : 200, transition: 'margin-left 0.3s ease' }}>
+        <Layout style={{ marginLeft: collapsed ? 80 : 200, transition: 'margin-left 0.3s ease' }}>
           <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 24px', gap: 16 }}>
             <span style={{ color: '#fff' }}>{user?.name || '管理员'}</span>
             <Button
@@ -314,42 +344,42 @@ function App() {
               退出
             </Button>
           </Header>
-          <Content style={{ margin: '24px 16px', padding: 24, minHeight: 280, background: colorBgContainer, borderRadius: borderRadiusLG }}>
+          <Content style={{ margin: 0, padding: 0, minHeight: 'calc(100vh - 64px)', background: 'var(--color-bg-page)' }}>
             <ErrorBoundary resetKey={location.pathname}>
               <Suspense fallback={<PageLoading />}>
                 <Routes>
-                <Route path="/" element={<Home />} />
-                <Route path="/department-tree" element={<RouteGuard menuKey="department-tree"><DepartmentTree /></RouteGuard>} />
-                <Route path="/employees" element={<RouteGuard menuKey="employees"><EmployeeList /></RouteGuard>} />
-                <Route path="/employees/:id" element={<RouteGuard menuKey="employees"><EmployeeDetail /></RouteGuard>} />
-                <Route path="/sync-log" element={<RouteGuard menuKey="sync-log"><SyncLog /></RouteGuard>} />
-                <Route path="/organization" element={<RouteGuard menuKey="organization-dashboard"><Organization /></RouteGuard>} />
-                <Route path="/attendance" element={<RouteGuard menuKey="attendance"><Attendance /></RouteGuard>} />
-                <Route path="/attendance-stats" element={<RouteGuard menuKey="attendance-stats"><AttendanceStats /></RouteGuard>} />
-                <Route path="/attendance-export" element={<RouteGuard menuKey="attendance-export"><AttendanceExport /></RouteGuard>} />
-                <Route path="/week-schedule" element={<RouteGuard menuKey="week-schedule"><WeekSchedule /></RouteGuard>} />
-                <Route path="/employee-shift-config" element={<RouteGuard menuKey="employee-shift-config"><EmployeeShiftConfig /></RouteGuard>} />
-                <Route path="/approval" element={<RouteGuard menuKey="approval-templates"><Approval /></RouteGuard>} />
-                <Route path="/approval-templates" element={<RouteGuard menuKey="approval-templates"><ApprovalTemplate /></RouteGuard>} />
-                <Route path="/approval-instances" element={<RouteGuard menuKey="approval-instances"><ApprovalInstance /></RouteGuard>} />
-                <Route path="/approval-detail/:id" element={<RouteGuard menuKey="approval-instances"><ApprovalDetail /></RouteGuard>} />
-                <Route path="/approval-stats" element={<RouteGuard menuKey="approval-stats"><ApprovalStats /></RouteGuard>} />
-                <Route path="/role-management" element={<RouteGuard menuKey="permission"><RoleManagement /></RouteGuard>} />
-                <Route path="/sync-jobs" element={<RouteGuard menuKey="sync-jobs"><SyncJobs /></RouteGuard>} />
-                <Route path="/audit-logs" element={<RouteGuard menuKey="audit-logs"><AuditLogs /></RouteGuard>} />
-                <Route path="/employee-profile" element={<RouteGuard menuKey="employee-profile"><EmployeeProfile /></RouteGuard>} />
-                <Route path="/employee-flow" element={<RouteGuard menuKey="employee-flow"><EmployeeFlow /></RouteGuard>} />
-                <Route path="/talent-analysis" element={<RouteGuard menuKey="talent-analysis"><TalentAnalysis /></RouteGuard>} />
-                <Route path="/leave-overtime" element={<RouteGuard menuKey="leave-overtime"><LeaveOvertime /></RouteGuard>} />
-                <Route path="/performance-overview" element={<RouteGuard menuKey="performance-overview"><PerformanceOverview /></RouteGuard>} />
-                <Route path="/performance-indicator-library" element={<RouteGuard menuKey="performance-indicator-library"><PerformanceIndicatorLibrary /></RouteGuard>} />
-                <Route path="/performance-result/:activityId/:participantId" element={<RouteGuard menuKey="performance-overview"><PerformanceResultView /></RouteGuard>} />
-                <Route path="/performance-self-eval/:activityId/:participantId" element={<RouteGuard menuKey="performance-overview"><PerformanceSelfEval /></RouteGuard>} />
-                <Route path="/performance-manager-eval/:activityId/:participantId" element={<RouteGuard menuKey="performance-overview"><PerformanceManagerEval /></RouteGuard>} />
-                <Route path="/performance-goal-setting/:activityId/:participantId" element={<RouteGuard menuKey="performance-overview"><PerformanceGoalSetting /></RouteGuard>} />
-                <Route path="/permission" element={<RouteGuard menuKey="permission"><Permission /></RouteGuard>} />
+                <Route path="/" element={<RouteGuard menuKey="menu:home"><Home /></RouteGuard>} />
+                <Route path="/department-tree" element={<RouteGuard menuKey="menu:department-tree"><DepartmentTree /></RouteGuard>} />
+                <Route path="/employees" element={<RouteGuard menuKey="menu:employees"><EmployeeList /></RouteGuard>} />
+                <Route path="/employees/:id" element={<RouteGuard menuKey="menu:employees"><EmployeeDetail /></RouteGuard>} />
+                <Route path="/sync-log" element={<RouteGuard menuKey="menu:sync-log"><SyncLog /></RouteGuard>} />
+                <Route path="/organization" element={<RouteGuard menuKey="menu:organization-dashboard"><Organization /></RouteGuard>} />
+                <Route path="/attendance" element={<RouteGuard menuKey="menu:attendance"><Attendance /></RouteGuard>} />
+                <Route path="/attendance-stats" element={<RouteGuard menuKey="menu:attendance-stats"><AttendanceStats /></RouteGuard>} />
+                <Route path="/attendance-export" element={<RouteGuard menuKey="menu:attendance-export"><AttendanceExport /></RouteGuard>} />
+                <Route path="/week-schedule" element={<RouteGuard menuKey="menu:week-schedule"><WeekSchedule /></RouteGuard>} />
+                <Route path="/employee-shift-config" element={<RouteGuard menuKey="menu:employee-shift-config"><EmployeeShiftConfig /></RouteGuard>} />
+                <Route path="/approval" element={<RouteGuard menuKey="menu:approval-templates"><Approval /></RouteGuard>} />
+                <Route path="/approval-templates" element={<RouteGuard menuKey="menu:approval-templates"><ApprovalTemplate /></RouteGuard>} />
+                <Route path="/approval-instances" element={<RouteGuard menuKey="menu:approval-instances"><ApprovalInstance /></RouteGuard>} />
+                <Route path="/approval-detail/:id" element={<RouteGuard menuKey="menu:approval-instances"><ApprovalDetail /></RouteGuard>} />
+                <Route path="/approval-stats" element={<RouteGuard menuKey="menu:approval-stats"><ApprovalStats /></RouteGuard>} />
+                <Route path="/role-management" element={<RouteGuard menuKey="menu:permission"><RoleManagement /></RouteGuard>} />
+                <Route path="/sync-jobs" element={<RouteGuard menuKey="menu:sync-jobs"><SyncJobs /></RouteGuard>} />
+                <Route path="/audit-logs" element={<RouteGuard menuKey="menu:audit-logs"><AuditLogs /></RouteGuard>} />
+                <Route path="/employee-profile" element={<RouteGuard menuKey="menu:employee-profile"><EmployeeProfile /></RouteGuard>} />
+                <Route path="/employee-flow" element={<RouteGuard menuKey="menu:employee-flow"><EmployeeFlow /></RouteGuard>} />
+                <Route path="/talent-analysis" element={<RouteGuard menuKey="menu:talent-analysis"><TalentAnalysis /></RouteGuard>} />
+                <Route path="/leave-overtime" element={<RouteGuard menuKey="menu:leave-overtime"><LeaveOvertime /></RouteGuard>} />
+                <Route path="/performance-overview" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceOverview /></RouteGuard>} />
+                <Route path="/performance-indicator-library" element={<RouteGuard menuKey="menu:performance-indicator-library"><PerformanceIndicatorLibrary /></RouteGuard>} />
+                <Route path="/performance-result/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceResultView /></RouteGuard>} />
+                <Route path="/performance-self-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceSelfEval /></RouteGuard>} />
+                <Route path="/performance-manager-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceManagerEval /></RouteGuard>} />
+                <Route path="/performance-goal-setting/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceGoalSetting /></RouteGuard>} />
+                <Route path="/permission" element={<RouteGuard menuKey="menu:permission"><Permission /></RouteGuard>} />
                 <Route path="/log" element={<Log />} />
-                <Route path="/setting" element={<RouteGuard menuKey="setting"><Setting /></RouteGuard>} />
+                <Route path="/setting" element={<RouteGuard menuKey="menu:setting"><Setting /></RouteGuard>} />
               </Routes>
             </Suspense>
             </ErrorBoundary>

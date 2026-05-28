@@ -45,6 +45,9 @@ func SubmitSupplementaryClockIn(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "匹配记录不存在"})
 		return
 	}
+	if _, ok := ensureCanAccessAttendanceUser(c, match.UserID); !ok {
+		return
+	}
 	if match.MatchStatus != "no_clock_record" && match.MatchStatus != "insufficient_clock_record" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "该记录状态不允许提交补卡申请"})
 		return
@@ -112,6 +115,24 @@ func GetSupplementaryRequests(c *gin.Context) {
 	userID := c.Query("user_id")
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
+	if !currentUserHasAnyPermission(c, "attendance_manage") {
+		if userID != "" {
+			if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
+				return
+			}
+		} else {
+			scope, err := resolveOrgScope(c)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "获取组织范围失败: " + err.Error()})
+				return
+			}
+			if !scope.IsSelf() || len(scope.UserIDs) == 0 {
+				respondOrgAccessDenied(c)
+				return
+			}
+			userID = scope.UserIDs[0]
+		}
+	}
 
 	svc := service.NewOvertimeMatchingService(database.DB)
 	results, err := svc.GetSupplementaryRequests(userID, startDate, endDate)

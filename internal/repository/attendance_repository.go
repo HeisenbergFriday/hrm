@@ -58,6 +58,9 @@ func (r *AttendanceRepository) FindAll(page, pageSize int, filters map[string]st
 		// 通过子查询找到该部门下所有用户的 user_id
 		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
 	}
+	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
+		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+	}
 	if v, ok := filters["start_date"]; ok && v != "" {
 		t, err := time.Parse("2006-01-02", v)
 		if err == nil {

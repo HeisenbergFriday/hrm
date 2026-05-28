@@ -363,6 +363,7 @@ const PerformanceOverview: React.FC = () => {
         indicator_library_id: values.indicator_library_id,
         description: values.description,
         enable_bonus_score: values.enable_bonus_score || false,
+        strict_time_mode: values.strict_time_mode || false,
       }
       if (editingActivity) {
         await performanceAPI.updateActivity(editingActivity.id, data)
@@ -518,6 +519,7 @@ const PerformanceOverview: React.FC = () => {
         indicator_library_id: activity.indicator_library_id,
         description: activity.description,
         enable_bonus_score: activity.enable_bonus_score || false,
+        strict_time_mode: activity.strict_time_mode || false,
       })
     } else {
       form.resetFields()
