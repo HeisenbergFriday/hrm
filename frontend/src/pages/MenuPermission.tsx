@@ -54,8 +54,12 @@ const MenuPermission: React.FC = () => {
       title: '组织管理',
       key: 'organization',
       children: [
-        { title: '部门树', key: 'department-tree' },
-        { title: '员工列表', key: 'employees' },
+        { title: '人才管理驾驶舱', key: 'organization-dashboard' },
+        { title: '组织架构', key: 'department-tree' },
+        { title: '组织花名册', key: 'employees' },
+        { title: '员工档案', key: 'employee-profile' },
+        { title: '入转调离', key: 'employee-flow' },
+        { title: '人才分析', key: 'talent-analysis' },
         { title: '同步日志', key: 'sync-log' },
       ],
     },
@@ -63,9 +67,11 @@ const MenuPermission: React.FC = () => {
       title: '考勤管理',
       key: 'attendance',
       children: [
-        { title: '考勤查询', key: 'attendance-records' },
+        { title: '考勤查询', key: 'attendance' },
         { title: '异常统计', key: 'attendance-stats' },
         { title: '导出记录', key: 'attendance-export' },
+        { title: '大小周与节假日', key: 'week-schedule' },
+        { title: '员工下班时间', key: 'employee-shift-config' },
       ],
     },
     {
@@ -79,12 +85,7 @@ const MenuPermission: React.FC = () => {
     },
     {
       title: '权限管理',
-      key: 'permission',
-      children: [
-        { title: '角色管理', key: 'role-management' },
-        { title: '菜单权限', key: 'menu-permission' },
-        { title: '数据权限', key: 'data-permission' },
-      ],
+      key: 'role-management',
     },
     {
       title: '任务中心',
@@ -99,6 +100,22 @@ const MenuPermission: React.FC = () => {
       children: [
         { title: '操作日志', key: 'audit-logs' },
       ],
+    },
+    {
+      title: '年假与调休',
+      key: 'leave-overtime',
+    },
+    {
+      title: '绩效管理',
+      key: 'performance',
+      children: [
+        { title: '绩效活动', key: 'performance-overview' },
+        { title: '指标库管理', key: 'performance-indicator-library' },
+      ],
+    },
+    {
+      title: '系统设置',
+      key: 'setting',
     },
   ]
 

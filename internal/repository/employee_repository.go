@@ -82,6 +82,12 @@ func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[str
 	if v, ok := filters["department_id"]; ok && v != "" {
 		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
 	}
+	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
+		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+	}
+	if v, ok := filters["user_id"]; ok && v != "" {
+		query = query.Where("user_id = ?", v)
+	}
 	if v, ok := filters["status"]; ok && v != "" {
 		query = query.Where("profile_status = ?", v)
 	}
@@ -132,6 +138,12 @@ func (r *EmployeeRepository) buildLifecycleLedgerQuery(filters map[string]string
 	if v, ok := filters["department_id"]; ok && v != "" {
 		query = query.Where("users.department_id = ?", v)
 	}
+	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
+		query = query.Where("users.department_id IN ?", departmentIDs)
+	}
+	if v, ok := filters["user_id"]; ok && v != "" {
+		query = query.Where("users.user_id = ?", v)
+	}
 	if v, ok := filters["status"]; ok && v != "" {
 		query = query.Where("users.status = ?", v)
 	}
@@ -178,6 +190,12 @@ func (r *EmployeeRepository) FindCandidateOnboardings(filters map[string]string)
 	// 应用筛选条件
 	if v, ok := filters["department_id"]; ok && v != "" {
 		query = query.Where("employee_onboardings.department_id = ?", v)
+	}
+	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
+		query = query.Where("employee_onboardings.department_id IN ?", departmentIDs)
+	}
+	if v, ok := filters["user_id"]; ok && v != "" {
+		query = query.Where("1 = 0")
 	}
 	if v, ok := filters["keyword"]; ok && v != "" {
 		like := "%" + v + "%"
@@ -376,13 +394,22 @@ func (r *EmployeeRepository) CreateTransfer(transfer *database.EmployeeTransfer)
 	return r.db.Create(transfer).Error
 }
 
-func (r *EmployeeRepository) FindAllTransfers(page, pageSize int, status string) ([]database.EmployeeTransfer, int64, error) {
+func (r *EmployeeRepository) FindAllTransfers(page, pageSize int, filters map[string]string) ([]database.EmployeeTransfer, int64, error) {
 	var transfers []database.EmployeeTransfer
 	var total int64
 
 	query := r.db.Model(&database.EmployeeTransfer{})
-	if status != "" {
+	if status := filters["status"]; status != "" {
 		query = query.Where("status = ?", status)
+	}
+	if userID := filters["user_id"]; userID != "" {
+		query = query.Where("user_id = ?", userID)
+	}
+	if departmentID := filters["department_id"]; departmentID != "" {
+		query = query.Where("(old_department_id = ? OR new_department_id = ?)", departmentID, departmentID)
+	}
+	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
+		query = query.Where("(old_department_id IN ? OR new_department_id IN ?)", departmentIDs, departmentIDs)
 	}
 
 	if err := query.Count(&total).Error; err != nil {
@@ -403,13 +430,22 @@ func (r *EmployeeRepository) CreateResignation(resignation *database.EmployeeRes
 	return r.db.Create(resignation).Error
 }
 
-func (r *EmployeeRepository) FindAllResignations(page, pageSize int, status string) ([]database.EmployeeResignation, int64, error) {
+func (r *EmployeeRepository) FindAllResignations(page, pageSize int, filters map[string]string) ([]database.EmployeeResignation, int64, error) {
 	var resignations []database.EmployeeResignation
 	var total int64
 
 	query := r.db.Model(&database.EmployeeResignation{})
-	if status != "" {
+	if status := filters["status"]; status != "" {
 		query = query.Where("status = ?", status)
+	}
+	if userID := filters["user_id"]; userID != "" {
+		query = query.Where("user_id = ?", userID)
+	}
+	if departmentID := filters["department_id"]; departmentID != "" {
+		query = query.Where("department_id = ?", departmentID)
+	}
+	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
+		query = query.Where("department_id IN ?", departmentIDs)
 	}
 
 	if err := query.Count(&total).Error; err != nil {
@@ -430,13 +466,22 @@ func (r *EmployeeRepository) CreateOnboarding(onboarding *database.EmployeeOnboa
 	return r.db.Create(onboarding).Error
 }
 
-func (r *EmployeeRepository) FindAllOnboardings(page, pageSize int, status string) ([]database.EmployeeOnboarding, int64, error) {
+func (r *EmployeeRepository) FindAllOnboardings(page, pageSize int, filters map[string]string) ([]database.EmployeeOnboarding, int64, error) {
 	var onboardings []database.EmployeeOnboarding
 	var total int64
 
 	query := r.db.Model(&database.EmployeeOnboarding{})
-	if status != "" {
+	if status := filters["status"]; status != "" {
 		query = query.Where("status = ?", status)
+	}
+	if userID := filters["user_id"]; userID != "" {
+		query = query.Where("1 = 0")
+	}
+	if departmentID := filters["department_id"]; departmentID != "" {
+		query = query.Where("department_id = ?", departmentID)
+	}
+	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
+		query = query.Where("department_id IN ?", departmentIDs)
 	}
 
 	if err := query.Count(&total).Error; err != nil {

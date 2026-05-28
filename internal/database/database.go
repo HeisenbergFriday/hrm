@@ -1,10 +1,14 @@
 package database
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/json"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -13,6 +17,22 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func getEnvOrDefault(key, defaultVal string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultVal
+}
+
+func generateRandomPassword(length int) string {
+	b := make([]byte, length/2)
+	if _, err := rand.Read(b); err != nil {
+		// fallback: 极端情况用固定字符串
+		panic(fmt.Sprintf("crypto random unavailable: %v", err))
+	}
+	return hex.EncodeToString(b)
+}
 
 var DB *gorm.DB
 
@@ -81,6 +101,10 @@ func Init() error {
 	log.Println("开始填充种子数据...")
 	seed()
 	log.Println("种子数据填充完成")
+
+	// 增量迁移：为已有部署补充新权限码
+	migratePermissions()
+	migrateMenuPermissions()
 
 	// 绩效表已随主库 migrate() 一并迁移，无需独立数据源
 	log.Println("绩效模块使用主库")
@@ -558,16 +582,22 @@ func CheckPassword(password, hash string) bool {
 
 func seed() {
 	// 创建默认管理员（如果不存在）
+	adminUserID := getEnvOrDefault("ADMIN_USER_ID", "admin")
 	var count int64
-	DB.Model(&User{}).Where("user_id = ?", "admin").Count(&count)
+	DB.Model(&User{}).Where("user_id = ?", adminUserID).Count(&count)
 	if count == 0 {
-		hash, err := HashPassword("admin123")
+		adminPassword := os.Getenv("ADMIN_PASSWORD")
+		if adminPassword == "" {
+			adminPassword = generateRandomPassword(32)
+			log.Printf("[security] ADMIN_PASSWORD is not set; default admin was initialized with a random password that is not printed")
+		}
+		hash, err := HashPassword(adminPassword)
 		if err != nil {
 			log.Printf("生成密码哈希失败: %v", err)
 			return
 		}
 		admin := User{
-			UserID:       "admin",
+			UserID:       adminUserID,
 			Name:         "管理员",
 			Email:        "admin@peopleops.local",
 			Mobile:       "10000000000",
@@ -579,7 +609,7 @@ func seed() {
 		if err := DB.Create(&admin).Error; err != nil {
 			log.Printf("创建默认管理员失败: %v", err)
 		} else {
-			log.Println("已创建默认管理员账号: admin / admin123")
+			log.Printf("已创建默认管理员账号: %s", adminUserID)
 		}
 	}
 
@@ -624,6 +654,10 @@ func seed() {
 			{Name: "部门管理", Code: "department_manage", Description: "部门管理权限"},
 			{Name: "考勤管理", Code: "attendance_manage", Description: "考勤管理权限"},
 			{Name: "审批管理", Code: "approval_manage", Description: "审批管理权限"},
+			{Name: "同步审批", Code: "approval:sync", Description: "同步审批模板/实例数据"},
+			{Name: "创建审批模板", Code: "approval:create", Description: "创建审批模板"},
+			{Name: "编辑审批模板", Code: "approval:update", Description: "编辑审批模板"},
+			{Name: "删除审批模板", Code: "approval:delete", Description: "删除审批模板"},
 			{Name: "权限管理", Code: "permission_manage", Description: "权限管理权限"},
 			// 绩效模块权限
 			{Name: "绩效活动管理", Code: "performance:activity:manage", Description: "创建/编辑/发布/启动/锁定/归档绩效活动"},
@@ -637,6 +671,9 @@ func seed() {
 			{Name: "绩效指标库管理", Code: "performance:indicator:manage", Description: "指标库/指标项CRUD"},
 			{Name: "绩效目标管理", Code: "performance:goal:manage", Description: "目标设定/审批/分配"},
 			{Name: "绩效结果查看", Code: "performance:result:view", Description: "查看绩效结果"},
+			// 细粒度权限（用于菜单派生）
+			{Name: "组织数据只读", Code: "org:read", Description: "查看组织架构、花名册等组织数据"},
+			{Name: "审计日志只读", Code: "audit_log:read", Description: "查看操作审计日志"},
 		}
 		for _, perm := range permissions {
 			DB.Create(&perm)
@@ -679,10 +716,12 @@ func seedRolePermissions() {
 	// 所有权限码
 	allPermCodes := []string{
 		"user_manage", "department_manage", "attendance_manage", "approval_manage", "permission_manage",
+		"approval:sync", "approval:create", "approval:update", "approval:delete",
 		"performance:activity:manage", "performance:self_eval:submit", "performance:manager_eval:submit",
 		"performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit",
 		"performance:level_adjust:manage", "performance:distribution:manage", "performance:indicator:manage",
 		"performance:goal:manage", "performance:result:view",
+		"org:read", "audit_log:read",
 	}
 
 	// 管理员 = 全部权限
@@ -733,8 +772,145 @@ func seedUserRoles() {
 	// admin 分配管理员角色
 	if adminID, ok := roleMap["管理员"]; ok {
 		var admin User
-		if err := DB.Where("user_id = ?", "admin").First(&admin).Error; err == nil {
+		if err := DB.Where("user_id = ?", getEnvOrDefault("ADMIN_USER_ID", "admin")).First(&admin).Error; err == nil {
 			DB.Create(&UserRole{UserID: admin.UserID, RoleID: adminID})
 		}
 	}
+}
+
+// migratePermissions 幂等迁移：为已有部署补充新权限码和角色关联
+func migratePermissions() {
+	// 1. 确保新权限码存在
+	newPerms := []Permission{
+		{Name: "组织数据只读", Code: "org:read", Description: "查看组织架构、花名册等组织数据"},
+		{Name: "审计日志只读", Code: "audit_log:read", Description: "查看操作审计日志"},
+		{Name: "同步审批", Code: "approval:sync", Description: "同步审批模板/实例数据"},
+		{Name: "创建审批模板", Code: "approval:create", Description: "创建审批模板"},
+		{Name: "编辑审批模板", Code: "approval:update", Description: "编辑审批模板"},
+		{Name: "删除审批模板", Code: "approval:delete", Description: "删除审批模板"},
+	}
+	for _, p := range newPerms {
+		var existing Permission
+		if err := DB.Where("code = ?", p.Code).First(&existing).Error; err != nil {
+			DB.Create(&p)
+			log.Printf("迁移：已创建权限码 %s", p.Code)
+		}
+	}
+
+	// 2. 构建权限码→ID映射
+	permMap := make(map[string]uint)
+	var allPerms []Permission
+	DB.Find(&allPerms)
+	for _, p := range allPerms {
+		permMap[p.Code] = p.ID
+	}
+
+	// 3. 给有 user_manage 的角色补 org:read
+	grantCompatPermission("user_manage", "org:read", permMap)
+	// 4. 给有 permission_manage 的角色补 audit_log:read 和 org:read
+	grantCompatPermission("permission_manage", "audit_log:read", permMap)
+	grantCompatPermission("permission_manage", "org:read", permMap)
+	// 5. 给有 performance:activity:manage 的角色补 org:read（部门负责人需要看部门树）
+	grantCompatPermission("performance:activity:manage", "org:read", permMap)
+	// 6. 将旧 approval_manage 平滑迁移到细粒度审批操作权限
+	grantCompatPermission("approval_manage", "approval:sync", permMap)
+	grantCompatPermission("approval_manage", "approval:create", permMap)
+	grantCompatPermission("approval_manage", "approval:update", permMap)
+	grantCompatPermission("approval_manage", "approval:delete", permMap)
+}
+
+// grantCompatPermission 给已拥有 sourcePerm 的角色自动补充 targetPerm（幂等）
+func grantCompatPermission(sourcePerm, targetPerm string, permMap map[string]uint) {
+	targetID, ok := permMap[targetPerm]
+	if !ok {
+		return
+	}
+	var source Permission
+	if err := DB.Where("code = ?", sourcePerm).First(&source).Error; err != nil {
+		return
+	}
+	// 找到所有拥有 sourcePerm 的角色
+	var sourceRoles []RolePermission
+	DB.Where("permission_id = ?", source.ID).Find(&sourceRoles)
+	for _, rp := range sourceRoles {
+		// 检查是否已有 targetPerm
+		var existing RolePermission
+		if err := DB.Where("role_id = ? AND permission_id = ?", rp.RoleID, targetID).First(&existing).Error; err != nil {
+			DB.Create(&RolePermission{RoleID: rp.RoleID, PermissionID: targetID})
+			log.Printf("迁移：角色 %d 已补充权限 %s", rp.RoleID, targetPerm)
+		}
+	}
+}
+
+var legacyMenuKeysByPermission = map[string][]string{
+	"org:read":           {"menu:organization-dashboard", "menu:department-tree", "menu:employees"},
+	"user_manage":        {"menu:employee-profile", "menu:employee-flow", "menu:talent-analysis", "menu:sync-log"},
+	"attendance_manage":  {"menu:attendance", "menu:attendance-stats", "menu:attendance-export", "menu:week-schedule", "menu:employee-shift-config", "menu:sync-jobs", "menu:leave-overtime"},
+	"approval_manage":    {"menu:approval-templates", "menu:approval-instances", "menu:approval-stats"},
+	"permission_manage":  {"menu:permission", "menu:setting"},
+	"audit_log:read":     {"menu:audit-logs"},
+	"performance:activity:manage":       {"menu:performance-overview"},
+	"performance:self_eval:submit":      {"menu:performance-overview"},
+	"performance:manager_eval:submit":   {"menu:performance-overview"},
+	"performance:employee_confirm:submit": {"menu:performance-overview"},
+	"performance:manager_confirm:submit": {"menu:performance-overview"},
+	"performance:hr_confirm:submit":     {"menu:performance-overview"},
+	"performance:goal:manage":           {"menu:performance-overview"},
+	"performance:result:view":           {"menu:performance-overview"},
+	"performance:indicator:manage":      {"menu:performance-indicator-library"},
+}
+
+// migrateMenuPermissions 将旧版本“操作权限推导菜单”的结果固化到 menu_permissions。
+// 之后运行时菜单可见性只读取 menu_permissions，不再依赖操作权限码。
+func migrateMenuPermissions() {
+	var roles []Role
+	if err := DB.Find(&roles).Error; err != nil {
+		log.Printf("迁移菜单权限：读取角色失败: %v", err)
+		return
+	}
+
+	for _, role := range roles {
+		var existing MenuPermission
+		if err := DB.Where("role_id = ? AND deleted_at IS NULL", role.ID).First(&existing).Error; err == nil {
+			continue
+		}
+
+		menuKeys := deriveLegacyMenuKeysForRole(role.ID)
+		if len(menuKeys) == 0 {
+			continue
+		}
+		payload, err := json.Marshal(menuKeys)
+		if err != nil {
+			log.Printf("迁移菜单权限：序列化角色 %d 菜单失败: %v", role.ID, err)
+			continue
+		}
+		if err := DB.Create(&MenuPermission{RoleID: role.ID, MenuKeys: string(payload)}).Error; err != nil {
+			log.Printf("迁移菜单权限：写入角色 %d 菜单失败: %v", role.ID, err)
+		}
+	}
+}
+
+func deriveLegacyMenuKeysForRole(roleID uint) []string {
+	var permissions []Permission
+	if err := DB.
+		Joins("JOIN role_permissions ON role_permissions.permission_id = permissions.id AND role_permissions.deleted_at IS NULL").
+		Where("role_permissions.role_id = ? AND permissions.deleted_at IS NULL", roleID).
+		Find(&permissions).Error; err != nil {
+		log.Printf("迁移菜单权限：读取角色 %d 权限失败: %v", roleID, err)
+		return nil
+	}
+
+	keySet := map[string]struct{}{"menu:home": {}}
+	for _, permission := range permissions {
+		for _, key := range legacyMenuKeysByPermission[permission.Code] {
+			keySet[key] = struct{}{}
+		}
+	}
+
+	keys := make([]string, 0, len(keySet))
+	for key := range keySet {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

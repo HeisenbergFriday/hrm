@@ -15,32 +15,26 @@ import (
 func SetupRouter() *gin.Engine {
 	router := gin.Default()
 
-	// 配置CORS
+	allowOrigins, allowOriginFunc := resolveCORSConfig()
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
+		AllowOrigins:     allowOrigins,
+		AllowOriginFunc:  allowOriginFunc,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 	}))
 
-	// 健康检查
 	router.GET("/health", HealthCheck)
+	router.GET("/api/v1/files/:filename", middleware.JWTAuthWithQuery(), ServeFile)
 
-	// 文件访问（公开）
-	router.GET("/api/v1/files/:filename", ServeFile)
-
-	// API v1 路由组
 	v1 := router.Group("/api/v1")
 	{
-		// 认证相关
 		auth := v1.Group("/auth")
 		{
-			auth.POST("/login", Login)
 			auth.POST("/logout", Logout)
 			auth.GET("/me", middleware.JWTAuth(), GetCurrentUser)
 
-			// 钉钉登录相关
 			dingtalk := auth.Group("/dingtalk")
 			{
 				dingtalk.GET("/qr/start", DingTalkQRLoginStart)
@@ -50,318 +44,341 @@ func SetupRouter() *gin.Engine {
 			}
 		}
 
-		// 需要认证的路由
 		authRequired := v1.Group("/")
 		authRequired.Use(middleware.JWTAuth())
 		{
-			// 用户相关
-			users := authRequired.Group("/users")
-			{
-				users.GET("", GetUsers)
-				users.GET("/:id", GetUser)
-				users.PUT("/:id", UpdateUser)
+			orgReadMenus := []string{
+				"menu:organization-dashboard",
+				"menu:department-tree",
+				"menu:employees",
+				"menu:employee-profile",
+				"menu:employee-flow",
+				"menu:talent-analysis",
+				"menu:attendance",
+				"menu:attendance-stats",
+				"menu:attendance-export",
+				"menu:leave-overtime",
+				"menu:performance-overview",
+			}
+			attendanceReadMenus := []string{
+				"menu:attendance",
+				"menu:attendance-stats",
+				"menu:attendance-export",
+			}
+			employeeReadMenus := []string{
+				"menu:employee-profile",
+				"menu:employee-flow",
+				"menu:employees",
 			}
 
-			// 部门相关
+			users := authRequired.Group("/users")
+			{
+				users.GET("", middleware.RequirePermissionOrMenu(
+					[]string{"user_manage", "permission_manage", "attendance_manage", "org:read"},
+					append(append([]string{}, orgReadMenus...), "menu:permission"),
+				), GetUsers)
+				users.GET("/:id", middleware.RequirePermissionOrMenu(
+					[]string{"user_manage", "permission_manage", "org:read"},
+					append(append([]string{}, orgReadMenus...), "menu:permission"),
+				), GetUser)
+				users.PUT("/:id", middleware.RequirePermission("user_manage"), UpdateUser)
+			}
+
 			departments := authRequired.Group("/departments")
 			{
 				departments.GET("", GetScopedDepartments)
 				departments.GET("/:id", GetDepartment)
 			}
 
-			// 同步相关
 			sync := authRequired.Group("/sync")
 			{
-				sync.POST("/departments", SyncDepartments)
-				sync.POST("/users", SyncUsers)
-				sync.GET("/status", GetSyncStatus)
+				sync.POST("/departments", middleware.RequirePermission("attendance_manage"), SyncDepartments)
+				sync.POST("/users", middleware.RequirePermission("attendance_manage"), SyncUsers)
+				sync.GET("/status", middleware.RequirePermissionOrMenu(
+					[]string{"attendance_manage"},
+					[]string{"menu:sync-log", "menu:sync-jobs", "menu:setting"},
+				), GetSyncStatus)
 			}
 
-			// 组织与员工模块
 			org := authRequired.Group("/org")
 			{
-				// 部门树
-				org.GET("/departments/tree", GetOrgDepartmentTree)
-				org.GET("/departments/:id/history", GetOrgDepartmentHistory)
+				org.GET("/departments/tree", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage", "permission_manage"}, orgReadMenus), GetOrgDepartmentTree)
+				org.GET("/departments/:id/history", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgDepartmentHistory)
+				org.GET("/overview", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgOverview)
 
-				// 员工相关
-				org.GET("/overview", GetOrgOverview)
-				org.GET("/employees", GetOrgEmployees)
-				org.GET("/employees/:id", GetOrgEmployeeDetail)
+				org.GET("/employees", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployees)
+				org.GET("/employees/:id", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployeeDetail)
 
-				// 同步
-				org.POST("/sync", SyncOrgData)
+				org.POST("/sync", middleware.RequirePermission("attendance_manage"), SyncOrgData)
 			}
 
-			// 考勤模块
 			attendance := authRequired.Group("/attendance")
 			{
-				attendance.GET("/records", GetAttendanceRecords)
-				attendance.GET("/stats", GetAttendanceStats)
-				attendance.POST("/sync", SyncAttendance)
-				attendance.POST("/export", ExportAttendance)
-				attendance.GET("/exports", GetAttendanceExports)
-				attendance.GET("/last-sync", GetLastSyncTime)
+				attendance.GET("/records", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, attendanceReadMenus), GetAttendanceRecords)
+				attendance.GET("/stats", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, attendanceReadMenus), GetAttendanceStats)
+				attendance.POST("/sync", middleware.RequirePermission("attendance_manage"), SyncAttendance)
+				attendance.POST("/export", middleware.RequirePermission("attendance_manage"), ExportAttendance)
+				attendance.GET("/exports", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-export"}), GetAttendanceExports)
+				attendance.GET("/last-sync", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, attendanceReadMenus), GetLastSyncTime)
 			}
 
-			// 审批模块
+			// 閻庡厜鍓濇竟鎺懳熼垾铏仴
+			// 审批模块：页面读取由菜单权限控制，同步由操作权限控制。
 			approvals := authRequired.Group("/approvals")
 			{
-				approvals.GET("/templates", GetApprovalTemplates)
-				approvals.GET("/instances", GetApprovalInstances)
-				approvals.GET("/:id", GetApproval)
-				approvals.POST("/sync", SyncApproval)
+				approvals.POST("/sync", middleware.RequirePermission("approval:sync"), SyncApproval)
+				approvals.GET("/templates", middleware.RequireMenuPermission("menu:approval-templates", "menu:approval-stats"), GetApprovalTemplates)
+				approvals.GET("/instances", middleware.RequireMenuPermission("menu:approval-instances"), GetApprovalInstances)
+				approvals.GET("/:id", middleware.RequireMenuPermission("menu:approval-instances"), GetApproval)
 			}
 
-			// 权限管理模块
+			permissionRead := middleware.RequirePermissionOrMenu(
+				[]string{"permission_manage"},
+				[]string{"menu:permission"},
+			)
 			permission := authRequired.Group("/permission")
 			{
-				// 角色管理
-				permission.GET("/roles", GetRoles)
-				permission.POST("/roles", CreateRole)
-				permission.PUT("/roles/:id", UpdateRole)
-				// 权限管理
-				permission.GET("/permissions", GetPermissions)
-				// 用户角色管理
-				permission.GET("/users/:user_id/roles", GetUserRoles)
-				permission.POST("/users/roles/assign", AssignUserRole)
-				permission.POST("/users/roles/remove", RemoveUserRole)
-				permission.GET("/roles/:role_id/users", GetRoleUsers)
-				// 用户权限查询
-				permission.GET("/users/:user_id/permissions", GetUserPermissions)
-				// 菜单权限
-				permission.GET("/roles/:role_id/menu", GetMenuPermission)
-				permission.POST("/roles/:role_id/menu", SaveMenuPermission)
-				// 数据权限
-				permission.GET("/roles/:role_id/data", GetDataPermission)
-				permission.POST("/roles/:role_id/data", SaveDataPermission)
+				permission.GET("/roles", permissionRead, GetRoles)
+				permission.POST("/roles", middleware.RequirePermission("permission_manage"), CreateRole)
+				permission.GET("/permissions", permissionRead, GetPermissions)
+				permission.GET("/users/:user_id/roles", permissionRead, GetUserRoles)
+				permission.POST("/users/roles/assign", middleware.RequirePermission("permission_manage"), AssignUserRole)
+				permission.POST("/users/roles/remove", middleware.RequirePermission("permission_manage"), RemoveUserRole)
+				permission.GET("/users/:user_id/permissions", permissionRead, GetUserPermissions)
+
+				// 角色子路由：统一使用 :role_id 参数名，避免 Gin 路由树冲突
+				role := permission.Group("/roles")
+				{
+					role.GET("/:role_id/users", permissionRead, GetRoleUsers)
+					role.GET("/:role_id/menu", permissionRead, GetMenuPermission)
+					role.POST("/:role_id/menu", middleware.RequirePermission("permission_manage"), SaveMenuPermission)
+					role.GET("/:role_id/data", permissionRead, GetDataPermission)
+					role.POST("/:role_id/data", middleware.RequirePermission("permission_manage"), SaveDataPermission)
+					role.PUT("/:role_id", middleware.RequirePermission("permission_manage"), UpdateRole)
+				}
 			}
 
-			// 审计日志模块
+			// 閻庡銈庡悁闁哄啨鍎辩换鏂课熼垾铏仴
 			audit := authRequired.Group("/audit")
+			audit.Use(middleware.RequirePermission("permission_manage", "audit_log:read"))
 			{
 				audit.GET("/logs", GetAuditLogs)
 			}
 
-			// 任务中心模块
+			// 濞寸姾顕ф慨鐔哥▔椤撶偟濡囨俊顖椻偓铏仴
 			jobs := authRequired.Group("/jobs")
+			jobs.Use(middleware.RequirePermission("attendance_manage"))
 			{
 				jobs.GET("", GetJobs)
 				jobs.POST("/:id/run", RunJob)
 			}
 
-			// 员工档案中心模块
+			// 闁告稒锚娴兼劕顩奸敐鍡╂敵濞戞搩鍘肩缓鎯熼垾铏仴
 			employee := authRequired.Group("/employee")
 			{
-				// 员工档案
-				employee.GET("/profiles", GetEmployeeProfiles)
-				employee.GET("/profiles/:id", GetEmployeeProfile)
-				employee.POST("/profiles", CreateEmployeeProfile)
-				employee.PUT("/profiles/:id", UpdateEmployeeProfile)
-				employee.GET("/ledger", GetEmployeeLifecycleLedger)
-
-				// 人事流程
-				employee.GET("/transfers", GetTransfers)
-				employee.POST("/transfers", CreateTransfer)
-				employee.GET("/resignations", GetResignations)
-				employee.POST("/resignations", CreateResignation)
-				employee.GET("/onboardings", GetOnboardings)
-				employee.POST("/onboardings", CreateOnboarding)
+				employee.GET("/profiles", middleware.RequirePermissionOrMenu([]string{"user_manage", "org:read"}, employeeReadMenus), GetEmployeeProfiles)
+				employee.GET("/profiles/:id", middleware.RequirePermissionOrMenu([]string{"user_manage", "org:read"}, employeeReadMenus), GetEmployeeProfile)
+				employee.POST("/profiles", middleware.RequirePermission("user_manage"), CreateEmployeeProfile)
+				employee.PUT("/profiles/:id", middleware.RequirePermission("user_manage"), UpdateEmployeeProfile)
+				employee.GET("/ledger", middleware.RequirePermissionOrMenu([]string{"user_manage", "org:read"}, employeeReadMenus), GetEmployeeLifecycleLedger)
+				employee.GET("/transfers", middleware.RequirePermissionOrMenu([]string{"user_manage", "org:read"}, []string{"menu:employee-flow"}), GetTransfers)
+				employee.POST("/transfers", middleware.RequirePermission("user_manage"), CreateTransfer)
+				employee.GET("/resignations", middleware.RequirePermissionOrMenu([]string{"user_manage", "org:read"}, []string{"menu:employee-flow"}), GetResignations)
+				employee.POST("/resignations", middleware.RequirePermission("user_manage"), CreateResignation)
+				employee.GET("/onboardings", middleware.RequirePermissionOrMenu([]string{"user_manage", "org:read"}, []string{"menu:employee-flow"}), GetOnboardings)
+				employee.POST("/onboardings", middleware.RequirePermission("user_manage"), CreateOnboarding)
 			}
 
-			// 人才分析模块
 			talent := authRequired.Group("/talent")
 			{
-				talent.GET("/analysis", GetTalentAnalysisList)
-				talent.GET("/analysis/:id", GetTalentAnalysisDetail)
-				talent.POST("/analysis", CreateTalentAnalysis)
+				talent.GET("/analysis", middleware.RequirePermissionOrMenu([]string{"user_manage", "org:read"}, []string{"menu:talent-analysis"}), GetTalentAnalysisList)
+				talent.GET("/analysis/:id", middleware.RequirePermissionOrMenu([]string{"user_manage", "org:read"}, []string{"menu:talent-analysis"}), GetTalentAnalysisDetail)
+				talent.POST("/analysis", middleware.RequirePermission("user_manage"), CreateTalentAnalysis)
 			}
 
-			// 大小周管理模块
+			weekScheduleRead := middleware.RequirePermissionOrMenu(
+				[]string{"attendance_manage"},
+				[]string{"menu:week-schedule"},
+			)
+			leaveOvertimeRead := middleware.RequirePermissionOrMenu(
+				[]string{"attendance_manage"},
+				[]string{"menu:leave-overtime"},
+			)
+			shiftConfigRead := middleware.RequirePermissionOrMenu(
+				[]string{"attendance_manage"},
+				[]string{"menu:employee-shift-config", "menu:week-schedule"},
+			)
+
 			weekSchedule := authRequired.Group("/week-schedule")
 			{
-				weekSchedule.GET("/rules", GetWeekScheduleRules)
-				weekSchedule.POST("/rules", CreateWeekScheduleRule)
-				weekSchedule.POST("/rules/batch", BatchSetWeekScheduleRules)
-				weekSchedule.PUT("/rules/:id", UpdateWeekScheduleRule)
-				weekSchedule.DELETE("/rules/:id", DeleteWeekScheduleRule)
+				weekSchedule.GET("/rules", middleware.RequirePermission("attendance_manage"), GetWeekScheduleRules)
+				weekSchedule.POST("/rules", middleware.RequirePermission("attendance_manage"), CreateWeekScheduleRule)
+				weekSchedule.POST("/rules/batch", middleware.RequirePermission("attendance_manage"), BatchSetWeekScheduleRules)
+				weekSchedule.PUT("/rules/:id", middleware.RequirePermission("attendance_manage"), UpdateWeekScheduleRule)
+				weekSchedule.DELETE("/rules/:id", middleware.RequirePermission("attendance_manage"), DeleteWeekScheduleRule)
 
-				weekSchedule.GET("/shifts", GetDingTalkShifts)
-				weekSchedule.POST("/shifts", CreateDingTalkShift)
-				weekSchedule.GET("/debug/attendance-groups", DebugAttendanceGroups)
+				weekSchedule.GET("/shifts", middleware.RequirePermission("attendance_manage"), GetDingTalkShifts)
+				weekSchedule.POST("/shifts", middleware.RequirePermission("attendance_manage"), CreateDingTalkShift)
+				weekSchedule.GET("/debug/attendance-groups", middleware.RequirePermission("attendance_manage"), DebugAttendanceGroups)
 
-				weekSchedule.GET("/calendar", GetWeekCalendar)
+				weekSchedule.GET("/calendar", weekScheduleRead, GetWeekCalendar)
 
-				weekSchedule.POST("/overrides", SetWeekOverride)
-				weekSchedule.DELETE("/overrides/:id", DeleteWeekOverride)
+				weekSchedule.POST("/overrides", middleware.RequirePermission("attendance_manage"), SetWeekOverride)
+				weekSchedule.DELETE("/overrides/:id", middleware.RequirePermission("attendance_manage"), DeleteWeekOverride)
 
-				weekSchedule.POST("/sync/to-dingtalk", SyncWeekToDingTalk)
-				weekSchedule.POST("/sync/from-dingtalk", SyncWeekFromDingTalk)
-				weekSchedule.GET("/sync/logs", GetWeekSyncLogs)
+				weekSchedule.POST("/sync/to-dingtalk", middleware.RequirePermission("attendance_manage"), SyncWeekToDingTalk)
+				weekSchedule.POST("/sync/from-dingtalk", middleware.RequirePermission("attendance_manage"), SyncWeekFromDingTalk)
+				weekSchedule.GET("/sync/logs", middleware.RequirePermission("attendance_manage"), GetWeekSyncLogs)
 
-				// 法定节假日
-				weekSchedule.GET("/holidays", GetHolidays)
-				weekSchedule.POST("/holidays", CreateHoliday)
-				weekSchedule.POST("/holidays/batch", BatchCreateHolidays)
-				weekSchedule.POST("/holidays/sync/from-juhe", SyncHolidaysFromJuhe)
-				weekSchedule.DELETE("/holidays/:id", DeleteHoliday)
+				weekSchedule.GET("/holidays", middleware.RequirePermission("attendance_manage"), GetHolidays)
+				weekSchedule.POST("/holidays", middleware.RequirePermission("attendance_manage"), CreateHoliday)
+				weekSchedule.POST("/holidays/batch", middleware.RequirePermission("attendance_manage"), BatchCreateHolidays)
+				weekSchedule.POST("/holidays/sync/from-juhe", middleware.RequirePermission("attendance_manage"), SyncHolidaysFromJuhe)
+				weekSchedule.DELETE("/holidays/:id", middleware.RequirePermission("attendance_manage"), DeleteHoliday)
 			}
 
-			// 年假模块
+			// 妤犵偞娼欐禍锝呂熼垾铏仴
 			leave := authRequired.Group("/leave")
 			{
-				leave.GET("/eligibility", GetLeaveEligibility)
-				leave.POST("/eligibility/recalculate", RecalculateLeaveEligibility)
-				leave.GET("/grants", GetLeaveGrants)
-				leave.POST("/grants/run-quarter", RunQuarterGrant)
-				leave.POST("/grants/regrant", RegrantLeave)
-				leave.POST("/grants/sync-to-dingtalk", SyncGrantsToDingTalk)
-				leave.GET("/vacation-types", ListVacationTypes)
-				leave.POST("/consume", ConsumeAnnualLeave)
-				leave.GET("/consume-log", GetConsumeLog)
+				leave.GET("/eligibility", leaveOvertimeRead, GetLeaveEligibility)
+				leave.POST("/eligibility/recalculate", middleware.RequirePermission("attendance_manage"), RecalculateLeaveEligibility)
+				leave.GET("/grants", leaveOvertimeRead, GetLeaveGrants)
+				leave.POST("/grants/run-quarter", middleware.RequirePermission("attendance_manage"), RunQuarterGrant)
+				leave.POST("/grants/regrant", middleware.RequirePermission("attendance_manage"), RegrantLeave)
+				leave.POST("/grants/sync-to-dingtalk", middleware.RequirePermission("attendance_manage"), SyncGrantsToDingTalk)
+				leave.GET("/vacation-types", middleware.RequirePermission("attendance_manage"), ListVacationTypes)
+				leave.POST("/consume", middleware.RequirePermission("attendance_manage"), ConsumeAnnualLeave)
+				leave.GET("/consume-log", leaveOvertimeRead, GetConsumeLog)
 			}
 
-			// 加班与调休模块
 			overtime := authRequired.Group("/overtime")
 			{
-				overtime.GET("/matches", GetOvertimeMatches)
-				overtime.POST("/matches/run", RunOvertimeMatch)
-				overtime.POST("/matches/force", ForceOvertimeMatch)
-				overtime.POST("/matches/clear-rematch", ClearAndRematchOvertime)
-				overtime.POST("/matches/delete", DeleteOvertimeMatchRecords)
-				overtime.POST("/sync-and-match", SyncAndMatch)
-				overtime.POST("/reset-manual-leave", ResetManualLeave)
-				overtime.POST("/resync-overtime", ResyncOvertimeToDingTalk)
-				overtime.POST("/supplementary/submit", SubmitSupplementaryClockIn)
-				overtime.POST("/supplementary/approve", ApproveSupplementaryClockIn)
-				overtime.GET("/supplementary/list", GetSupplementaryRequests)
-				overtime.POST("/supplementary/sync-dingtalk", SyncSupplementaryFromDingTalk)
+				overtime.GET("/matches", leaveOvertimeRead, GetOvertimeMatches)
+				overtime.POST("/matches/run", middleware.RequirePermission("attendance_manage"), RunOvertimeMatch)
+				overtime.POST("/matches/force", middleware.RequirePermission("attendance_manage"), ForceOvertimeMatch)
+				overtime.POST("/matches/clear-rematch", middleware.RequirePermission("attendance_manage"), ClearAndRematchOvertime)
+				overtime.POST("/matches/delete", middleware.RequirePermission("attendance_manage"), DeleteOvertimeMatchRecords)
+				overtime.POST("/sync-and-match", middleware.RequirePermission("attendance_manage"), SyncAndMatch)
+				overtime.POST("/reset-manual-leave", middleware.RequirePermission("attendance_manage"), ResetManualLeave)
+				overtime.POST("/resync-overtime", middleware.RequirePermission("attendance_manage"), ResyncOvertimeToDingTalk)
+				overtime.POST("/supplementary/submit", leaveOvertimeRead, SubmitSupplementaryClockIn)
+				overtime.POST("/supplementary/approve", middleware.RequirePermission("attendance_manage"), ApproveSupplementaryClockIn)
+				overtime.GET("/supplementary/list", leaveOvertimeRead, GetSupplementaryRequests)
+				overtime.POST("/supplementary/sync-dingtalk", middleware.RequirePermission("attendance_manage"), SyncSupplementaryFromDingTalk)
 			}
 			compTime := authRequired.Group("/comp-time")
 			{
-				compTime.GET("/balance", GetCompTimeBalance)
-				compTime.POST("/manual-grant", ManualGrantCompensatoryLeave)
+				compTime.GET("/balance", leaveOvertimeRead, GetCompTimeBalance)
+				compTime.POST("/manual-grant", middleware.RequirePermission("attendance_manage"), ManualGrantCompensatoryLeave)
 			}
 
-			// 员工下班时间配置
+			// 闁告稒锚娴兼劖绋夌€ｎ剙鐤嗛柡鍐ㄧ埣濡潡鏌婂鍥╂瀭
 			shiftConfig := authRequired.Group("/shift-config")
 			{
-				shiftConfig.GET("/list", GetShiftConfigs)
-				shiftConfig.GET("/catalogs", GetShiftCatalogs)
-				shiftConfig.POST("/preview", PreviewShiftConfigs)
-				shiftConfig.POST("/set", SetShiftConfigs)
-				shiftConfig.POST("/apply", ApplyShiftConfigs)
-				shiftConfig.DELETE("/:user_id", DeleteShiftConfig)
-				shiftConfig.POST("/get-or-create-shift", GetOrCreateCustomShift)
+				shiftConfig.GET("/list", shiftConfigRead, GetShiftConfigs)
+				shiftConfig.GET("/catalogs", shiftConfigRead, GetShiftCatalogs)
+				shiftConfig.POST("/preview", middleware.RequirePermission("attendance_manage"), PreviewShiftConfigs)
+				shiftConfig.POST("/set", middleware.RequirePermission("attendance_manage"), SetShiftConfigs)
+				shiftConfig.POST("/apply", middleware.RequirePermission("attendance_manage"), ApplyShiftConfigs)
+				shiftConfig.DELETE("/:user_id", middleware.RequirePermission("attendance_manage"), DeleteShiftConfig)
+				shiftConfig.POST("/get-or-create-shift", middleware.RequirePermission("attendance_manage"), GetOrCreateCustomShift)
 			}
 
-			// 文件上传
 			authRequired.POST("/upload", UploadFile)
 
 			performance := authRequired.Group("/performance")
 			{
 				performance.GET("/activities", GetPerformanceActivities)
-				performance.POST("/activities", CreatePerformanceActivity)
+				performance.POST("/activities", middleware.RequirePermission("performance:activity:manage"), CreatePerformanceActivity)
 				performance.GET("/activities/:activity_id", GetPerformanceActivity)
-				performance.PUT("/activities/:activity_id", UpdatePerformanceActivity)
+				performance.PUT("/activities/:activity_id", middleware.RequirePermission("performance:activity:manage"), UpdatePerformanceActivity)
 
-				// 活动状态流转
-				performance.POST("/activities/:activity_id/start", StartPerformanceActivity)
-				performance.POST("/activities/:activity_id/open-self-evaluation", OpenSelfEvaluation)
-				performance.POST("/activities/:activity_id/open-manager-evaluation", OpenManagerEvaluation)
-				performance.POST("/activities/:activity_id/confirm-results", ConfirmActivityResults)
-				performance.POST("/activities/:activity_id/archive", ArchivePerformanceActivity)
+				performance.POST("/activities/:activity_id/start", middleware.RequirePermission("performance:activity:manage"), StartPerformanceActivity)
+				performance.POST("/activities/:activity_id/open-self-evaluation", middleware.RequirePermission("performance:activity:manage"), OpenSelfEvaluation)
+				performance.POST("/activities/:activity_id/open-manager-evaluation", middleware.RequirePermission("performance:activity:manage"), OpenManagerEvaluation)
+				performance.POST("/activities/:activity_id/confirm-results", middleware.RequirePermission("performance:activity:manage"), ConfirmActivityResults)
+				performance.POST("/activities/:activity_id/archive", middleware.RequirePermission("performance:activity:manage"), ArchivePerformanceActivity)
 
-				// 新增状态流转（9状态流）
-				performance.POST("/activities/:activity_id/open-target-setting", OpenTargetSettingHandler)
-				performance.POST("/activities/:activity_id/open-employee-confirmation", OpenEmployeeConfirmationHandler)
-				performance.POST("/activities/:activity_id/open-manager-confirmation", OpenManagerConfirmationHandler)
-				performance.POST("/activities/:activity_id/open-hr-confirmation", OpenHRConfirmationHandler)
-				performance.POST("/activities/:activity_id/lock", LockPerformanceActivityHandler)
-				performance.POST("/activities/:activity_id/force-lock-overdue-hr", ForceLockOverdueHRConfirmationHandler)
+				performance.POST("/activities/:activity_id/open-target-setting", middleware.RequirePermission("performance:activity:manage"), OpenTargetSettingHandler)
+				performance.POST("/activities/:activity_id/open-employee-confirmation", middleware.RequirePermission("performance:activity:manage"), OpenEmployeeConfirmationHandler)
+				performance.POST("/activities/:activity_id/open-manager-confirmation", middleware.RequirePermission("performance:activity:manage"), OpenManagerConfirmationHandler)
+				performance.POST("/activities/:activity_id/open-hr-confirmation", middleware.RequirePermission("performance:activity:manage"), OpenHRConfirmationHandler)
+				performance.POST("/activities/:activity_id/lock", middleware.RequirePermission("performance:activity:manage"), LockPerformanceActivityHandler)
+				performance.POST("/activities/:activity_id/force-lock-overdue-hr", middleware.RequirePermission("performance:activity:manage"), ForceLockOverdueHRConfirmationHandler)
 
-				// 兼容旧接口
-				performance.POST("/activities/:activity_id/publish", PublishPerformanceActivity)
-				performance.POST("/activities/:activity_id/close", ClosePerformanceActivity)
+				performance.POST("/activities/:activity_id/publish", middleware.RequirePermission("performance:activity:manage"), PublishPerformanceActivity)
+				performance.POST("/activities/:activity_id/close", middleware.RequirePermission("performance:activity:manage"), ClosePerformanceActivity)
 
-				performance.PUT("/activities/:activity_id/distribution-rules", PutDistributionRules)
+				performance.PUT("/activities/:activity_id/distribution-rules", middleware.RequirePermission("performance:distribution:manage"), PutDistributionRules)
 				performance.GET("/activities/:activity_id/distribution-rules", GetDistributionRules)
 				performance.GET("/activities/:activity_id/result-summary", GetPerformanceResultSummary)
 				performance.GET("/activities/:activity_id/distribution-check", GetPerformanceDistributionCheck)
 				performance.GET("/activities/:activity_id/realtime-distribution-check", GetRealtimeDistributionCheck)
 
-				performance.POST("/activities/:activity_id/refresh-participants", RefreshPerformanceParticipants)
+				performance.POST("/activities/:activity_id/refresh-participants", middleware.RequirePermission("performance:activity:manage"), RefreshPerformanceParticipants)
 				performance.GET("/activities/:activity_id/participants", GetPerformanceParticipants)
 				performance.GET("/participants/:participant_id", GetParticipant)
 
-				// 评分（旧路径，兼容）
-				performance.POST("/participants/:participant_id/self-evaluation", SubmitSelfEvaluation)
-				performance.POST("/participants/:participant_id/manager-evaluation", SubmitManagerEvaluation)
-				// 评分（新路径，带钉钉审批同步）
-				performance.POST("/reviews/:participant_id/self-evaluation", SubmitReviewSelfEvaluation)
-				performance.POST("/reviews/:participant_id/manager-evaluation", SubmitReviewManagerEvaluation)
-				performance.POST("/goal-reviews/:participant_id/self-evaluation", SubmitGoalSelfEvaluationHandler)
-				performance.POST("/goal-reviews/:participant_id/manager-evaluation", SubmitGoalManagerEvaluationHandler)
-				performance.POST("/goal-reviews/:participant_id/bonus-penalty", SetBonusPenaltyScoreHandler)
-				performance.POST("/auto-score", AutoScoreGoalRecordsHandler)
-				performance.POST("/activities/:activity_id/batch-manager-evaluations", BatchSubmitManagerEvaluation)
+				performance.POST("/participants/:participant_id/self-evaluation", middleware.RequirePermission("performance:self_eval:submit"), SubmitSelfEvaluation)
+				performance.POST("/participants/:participant_id/manager-evaluation", middleware.RequirePermission("performance:manager_eval:submit"), SubmitManagerEvaluation)
+				performance.POST("/reviews/:participant_id/self-evaluation", middleware.RequirePermission("performance:self_eval:submit"), SubmitReviewSelfEvaluation)
+				performance.POST("/reviews/:participant_id/manager-evaluation", middleware.RequirePermission("performance:manager_eval:submit"), SubmitReviewManagerEvaluation)
+				performance.POST("/goal-reviews/:participant_id/self-evaluation", middleware.RequirePermission("performance:self_eval:submit"), SubmitGoalSelfEvaluationHandler)
+				performance.POST("/goal-reviews/:participant_id/manager-evaluation", middleware.RequirePermission("performance:manager_eval:submit"), SubmitGoalManagerEvaluationHandler)
+				performance.POST("/goal-reviews/:participant_id/bonus-penalty", middleware.RequirePermission("performance:manager_eval:submit"), SetBonusPenaltyScoreHandler)
+				performance.POST("/auto-score", middleware.RequirePermission("performance:activity:manage"), AutoScoreGoalRecordsHandler)
+				performance.POST("/activities/:activity_id/batch-manager-evaluations", middleware.RequirePermission("performance:manager_eval:submit"), BatchSubmitManagerEvaluation)
 
-				performance.POST("/participants/:participant_id/adjust-final-level", AdjustFinalLevel)
-				performance.POST("/participants/:participant_id/confirm-result", ConfirmResult)
-				// 三级确认流程
-				performance.POST("/participants/:participant_id/confirm-employee", ConfirmEmployeeResultHandler)
-				performance.POST("/participants/:participant_id/confirm-manager", ConfirmManagerResultHandler)
-				performance.POST("/participants/:participant_id/confirm-hr", ConfirmHRResultHandler)
-				performance.POST("/participants/:participant_id/trigger-interview", TriggerPerformanceInterview)
+				performance.POST("/participants/:participant_id/adjust-final-level", middleware.RequirePermission("performance:level_adjust:manage"), AdjustFinalLevel)
+				performance.POST("/participants/:participant_id/confirm-result", middleware.RequirePermission("performance:manager_confirm:submit"), ConfirmResult)
+				performance.POST("/participants/:participant_id/confirm-employee", middleware.RequirePermission("performance:employee_confirm:submit"), ConfirmEmployeeResultHandler)
+				performance.POST("/participants/:participant_id/confirm-manager", middleware.RequirePermission("performance:manager_confirm:submit"), ConfirmManagerResultHandler)
+				performance.POST("/participants/:participant_id/confirm-hr", middleware.RequirePermission("performance:hr_confirm:submit"), ConfirmHRResultHandler)
+				performance.POST("/participants/:participant_id/trigger-interview", middleware.RequirePermission("performance:activity:manage"), TriggerPerformanceInterview)
 
 				performance.GET("/participants/:participant_id/versions", GetParticipantVersions)
 				performance.GET("/participants/:participant_id/relationship-change-logs", GetParticipantRelationshipChangeLogs)
 				performance.GET("/activities/:activity_id/relationship-change-logs", GetActivityRelationshipChangeLogs)
-				performance.POST("/activities/:activity_id/batch-confirm-results", BatchConfirmResults)
-				performance.POST("/activities/:activity_id/batch-confirm", BatchConfirmResults)
-				performance.POST("/activities/:activity_id/send-self-eval-reminder", SendSelfEvalReminder)
-				performance.POST("/activities/:activity_id/send-manager-eval-reminder", SendManagerEvalReminder)
-				performance.POST("/activities/:activity_id/send-hr-confirm-reminder", SendHRConfirmReminder)
-				performance.PUT("/activities/:activity_id/finance", SetCompanyFinanceHandler)
+				performance.POST("/activities/:activity_id/batch-confirm-results", middleware.RequirePermission("performance:activity:manage"), BatchConfirmResults)
+				performance.POST("/activities/:activity_id/batch-confirm", middleware.RequirePermission("performance:activity:manage"), BatchConfirmResults)
+				performance.POST("/activities/:activity_id/send-self-eval-reminder", middleware.RequirePermission("performance:activity:manage"), SendSelfEvalReminder)
+				performance.POST("/activities/:activity_id/send-manager-eval-reminder", middleware.RequirePermission("performance:activity:manage"), SendManagerEvalReminder)
+				performance.POST("/activities/:activity_id/send-hr-confirm-reminder", middleware.RequirePermission("performance:activity:manage"), SendHRConfirmReminder)
+				performance.PUT("/activities/:activity_id/finance", middleware.RequirePermission("performance:activity:manage"), SetCompanyFinanceHandler)
 				performance.GET("/activities/:activity_id/finance", GetCompanyFinanceHandler)
 				performance.GET("/activities/:activity_id/pending-hr-confirm", GetPendingHRConfirmHandler)
-				performance.PUT("/activities/:activity_id/hr-confirm-deadline", SetHRConfirmDeadlineHandler)
+				performance.PUT("/activities/:activity_id/hr-confirm-deadline", middleware.RequirePermission("performance:activity:manage"), SetHRConfirmDeadlineHandler)
 				performance.GET("/activities/:activity_id/hr-confirm-deadline-status", GetHRConfirmDeadlineStatusHandler)
 
-				// 指标库管理
 				performance.GET("/indicator-libraries", GetIndicatorLibraries)
-				performance.POST("/indicator-libraries", CreateIndicatorLibrary)
+				performance.POST("/indicator-libraries", middleware.RequirePermission("performance:indicator:manage"), CreateIndicatorLibrary)
 				performance.GET("/indicator-libraries/:id", GetIndicatorLibrary)
-				performance.PUT("/indicator-libraries/:id", UpdateIndicatorLibrary)
-				performance.POST("/indicator-libraries/:id/archive", ArchiveIndicatorLibrary)
+				performance.PUT("/indicator-libraries/:id", middleware.RequirePermission("performance:indicator:manage"), UpdateIndicatorLibrary)
+				performance.POST("/indicator-libraries/:id/archive", middleware.RequirePermission("performance:indicator:manage"), ArchiveIndicatorLibrary)
 				performance.GET("/indicator-libraries/department/:department_id", GetIndicatorLibrariesByDepartment)
-				performance.POST("/indicator-libraries/inherit", InheritIndicatorLibrary)
+				performance.POST("/indicator-libraries/inherit", middleware.RequirePermission("performance:indicator:manage"), InheritIndicatorLibrary)
 
-				// 指标项管理
 				performance.GET("/indicator-items", GetIndicatorItems)
-				performance.POST("/indicator-items", CreateIndicatorItem)
-				performance.PUT("/indicator-items/:id", UpdateIndicatorItem)
-				performance.DELETE("/indicator-items/:id", DeleteIndicatorItem)
+				performance.POST("/indicator-items", middleware.RequirePermission("performance:indicator:manage"), CreateIndicatorItem)
+				performance.PUT("/indicator-items/:id", middleware.RequirePermission("performance:indicator:manage"), UpdateIndicatorItem)
+				performance.DELETE("/indicator-items/:id", middleware.RequirePermission("performance:indicator:manage"), DeleteIndicatorItem)
 				performance.GET("/indicator-items/search", SearchIndicatorItems)
 
-				// 模板管理（兼容旧接口）
 				performance.GET("/templates", GetPerformanceTemplates)
-				performance.POST("/templates", CreatePerformanceTemplate)
+				performance.POST("/templates", middleware.RequirePermission("performance:activity:manage"), CreatePerformanceTemplate)
 				performance.GET("/templates/:id", GetPerformanceTemplate)
-				performance.PUT("/templates/:id", UpdatePerformanceTemplate)
+				performance.PUT("/templates/:id", middleware.RequirePermission("performance:activity:manage"), UpdatePerformanceTemplate)
 
-				// 目标记录管理
 				performance.GET("/goal-records/:participant_id", GetGoalRecords)
-				performance.POST("/goal-records/:participant_id", BatchSaveGoalRecords)
-				performance.POST("/goal-records/:participant_id/submit", SubmitGoalApprovalHandler)
-				performance.POST("/goal-records/:participant_id/approve", ApproveGoalRecords)
-				performance.POST("/goal-records/:participant_id/reject", RejectGoalRecords)
+				performance.POST("/goal-records/:participant_id", middleware.RequirePermission("performance:goal:manage"), BatchSaveGoalRecords)
+				performance.POST("/goal-records/:participant_id/submit", middleware.RequirePermission("performance:goal:manage"), SubmitGoalApprovalHandler)
+				performance.POST("/goal-records/:participant_id/approve", middleware.RequirePermission("performance:goal:manage"), ApproveGoalRecords)
+				performance.POST("/goal-records/:participant_id/reject", middleware.RequirePermission("performance:goal:manage"), RejectGoalRecords)
 				performance.GET("/goal-records/:participant_id/manager-goals", GetManagerGoals)
 				performance.GET("/goal-records/:participant_id/suggestions", GetGoalSuggestions)
-				performance.POST("/activities/:activity_id/batch-assign-goals", BatchAssignGoals)
+				performance.POST("/activities/:activity_id/batch-assign-goals", middleware.RequirePermission("performance:goal:manage"), BatchAssignGoals)
 
-				// 加减分
-				performance.POST("/participants/:participant_id/bonus-penalty", SetBonusPenaltyScoreHandler)
+				performance.POST("/participants/:participant_id/bonus-penalty", middleware.RequirePermission("performance:manager_eval:submit"), SetBonusPenaltyScoreHandler)
 			}
 		}
 	}
@@ -369,6 +386,29 @@ func SetupRouter() *gin.Engine {
 	registerFrontendRoutes(router)
 
 	return router
+}
+
+func resolveCORSConfig() ([]string, func(string) bool) {
+	allowOrigins := make([]string, 0)
+	for _, origin := range strings.Split(os.Getenv("CORS_ALLOW_ORIGINS"), ",") {
+		origin = strings.TrimSpace(origin)
+		if origin == "" || origin == "*" {
+			continue
+		}
+		allowOrigins = append(allowOrigins, origin)
+	}
+	if len(allowOrigins) > 0 {
+		return allowOrigins, nil
+	}
+
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	ginMode := strings.ToLower(strings.TrimSpace(os.Getenv("GIN_MODE")))
+	if env == "production" || ginMode == "release" {
+		return nil, func(string) bool { return false }
+	}
+
+	// 开发环境：允许 localhost 常见端口 + 任意 origin（局域网访问等）
+	return []string{"http://localhost:5173", "http://localhost:3000"}, func(origin string) bool { return true }
 }
 
 func registerFrontendRoutes(router *gin.Engine) {
@@ -386,7 +426,7 @@ func registerFrontendRoutes(router *gin.Engine) {
 		}
 
 		if _, err := os.Stat(indexFile); err != nil {
-			c.String(http.StatusServiceUnavailable, "frontend build not found at %s, please run npm run build in D:\\ai项目\\frontend", indexFile)
+			c.String(http.StatusServiceUnavailable, "frontend build not found at %s, please run npm run build in D:\\ai濡炪倕婀卞ú鐧╘frontend", indexFile)
 			return
 		}
 

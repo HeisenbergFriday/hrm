@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
 import {
@@ -28,6 +28,7 @@ import { CalendarOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOut
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { departmentAPI, shiftConfigAPI, userAPI, weekScheduleAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
+import { useAuthStore } from '../store/authStore'
 
 const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -274,7 +275,9 @@ function buildMonthCalendarSections(calendarItems: WeekCalendarItem[]): MonthCal
 
 export default function WeekSchedule() {
   const queryClient = useQueryClient()
-  const [calendarScopeType, setCalendarScopeType] = useState<ScopeType>('company')
+  const permissions = useAuthStore((state) => state.permissions)
+  const canManageAttendance = permissions.includes('attendance_manage')
+  const [calendarScopeType, setCalendarScopeType] = useState<ScopeType>(canManageAttendance ? 'company' : 'user')
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('')
   const [selectedUserId, setSelectedUserId] = useState('')
   const [syncWeeks, setSyncWeeks] = useState(4)
@@ -311,18 +314,21 @@ export default function WeekSchedule() {
   const shiftsQuery = useQuery({
     queryKey: ['week-schedule', 'shifts'],
     queryFn: () => weekScheduleAPI.getShifts(),
+    enabled: canManageAttendance,
     retry: false,
   })
 
   const rulesQuery = useQuery({
     queryKey: ['week-schedule', 'rules'],
     queryFn: () => weekScheduleAPI.getRules(),
+    enabled: canManageAttendance,
     retry: false,
   })
 
   const logsQuery = useQuery({
     queryKey: ['week-schedule', 'logs'],
     queryFn: () => weekScheduleAPI.getSyncLogs({ page: 1, page_size: 20 }),
+    enabled: canManageAttendance,
     retry: false,
   })
 
@@ -331,6 +337,23 @@ export default function WeekSchedule() {
   const shifts = getItems<ShiftOption>(shiftsQuery.data)
   const rules = getItems<WeekScheduleRule>(rulesQuery.data)
   const syncLogs = getItems<SyncLogRecord>(logsQuery.data)
+
+  useEffect(() => {
+    if (!canManageAttendance && calendarScopeType === 'company') {
+      setCalendarScopeType('user')
+    }
+  }, [canManageAttendance, calendarScopeType])
+
+  useEffect(() => {
+    if (calendarScopeType !== 'user' || selectedUserId || users.length !== 1) {
+      return
+    }
+    const [user] = users
+    setSelectedUserId(user.user_id)
+    if (!selectedDepartmentId && user.department_id) {
+      setSelectedDepartmentId(user.department_id)
+    }
+  }, [calendarScopeType, selectedDepartmentId, selectedUserId, users])
 
   const selectedDepartment = departments.find((item) => item.department_id === selectedDepartmentId) ?? null
   const selectedUser = users.find((item) => item.user_id === selectedUserId) ?? null
@@ -353,12 +376,12 @@ export default function WeekSchedule() {
   }, [calendarScopeType, selectedDepartmentId, selectedUserId, selectedUser?.department_id, selectedMonth])
 
   const canQueryCalendar =
-    calendarScopeType === 'company' ||
+    (calendarScopeType === 'company' && canManageAttendance) ||
     (calendarScopeType === 'department' && Boolean(selectedDepartmentId)) ||
     (calendarScopeType === 'user' && Boolean(selectedUserId))
 
   const calendarQuery = useQuery({
-    queryKey: ['week-schedule', 'calendar', calendarScopeType, selectedDepartmentId, selectedUserId, calendarParams.weeks],
+    queryKey: ['week-schedule', 'calendar', calendarScopeType, selectedDepartmentId, selectedUserId, calendarParams.start_date, calendarParams.weeks],
     queryFn: () => weekScheduleAPI.getCalendar(calendarParams),
     enabled: canQueryCalendar,
     retry: false,
@@ -367,6 +390,7 @@ export default function WeekSchedule() {
   const holidaysQuery = useQuery({
     queryKey: ['week-schedule', 'holidays', holidayYear],
     queryFn: () => weekScheduleAPI.getHolidays({ year: holidayYear }),
+    enabled: canManageAttendance,
     retry: false,
   })
 
@@ -428,6 +452,15 @@ export default function WeekSchedule() {
       : calendarScopeType === 'department'
         ? selectedDepartment?.name || ''
         : selectedUser?.name || ''
+
+  const calendarScopeOptions = useMemo(
+    () => [
+      ...(canManageAttendance ? [{ label: '全公司', value: 'company' as ScopeType }] : []),
+      { label: '部门', value: 'department' as ScopeType },
+      { label: '个人', value: 'user' as ScopeType },
+    ],
+    [canManageAttendance],
+  )
 
   const invalidateAll = async () => {
     await Promise.all([
@@ -555,6 +588,7 @@ export default function WeekSchedule() {
   })
 
   const openCreateRuleModal = () => {
+    if (!canManageAttendance) return
     setEditingRule(null)
     ruleForm.setFieldsValue({
       scope_type: 'company',
@@ -567,6 +601,7 @@ export default function WeekSchedule() {
   }
 
   const openEditRuleModal = (rule: WeekScheduleRule) => {
+    if (!canManageAttendance) return
     setEditingRule(rule)
     ruleForm.setFieldsValue({
       scope_type: rule.scope_type,
@@ -580,6 +615,7 @@ export default function WeekSchedule() {
   }
 
   const openOverrideModal = (week: WeekCalendarItem) => {
+    if (!canManageAttendance) return
     setSelectedWeek(week)
     overrideForm.setFieldsValue({
       week_type: week.week_type,
@@ -703,7 +739,7 @@ export default function WeekSchedule() {
       width: 180,
       render: (value) => dayjs(value).format('YYYY年M月D日 HH:mm:ss'),
     },
-    {
+    ...(canManageAttendance ? [{
       title: '操作',
       key: 'actions',
       width: 140,
@@ -719,7 +755,7 @@ export default function WeekSchedule() {
           </Popconfirm>
         </Space>
       ),
-    },
+    }] : []),
   ]
 
   const holidayColumns = [
@@ -738,7 +774,7 @@ export default function WeekSchedule() {
       width: 140,
       render: (value: HolidayType) => <Tag color={value === 'holiday' ? 'red' : 'gold'} style={{ borderRadius: 6, fontWeight: 600, margin: 0 }}>{value === 'holiday' ? '放假' : '调休上班'}</Tag>,
     },
-    {
+    ...(canManageAttendance ? [{
       title: '操作',
       key: 'actions',
       width: 100,
@@ -752,7 +788,7 @@ export default function WeekSchedule() {
           </Button>
         </Popconfirm>
       ),
-    },
+    }] : []),
   ]
 
   const logColumns: TableColumnsType<SyncLogRecord> = [
@@ -807,11 +843,7 @@ export default function WeekSchedule() {
                 block
                 value={calendarScopeType}
                 onChange={(value) => setCalendarScopeType(value as ScopeType)}
-                options={[
-                  { label: '全公司', value: 'company' },
-                  { label: '部门', value: 'department' },
-                  { label: '个人', value: 'user' },
-                ]}
+                options={calendarScopeOptions}
               />
             </Space>
           </Col>
@@ -858,16 +890,20 @@ export default function WeekSchedule() {
             <Button icon={<ReloadOutlined />} onClick={() => invalidateAll()} style={{ borderRadius: 8, fontWeight: 600 }}>
               刷新
             </Button>
-            <Button loading={syncHolidayMutation.isPending} onClick={() => syncHolidayMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
-              同步节假日
-            </Button>
-            <Button loading={syncFromMutation.isPending} onClick={() => syncFromMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
-              从钉钉拉取
-            </Button>
-            <InputNumber min={1} max={12} value={syncWeeks} onChange={(value) => setSyncWeeks(Number(value) || 4)} style={{ width: 60 }} />
-            <Button type="primary" icon={<SyncOutlined />} loading={syncToMutation.isPending} onClick={() => syncToMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
-              推送到钉钉
-            </Button>
+            {canManageAttendance && (
+              <>
+                <Button loading={syncHolidayMutation.isPending} onClick={() => syncHolidayMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
+                  同步节假日
+                </Button>
+                <Button loading={syncFromMutation.isPending} onClick={() => syncFromMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
+                  从钉钉拉取
+                </Button>
+                <InputNumber min={1} max={12} value={syncWeeks} onChange={(value) => setSyncWeeks(Number(value) || 4)} style={{ width: 60 }} />
+                <Button type="primary" icon={<SyncOutlined />} loading={syncToMutation.isPending} onClick={() => syncToMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
+                  推送到钉钉
+                </Button>
+              </>
+            )}
             <Text type="secondary">当前：{currentScopeName || '未选择'}</Text>
             <DatePicker
               picker="month"
@@ -942,7 +978,7 @@ export default function WeekSchedule() {
                           : '无特殊日期'
 
                       return (
-                        <tr key={row.week.week_start} onClick={() => openOverrideModal(row.week)} style={{ cursor: 'pointer' }}>
+                        <tr key={row.week.week_start} onClick={() => openOverrideModal(row.week)} style={{ cursor: canManageAttendance ? 'pointer' : 'default' }}>
                           <td
                             style={{
                               border: '1px solid #d9d9d9',
@@ -1029,79 +1065,83 @@ export default function WeekSchedule() {
         )}
       </Card>
 
-      <Row gutter={[24, 24]}>
-        <Col xs={24} xxl={12}>
+      {canManageAttendance && (
+        <>
+          <Row gutter={[24, 24]}>
+            <Col xs={24} xxl={12}>
+              <Card
+                title="规则管理"
+                style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
+                styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+                extra={
+                  <Space>
+                    <Button onClick={() => shiftsQuery.refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>刷新班次</Button>
+                    <Button onClick={() => setShiftModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>新增班次</Button>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreateRuleModal} style={{ borderRadius: 8, fontWeight: 600 }}>
+                      新增规则
+                    </Button>
+                  </Space>
+                }
+              >
+                <Table
+                  rowKey="id"
+                  loading={rulesQuery.isLoading}
+                  columns={ruleColumns}
+                  dataSource={rules}
+                  pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                />
+              </Card>
+            </Col>
+
+            <Col xs={24} xxl={12}>
+              <Card
+                title="钉钉同步"
+                style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
+                styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+                extra={
+                  <Space>
+                    <Button icon={<ReloadOutlined />} onClick={() => logsQuery.refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>
+                      刷新
+                    </Button>
+                  </Space>
+                }
+              >
+                <Table
+                  rowKey="id"
+                  size="small"
+                  loading={logsQuery.isLoading}
+                  columns={logColumns}
+                  dataSource={syncLogs}
+                  pagination={{ pageSize: 6, hideOnSinglePage: true }}
+                />
+              </Card>
+            </Col>
+          </Row>
+
           <Card
-            title="规则管理"
+            title="节假日管理"
             style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
             styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
             extra={
               <Space>
-                <Button onClick={() => shiftsQuery.refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>刷新班次</Button>
-                <Button onClick={() => setShiftModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>新增班次</Button>
-                <Button type="primary" icon={<PlusOutlined />} onClick={openCreateRuleModal} style={{ borderRadius: 8, fontWeight: 600 }}>
-                  新增规则
+                <DatePicker picker="year" value={dayjs(`${holidayYear}-01-01`)} onChange={(value) => setHolidayYear(value?.year() || dayjs().year())} />
+                <Button onClick={() => setHolidayImportModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>批量导入</Button>
+                <Button type="primary" onClick={() => setHolidayModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>
+                  新增节假日
                 </Button>
               </Space>
             }
           >
             <Table
               rowKey="id"
-              loading={rulesQuery.isLoading}
-              columns={ruleColumns}
-              dataSource={rules}
-              pagination={{ pageSize: 8, hideOnSinglePage: true }}
+              loading={holidaysQuery.isLoading}
+              columns={holidayColumns}
+              dataSource={groupedHolidays}
+              pagination={{ pageSize: 10, hideOnSinglePage: true }}
             />
           </Card>
-        </Col>
-
-        <Col xs={24} xxl={12}>
-          <Card
-            title="钉钉同步"
-            style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-            styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
-            extra={
-              <Space>
-                <Button icon={<ReloadOutlined />} onClick={() => logsQuery.refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>
-                  刷新
-                </Button>
-              </Space>
-            }
-          >
-            <Table
-              rowKey="id"
-              size="small"
-              loading={logsQuery.isLoading}
-              columns={logColumns}
-              dataSource={syncLogs}
-              pagination={{ pageSize: 6, hideOnSinglePage: true }}
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      <Card
-        title="节假日管理"
-        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
-        extra={
-          <Space>
-            <DatePicker picker="year" value={dayjs(`${holidayYear}-01-01`)} onChange={(value) => setHolidayYear(value?.year() || dayjs().year())} />
-            <Button onClick={() => setHolidayImportModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>批量导入</Button>
-            <Button type="primary" onClick={() => setHolidayModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>
-              新增节假日
-            </Button>
-          </Space>
-        }
-      >
-        <Table
-          rowKey="id"
-          loading={holidaysQuery.isLoading}
-          columns={holidayColumns}
-          dataSource={groupedHolidays}
-          pagination={{ pageSize: 10, hideOnSinglePage: true }}
-        />
-      </Card>
+        </>
+      )}
 
       <Modal
         open={ruleModalOpen}

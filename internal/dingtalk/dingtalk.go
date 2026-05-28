@@ -2871,7 +2871,7 @@ func BatchSetAttendanceSchedule(opUserID string, items []ScheduleItem, groupID i
 			}
 		}
 
-		return 0, failedItems, fmt.Errorf(validationResult.Message)
+		return 0, failedItems, fmt.Errorf("%s", validationResult.Message)
 	}
 
 	accessToken, err := GetAccessToken()
@@ -2963,7 +2963,7 @@ func BatchSetAttendanceSchedule(opUserID string, items []ScheduleItem, groupID i
 	}
 
 	if len(batchErrors) > 0 {
-		return successCount, failedItems, fmt.Errorf(strings.Join(batchErrors, "; "))
+		return successCount, failedItems, fmt.Errorf("%s", strings.Join(batchErrors, "; "))
 	}
 	return successCount, failedItems, nil
 }

@@ -298,6 +298,9 @@ func (s *AttendanceService) loadUsers(filters map[string]string) ([]database.Use
 	if v := filters["department_id"]; v != "" {
 		query = query.Where("department_id = ?", v)
 	}
+	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
+		query = query.Where("department_id IN ?", departmentIDs)
+	}
 	if v := filters["user_id"]; v != "" {
 		query = query.Where("user_id = ?", v)
 	}

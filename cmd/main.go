@@ -8,6 +8,7 @@ import (
 	"peopleops/internal/config"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
+	"peopleops/internal/middleware"
 	"peopleops/internal/service"
 )
 
@@ -17,10 +18,14 @@ func main() {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
+	// 校验 JWT_SECRET
+	if err := middleware.ValidateJWTSecret(); err != nil {
+		log.Fatalf("JWT_SECRET 无效: %v（请设置至少 32 字符的 JWT_SECRET 环境变量）", err)
+	}
+
 	// 初始化数据库
 	if err := database.Init(); err != nil {
-		log.Printf("初始化数据库失败: %v，将继续运行", err)
-		// 注意：数据库初始化失败，部分功能可能不可用
+		log.Fatalf("初始化数据库失败: %v", err)
 	}
 
 	// 初始化Redis缓存

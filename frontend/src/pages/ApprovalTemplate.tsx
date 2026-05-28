@@ -3,6 +3,7 @@ import { Typography, Table, Spin, Empty, Alert, Button, Tag, Modal, Descriptions
 import { FileOutlined, EditOutlined, DeleteOutlined, EyeOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { approvalAPI } from '../services/api'
+import { hasPermission } from '../utils/permission'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
@@ -112,6 +113,7 @@ const ApprovalTemplate: React.FC = () => {
             icon={<SyncOutlined />}
             onClick={() => syncMutation.mutate(record.template_id)}
             loading={syncMutation.isPending && syncMutation.variables === record.template_id}
+            disabled={!hasPermission('approval:sync')}
           >
             同步实例
           </Button>

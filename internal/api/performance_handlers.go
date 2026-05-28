@@ -17,10 +17,19 @@ import (
 
 func currentOperatorID(c *gin.Context) string {
 	userID := strings.TrimSpace(c.GetString("userID"))
-	if userID != "" {
-		return userID
+	if userID == "" {
+		return "system"
 	}
-	return "system"
+	if database.DB != nil {
+		userService := service.NewUserService(database.DB)
+		if user, err := userService.GetUserByUserID(userID); err == nil && strings.TrimSpace(user.UserID) != "" {
+			return user.UserID
+		}
+		if user, err := userService.GetUserByID(userID); err == nil && strings.TrimSpace(user.UserID) != "" {
+			return user.UserID
+		}
+	}
+	return userID
 }
 
 // resolvePerformanceScope 获取用户的数据范围（绩效模块专用）
@@ -138,6 +147,7 @@ func CreatePerformanceActivity(c *gin.Context) {
 		IndicatorLibraryID     *uint    `json:"indicator_library_id"`
 		Description            string   `json:"description"`
 		EnableBonusScore       bool     `json:"enable_bonus_score"`
+		StrictTimeMode         bool     `json:"strict_time_mode"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: gin.H{"error": err.Error()}})
@@ -171,6 +181,7 @@ func CreatePerformanceActivity(c *gin.Context) {
 		IndicatorLibraryID:     req.IndicatorLibraryID,
 		Description:            req.Description,
 		EnableBonusScore:       req.EnableBonusScore,
+		StrictTimeMode:         req.StrictTimeMode,
 	}, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -227,6 +238,7 @@ func UpdatePerformanceActivity(c *gin.Context) {
 		IndicatorLibraryID     *uint    `json:"indicator_library_id"`
 		Description            string   `json:"description"`
 		EnableBonusScore       bool     `json:"enable_bonus_score"`
+		StrictTimeMode         bool     `json:"strict_time_mode"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: gin.H{"error": err.Error()}})
@@ -260,6 +272,7 @@ func UpdatePerformanceActivity(c *gin.Context) {
 		IndicatorLibraryID:     req.IndicatorLibraryID,
 		Description:            req.Description,
 		EnableBonusScore:       req.EnableBonusScore,
+		StrictTimeMode:         req.StrictTimeMode,
 	}, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})

@@ -29,9 +29,11 @@ export function refreshMenuKeys() {
   api.get('/auth/me')
     .then((res: any) => {
       const keys = res?.data?.user?.menu_keys
+      const perms = res?.data?.user?.permissions
       if (Array.isArray(keys)) useAuthStore.getState().setMenuKeys(keys)
+      if (Array.isArray(perms)) useAuthStore.getState().setPermissions(perms)
     })
-    .catch(() => {})
+    .catch((err) => console.error('[refreshMenuKeys] error:', err))
     .finally(() => {
       isRefreshingMenuKeys = false
     })
@@ -52,7 +54,6 @@ api.interceptors.response.use(
 )
 
 export const authAPI = {
-  login: (data: { username: string; password: string }) => api.post('/auth/login', data),
   dingtalkLogin: (data: { code: string }) => api.post('/auth/dingtalk/in-app', data),
   logout: () => api.post('/auth/logout'),
   getCurrentUser: () => api.get('/auth/me'),
@@ -77,7 +78,7 @@ export const syncAPI = {
 
 export const orgAPI = {
   getOverview: (params?: { department_id?: string }) => api.get('/org/overview', { params }),
-  getDepartmentTree: () => api.get('/org/departments/tree'),
+  getDepartmentTree: (params?: { all?: boolean }) => api.get('/org/departments/tree', { params }),
   getDepartmentHistory: (id: string, params?: { limit?: number }) => api.get(`/org/departments/${id}/history`, { params }),
   getEmployees: (params: { page?: number; page_size?: number; department_id?: string; search?: string; status?: string }) =>
     api.get('/org/employees', { params }),
@@ -140,7 +141,7 @@ export const permissionAPI = {
   getUserPermissions: (userId: string) => api.get(`/permission/users/${userId}/permissions`),
   getRoleUsers: (roleId: number) => api.get(`/permission/roles/${roleId}/users`),
   getMenuPermission: (roleId: number) => api.get(`/permission/roles/${roleId}/menu`),
-  saveMenuPermission: (roleId: number, menuKeys: string[]) => api.post(`/permission/roles/${roleId}/menu`, { menu_keys: JSON.stringify(menuKeys) }),
+  saveMenuPermission: (roleId: number, menuKeys: string[]) => api.post(`/permission/roles/${roleId}/menu`, { menu_keys: menuKeys }),
   getDataPermission: (roleId: number) => api.get(`/permission/roles/${roleId}/data`),
   saveDataPermission: (roleId: number, scope: string, departmentKeys: string[]) => api.post(`/permission/roles/${roleId}/data`, { scope, department_keys: JSON.stringify(departmentKeys) }),
 }
@@ -328,6 +329,7 @@ export interface PerformanceActivity {
   target_department_ids?: string[]
   target_employee_ids?: string[]
   enable_bonus_score?: boolean
+  strict_time_mode?: boolean
   created_at: string
   updated_at: string
   created_by: string

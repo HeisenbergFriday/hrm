@@ -1,12 +1,30 @@
 package config
 
 import (
+	"os"
+	"strings"
+
 	"github.com/joho/godotenv"
 )
 
-// LoadEnv 加载环境变量
+// LoadEnv 加载环境变量（自动处理 UTF-8 BOM）
 func LoadEnv() error {
-	return godotenv.Load()
+	data, err := os.ReadFile(".env")
+	if err != nil {
+		return err
+	}
+	// 去除 UTF-8 BOM
+	content := strings.TrimPrefix(string(data), "\xef\xbb\xbf")
+	envMap, err := godotenv.Parse(strings.NewReader(content))
+	if err != nil {
+		return err
+	}
+	for k, v := range envMap {
+		if os.Getenv(k) == "" {
+			os.Setenv(k, v)
+		}
+	}
+	return nil
 }
 
 // Config 应用配置

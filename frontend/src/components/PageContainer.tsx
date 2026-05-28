@@ -9,6 +9,7 @@ interface PageContainerProps {
   icon?: React.ReactNode
   extra?: React.ReactNode
   children: React.ReactNode
+  className?: string
   style?: React.CSSProperties
   noPadding?: boolean
 }
@@ -19,15 +20,20 @@ const PageContainer: React.FC<PageContainerProps> = ({
   icon,
   extra,
   children,
+  className,
   style,
   noPadding = false,
 }) => {
+  const containerClassName = ['page-container', noPadding ? 'page-container-no-padding' : '', className]
+    .filter(Boolean)
+    .join(' ')
+
   return (
     <div
+      className={containerClassName}
       style={{
         padding: noPadding ? 0 : 'var(--page-padding)',
         background: 'var(--color-bg-page)',
-        minHeight: '100vh',
         ...style,
       }}
     >

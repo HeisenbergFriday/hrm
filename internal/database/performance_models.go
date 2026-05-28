@@ -90,6 +90,9 @@ type PerformanceActivity struct {
 	// 附加分配置
 	EnableBonusScore bool `gorm:"default:false" json:"enable_bonus_score"` // 启用后附加分计入总分并影响等级
 
+	// 严格时间模式：开启后超过截止时间禁止提交
+	StrictTimeMode bool `gorm:"default:false" json:"strict_time_mode"`
+
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `gorm:"index" json:"-"`

@@ -164,9 +164,145 @@ code {
 }
 
 .ant-btn {
-  margin-right: var(--space-2);
   border-radius: var(--radius-md);
   font-weight: var(--font-weight-semibold);
+}
+
+.page-container {
+  width: 100%;
+}
+
+.page-container > .ant-card:last-child {
+  margin-bottom: 0;
+}
+
+.app-sider .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-sider-menu-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: var(--space-2);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+.app-sider-menu-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.app-sider-menu-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-sider-menu-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.24);
+  border-radius: var(--radius-pill);
+}
+
+.app-sider-menu-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.app-sider-menu-scroll::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.app-sider-trigger {
+  flex: 0 0 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(0, 0, 0, 0.15);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.3s;
+}
+
+.app-sider-collapsed .logo {
+  font-size: 0 !important;
+}
+
+.app-sider-collapsed .ant-menu-inline-collapsed {
+  width: 80px;
+}
+
+.app-sider-collapsed .ant-menu-item,
+.app-sider-collapsed .ant-menu-submenu-title {
+  display: flex;
+  justify-content: center;
+  padding-inline: 0 !important;
+}
+
+.app-sider-collapsed .ant-menu-title-content {
+  display: none !important;
+}
+
+.app-sider-collapsed .ant-menu-item-icon,
+.app-sider-collapsed .ant-menu-submenu-title .ant-menu-item-icon {
+  margin-inline-end: 0 !important;
+  font-size: 18px;
+}
+
+.leave-overtime-panel {
+  min-width: 0;
+}
+
+.leave-overtime-card {
+  margin-bottom: 0;
+}
+
+.leave-overtime-card .ant-card-body {
+  padding: 20px 24px 24px;
+}
+
+.leave-overtime-card .ant-tabs-nav {
+  margin-bottom: var(--space-4);
+}
+
+.leave-overtime-card .ant-tabs-content-holder {
+  min-height: 0;
+}
+
+.leave-overtime-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.leave-overtime-table .ant-table {
+  margin-top: 0;
+}
+
+.leave-overtime-table .ant-table-container {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.leave-overtime-table .ant-table-thead > tr > th,
+.leave-overtime-table .ant-table-tbody > tr > td {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.leave-overtime-table .ant-table-thead > tr > th {
+  background: var(--color-bg-card-header);
+  font-weight: var(--font-weight-semibold);
+}
+
+.leave-overtime-table .ant-table-placeholder .ant-table-cell {
+  padding: 28px 16px;
 }
 
 .ant-tag {

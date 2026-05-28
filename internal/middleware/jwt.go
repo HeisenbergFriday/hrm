@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -9,32 +10,57 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// JWTAuth JWT认证中间件
+const minJWTSecretLength = 32
+
+type Claims struct {
+	UserID   string `json:"user_id"`
+	UserName string `json:"user_name"`
+	jwt.RegisteredClaims
+}
+
+func JWTSecret() ([]byte, error) {
+	secret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	if len(secret) < minJWTSecretLength {
+		return nil, fmt.Errorf("JWT_SECRET must be at least %d characters", minJWTSecretLength)
+	}
+	return []byte(secret), nil
+}
+
+func ValidateJWTSecret() error {
+	_, err := JWTSecret()
+	return err
+}
+
 func JWTAuth() gin.HandlerFunc {
+	return jwtAuth(false)
+}
+
+func JWTAuthWithQuery() gin.HandlerFunc {
+	return jwtAuth(true)
+}
+
+func jwtAuth(allowQueryToken bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "未提供认证令牌"})
+		tokenString := bearerToken(c.GetHeader("Authorization"))
+		if tokenString == "" && allowQueryToken {
+			tokenString = strings.TrimSpace(c.Query("access_token"))
+		}
+		if tokenString == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing auth token"})
 			c.Abort()
 			return
 		}
 
-		parts := strings.SplitN(authHeader, " ", 2)
-		if !(len(parts) == 2 && parts[0] == "Bearer") {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "认证令牌格式错误"})
-			c.Abort()
-			return
-		}
-
-		tokenString := parts[1]
 		claims := &Claims{}
-
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-			return []byte(os.Getenv("JWT_SECRET")), nil
-		})
+			if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+				return nil, fmt.Errorf("unexpected JWT signing method: %s", token.Method.Alg())
+			}
+			return JWTSecret()
+		}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 
 		if err != nil || !token.Valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "认证令牌无效"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid auth token"})
 			c.Abort()
 			return
 		}
@@ -45,9 +71,10 @@ func JWTAuth() gin.HandlerFunc {
 	}
 }
 
-// Claims JWT声明
-type Claims struct {
-	UserID   string `json:"user_id"`
-	UserName string `json:"user_name"`
-	jwt.RegisteredClaims
+func bearerToken(authHeader string) string {
+	parts := strings.SplitN(strings.TrimSpace(authHeader), " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
 }
