@@ -14,6 +14,7 @@ const minJWTSecretLength = 32
 
 type Claims struct {
 	UserID   string `json:"user_id"`
+	UserDBID string `json:"user_db_id,omitempty"`
 	UserName string `json:"user_name"`
 	jwt.RegisteredClaims
 }
@@ -66,6 +67,7 @@ func jwtAuth(allowQueryToken bool) gin.HandlerFunc {
 		}
 
 		c.Set("userID", claims.UserID)
+		c.Set("userDBID", claims.UserDBID)
 		c.Set("userName", claims.UserName)
 		c.Next()
 	}

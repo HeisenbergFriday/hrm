@@ -271,6 +271,35 @@ func NewOrgService(db *gorm.DB) *OrgService {
 	}
 }
 
+func (s *OrgService) findUserByAuthID(authUserID string) (*database.User, error) {
+	authUserID = strings.TrimSpace(authUserID)
+	if authUserID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+
+	var user database.User
+	tx := s.db.Where("user_id = ? AND deleted_at IS NULL", authUserID).Limit(1).Find(&user)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	if tx.RowsAffected > 0 {
+		return &user, nil
+	}
+
+	if !looksNumericID(authUserID) {
+		return nil, gorm.ErrRecordNotFound
+	}
+	user = database.User{}
+	tx = s.db.Where("id = ? AND deleted_at IS NULL", authUserID).Limit(1).Find(&user)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &user, nil
+}
+
 func (s *OrgService) ResolveScopeForUser(currentUserID string) (*OrgDataScope, error) {
 	if strings.TrimSpace(currentUserID) == "" {
 		scope := &OrgDataScope{Mode: "all", all: true}
@@ -299,8 +328,11 @@ func (s *OrgService) ResolveScopeForUser(currentUserID string) (*OrgDataScope, e
 					scope.DepartmentNames = departmentNamesByIDs(scope.DepartmentIDs, departmentMap)
 				} else if scope.Mode == "self" {
 					// self 模式：填入当前用户 user_id，花名册等模块据此只返回自己
-					var user database.User
-					if err := s.db.Where("id = ? AND deleted_at IS NULL", currentUserID).First(&user).Error; err == nil {
+					scopeUserID := currentUserID
+					if len(scope.UserIDs) > 0 {
+						scopeUserID = scope.UserIDs[0]
+					}
+					if user, err := s.findUserByAuthID(scopeUserID); err == nil {
 						scope.UserIDs = []string{user.UserID}
 						if strings.TrimSpace(user.DepartmentID) != "" {
 							scope.DepartmentIDs = []string{user.DepartmentID}
@@ -317,8 +349,8 @@ func (s *OrgService) ResolveScopeForUser(currentUserID string) (*OrgDataScope, e
 	}
 
 	// fallback: 保持向后兼容，从 User.Extension 读取
-	var currentUser database.User
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", currentUserID).First(&currentUser).Error; err != nil {
+	currentUser, err := s.findUserByAuthID(currentUserID)
+	if err != nil {
 		return nil, err
 	}
 

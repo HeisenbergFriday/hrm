@@ -26,7 +26,7 @@ import {
   TeamOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { permissionAPI, orgAPI, userAPI } from '../services/api'
+import { permissionAPI, orgAPI, userAPI, refreshMenuKeys } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import { menuConfig, toTreeData, type TreeNode } from '../config/menu'
@@ -41,6 +41,13 @@ interface Role {
   description: string
   created_at: string
   updated_at: string
+}
+
+interface PermissionItem {
+  id: number
+  name: string
+  code: string
+  description?: string
 }
 
 // 使用 config/menu 中定义的 TreeNode 类型
@@ -66,6 +73,9 @@ const RoleManagement: React.FC = () => {
   const [menuCheckedKeys, setMenuCheckedKeys] = useState<string[]>([])
   const [menuSearchText, setMenuSearchText] = useState('')
   const [menuExpandAll, setMenuExpandAll] = useState(true)
+
+  const [permissionCheckedKeys, setPermissionCheckedKeys] = useState<React.Key[]>([])
+  const [permissionSearchText, setPermissionSearchText] = useState('')
 
   // 数据权限相关状态
   const [dataScope, setDataScope] = useState<string>('all')
@@ -101,6 +111,18 @@ const RoleManagement: React.FC = () => {
     queryKey: ['all-users'],
     queryFn: () => userAPI.getUsers({ page: 1, page_size: 1000 }),
     enabled: assignModalVisible && canManagePermission,
+  })
+
+  const { data: permissionsData, isLoading: permissionsLoading } = useQuery({
+    queryKey: ['permissions'],
+    queryFn: () => permissionAPI.getPermissions(),
+    enabled: canManagePermission,
+  })
+
+  const { data: rolePermissionsData, isLoading: rolePermissionsLoading } = useQuery({
+    queryKey: ['role-permissions', selectedRoleId],
+    queryFn: () => permissionAPI.getRolePermissions(Number(selectedRoleId)),
+    enabled: !!selectedRoleId,
   })
 
   // 获取选中角色的菜单权限
@@ -140,6 +162,18 @@ const RoleManagement: React.FC = () => {
   })
 
   // 获取选中的角色
+  const saveRolePermMutation = useMutation({
+    mutationFn: (data: { roleId: number; permissionIds: number[] }) =>
+      permissionAPI.saveRolePermissions(data.roleId, data.permissionIds),
+    onSuccess: () => {
+      message.success('功能权限保存成功')
+      queryClient.invalidateQueries({ queryKey: ['role-permissions', selectedRoleId] })
+      queryClient.invalidateQueries({ queryKey: ['permissions'] })
+      refreshMenuKeys()
+    },
+    onError: () => message.error('功能权限保存失败'),
+  })
+
   const selectedRole = useMemo(() => {
     if (!selectedRoleId || !rolesData?.data?.items) return null
     return rolesData.data.items.find((r: Role) => r.id === selectedRoleId)
@@ -189,6 +223,20 @@ const RoleManagement: React.FC = () => {
     }
     return filterTree(menuItems)
   }, [menuItems, menuSearchText])
+
+  const permissions: PermissionItem[] = useMemo(() => {
+    return permissionsData?.data?.items || []
+  }, [permissionsData])
+
+  const filteredPermissions = useMemo(() => {
+    const search = permissionSearchText.trim().toLowerCase()
+    if (!search) return permissions
+    return permissions.filter((item) =>
+      item.name?.toLowerCase().includes(search) ||
+      item.code?.toLowerCase().includes(search) ||
+      item.description?.toLowerCase().includes(search)
+    )
+  }, [permissions, permissionSearchText])
 
   // Mutations
   const createRoleMutation = useMutation({
@@ -241,9 +289,17 @@ const RoleManagement: React.FC = () => {
   const handleSelectRole = (roleId: string) => {
     setSelectedRoleId(roleId)
     setMenuCheckedKeys([])
+    setPermissionCheckedKeys([])
     setDataScope('all')
     setSelectedDepartments([])
   }
+
+  React.useEffect(() => {
+    const rolePermissions = rolePermissionsData?.data?.permissions
+    if (Array.isArray(rolePermissions)) {
+      setPermissionCheckedKeys(rolePermissions.map((item: PermissionItem) => item.id))
+    }
+  }, [rolePermissionsData])
 
   // 当菜单权限数据加载完成后，同步到本地状态
   React.useEffect(() => {
@@ -317,6 +373,14 @@ const RoleManagement: React.FC = () => {
   const handleSaveMenuPermission = () => {
     if (!selectedRoleId || !canManagePermission) return
     saveMenuPermMutation.mutate({ roleId: Number(selectedRoleId), menuKeys: menuCheckedKeys })
+  }
+
+  const handleSaveRolePermission = () => {
+    if (!selectedRoleId || !canManagePermission) return
+    saveRolePermMutation.mutate({
+      roleId: Number(selectedRoleId),
+      permissionIds: permissionCheckedKeys.map((key) => Number(key)).filter(Boolean),
+    })
   }
 
   const handleSelectAllMenu = () => {
@@ -449,6 +513,94 @@ const RoleManagement: React.FC = () => {
   )
 
   // 菜单权限Tab（可编辑 Tree，保存到 menu_permissions 表）
+  const renderRolePermission = () => (
+    <Card
+      title={<Space><KeyOutlined /> <Text strong>功能权限配置</Text></Space>}
+      extra={
+        <Button
+          type="primary"
+          icon={<SaveOutlined />}
+          onClick={handleSaveRolePermission}
+          disabled={!selectedRole || !canManagePermission}
+          loading={saveRolePermMutation.isPending}
+        >
+          保存
+        </Button>
+      }
+    >
+      {!selectedRole ? (
+        <Empty description="请先选择一个角色" />
+      ) : (
+        <>
+          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Space>
+              <Input
+                placeholder="搜索功能权限"
+                prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
+                value={permissionSearchText}
+                onChange={(e) => setPermissionSearchText(e.target.value)}
+                allowClear
+                style={{ width: 240 }}
+              />
+              <Button
+                icon={<CheckSquareOutlined />}
+                onClick={() => setPermissionCheckedKeys(filteredPermissions.map((item) => item.id))}
+                disabled={!canManagePermission}
+              >
+                全选当前
+              </Button>
+              <Button
+                icon={<CloseSquareOutlined />}
+                onClick={() => setPermissionCheckedKeys([])}
+                disabled={!canManagePermission}
+              >
+                全不选
+              </Button>
+            </Space>
+            <Badge count={permissionCheckedKeys.length} showZero style={{ backgroundColor: '#4338ca' }}>
+              <Tag color="processing">已选权限</Tag>
+            </Badge>
+          </div>
+          <Table
+            rowKey="id"
+            loading={permissionsLoading || rolePermissionsLoading}
+            dataSource={filteredPermissions}
+            rowSelection={{
+              selectedRowKeys: permissionCheckedKeys,
+              onChange: setPermissionCheckedKeys,
+              getCheckboxProps: () => ({ disabled: !canManagePermission }),
+            }}
+            columns={[
+              { title: '权限名称', dataIndex: 'name', key: 'name', width: 180 },
+              {
+                title: '权限码',
+                dataIndex: 'code',
+                key: 'code',
+                width: 260,
+                render: (code: string) => <Tag color={code.startsWith('performance:') ? 'blue' : 'default'}>{code}</Tag>,
+              },
+              {
+                title: '说明',
+                dataIndex: 'description',
+                key: 'description',
+                render: (text: string) => text || '-',
+              },
+            ]}
+            pagination={{ pageSize: 10 }}
+            locale={{ emptyText: '暂无功能权限' }}
+          />
+          <Divider style={{ margin: '16px 0' }} />
+          <Alert
+            message="勾选并保存后，对应角色会获得这些后端接口操作权限。权限字典缺失时，系统会在加载列表时自动补齐内置权限。"
+            type="info"
+            icon={<InfoCircleOutlined />}
+            showIcon
+          />
+        </>
+      )}
+    </Card>
+  )
+
   const renderMenuPermission = () => (
     <Card
       title={<Space><MenuOutlined /> <Text strong>菜单权限配置</Text></Space>}
@@ -733,6 +885,7 @@ const RoleManagement: React.FC = () => {
 
   // Tab配置
   const tabItems = [
+    { key: 'permissions', label: <Space><KeyOutlined /> 功能权限</Space>, children: renderRolePermission() },
     { key: 'basic', label: <Space><SettingOutlined /> 基本设置</Space>, children: renderBasicSettings() },
     { key: 'menu', label: <Space><MenuOutlined /> 菜单权限</Space>, children: renderMenuPermission() },
     { key: 'data', label: <Space><LockOutlined /> 数据权限</Space>, children: renderDataPermission() },

@@ -150,6 +150,8 @@ func SetupRouter() *gin.Engine {
 				role := permission.Group("/roles")
 				{
 					role.GET("/:role_id/users", permissionRead, GetRoleUsers)
+					role.GET("/:role_id/permissions", permissionRead, GetRolePermissions)
+					role.POST("/:role_id/permissions", middleware.RequirePermission("permission_manage"), SaveRolePermissions)
 					role.GET("/:role_id/menu", permissionRead, GetMenuPermission)
 					role.POST("/:role_id/menu", middleware.RequirePermission("permission_manage"), SaveMenuPermission)
 					role.GET("/:role_id/data", permissionRead, GetDataPermission)
@@ -317,7 +319,7 @@ func SetupRouter() *gin.Engine {
 
 				performance.POST("/activities/:activity_id/refresh-participants", middleware.RequirePermission("performance:activity:manage"), RefreshPerformanceParticipants)
 				performance.GET("/activities/:activity_id/participants", GetPerformanceParticipants)
-				performance.GET("/participants/:participant_id", GetParticipant)
+				performance.GET("/participants/:participant_id", middleware.RequirePermission("performance:result:view"), GetParticipant)
 
 				performance.POST("/participants/:participant_id/self-evaluation", middleware.RequirePermission("performance:self_eval:submit"), SubmitSelfEvaluation)
 				performance.POST("/participants/:participant_id/manager-evaluation", middleware.RequirePermission("performance:manager_eval:submit"), SubmitManagerEvaluation)
@@ -336,9 +338,9 @@ func SetupRouter() *gin.Engine {
 				performance.POST("/participants/:participant_id/confirm-hr", middleware.RequirePermission("performance:hr_confirm:submit"), ConfirmHRResultHandler)
 				performance.POST("/participants/:participant_id/trigger-interview", middleware.RequirePermission("performance:activity:manage"), TriggerPerformanceInterview)
 
-				performance.GET("/participants/:participant_id/versions", GetParticipantVersions)
-				performance.GET("/participants/:participant_id/relationship-change-logs", GetParticipantRelationshipChangeLogs)
-				performance.GET("/activities/:activity_id/relationship-change-logs", GetActivityRelationshipChangeLogs)
+				performance.GET("/participants/:participant_id/versions", middleware.RequirePermission("performance:result:view"), GetParticipantVersions)
+				performance.GET("/participants/:participant_id/relationship-change-logs", middleware.RequirePermission("performance:result:view"), GetParticipantRelationshipChangeLogs)
+				performance.GET("/activities/:activity_id/relationship-change-logs", middleware.RequirePermission("performance:result:view"), GetActivityRelationshipChangeLogs)
 				performance.POST("/activities/:activity_id/batch-confirm-results", middleware.RequirePermission("performance:activity:manage"), BatchConfirmResults)
 				performance.POST("/activities/:activity_id/batch-confirm", middleware.RequirePermission("performance:activity:manage"), BatchConfirmResults)
 				performance.POST("/activities/:activity_id/send-self-eval-reminder", middleware.RequirePermission("performance:activity:manage"), SendSelfEvalReminder)
@@ -374,8 +376,8 @@ func SetupRouter() *gin.Engine {
 				performance.POST("/goal-records/:participant_id/submit", middleware.RequirePermission("performance:goal:manage"), SubmitGoalApprovalHandler)
 				performance.POST("/goal-records/:participant_id/approve", middleware.RequirePermission("performance:goal:manage"), ApproveGoalRecords)
 				performance.POST("/goal-records/:participant_id/reject", middleware.RequirePermission("performance:goal:manage"), RejectGoalRecords)
-				performance.GET("/goal-records/:participant_id/manager-goals", GetManagerGoals)
-				performance.GET("/goal-records/:participant_id/suggestions", GetGoalSuggestions)
+				performance.GET("/goal-records/:participant_id/manager-goals", middleware.RequirePermission("performance:goal:manage"), GetManagerGoals)
+				performance.GET("/goal-records/:participant_id/suggestions", middleware.RequirePermission("performance:goal:manage"), GetGoalSuggestions)
 				performance.POST("/activities/:activity_id/batch-assign-goals", middleware.RequirePermission("performance:goal:manage"), BatchAssignGoals)
 
 				performance.POST("/participants/:participant_id/bonus-penalty", middleware.RequirePermission("performance:manager_eval:submit"), SetBonusPenaltyScoreHandler)
