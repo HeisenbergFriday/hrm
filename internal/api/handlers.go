@@ -222,6 +222,47 @@ func loadUserByUserID(userID string) (*database.User, error) {
 	return &user, nil
 }
 
+func loadUserByAuthID(authUserID string) (*database.User, error) {
+	authUserID = strings.TrimSpace(authUserID)
+	if authUserID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+
+	var user database.User
+	tx := database.DB.Where("user_id = ? AND deleted_at IS NULL", authUserID).Limit(1).Find(&user)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	if tx.RowsAffected > 0 {
+		return &user, nil
+	}
+
+	if !isNumericString(authUserID) {
+		return nil, gorm.ErrRecordNotFound
+	}
+	user = database.User{}
+	tx = database.DB.Where("id = ? AND deleted_at IS NULL", authUserID).Limit(1).Find(&user)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &user, nil
+}
+
+func isNumericString(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func ensureCanAccessAttendanceUser(c *gin.Context, userID string) (*database.User, bool) {
 	user, err := loadUserByUserID(userID)
 	if err != nil {
@@ -283,6 +324,12 @@ func createOperationAuditLog(c *gin.Context, operation, resource string, details
 			userName = fmt.Sprint(value)
 		}
 	}
+	if user, err := loadUserByAuthID(userID); err == nil {
+		userID = user.UserID
+		if strings.TrimSpace(userName) == "" {
+			userName = user.Name
+		}
+	}
 	if userID == "" {
 		userID = "system"
 	}
@@ -309,12 +356,20 @@ func HealthCheck(c *gin.Context) {
 	})
 }
 
-// generateToken 生成 JWT token
-func generateToken(userID, userName string) (string, time.Time, error) {
+// generateToken issues new tokens with the business user_id as the primary identity.
+func generateToken(user *database.User) (string, time.Time, error) {
+	if user == nil {
+		return "", time.Time{}, errors.New("missing user")
+	}
+	userID := strings.TrimSpace(user.UserID)
+	if userID == "" {
+		userID = strconv.FormatUint(uint64(user.ID), 10)
+	}
 	expiresAt := time.Now().Add(24 * time.Hour)
 	claims := &middleware.Claims{
 		UserID:   userID,
-		UserName: userName,
+		UserDBID: strconv.FormatUint(uint64(user.ID), 10),
+		UserName: user.Name,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -400,7 +455,7 @@ func Login(c *gin.Context) {
 	}
 
 	// 生成 JWT token
-	tokenString, expiresAt, err := generateToken(fmt.Sprintf("%d", user.ID), user.Name)
+	tokenString, expiresAt, err := generateToken(user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -411,7 +466,7 @@ func Login(c *gin.Context) {
 
 	// 写入 LoginLog
 	database.DB.Create(&database.LoginLog{
-		UserID:      fmt.Sprintf("%d", user.ID),
+		UserID:      user.UserID,
 		UserName:    user.Name,
 		LoginType:   "local",
 		LoginStatus: "success",
@@ -891,7 +946,7 @@ func DingTalkInAppLogin(c *gin.Context) {
 		return
 	}
 
-	tokenString, expiresAt, err := generateToken(fmt.Sprintf("%d", user.ID), user.Name)
+	tokenString, expiresAt, err := generateToken(user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -901,7 +956,7 @@ func DingTalkInAppLogin(c *gin.Context) {
 	}
 
 	database.DB.Create(&database.LoginLog{
-		UserID:      fmt.Sprintf("%d", user.ID),
+		UserID:      user.UserID,
 		UserName:    user.Name,
 		LoginType:   "dingtalk_in_app",
 		LoginStatus: "success",
@@ -1070,7 +1125,7 @@ func DingTalkCallback(c *gin.Context) {
 		return
 	}
 
-	tokenString, expiresAt, err := generateToken(fmt.Sprintf("%d", user.ID), user.Name)
+	tokenString, expiresAt, err := generateToken(user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -1080,7 +1135,7 @@ func DingTalkCallback(c *gin.Context) {
 	}
 
 	database.DB.Create(&database.LoginLog{
-		UserID:      fmt.Sprintf("%d", user.ID),
+		UserID:      user.UserID,
 		UserName:    user.Name,
 		LoginType:   "dingtalk_qr",
 		LoginStatus: "success",
@@ -1248,6 +1303,12 @@ func Logout(c *gin.Context) {
 	userName, _ := c.Get("userName")
 	if uid, ok := userID.(string); ok {
 		uname, _ := userName.(string)
+		if user, err := loadUserByAuthID(uid); err == nil {
+			uid = user.UserID
+			if strings.TrimSpace(uname) == "" {
+				uname = user.Name
+			}
+		}
 		database.DB.Create(&database.OperationLog{
 			UserID:    uid,
 			UserName:  uname,
@@ -1265,8 +1326,8 @@ func Logout(c *gin.Context) {
 
 // GetCurrentUser 获取当前用户信息
 func GetCurrentUser(c *gin.Context) {
-	userID, exists := c.Get("userID")
-	if !exists {
+	userID := strings.TrimSpace(c.GetString("userID"))
+	if userID == "" {
 		c.JSON(http.StatusUnauthorized, Response{
 			Code:    http.StatusUnauthorized,
 			Message: "未登录",
@@ -1274,8 +1335,7 @@ func GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	userService := service.NewUserService(database.DB)
-	user, err := userService.GetUserByID(userID.(string))
+	user, err := loadUserByAuthID(userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
 			Code:    http.StatusNotFound,
@@ -2015,6 +2075,12 @@ func ExportAttendance(c *gin.Context) {
 	userName, _ := c.Get("userName")
 	uid, _ := userID.(string)
 	uname, _ := userName.(string)
+	if user, err := loadUserByAuthID(uid); err == nil {
+		uid = user.UserID
+		if strings.TrimSpace(uname) == "" {
+			uname = user.Name
+		}
+	}
 
 	fileName := fmt.Sprintf("attendance_%s_%s.xlsx", req.StartDate, req.EndDate)
 	export := &database.AttendanceExport{
@@ -2537,6 +2603,44 @@ func GetMenuPermission(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"menu_keys": menuKeys}})
+}
+
+func GetRolePermissions(c *gin.Context) {
+	roleIDStr := c.Param("role_id")
+	roleID, err := strconv.ParseUint(roleIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	permissions, err := permService.GetRolePermissions(uint(roleID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取角色功能权限失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"permissions": permissions}})
+}
+
+func SaveRolePermissions(c *gin.Context) {
+	roleIDStr := c.Param("role_id")
+	roleID, err := strconv.ParseUint(roleIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
+		return
+	}
+	var req struct {
+		PermissionIDs []uint `json:"permission_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
+		return
+	}
+	permService := service.NewPermissionService(database.DB)
+	if err := permService.SaveRolePermissions(uint(roleID), req.PermissionIDs); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "保存功能权限失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "功能权限保存成功"})
 }
 
 func parseMenuKeysPayload(payload json.RawMessage) ([]string, error) {

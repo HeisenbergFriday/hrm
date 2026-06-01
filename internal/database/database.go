@@ -3,8 +3,8 @@ package database
 import (
 	"crypto/rand"
 	"database/sql"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -36,6 +36,16 @@ func generateRandomPassword(length int) string {
 
 var DB *gorm.DB
 
+func gormConfig() *gorm.Config {
+	return &gorm.Config{
+		Logger: logger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), logger.Config{
+			LogLevel:                  logger.Info,
+			IgnoreRecordNotFoundError: true,
+		}),
+		DisableForeignKeyConstraintWhenMigrating: true,
+	}
+}
+
 func Init() error {
 	dsn := os.Getenv("DATABASE_URL")
 
@@ -59,10 +69,7 @@ func Init() error {
 	}
 
 	// 尝试连接数据库
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
-		Logger:                                   logger.Default.LogMode(logger.Info),
-		DisableForeignKeyConstraintWhenMigrating: true,
-	})
+	db, err := gorm.Open(mysql.Open(dsn), gormConfig())
 	if err != nil {
 		log.Printf("连接数据库失败: %v", err)
 		// 尝试创建数据库
@@ -72,10 +79,7 @@ func Init() error {
 		}
 		// 重新连接
 		log.Println("重新连接数据库...")
-		db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
-			Logger:                                   logger.Default.LogMode(logger.Info),
-			DisableForeignKeyConstraintWhenMigrating: true,
-		})
+		db, err = gorm.Open(mysql.Open(dsn), gormConfig())
 		if err != nil {
 			log.Printf("重新连接数据库失败: %v", err)
 			return err
@@ -843,21 +847,21 @@ func grantCompatPermission(sourcePerm, targetPerm string, permMap map[string]uin
 }
 
 var legacyMenuKeysByPermission = map[string][]string{
-	"org:read":           {"menu:organization-dashboard", "menu:department-tree", "menu:employees"},
-	"user_manage":        {"menu:employee-profile", "menu:employee-flow", "menu:talent-analysis", "menu:sync-log"},
-	"attendance_manage":  {"menu:attendance", "menu:attendance-stats", "menu:attendance-export", "menu:week-schedule", "menu:employee-shift-config", "menu:sync-jobs", "menu:leave-overtime"},
-	"approval_manage":    {"menu:approval-templates", "menu:approval-instances", "menu:approval-stats"},
-	"permission_manage":  {"menu:permission", "menu:setting"},
-	"audit_log:read":     {"menu:audit-logs"},
-	"performance:activity:manage":       {"menu:performance-overview"},
-	"performance:self_eval:submit":      {"menu:performance-overview"},
-	"performance:manager_eval:submit":   {"menu:performance-overview"},
+	"org:read":                            {"menu:organization-dashboard", "menu:department-tree", "menu:employees"},
+	"user_manage":                         {"menu:employee-profile", "menu:employee-flow", "menu:talent-analysis", "menu:sync-log"},
+	"attendance_manage":                   {"menu:attendance", "menu:attendance-stats", "menu:attendance-export", "menu:week-schedule", "menu:employee-shift-config", "menu:sync-jobs", "menu:leave-overtime"},
+	"approval_manage":                     {"menu:approval-templates", "menu:approval-instances", "menu:approval-stats"},
+	"permission_manage":                   {"menu:permission", "menu:setting"},
+	"audit_log:read":                      {"menu:audit-logs"},
+	"performance:activity:manage":         {"menu:performance-overview"},
+	"performance:self_eval:submit":        {"menu:performance-overview"},
+	"performance:manager_eval:submit":     {"menu:performance-overview"},
 	"performance:employee_confirm:submit": {"menu:performance-overview"},
-	"performance:manager_confirm:submit": {"menu:performance-overview"},
-	"performance:hr_confirm:submit":     {"menu:performance-overview"},
-	"performance:goal:manage":           {"menu:performance-overview"},
-	"performance:result:view":           {"menu:performance-overview"},
-	"performance:indicator:manage":      {"menu:performance-indicator-library"},
+	"performance:manager_confirm:submit":  {"menu:performance-overview"},
+	"performance:hr_confirm:submit":       {"menu:performance-overview"},
+	"performance:goal:manage":             {"menu:performance-overview"},
+	"performance:result:view":             {"menu:performance-overview"},
+	"performance:indicator:manage":        {"menu:performance-indicator-library"},
 }
 
 // migrateMenuPermissions 将旧版本“操作权限推导菜单”的结果固化到 menu_permissions。

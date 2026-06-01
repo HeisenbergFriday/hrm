@@ -12,6 +12,7 @@ import (
 )
 
 type PermissionService struct {
+	db                 *gorm.DB
 	roleRepo           *repository.RoleRepository
 	permissionRepo     *repository.PermissionRepository
 	userRoleRepo       *repository.UserRoleRepository
@@ -24,6 +25,7 @@ type PermissionService struct {
 
 func NewPermissionService(db *gorm.DB) *PermissionService {
 	return &PermissionService{
+		db:                 db,
 		roleRepo:           repository.NewRoleRepository(db),
 		permissionRepo:     repository.NewPermissionRepository(db),
 		userRoleRepo:       repository.NewUserRoleRepository(db),
@@ -33,6 +35,63 @@ func NewPermissionService(db *gorm.DB) *PermissionService {
 		deptRepo:           repository.NewDepartmentRepository(db),
 		userRepo:           repository.NewUserRepository(db),
 	}
+}
+
+type SystemPermissionDefinition struct {
+	Name        string
+	Code        string
+	Description string
+}
+
+var systemPermissionDefinitions = []SystemPermissionDefinition{
+	{Name: "用户管理", Code: "user_manage", Description: "用户管理权限"},
+	{Name: "部门管理", Code: "department_manage", Description: "部门管理权限"},
+	{Name: "考勤管理", Code: "attendance_manage", Description: "考勤管理权限"},
+	{Name: "审批管理", Code: "approval_manage", Description: "审批管理权限"},
+	{Name: "同步审批", Code: "approval:sync", Description: "同步审批模板/实例数据"},
+	{Name: "创建审批模板", Code: "approval:create", Description: "创建审批模板"},
+	{Name: "编辑审批模板", Code: "approval:update", Description: "编辑审批模板"},
+	{Name: "删除审批模板", Code: "approval:delete", Description: "删除审批模板"},
+	{Name: "权限管理", Code: "permission_manage", Description: "权限管理权限"},
+	{Name: "绩效活动管理", Code: "performance:activity:manage", Description: "创建/编辑/发布/启动/锁定/归档绩效活动"},
+	{Name: "绩效自评提交", Code: "performance:self_eval:submit", Description: "提交绩效自评"},
+	{Name: "绩效主管评分", Code: "performance:manager_eval:submit", Description: "主管绩效评分"},
+	{Name: "绩效员工确认", Code: "performance:employee_confirm:submit", Description: "员工确认绩效结果"},
+	{Name: "绩效主管确认", Code: "performance:manager_confirm:submit", Description: "主管确认绩效结果"},
+	{Name: "绩效HR确认", Code: "performance:hr_confirm:submit", Description: "HR确认绩效结果"},
+	{Name: "绩效等级调整", Code: "performance:level_adjust:manage", Description: "调整绩效最终等级"},
+	{Name: "绩效分布规则", Code: "performance:distribution:manage", Description: "设置绩效分布规则"},
+	{Name: "绩效指标库管理", Code: "performance:indicator:manage", Description: "指标库/指标项 CRUD"},
+	{Name: "绩效目标管理", Code: "performance:goal:manage", Description: "目标设定/审批/分配"},
+	{Name: "绩效结果查看", Code: "performance:result:view", Description: "查看绩效结果"},
+	{Name: "组织数据只读", Code: "org:read", Description: "查看组织架构、花名册等组织数据"},
+	{Name: "审计日志只读", Code: "audit_log:read", Description: "查看操作审计日志"},
+}
+
+func (s *PermissionService) EnsureSystemPermissions() error {
+	for _, def := range systemPermissionDefinitions {
+		var perm database.Permission
+		err := s.db.Unscoped().Where("code = ?", def.Code).First(&perm).Error
+		if err == gorm.ErrRecordNotFound {
+			perm = database.Permission{Name: def.Name, Code: def.Code, Description: def.Description}
+			if err := s.db.Create(&perm).Error; err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		updates := map[string]interface{}{
+			"name":        def.Name,
+			"description": def.Description,
+			"deleted_at":  nil,
+		}
+		if err := s.db.Unscoped().Model(&perm).Updates(updates).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *PermissionService) GetRoles() ([]database.Role, int64, error) {
@@ -48,7 +107,74 @@ func (s *PermissionService) UpdateRole(role *database.Role) error {
 }
 
 func (s *PermissionService) GetPermissions() ([]database.Permission, int64, error) {
+	if err := s.EnsureSystemPermissions(); err != nil {
+		return nil, 0, err
+	}
 	return s.permissionRepo.FindAll()
+}
+
+func (s *PermissionService) GetRolePermissions(roleID uint) ([]database.Permission, error) {
+	if err := s.EnsureSystemPermissions(); err != nil {
+		return nil, err
+	}
+	return s.rolePermissionRepo.FindByRoleID(roleID)
+}
+
+func (s *PermissionService) SaveRolePermissions(roleID uint, permissionIDs []uint) error {
+	if err := s.EnsureSystemPermissions(); err != nil {
+		return err
+	}
+	seen := make(map[uint]struct{}, len(permissionIDs))
+	ids := make([]uint, 0, len(permissionIDs))
+	for _, id := range permissionIDs {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		query := tx.Where("role_id = ?", roleID)
+		if len(ids) > 0 {
+			query = query.Where("permission_id NOT IN ?", ids)
+		}
+		if err := query.Delete(&database.RolePermission{}).Error; err != nil {
+			return err
+		}
+
+		for _, permissionID := range ids {
+			var count int64
+			if err := tx.Model(&database.Permission{}).Where("id = ? AND deleted_at IS NULL", permissionID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count == 0 {
+				continue
+			}
+
+			var existing database.RolePermission
+			err := tx.Unscoped().
+				Where("role_id = ? AND permission_id = ?", roleID, permissionID).
+				Order("deleted_at IS NULL DESC, id ASC").
+				First(&existing).Error
+			if err == gorm.ErrRecordNotFound {
+				if err := tx.Create(&database.RolePermission{RoleID: roleID, PermissionID: permissionID}).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if err := tx.Unscoped().Model(&existing).Update("deleted_at", nil).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *PermissionService) normalizeUserID(userID string) string {

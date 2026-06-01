@@ -30,9 +30,12 @@ func (r *UserRepository) Delete(userID string) error {
 
 func (r *UserRepository) FindByUserID(userID string) (*database.User, error) {
 	var user database.User
-	err := r.db.Where("user_id = ?", userID).First(&user).Error
-	if err != nil {
-		return nil, err
+	tx := r.db.Where("user_id = ?", userID).Limit(1).Find(&user)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
 	}
 	return &user, nil
 }

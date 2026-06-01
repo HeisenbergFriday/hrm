@@ -21,11 +21,7 @@ func currentOperatorID(c *gin.Context) string {
 		return "system"
 	}
 	if database.DB != nil {
-		userService := service.NewUserService(database.DB)
-		if user, err := userService.GetUserByUserID(userID); err == nil && strings.TrimSpace(user.UserID) != "" {
-			return user.UserID
-		}
-		if user, err := userService.GetUserByID(userID); err == nil && strings.TrimSpace(user.UserID) != "" {
+		if user, err := loadUserByAuthID(userID); err == nil && strings.TrimSpace(user.UserID) != "" {
 			return user.UserID
 		}
 	}
@@ -661,11 +657,7 @@ func ConfirmResult(c *gin.Context) {
 func currentOperatorName(c *gin.Context) string {
 	userID := strings.TrimSpace(c.GetString("userID"))
 	if userID != "" {
-		userService := service.NewUserService(database.DB)
-		if user, err := userService.GetUserByID(userID); err == nil && strings.TrimSpace(user.Name) != "" {
-			return strings.TrimSpace(user.Name)
-		}
-		if user, err := userService.GetUserByUserID(userID); err == nil && strings.TrimSpace(user.Name) != "" {
+		if user, err := loadUserByAuthID(userID); err == nil && strings.TrimSpace(user.Name) != "" {
 			return strings.TrimSpace(user.Name)
 		}
 	}
@@ -686,11 +678,7 @@ func displayUserName(userID string) string {
 	if value == "" {
 		return ""
 	}
-	userService := service.NewUserService(database.DB)
-	if user, err := userService.GetUserByID(value); err == nil && strings.TrimSpace(user.Name) != "" {
-		return strings.TrimSpace(user.Name)
-	}
-	if user, err := userService.GetUserByUserID(value); err == nil && strings.TrimSpace(user.Name) != "" {
+	if user, err := loadUserByAuthID(value); err == nil && strings.TrimSpace(user.Name) != "" {
 		return strings.TrimSpace(user.Name)
 	}
 	return value
@@ -2101,6 +2089,9 @@ func SearchIndicatorItems(c *gin.Context) {
 // ===================== 目标记录管理 =====================
 
 func GetGoalRecords(c *gin.Context) {
+	if !requirePermission(c, "performance:result:view", "performance:goal:manage", "performance:self_eval:submit", "performance:manager_eval:submit") {
+		return
+	}
 	participantID, err := strconv.ParseUint(c.Param("participant_id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的参与人 ID", Data: nil})

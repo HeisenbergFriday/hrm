@@ -23,6 +23,7 @@ import {
 import PerformanceActivityEditor from '../components/PerformanceActivityEditor'
 import { BarChartOutlined, PlusOutlined } from '@ant-design/icons'
 import { getCycleLabel, formatDateTime } from '../utils/format'
+import { hasPermission } from '../utils/permission'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -128,6 +129,16 @@ function getStatusMeta(status?: string) {
 
 function getParticipantStatusMeta(status?: string) {
   return PARTICIPANT_STATUS_MAP[status || ''] || { label: status || '-', color: 'default' }
+}
+
+const PERFORMANCE_PERMISSION_LABELS: Record<string, string> = {
+  'performance:activity:manage': '绩效活动管理',
+  'performance:distribution:manage': '绩效分布规则',
+  'performance:goal:manage': '绩效目标管理',
+  'performance:self_eval:submit': '绩效自评提交',
+  'performance:manager_eval:submit': '绩效主管评分',
+  'performance:result:view': '绩效结果查看',
+  'performance:hr_confirm:submit': '绩效HR确认',
 }
 
 const PerformanceOverview: React.FC = () => {
@@ -496,6 +507,82 @@ const PerformanceOverview: React.FC = () => {
     })
   }
 
+  const renderPermissionButton = (
+    permissionCode: string,
+    button: React.ReactElement,
+    permissionName = PERFORMANCE_PERMISSION_LABELS[permissionCode] || permissionCode,
+  ) => {
+    if (hasPermission(permissionCode)) return button
+    return (
+      <Tooltip title={`你缺少${permissionName}权限，需要联系管理员添加`}>
+        <span>
+          {React.cloneElement(button, {
+            disabled: true,
+            onClick: undefined,
+          } as Partial<React.ComponentProps<typeof Button>>)}
+        </span>
+      </Tooltip>
+    )
+  }
+
+  const renderActivityManageButton = (button: React.ReactElement) =>
+    renderPermissionButton('performance:activity:manage', button)
+
+  const renderDistributionButton = (button: React.ReactElement) =>
+    renderPermissionButton('performance:distribution:manage', button)
+
+  const renderManagerEvalButton = (button: React.ReactElement) =>
+    renderPermissionButton('performance:manager_eval:submit', button)
+
+  const renderDetailActionButtons = (activity: PerformanceActivity) => {
+    const actions: React.ReactNode[] = []
+    const activityManage = (button: React.ReactElement) => renderActivityManageButton(button)
+
+    if (activity.status === 'draft') {
+      actions.push(
+        activityManage(<Button key="open-target-setting" type="primary" size="small" onClick={() => handleActivityAction('open-target-setting', activity)}>开启目标设定</Button>),
+        activityManage(<Button key="publish" size="small" onClick={() => handleActivityAction('publish', activity)}>直接开启自评</Button>),
+      )
+    }
+    if (activity.status === 'target_setting') {
+      actions.push(activityManage(<Button key="open-self-evaluation" type="primary" size="small" onClick={() => handleActivityAction('open-self-evaluation', activity)}>开启自评</Button>))
+    }
+    if (activity.status === 'self_evaluation') {
+      actions.push(
+        activityManage(<Button key="open-manager-evaluation" type="primary" size="small" onClick={() => handleActivityAction('open-manager-evaluation', activity)}>开启主管评分</Button>),
+        activityManage(<Button key="send-self-reminder" size="small" onClick={async () => { try { await performanceAPI.sendSelfEvalReminder(activity.id); message.success('已发送自评提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒自评</Button>),
+      )
+    }
+    if (activity.status === 'manager_evaluation') {
+      actions.push(
+        activityManage(<Button key="open-employee-confirmation" type="primary" size="small" onClick={() => handleActivityAction('open-employee-confirmation', activity)}>开启员工确认</Button>),
+        renderDistributionButton(<Button key="distribution" size="small" onClick={() => setDistributionModalVisible(true)}>强制分布</Button>),
+        renderManagerEvalButton(<Button key="batch-eval" size="small" onClick={() => { const selectable = participants.filter(p => p.status === 'self_submitted' || p.status === 'manager_submitted'); setBatchEvalSelected(selectable.map(p => p.id)); setBatchEvalModalVisible(true) }}>批量评分</Button>),
+        activityManage(<Button key="send-manager-reminder" size="small" onClick={async () => { try { await performanceAPI.sendManagerEvalReminder(activity.id); message.success('已发送评分提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒评分</Button>),
+      )
+    }
+    if (activity.status === 'employee_confirmation') {
+      actions.push(activityManage(<Button key="open-manager-confirmation" type="primary" size="small" onClick={() => handleActivityAction('open-manager-confirmation', activity)}>开启主管确认</Button>))
+    }
+    if (activity.status === 'manager_confirmation') {
+      actions.push(activityManage(<Button key="open-hr-confirmation" type="primary" size="small" onClick={() => handleActivityAction('open-hr-confirmation', activity)}>开启HR确认</Button>))
+    }
+    if (activity.status === 'hr_confirmation') {
+      actions.push(activityManage(<Button key="send-hr-reminder" size="small" onClick={async () => { try { await performanceAPI.sendHRConfirmReminder(activity.id); message.success('已发送HR确认提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒HR确认</Button>))
+      if (hrDeadlineStatus?.can_force_lock) {
+        actions.push(activityManage(<Button key="force-lock-overdue" danger size="small" onClick={() => handleForceLockOverdueHR(activity)}>逾期强制锁定</Button>))
+      }
+      actions.push(activityManage(<Button key="lock" type="primary" danger size="small" onClick={() => handleActivityAction('lock', activity)}>锁定活动</Button>))
+    }
+    if (activity.status === 'locked' || activity.status === 'result_confirmed') {
+      actions.push(activityManage(<Button key="archive" size="small" onClick={() => handleActivityAction('archive', activity)}>归档活动</Button>))
+    }
+    if (['draft', 'target_setting', 'self_evaluation', 'manager_evaluation'].includes(activity.status)) {
+      actions.push(activityManage(<Button key="refresh-participants" size="small" onClick={() => handleActivityAction('refresh', activity)}>刷新参与人</Button>))
+    }
+    return actions
+  }
+
   // 打开活动表单
   const openActivityModal = (activity?: PerformanceActivity) => {
     setEditingActivity(activity || null)
@@ -586,7 +673,11 @@ const PerformanceOverview: React.FC = () => {
       )
     }
 
-    return buttons
+    return buttons.map(button => (
+      React.isValidElement(button) && button.key !== 'view'
+        ? renderActivityManageButton(button)
+        : button
+    ))
   }
 
   // 活动列表 columns
@@ -673,6 +764,13 @@ const PerformanceOverview: React.FC = () => {
         const isArchived = ['archived', 'locked'].includes(currentActivity?.status || '')
         if (!activityId) return null
 
+        if (isArchived && !hasPermission('performance:result:view')) {
+          return renderPermissionButton(
+            'performance:result:view',
+            <Button size="small" type="link" style={{ fontSize: 'var(--font-size-sm)' }}>查看</Button>
+          )
+        }
+
         if (isArchived) {
           return (
             <Button size="small" type="link" style={{ fontSize: 'var(--font-size-sm)' }}
@@ -685,8 +783,28 @@ const PerformanceOverview: React.FC = () => {
         const linkStyle = { fontSize: 'var(--font-size-sm)', padding: '0 2px' }
         const activityStatus = currentActivity?.status
 
+        if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && !hasPermission('performance:goal:manage')) {
+          links.push(renderPermissionButton('performance:goal:manage', <Button key="target-disabled" size="small" type="link" style={linkStyle}>目标</Button>))
+        }
+        if (activityStatus === 'self_evaluation' && ['target_set', 'self_submitted'].includes(record.status) && !hasPermission('performance:self_eval:submit')) {
+          links.push(renderPermissionButton('performance:self_eval:submit', <Button key="self-disabled" size="small" type="link" style={linkStyle}>自评</Button>))
+        }
+        if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && !hasPermission('performance:manager_eval:submit')) {
+          links.push(renderPermissionButton('performance:manager_eval:submit', <Button key="mgr-disabled" size="small" type="link" style={linkStyle}>评分</Button>))
+        }
+        if (['manager_submitted', 'employee_confirmed', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && !hasPermission('performance:result:view')) {
+          links.push(renderPermissionButton('performance:result:view', <Button key="result-disabled" size="small" type="link" style={linkStyle}>结果</Button>))
+        }
+        if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && !hasPermission('performance:hr_confirm:submit')) {
+          links.push(renderPermissionButton('performance:hr_confirm:submit', <Button key="hr-confirm-disabled" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }}>HR确认</Button>))
+        }
+        if (record.status === 'target_pending_approval' && !hasPermission('performance:goal:manage')) {
+          links.push(renderPermissionButton('performance:goal:manage', <Button key="approve-disabled" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }}>通过</Button>))
+          links.push(renderPermissionButton('performance:goal:manage', <Button key="reject-disabled" size="small" type="link" danger style={linkStyle}>驳回</Button>))
+        }
+
         // 目标设定：活动必须处于 target_setting 状态，且参与人状态允许
-        if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status)) {
+        if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && hasPermission('performance:goal:manage')) {
           links.push(
             <Button key="target" size="small" type="link" style={linkStyle}
               onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}`)}
@@ -694,7 +812,7 @@ const PerformanceOverview: React.FC = () => {
           )
         }
         // 自评：活动必须处于 self_evaluation 状态，且参与人状态允许
-        if (activityStatus === 'self_evaluation' && ['target_set', 'self_submitted'].includes(record.status)) {
+        if (activityStatus === 'self_evaluation' && ['target_set', 'self_submitted'].includes(record.status) && hasPermission('performance:self_eval:submit')) {
           links.push(
             <Button key="self" size="small" type="link" style={linkStyle}
               onClick={() => navigate(`/performance-self-eval/${activityId}/${record.id}`)}
@@ -702,21 +820,21 @@ const PerformanceOverview: React.FC = () => {
           )
         }
         // 主管评分：活动必须处于 manager_evaluation 状态，且参与人状态允许
-        if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status)) {
+        if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && hasPermission('performance:manager_eval:submit')) {
           links.push(
             <Button key="mgr" size="small" type="link" style={linkStyle}
               onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}
             >评分</Button>
           )
         }
-        if (['manager_submitted', 'employee_confirmed', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status)) {
+        if (['manager_submitted', 'employee_confirmed', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && hasPermission('performance:result:view')) {
           links.push(
             <Button key="result" size="small" type="link" style={linkStyle}
               onClick={() => navigate(`/performance-result/${activityId}/${record.id}`)}
             >结果</Button>
           )
         }
-        if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed') {
+        if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && hasPermission('performance:hr_confirm:submit')) {
           links.push(
             <Button key="hr-confirm" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }}
               onClick={async () => {
@@ -731,7 +849,7 @@ const PerformanceOverview: React.FC = () => {
             >HR确认</Button>
           )
         }
-        if (record.status === 'target_pending_approval') {
+        if (record.status === 'target_pending_approval' && hasPermission('performance:goal:manage')) {
           links.push(
             <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }}
               onClick={async () => {
@@ -903,6 +1021,9 @@ const PerformanceOverview: React.FC = () => {
 
             {/* 操作按钮 - 紧凑布局 */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+              {renderDetailActionButtons(currentActivity)}
+              {false && (
+                <>
               {currentActivity.status === 'draft' && (
                 <>
                   <Button type="primary" size="small" onClick={() => handleActivityAction('open-target-setting', currentActivity)}>开启目标设定</Button>
@@ -949,6 +1070,8 @@ const PerformanceOverview: React.FC = () => {
               )}
               {['draft', 'target_setting', 'self_evaluation', 'manager_evaluation'].includes(currentActivity.status) && (
                 <Button size="small" onClick={() => handleActivityAction('refresh', currentActivity)}>刷新参与人</Button>
+              )}
+                </>
               )}
             </div>
 

@@ -107,9 +107,10 @@ const routeMenuKeys: Record<string, string> = {
 function selectedMenuKeyForPath(pathname: string) {
   if (pathname.startsWith('/employees/')) return menuPermissionKey('employees')
   if (pathname.startsWith('/approval-detail/')) return menuPermissionKey('approval-instances')
-  if (pathname.startsWith('/performance-result/') || pathname.startsWith('/performance-self-eval/') || pathname.startsWith('/performance-manager-eval/') || pathname.startsWith('/performance-goal-setting/')) {
-    return menuPermissionKey('performance-overview')
-  }
+  if (pathname.startsWith('/performance-result/')) return menuPermissionKey('performance-result')
+  if (pathname.startsWith('/performance-self-eval/')) return menuPermissionKey('performance-self-eval')
+  if (pathname.startsWith('/performance-manager-eval/')) return menuPermissionKey('performance-manager-eval')
+  if (pathname.startsWith('/performance-goal-setting/')) return menuPermissionKey('performance-goal-setting')
   return routeMenuKeys[pathname] || ''
 }
 
@@ -373,10 +374,10 @@ function App() {
                 <Route path="/leave-overtime" element={<RouteGuard menuKey="menu:leave-overtime"><LeaveOvertime /></RouteGuard>} />
                 <Route path="/performance-overview" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceOverview /></RouteGuard>} />
                 <Route path="/performance-indicator-library" element={<RouteGuard menuKey="menu:performance-indicator-library"><PerformanceIndicatorLibrary /></RouteGuard>} />
-                <Route path="/performance-result/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceResultView /></RouteGuard>} />
-                <Route path="/performance-self-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceSelfEval /></RouteGuard>} />
-                <Route path="/performance-manager-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceManagerEval /></RouteGuard>} />
-                <Route path="/performance-goal-setting/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceGoalSetting /></RouteGuard>} />
+                <Route path="/performance-result/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:result:view"><PerformanceResultView /></RouteGuard>} />
+                <Route path="/performance-self-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:self_eval:submit"><PerformanceSelfEval /></RouteGuard>} />
+                <Route path="/performance-manager-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:manager_eval:submit"><PerformanceManagerEval /></RouteGuard>} />
+                <Route path="/performance-goal-setting/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:goal:manage"><PerformanceGoalSetting /></RouteGuard>} />
                 <Route path="/permission" element={<RouteGuard menuKey="menu:permission"><Permission /></RouteGuard>} />
                 <Route path="/log" element={<Log />} />
                 <Route path="/setting" element={<RouteGuard menuKey="menu:setting"><Setting /></RouteGuard>} />
