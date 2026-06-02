@@ -2,6 +2,7 @@ package repository
 
 import (
 	"peopleops/internal/database"
+	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -9,6 +10,11 @@ import (
 
 type WeekScheduleRepository struct {
 	db *gorm.DB
+}
+
+type WeekScheduleScope struct {
+	ScopeType string
+	ScopeID   string
 }
 
 func NewWeekScheduleRepository(db *gorm.DB) *WeekScheduleRepository {
@@ -56,6 +62,17 @@ func (r *WeekScheduleRepository) FindAllRules() ([]database.WeekScheduleRule, er
 func (r *WeekScheduleRepository) FindActiveRules() ([]database.WeekScheduleRule, error) {
 	var rules []database.WeekScheduleRule
 	err := r.db.Where("status = ?", "active").Order("created_at DESC").Find(&rules).Error
+	return rules, err
+}
+
+func (r *WeekScheduleRepository) FindActiveRulesByScopes(scopes []WeekScheduleScope) ([]database.WeekScheduleRule, error) {
+	var rules []database.WeekScheduleRule
+	if len(scopes) == 0 {
+		return rules, nil
+	}
+	query := r.db.Where("status = ?", "active")
+	query = applyWeekScheduleScopeFilter(query, scopes)
+	err := query.Order("id ASC").Find(&rules).Error
 	return rules, err
 }
 
@@ -108,6 +125,17 @@ func (r *WeekScheduleRepository) FindOverridesByScope(scopeType, scopeID string)
 func (r *WeekScheduleRepository) FindOverridesByDateRange(startDate, endDate string) ([]database.WeekScheduleOverride, error) {
 	var overrides []database.WeekScheduleOverride
 	err := r.db.Where("week_start_date >= ? AND week_start_date <= ?", startDate, endDate).Order("week_start_date ASC").Find(&overrides).Error
+	return overrides, err
+}
+
+func (r *WeekScheduleRepository) FindOverridesByWeekStartDates(scopes []WeekScheduleScope, weekStartDates []string) ([]database.WeekScheduleOverride, error) {
+	var overrides []database.WeekScheduleOverride
+	if len(scopes) == 0 || len(weekStartDates) == 0 {
+		return overrides, nil
+	}
+	query := r.db.Where("week_start_date IN ?", weekStartDates)
+	query = applyWeekScheduleScopeFilter(query, scopes)
+	err := query.Order("week_start_date ASC, id ASC").Find(&overrides).Error
 	return overrides, err
 }
 
@@ -169,8 +197,27 @@ func (r *WeekScheduleRepository) FindHolidaysByYear(year int) ([]database.Statut
 	return holidays, err
 }
 
+func (r *WeekScheduleRepository) FindHolidaysByYears(years []int) ([]database.StatutoryHoliday, error) {
+	var holidays []database.StatutoryHoliday
+	if len(years) == 0 {
+		return holidays, nil
+	}
+	err := r.db.Where("year IN ?", years).Order("date ASC").Find(&holidays).Error
+	return holidays, err
+}
+
 func (r *WeekScheduleRepository) FindHolidaysByDateRange(startDate, endDate string) ([]database.StatutoryHoliday, error) {
 	var holidays []database.StatutoryHoliday
 	err := r.db.Where("date >= ? AND date <= ?", startDate, endDate).Order("date ASC").Find(&holidays).Error
 	return holidays, err
+}
+
+func applyWeekScheduleScopeFilter(query *gorm.DB, scopes []WeekScheduleScope) *gorm.DB {
+	clauses := make([]string, 0, len(scopes))
+	args := make([]interface{}, 0, len(scopes)*2)
+	for _, scope := range scopes {
+		clauses = append(clauses, "(scope_type = ? AND scope_id = ?)")
+		args = append(args, scope.ScopeType, scope.ScopeID)
+	}
+	return query.Where(strings.Join(clauses, " OR "), args...)
 }

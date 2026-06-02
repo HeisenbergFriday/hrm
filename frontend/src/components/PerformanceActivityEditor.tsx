@@ -12,9 +12,10 @@ import {
   Switch,
   Tag,
   Typography,
+  Upload,
 } from 'antd'
 import type { FormInstance } from 'antd/es/form'
-import { SaveOutlined } from '@ant-design/icons'
+import { CloseOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
 const { TextArea } = Input
@@ -35,6 +36,8 @@ interface PerformanceActivityEditorProps {
   departmentOptions: SelectOption[]
   userOptions: SelectOption[]
   scopeOptionsLoading: boolean
+  importingParticipants?: boolean
+  onImportParticipants: (file: File) => Promise<void>
   onSave: () => void
   onCancel: () => void
 }
@@ -84,6 +87,33 @@ function getCycleLabel(value?: string) {
   return cycleLabels[normalized] || normalized || '未知周期'
 }
 
+function normalizeEditorIDArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(item => String(item).trim()).filter(Boolean)
+  if (!value) return []
+  return String(value).split(',').map(item => item.trim()).filter(Boolean)
+}
+
+function toSearchText(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  if (Array.isArray(value)) return value.map(toSearchText).join(' ')
+  return ''
+}
+
+function filterSelectOption(input: string, option?: { label?: unknown; value?: unknown }) {
+  const keyword = input.trim().toLowerCase()
+  if (!keyword) return true
+  return `${toSearchText(option?.label)} ${toSearchText(option?.value)}`.toLowerCase().includes(keyword)
+}
+
+const fieldHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  minHeight: 24,
+  marginBottom: 8,
+}
+
 const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
   visible,
   editing,
@@ -94,12 +124,15 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
   departmentOptions,
   userOptions,
   scopeOptionsLoading,
+  importingParticipants = false,
+  onImportParticipants,
   onSave,
   onCancel,
 }) => {
   const [, forceFormRerender] = React.useState(0)
   const values = form.getFieldsValue(true)
   const cycleType = Form.useWatch('cycle_type', form) as string | undefined
+  const targetEmployeeIDs = normalizeEditorIDArray(Form.useWatch('target_employee_ids', form))
   const selectedIndicatorLibraryId = Form.useWatch('indicator_library_id', form) as number | string | undefined
   const normalizedCycleType = normalizeCycleType(cycleType)
   const selectedIndicatorLibraryIdKey = selectedIndicatorLibraryId == null ? '' : String(selectedIndicatorLibraryId)
@@ -145,6 +178,17 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
 
   if (!visible) return null
 
+  const saveActions = (
+    <Space wrap>
+      <Button icon={<CloseOutlined />} onClick={onCancel} disabled={saving}>
+        取消
+      </Button>
+      <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave} style={{ background: '#4338ca', borderColor: '#4338ca' }}>
+        {editing ? '保存修改' : '保存活动'}
+      </Button>
+    </Space>
+  )
+
   return (
     <div
       id="performance-activity-editor"
@@ -153,6 +197,10 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
+        border: '1px solid #e5e7eb',
+        borderRadius: 8,
+        overflow: 'hidden',
+        marginBottom: 16,
       }}
     >
       <div
@@ -160,25 +208,23 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          gap: 12,
-          padding: '14px 24px',
+          flexWrap: 'wrap',
+          gap: 16,
+          padding: '18px 24px',
           borderBottom: '1px solid #e5e7eb',
-          background: '#f8fafc',
+          background: '#fff',
         }}
       >
-        <Space size={16} align="center">
-          <Progress percent={progress} size="small" showInfo={false} style={{ width: 120 }} />
-          <Text type="secondary" style={{ fontSize: 13, background: '#e2e8f0', padding: '2px 10px', borderRadius: 10 }}>
-            {doneCount}/{requiredChecks.length} 必填项已完成
+        <Space size={10} align="center">
+          <Text strong style={{ fontSize: 16, color: '#111827' }}>
+            {editing ? '编辑绩效活动' : '创建绩效活动'}
           </Text>
+          <Tag color={progress === 100 ? 'success' : 'processing'} style={{ marginInlineEnd: 0 }}>
+            {doneCount}/{requiredChecks.length} 必填项已完成
+          </Tag>
         </Space>
-        <Space>
-          <Button onClick={onCancel} disabled={saving}>
-            取消
-          </Button>
-          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave} style={{ background: '#4338ca', borderColor: '#4338ca' }}>
-            {editing ? '保存修改' : '保存活动'}
-          </Button>
+        <Space size={12} align="center">
+          <Progress percent={progress} size="small" showInfo={false} style={{ width: 160 }} />
         </Space>
       </div>
 
@@ -227,7 +273,7 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
                   必填
                 </Tag>
               </div>
-              <Row gutter={16}>
+              <Row gutter={[16, 12]}>
                 <Col xs={24} md={8}>
                   <Form.Item name="name" label="活动名称" rules={[{ required: true, message: '请输入活动名称' }]}>
                     <Input placeholder="如：2026 Q2 绩效评估" />
@@ -291,6 +337,7 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
                       disabled={!normalizedCycleType}
                       loading={indicatorLibrariesLoading}
                       optionFilterProp="label"
+                      filterOption={filterSelectOption}
                       options={visibleIndicatorLibraries.map(lib => ({
                         value: lib.id,
                         label: `${lib.name}${lib.default_cycle ? `（${getCycleLabel(lib.default_cycle)}）` : ''}`,
@@ -308,7 +355,7 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
                   必填
                 </Tag>
               </div>
-              <Row gutter={16}>
+              <Row gutter={[16, 12]}>
                 <Col xs={24} md={12}>
                   <Form.Item name="date_range" label="绩效周期" rules={[{ required: true, message: '请选择绩效周期' }]}>
                     <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
@@ -329,7 +376,7 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
                   必填
                 </Tag>
               </div>
-              <Row gutter={16}>
+              <Row gutter={[16, 12]}>
                 <Col xs={24} lg={8}>
                   <Form.Item name="self_eval_range" label="自评时间" rules={[{ required: true, message: '请选择自评时间' }]}>
                     <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
@@ -353,32 +400,61 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
                 <Text strong style={{ fontSize: 15 }}>参与范围</Text>
                 <Tag style={{ marginInlineEnd: 0 }}>可选</Tag>
               </div>
-              <Row gutter={16}>
+              <Row gutter={[16, 12]} align="top">
                 <Col xs={24} md={12}>
-                  <Form.Item name="target_department_ids" label="参与部门">
+                  <div style={fieldHeaderStyle}>
+                    <Text>参与部门</Text>
+                  </div>
+                  <Form.Item name="target_department_ids" style={{ marginBottom: 0 }}>
                     <Select
                       mode="multiple"
                       allowClear
                       showSearch
                       loading={scopeOptionsLoading}
                       optionFilterProp="label"
+                      filterOption={filterSelectOption}
+                      maxTagCount="responsive"
                       placeholder="请选择参与部门"
                       options={departmentOptions}
+                      style={{ width: '100%' }}
                     />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={12}>
-                  <Form.Item name="target_employee_ids" label="指定员工">
+                  <div style={fieldHeaderStyle}>
+                    <Text>指定员工</Text>
+                    <Upload
+                      accept=".xlsx"
+                      showUploadList={false}
+                      beforeUpload={(file) => {
+                        void onImportParticipants(file as File)
+                        return false
+                      }}
+                    >
+                      <Button size="small" type="text" icon={<UploadOutlined />} loading={importingParticipants}>
+                        导入 Excel
+                      </Button>
+                    </Upload>
+                  </div>
+                  <Form.Item name="target_employee_ids" style={{ marginBottom: 0 }}>
                     <Select
                       mode="multiple"
                       allowClear
                       showSearch
                       loading={scopeOptionsLoading}
                       optionFilterProp="label"
+                      filterOption={filterSelectOption}
+                      maxTagCount="responsive"
                       placeholder="请选择指定员工"
                       options={userOptions}
+                      style={{ width: '100%' }}
                     />
                   </Form.Item>
+                  {targetEmployeeIDs.length > 0 && (
+                    <Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
+                      已选择 {targetEmployeeIDs.length} 人
+                    </Text>
+                  )}
                 </Col>
               </Row>
             </section>
@@ -388,7 +464,7 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
                 <Text strong style={{ fontSize: 15 }}>高级设置</Text>
                 <Tag style={{ marginInlineEnd: 0 }}>可选</Tag>
               </div>
-              <Row gutter={16}>
+              <Row gutter={[16, 12]}>
                 <Col xs={24} md={12}>
                   <Form.Item
                     name="enable_bonus_score"
@@ -437,6 +513,26 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
               </Row>
             </section>
       </Form>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 16,
+          padding: '14px 28px',
+          borderTop: '1px solid #e5e7eb',
+          background: '#fff',
+          position: 'sticky',
+          bottom: 0,
+          zIndex: 2,
+        }}
+      >
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {targetEmployeeIDs.length > 0 ? `已指定 ${targetEmployeeIDs.length} 名员工` : '未指定员工时可按部门生成参与范围'}
+        </Text>
+        {saveActions}
+      </div>
     </div>
   )
 }

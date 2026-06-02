@@ -35,6 +35,7 @@ frontend/node_modules/
 .claude/
 
 # Scratch files
+.tmp/
 query
 test_dingtalk_dept.go
 

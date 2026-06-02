@@ -2,8 +2,6 @@ package middleware
 
 import (
 	"net/http"
-	"peopleops/internal/database"
-	"peopleops/internal/service"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -18,8 +16,7 @@ func RequirePermission(permissionCodes ...string) gin.HandlerFunc {
 			return
 		}
 
-		permService := service.NewPermissionService(database.DB)
-		ok, err := permService.HasAnyPermission(userID, permissionCodes...)
+		ok, err := HasAnyPermission(c, permissionCodes...)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "permission lookup failed"})
 			c.Abort()
@@ -44,9 +41,8 @@ func RequirePermissionOrMenu(permissionCodes []string, menuKeys []string) gin.Ha
 			return
 		}
 
-		permService := service.NewPermissionService(database.DB)
 		if len(permissionCodes) > 0 {
-			ok, err := permService.HasAnyPermission(userID, permissionCodes...)
+			ok, err := HasAnyPermission(c, permissionCodes...)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "permission lookup failed"})
 				c.Abort()
@@ -59,7 +55,7 @@ func RequirePermissionOrMenu(permissionCodes []string, menuKeys []string) gin.Ha
 		}
 
 		for _, menuKey := range menuKeys {
-			ok, err := permService.HasMenuPermission(userID, menuKey)
+			ok, err := HasMenuPermission(c, menuKey)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "menu permission lookup failed"})
 				c.Abort()
@@ -85,9 +81,8 @@ func RequireMenuPermission(menuKeys ...string) gin.HandlerFunc {
 			return
 		}
 
-		permService := service.NewPermissionService(database.DB)
 		for _, menuKey := range menuKeys {
-			ok, err := permService.HasMenuPermission(userID, menuKey)
+			ok, err := HasMenuPermission(c, menuKey)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "menu permission lookup failed"})
 				c.Abort()

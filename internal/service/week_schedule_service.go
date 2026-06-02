@@ -276,29 +276,52 @@ func (s *WeekScheduleService) GetWeekCalendar(userID, departmentID string, weeks
 		monday = getMonday(time.Now())
 	}
 
-	// 预加载整个时间范围的节假日
-	startDate := monday.Format("2006-01-02")
-	endDate := monday.AddDate(0, 0, weeks*7-1).Format("2006-01-02")
-	holidays, _ := s.scheduleRepo.FindHolidaysByDateRange(startDate, endDate)
+	weekStarts := make([]time.Time, 0, weeks)
+	weekStartDates := make([]string, 0, weeks)
+	for i := 0; i < weeks; i++ {
+		weekStart := monday.AddDate(0, 0, i*7)
+		weekStarts = append(weekStarts, weekStart)
+		weekStartDates = append(weekStartDates, weekStart.Format("2006-01-02"))
+	}
 
-	// 按日期索引
+	holidays, _ := s.scheduleRepo.FindHolidaysByYears(calendarYears(monday, weeks))
+
 	holidayMap := make(map[string]*database.StatutoryHoliday)
 	for i := range holidays {
 		holidayMap[holidays[i].Date] = &holidays[i]
 	}
 
+	scopes := weekScheduleLookupScopes(userID, departmentID)
+	rules, err := s.scheduleRepo.FindActiveRulesByScopes(scopes)
+	if err != nil {
+		return nil, fmt.Errorf("查询大小周规则失败: %w", err)
+	}
+	ruleMap := make(map[string]*database.WeekScheduleRule, len(rules))
+	for i := range rules {
+		key := weekScheduleScopeKey(rules[i].ScopeType, rules[i].ScopeID)
+		if _, exists := ruleMap[key]; !exists {
+			ruleMap[key] = &rules[i]
+		}
+	}
+
+	overrides, err := s.scheduleRepo.FindOverridesByWeekStartDates(scopes, weekStartDates)
+	if err != nil {
+		return nil, fmt.Errorf("查询大小周覆盖失败: %w", err)
+	}
+	overrideMap := make(map[string]*database.WeekScheduleOverride, len(overrides))
+	for i := range overrides {
+		key := weekScheduleOverrideKey(overrides[i].ScopeType, overrides[i].ScopeID, overrides[i].WeekStartDate)
+		if _, exists := overrideMap[key]; !exists {
+			overrideMap[key] = &overrides[i]
+		}
+	}
+
 	var calendar []WeekInfo
-	for i := 0; i < weeks; i++ {
-		weekStart := monday.AddDate(0, 0, i*7)
+	for _, weekStart := range weekStarts {
 		weekEnd := weekStart.AddDate(0, 0, 6)
 		weekStartStr := weekStart.Format("2006-01-02")
 
-		weekType, err := s.GetWeekType(userID, departmentID, weekStartStr)
-		if err != nil {
-			weekType = "big"
-		}
-
-		isOverride := s.isOverride(userID, departmentID, weekStartStr)
+		weekType, isOverride := resolveWeekTypeFromMaps(scopes, ruleMap, overrideMap, weekStartStr)
 
 		// 收集本周内的节假日/调休日
 		var weekHolidays []DayInfo
@@ -335,6 +358,57 @@ func (s *WeekScheduleService) GetWeekCalendar(userID, departmentID string, weeks
 	}
 
 	return calendar, nil
+}
+
+func calendarYears(startMonday time.Time, weeks int) []int {
+	seen := make(map[int]struct{})
+	years := make([]int, 0, 2)
+	endDate := startMonday.AddDate(0, 0, weeks*7-1)
+	for d := startMonday; !d.After(endDate); d = d.AddDate(0, 0, 1) {
+		year := d.Year()
+		if _, ok := seen[year]; ok {
+			continue
+		}
+		seen[year] = struct{}{}
+		years = append(years, year)
+	}
+	return years
+}
+
+func weekScheduleLookupScopes(userID, departmentID string) []repository.WeekScheduleScope {
+	scopes := make([]repository.WeekScheduleScope, 0, 3)
+	if userID != "" {
+		scopes = append(scopes, repository.WeekScheduleScope{ScopeType: "user", ScopeID: userID})
+	}
+	if departmentID != "" {
+		scopes = append(scopes, repository.WeekScheduleScope{ScopeType: "department", ScopeID: departmentID})
+	}
+	// Company-level rules use an empty scope_id by schema convention. The request
+	// preload maps serve as a negative cache when no company-level row exists.
+	scopes = append(scopes, repository.WeekScheduleScope{ScopeType: "company", ScopeID: ""})
+	return scopes
+}
+
+func resolveWeekTypeFromMaps(scopes []repository.WeekScheduleScope, ruleMap map[string]*database.WeekScheduleRule, overrideMap map[string]*database.WeekScheduleOverride, weekStartStr string) (string, bool) {
+	for _, scope := range scopes {
+		if override := overrideMap[weekScheduleOverrideKey(scope.ScopeType, scope.ScopeID, weekStartStr)]; override != nil {
+			return override.WeekType, true
+		}
+		if rule := ruleMap[weekScheduleScopeKey(scope.ScopeType, scope.ScopeID)]; rule != nil {
+			if weekType, err := calcWeekTypeByRule(rule, weekStartStr); err == nil {
+				return weekType, false
+			}
+		}
+	}
+	return "big", false
+}
+
+func weekScheduleScopeKey(scopeType, scopeID string) string {
+	return scopeType + "|" + scopeID
+}
+
+func weekScheduleOverrideKey(scopeType, scopeID, weekStartDate string) string {
+	return weekScheduleScopeKey(scopeType, scopeID) + "|" + weekStartDate
 }
 
 // ===================== 同步到钉钉 =====================

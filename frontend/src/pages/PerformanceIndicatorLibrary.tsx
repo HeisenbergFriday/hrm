@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { cloneElement, useState, useEffect, useCallback, useRef, type ComponentProps, type ReactElement } from 'react'
 import {
   Table, Button, Modal, Form, Input, Select, Tag, Space, Card, message,
-  Popconfirm, Empty, InputNumber, Row, Col, AutoComplete
+  Popconfirm, Empty, InputNumber, Row, Col, AutoComplete, Tooltip, Alert
 } from 'antd'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -9,6 +9,7 @@ import StatusTag from '../components/StatusTag'
 import { PlusOutlined, ArrowLeftOutlined, DeleteOutlined, DatabaseOutlined, EditOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { performanceAPI, departmentAPI, type PerformanceIndicatorLibrary as ILibrary, type PerformanceIndicatorItem } from '../services/api'
+import { hasPermission } from '../utils/permission'
 
 const { TextArea } = Input
 
@@ -28,6 +29,8 @@ type DepartmentOption = {
 }
 
 const isValidWeight = (weight: number) => Number.isFinite(weight) && weight >= 10 && weight % 5 === 0
+const INDICATOR_MANAGE_PERMISSION = 'performance:indicator:manage'
+const INDICATOR_MANAGE_PERMISSION_NAME = '绩效指标库管理'
 
 const newQuantItem = (): DraftIndicatorItem => ({
   name: '',
@@ -48,6 +51,8 @@ const newActionItem = (): DraftIndicatorItem => ({
 
 export default function PerformanceIndicatorLibrary() {
   const navigate = useNavigate()
+  const canManageIndicator = hasPermission(INDICATOR_MANAGE_PERMISSION)
+  const indicatorManagePermissionTip = `你缺少${INDICATOR_MANAGE_PERMISSION_NAME}权限，需要联系管理员添加`
   const [libraries, setLibraries] = useState<ILibrary[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -111,6 +116,26 @@ export default function PerformanceIndicatorLibrary() {
     setActionItems([newActionItem()])
   }
 
+  const guardIndicatorManage = () => {
+    if (canManageIndicator) return true
+    message.warning(indicatorManagePermissionTip)
+    return false
+  }
+
+  const renderIndicatorManageButton = (button: ReactElement) => {
+    if (canManageIndicator) return button
+    return (
+      <Tooltip title={indicatorManagePermissionTip}>
+        <span>
+          {cloneElement(button, {
+            disabled: true,
+            onClick: undefined,
+          } as Partial<ComponentProps<typeof Button>>)}
+        </span>
+      </Tooltip>
+    )
+  }
+
   const fetchItems = async (libraryId: number) => {
     setItemsLoading(true)
     try {
@@ -125,6 +150,8 @@ export default function PerformanceIndicatorLibrary() {
   }
 
   const handleCreate = async (values: any) => {
+    if (!guardIndicatorManage()) return
+
     const totalWeight = [...quantItems, ...actionItems].reduce((sum, item) => sum + (item.weight || 0), 0)
     const quantWeight = quantItems.reduce((sum, item) => sum + (item.weight || 0), 0)
     const actionWeight = actionItems.reduce((sum, item) => sum + (item.weight || 0), 0)
@@ -211,6 +238,8 @@ export default function PerformanceIndicatorLibrary() {
   }
 
   const handleInherit = async (values: any) => {
+    if (!guardIndicatorManage()) return
+
     const dept = departments.find(d => d.department_id === values.target_department_id)
     setInheriting(true)
     try {
@@ -239,6 +268,8 @@ export default function PerformanceIndicatorLibrary() {
   }
 
   const handleEditItem = (item: PerformanceIndicatorItem) => {
+    if (!guardIndicatorManage()) return
+
     setEditingItem(item)
     editItemForm.setFieldsValue({
       name: item.name,
@@ -254,6 +285,8 @@ export default function PerformanceIndicatorLibrary() {
 
   const handleEditItemSubmit = async (values: any) => {
     if (!editingItem) return
+    if (!guardIndicatorManage()) return
+
     setEditingItemLoading(true)
     try {
       await performanceAPI.updateIndicatorItem(editingItem.id, values)
@@ -269,6 +302,8 @@ export default function PerformanceIndicatorLibrary() {
   }
 
   const handleDeleteItem = async (itemId: number) => {
+    if (!guardIndicatorManage()) return
+
     try {
       await performanceAPI.deleteIndicatorItem(itemId)
       message.success('删除成功')
@@ -279,6 +314,8 @@ export default function PerformanceIndicatorLibrary() {
   }
 
   const handleArchive = async (id: number) => {
+    if (!guardIndicatorManage()) return
+
     try {
       await performanceAPI.archiveIndicatorLibrary(id)
       message.success('归档成功')
@@ -390,10 +427,13 @@ export default function PerformanceIndicatorLibrary() {
       render: (_: any, record: ILibrary) => (
         <Space size={4}>
           <Button type="link" size="small" onClick={() => handleSelectLib(record)} style={{ padding: '0 4px' }}>查看</Button>
-          {record.status === 'active' && (
+          {record.status === 'active' && canManageIndicator && (
             <Popconfirm title="确认归档该指标库？" onConfirm={() => handleArchive(record.id)}>
               <Button type="link" size="small" danger style={{ padding: '0 4px' }}>归档</Button>
             </Popconfirm>
+          )}
+          {record.status === 'active' && !canManageIndicator && renderIndicatorManageButton(
+            <Button type="link" size="small" danger style={{ padding: '0 4px' }}>归档</Button>
           )}
         </Space>
       )
@@ -439,10 +479,16 @@ export default function PerformanceIndicatorLibrary() {
       title: '操作', key: 'action', width: 100,
       render: (_: any, record: PerformanceIndicatorItem) => (
         <Space size={8}>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditItem(record)} style={{ padding: 0, color: 'var(--color-primary)' }} />
-          <Popconfirm title="确认删除该指标项？" onConfirm={() => handleDeleteItem(record.id)}>
+          {renderIndicatorManageButton(
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditItem(record)} style={{ padding: 0, color: 'var(--color-primary)' }} />
+          )}
+          {canManageIndicator ? (
+            <Popconfirm title="确认删除该指标项？" onConfirm={() => handleDeleteItem(record.id)}>
+              <Button type="link" size="small" icon={<DeleteOutlined />} style={{ padding: 0, color: 'var(--color-error)' }} />
+            </Popconfirm>
+          ) : renderIndicatorManageButton(
             <Button type="link" size="small" icon={<DeleteOutlined />} style={{ padding: 0, color: 'var(--color-error)' }} />
-          </Popconfirm>
+          )}
         </Space>
       )
     },
@@ -483,6 +529,15 @@ export default function PerformanceIndicatorLibrary() {
         <strong style={{ color: 'var(--color-text-heading)' }}>创建规则：</strong>
         量化指标权重合计 70%，关键行动权重合计 30%，总权重必须为 100%。
       </div>
+      {!canManageIndicator && (
+        <Alert
+          type="warning"
+          showIcon
+          message="当前账号缺少绩效指标库管理权限"
+          description="本页仅支持查看指标库和指标项；创建、继承、归档、编辑和删除操作需要管理员补充分配功能权限。"
+          style={{ marginBottom: 20 }}
+        />
+      )}
 
       <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
         <PageCard
@@ -490,12 +545,16 @@ export default function PerformanceIndicatorLibrary() {
           style={{ flexShrink: 0 }}
           extra={
             <Space>
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}
-                style={{ height: 36, boxShadow: '0 2px 6px rgba(67,56,202,0.3)' }}
-              >
-                创建
-              </Button>
-              <Button style={{ height: 36 }} onClick={() => setInheritOpen(true)}>继承</Button>
+              {renderIndicatorManageButton(
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}
+                  style={{ height: 36, boxShadow: canManageIndicator ? '0 2px 6px rgba(67,56,202,0.3)' : undefined }}
+                >
+                  创建
+                </Button>
+              )}
+              {renderIndicatorManageButton(
+                <Button style={{ height: 36 }} onClick={() => setInheritOpen(true)}>继承</Button>
+              )}
             </Space>
           }
         >
@@ -575,8 +634,9 @@ export default function PerformanceIndicatorLibrary() {
         }
         open={createOpen}
         onCancel={() => { setCreateOpen(false); resetCreateState() }}
-        onOk={() => form.submit()}
+        onOk={() => { if (guardIndicatorManage()) form.submit() }}
         confirmLoading={creating}
+        okButtonProps={{ disabled: !canManageIndicator }}
         width={1280}
         styles={{
           header: {
@@ -866,8 +926,9 @@ export default function PerformanceIndicatorLibrary() {
         title={<span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 17, color: 'var(--color-text-title)' }}>继承指标库</span>}
         open={inheritOpen}
         onCancel={() => { setInheritOpen(false); inheritForm.resetFields() }}
-        onOk={() => inheritForm.submit()}
+        onOk={() => { if (guardIndicatorManage()) inheritForm.submit() }}
         confirmLoading={inheriting}
+        okButtonProps={{ disabled: !canManageIndicator }}
         width={480}
         styles={{ mask: { backdropFilter: 'blur(4px)' } }}
       >
@@ -924,8 +985,9 @@ export default function PerformanceIndicatorLibrary() {
         title={<span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 17, color: 'var(--color-text-title)' }}>编辑指标项</span>}
         open={editItemOpen}
         onCancel={() => { setEditItemOpen(false); setEditingItem(null) }}
-        onOk={() => editItemForm.submit()}
+        onOk={() => { if (guardIndicatorManage()) editItemForm.submit() }}
         confirmLoading={editingItemLoading}
+        okButtonProps={{ disabled: !canManageIndicator }}
         width={560}
         styles={{ mask: { backdropFilter: 'blur(4px)' } }}
       >

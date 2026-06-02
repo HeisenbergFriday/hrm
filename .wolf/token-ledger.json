@@ -2,14 +2,14 @@
   "version": 1,
   "created_at": "2026-05-25T06:54:29.374Z",
   "lifetime": {
-    "total_tokens_estimated": 3569443,
-    "total_reads": 1304,
-    "total_writes": 1795,
-    "total_sessions": 98,
-    "anatomy_hits": 473,
+    "total_tokens_estimated": 3678973,
+    "total_reads": 1316,
+    "total_writes": 1796,
+    "total_sessions": 119,
+    "anatomy_hits": 481,
     "anatomy_misses": 813,
-    "repeated_reads_blocked": 792,
-    "estimated_savings_vs_bare_cli": 5946317
+    "repeated_reads_blocked": 800,
+    "estimated_savings_vs_bare_cli": 6098914
   },
   "sessions": [
     {
@@ -20428,6 +20428,100 @@
         "writes_count": 17,
         "repeated_reads_blocked": 12,
         "anatomy_lookups": 3
+      }
+    },
+    {
+      "id": "session-2026-06-02-0921",
+      "started": "2026-06-02T01:21:50.154Z",
+      "ended": "2026-06-02T03:18:08.655Z",
+      "reads": [
+        {
+          "file": "D:/ai项目/frontend/src/services/api.ts",
+          "tokens_estimated": 11253,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "D:/ai项目/internal/database/performance_models.go",
+          "tokens_estimated": 6298,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "D:/ai项目/internal/service/performance_service.go",
+          "tokens_estimated": 26333,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "D:/ai项目/frontend/src/components/PerformanceActivityEditor.tsx",
+          "tokens_estimated": 4904,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "D:/ai项目/frontend/src/pages/PerformanceOverview.tsx",
+          "tokens_estimated": 18500,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "D:/ai项目/internal/api/performance_handlers.go",
+          "tokens_estimated": 25280,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "D:/ai项目/frontend/package.json",
+          "tokens_estimated": 314,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "D:/ai项目/frontend/src/components/AttachmentUpload.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "D:/ai项目/frontend/src/services/api.mock.ts",
+          "tokens_estimated": 3093,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "D:/ai项目/internal/repository/performance_repository.go",
+          "tokens_estimated": 6306,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/frontend/package.json",
+          "tokens_estimated": 314,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/ai项目/.ai/MODULES/performance.md",
+          "tokens_estimated": 5977,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "C:/Users/吴列德/.claude/plans/linear-wondering-scone.md",
+          "tokens_estimated": 958,
+          "action": "create"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 108572,
+        "output_tokens_estimated": 958,
+        "reads_count": 12,
+        "writes_count": 1,
+        "repeated_reads_blocked": 8,
+        "anatomy_lookups": 8
       }
     }
   ],
