@@ -653,49 +653,6 @@ func (s *ShiftConfigService) ListShiftCatalogs() ([]ShiftCatalogItem, error) {
 		})
 	}
 
-	if len(items) == 0 {
-		return items, nil
-	}
-
-	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
-	if opUserID == "" {
-		return items, nil
-	}
-
-	groups, err := dingtalk.GetAttendanceGroups()
-	if err != nil {
-		return items, nil
-	}
-	groupID, err := dingtalk.FindScheduleGroupID(groups)
-	if err != nil {
-		return items, nil
-	}
-
-	var groupName string
-	for _, group := range groups {
-		gid, ok := group["group_id"].(float64)
-		if !ok || int64(gid) != groupID {
-			continue
-		}
-		groupName, _ = group["group_name"].(string)
-		break
-	}
-
-	groupDetail, err := dingtalk.GetAttendanceGroup(opUserID, groupID)
-	if err != nil {
-		for i := range items {
-			items[i].GroupID = groupID
-			items[i].GroupName = groupName
-		}
-		return items, nil
-	}
-
-	for i := range items {
-		items[i].GroupID = groupID
-		items[i].GroupName = groupName
-		items[i].AttachedToGroup = dingtalk.AttendanceGroupHasShift(groupDetail, items[i].ShiftID)
-	}
-
 	return items, nil
 }
 

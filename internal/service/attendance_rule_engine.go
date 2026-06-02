@@ -22,6 +22,7 @@ type AttendanceRuleEngine struct {
 	weekScheduleService *WeekScheduleService
 	holidayFinder       func(date string) (*database.StatutoryHoliday, bool)
 	scheduleFinder      func(userID, departmentID, date string) (attendanceSchedule, error)
+	weekTypeFinder      func(userID, departmentID, date string) (string, error)
 }
 
 // NewAttendanceRuleEngine creates a new attendance rule engine.
@@ -31,7 +32,181 @@ func NewAttendanceRuleEngine(weekScheduleService *WeekScheduleService) *Attendan
 	}
 	engine.holidayFinder = engine.lookupHoliday
 	engine.scheduleFinder = engine.lookupSchedule
+	engine.weekTypeFinder = engine.lookupWeekType
 	return engine
+}
+
+func (e *AttendanceRuleEngine) WithCachedLookups(users []database.User, startDate, endDate string) (*AttendanceRuleEngine, error) {
+	cached := *e
+	if e.weekScheduleService == nil || e.weekScheduleService.db == nil || e.weekScheduleService.scheduleRepo == nil {
+		return &cached, nil
+	}
+
+	lookupCache, err := newAttendanceLookupCache(e.weekScheduleService, users, startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+
+	cached.holidayFinder = lookupCache.findHoliday
+	cached.scheduleFinder = lookupCache.findSchedule
+	cached.weekTypeFinder = lookupCache.findWeekType
+	return &cached, nil
+}
+
+type attendanceLookupCache struct {
+	holidays      map[string]*database.StatutoryHoliday
+	customConfigs map[string]database.EmployeeShiftConfig
+	shiftCatalogs map[int64]*database.DingTalkShiftCatalog
+	rules         map[string]*database.WeekScheduleRule
+	overrides     map[string]*database.WeekScheduleOverride
+}
+
+func newAttendanceLookupCache(weekScheduleService *WeekScheduleService, users []database.User, startDate, endDate string) (*attendanceLookupCache, error) {
+	cache := &attendanceLookupCache{
+		holidays:      make(map[string]*database.StatutoryHoliday),
+		customConfigs: make(map[string]database.EmployeeShiftConfig),
+		shiftCatalogs: make(map[int64]*database.DingTalkShiftCatalog),
+		rules:         make(map[string]*database.WeekScheduleRule),
+		overrides:     make(map[string]*database.WeekScheduleOverride),
+	}
+
+	start, err := time.Parse("2006-01-02", startDate)
+	if err != nil {
+		return nil, err
+	}
+	end, err := time.Parse("2006-01-02", endDate)
+	if err != nil {
+		return nil, err
+	}
+
+	holidays, err := weekScheduleService.scheduleRepo.FindHolidaysByDateRange(startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+	for i := range holidays {
+		cache.holidays[holidays[i].Date] = &holidays[i]
+	}
+
+	userIDs := collectAttendanceUserIDs(users)
+	departmentIDs := collectAttendanceDepartmentIDs(users)
+
+	rules, err := findActiveAttendanceRules(weekScheduleService.db, userIDs, departmentIDs)
+	if err != nil {
+		return nil, err
+	}
+	shiftIDs := make(map[int64]struct{})
+	for i := range rules {
+		key := attendanceScopeKey(rules[i].ScopeType, rules[i].ScopeID)
+		if _, exists := cache.rules[key]; !exists {
+			cache.rules[key] = &rules[i]
+		}
+		if rules[i].ShiftID > 0 {
+			shiftIDs[rules[i].ShiftID] = struct{}{}
+		}
+	}
+
+	weekStart := getMonday(start).Format("2006-01-02")
+	weekEnd := getMonday(end).Format("2006-01-02")
+	overrides, err := findAttendanceOverridesByDateRange(weekScheduleService.db, userIDs, departmentIDs, weekStart, weekEnd)
+	if err != nil {
+		return nil, err
+	}
+	for i := range overrides {
+		cache.overrides[attendanceOverrideKey(overrides[i].ScopeType, overrides[i].ScopeID, overrides[i].WeekStartDate)] = &overrides[i]
+	}
+
+	if len(userIDs) > 0 {
+		var customConfigs []database.EmployeeShiftConfig
+		if err := weekScheduleService.db.Where("user_id IN ?", userIDs).Find(&customConfigs).Error; err != nil {
+			return nil, err
+		}
+		for _, cfg := range customConfigs {
+			cache.customConfigs[cfg.UserID] = cfg
+			if cfg.ShiftID > 0 {
+				shiftIDs[cfg.ShiftID] = struct{}{}
+			}
+		}
+	}
+
+	if len(shiftIDs) > 0 {
+		ids := make([]int64, 0, len(shiftIDs))
+		for id := range shiftIDs {
+			ids = append(ids, id)
+		}
+		var catalogs []database.DingTalkShiftCatalog
+		if err := weekScheduleService.db.Where("shift_id IN ?", ids).Order("updated_at DESC").Find(&catalogs).Error; err != nil {
+			return nil, err
+		}
+		for i := range catalogs {
+			if _, exists := cache.shiftCatalogs[catalogs[i].ShiftID]; !exists {
+				cache.shiftCatalogs[catalogs[i].ShiftID] = &catalogs[i]
+			}
+		}
+	}
+
+	return cache, nil
+}
+
+func collectAttendanceUserIDs(users []database.User) []string {
+	seen := make(map[string]struct{}, len(users))
+	userIDs := make([]string, 0, len(users))
+	for _, user := range users {
+		if user.UserID == "" {
+			continue
+		}
+		if _, exists := seen[user.UserID]; exists {
+			continue
+		}
+		seen[user.UserID] = struct{}{}
+		userIDs = append(userIDs, user.UserID)
+	}
+	return userIDs
+}
+
+func collectAttendanceDepartmentIDs(users []database.User) []string {
+	seen := make(map[string]struct{}, len(users))
+	departmentIDs := make([]string, 0, len(users))
+	for _, user := range users {
+		if user.DepartmentID == "" {
+			continue
+		}
+		if _, exists := seen[user.DepartmentID]; exists {
+			continue
+		}
+		seen[user.DepartmentID] = struct{}{}
+		departmentIDs = append(departmentIDs, user.DepartmentID)
+	}
+	return departmentIDs
+}
+
+func findActiveAttendanceRules(db *gorm.DB, userIDs, departmentIDs []string) ([]database.WeekScheduleRule, error) {
+	var rules []database.WeekScheduleRule
+	query := db.Where("status = ?", "active")
+	query = applyAttendanceScopeFilter(query, userIDs, departmentIDs)
+	err := query.Order("created_at DESC").Find(&rules).Error
+	return rules, err
+}
+
+func findAttendanceOverridesByDateRange(db *gorm.DB, userIDs, departmentIDs []string, startDate, endDate string) ([]database.WeekScheduleOverride, error) {
+	var overrides []database.WeekScheduleOverride
+	query := db.Where("week_start_date >= ? AND week_start_date <= ?", startDate, endDate)
+	query = applyAttendanceScopeFilter(query, userIDs, departmentIDs)
+	err := query.Order("week_start_date ASC").Find(&overrides).Error
+	return overrides, err
+}
+
+func applyAttendanceScopeFilter(query *gorm.DB, userIDs, departmentIDs []string) *gorm.DB {
+	clauses := []string{"(scope_type = ? AND scope_id = ?)"}
+	args := []interface{}{"company", ""}
+	if len(userIDs) > 0 {
+		clauses = append(clauses, "(scope_type = ? AND scope_id IN ?)")
+		args = append(args, "user", userIDs)
+	}
+	if len(departmentIDs) > 0 {
+		clauses = append(clauses, "(scope_type = ? AND scope_id IN ?)")
+		args = append(args, "department", departmentIDs)
+	}
+	return query.Where(strings.Join(clauses, " OR "), args...)
 }
 
 // AttendanceStatus describes the primary status of a workday.
@@ -254,14 +429,22 @@ func (e *AttendanceRuleEngine) getSchedule(userID, departmentID, date string) (a
 }
 
 func (e *AttendanceRuleEngine) resolveWeekType(userID, departmentID, date string) (string, error) {
-	if e.weekScheduleService == nil {
-		return "big", nil
+	finder := e.weekTypeFinder
+	if finder == nil {
+		finder = e.lookupWeekType
 	}
-	weekType, err := e.weekScheduleService.GetWeekType(userID, departmentID, date)
+	weekType, err := finder(userID, departmentID, date)
 	if err != nil {
 		return "big", nil
 	}
 	return weekType, nil
+}
+
+func (e *AttendanceRuleEngine) lookupWeekType(userID, departmentID, date string) (string, error) {
+	if e.weekScheduleService == nil {
+		return "big", nil
+	}
+	return e.weekScheduleService.GetWeekType(userID, departmentID, date)
 }
 
 func (e *AttendanceRuleEngine) lookupHoliday(date string) (*database.StatutoryHoliday, bool) {
@@ -372,6 +555,113 @@ func (e *AttendanceRuleEngine) lookupShiftCatalog(shiftID int64) (*database.Ding
 		return nil, false, err
 	}
 	return &catalog, true, nil
+}
+
+func (c *attendanceLookupCache) findHoliday(date string) (*database.StatutoryHoliday, bool) {
+	holiday, exists := c.holidays[date]
+	return holiday, exists
+}
+
+func (c *attendanceLookupCache) findSchedule(userID, departmentID, _ string) (attendanceSchedule, error) {
+	schedule := attendanceSchedule{
+		CheckIn:  config.GetDefaultCheckIn(),
+		CheckOut: config.GetDefaultCheckOut(),
+		Source:   "default",
+	}
+
+	if customConfig, exists := c.customConfigs[userID]; exists {
+		schedule.Source = "custom"
+		schedule.ShiftID = customConfig.ShiftID
+		c.applyShiftCatalog(&schedule, customConfig.ShiftID)
+		if strings.TrimSpace(customConfig.EndTime) != "" {
+			schedule.CheckOut = strings.TrimSpace(customConfig.EndTime)
+		}
+		return schedule, nil
+	}
+
+	scopes := []struct {
+		scopeType string
+		scopeID   string
+	}{
+		{scopeType: "user", scopeID: userID},
+	}
+	if departmentID != "" {
+		scopes = append(scopes, struct {
+			scopeType string
+			scopeID   string
+		}{scopeType: "department", scopeID: departmentID})
+	}
+	scopes = append(scopes, struct {
+		scopeType string
+		scopeID   string
+	}{scopeType: "company", scopeID: ""})
+
+	for _, scope := range scopes {
+		rule := c.rules[attendanceScopeKey(scope.scopeType, scope.scopeID)]
+		if rule == nil || rule.ShiftID <= 0 {
+			continue
+		}
+		schedule.Source = "week_rule"
+		schedule.ShiftID = rule.ShiftID
+		c.applyShiftCatalog(&schedule, rule.ShiftID)
+		return schedule, nil
+	}
+
+	return schedule, nil
+}
+
+func (c *attendanceLookupCache) findWeekType(userID, departmentID, date string) (string, error) {
+	t, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return "", err
+	}
+	weekStart := getMonday(t).Format("2006-01-02")
+
+	scopes := []struct {
+		scopeType string
+		scopeID   string
+	}{
+		{"user", userID},
+		{"department", departmentID},
+		{"company", ""},
+	}
+
+	for _, scope := range scopes {
+		if scope.scopeID == "" && scope.scopeType != "company" {
+			continue
+		}
+		override := c.overrides[attendanceOverrideKey(scope.scopeType, scope.scopeID, weekStart)]
+		if override != nil {
+			return override.WeekType, nil
+		}
+		rule := c.rules[attendanceScopeKey(scope.scopeType, scope.scopeID)]
+		if rule != nil {
+			return calcWeekTypeByRule(rule, weekStart)
+		}
+	}
+
+	return "big", nil
+}
+
+func (c *attendanceLookupCache) applyShiftCatalog(schedule *attendanceSchedule, shiftID int64) {
+	catalog := c.shiftCatalogs[shiftID]
+	if catalog == nil {
+		return
+	}
+	if catalog.CheckIn != "" {
+		schedule.CheckIn = strings.TrimSpace(catalog.CheckIn)
+	}
+	if catalog.CheckOut != "" {
+		schedule.CheckOut = strings.TrimSpace(catalog.CheckOut)
+	}
+}
+
+func attendanceScopeKey(scopeType, scopeID string) string {
+	return scopeType + "|" + scopeID
+}
+
+func attendanceOverrideKey(scopeType, scopeID, weekStartDate string) string {
+	return attendanceScopeKey(scopeType, scopeID) + "|" + weekStartDate
 }
 
 func normalizeCheckType(checkType string) string {

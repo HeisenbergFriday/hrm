@@ -540,6 +540,25 @@ export interface RefreshParticipantsResult {
   inactive_count: number
 }
 
+export interface PerformanceParticipantImportResult {
+  activity_name: string
+  employee_ids: string[]
+  employees?: {
+    user_id: string
+    employee_id?: string
+    name?: string
+    department_id?: string
+    department_name?: string
+  }[]
+  parsed_count: number
+  imported_count: number
+  duplicate_count: number
+  missing_employee_ids: string[]
+  inactive_employee_ids: string[]
+  skipped_rows: { row: number; reason: string }[]
+  warnings: string[]
+}
+
 // 自评提交请求
 export interface SubmitSelfEvaluationRequest {
   self_score: number
@@ -822,6 +841,15 @@ export const performanceAPI = {
 
   refreshParticipants: (activityId: number) =>
     api.post(`/performance/activities/${activityId}/refresh-participants`),
+
+  importParticipants: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post('/performance/participants/import', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 30000,
+    })
+  },
 
   getParticipant: (participantId: number) =>
     api.get(`/performance/participants/${participantId}`),

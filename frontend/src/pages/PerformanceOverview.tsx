@@ -15,13 +15,14 @@ import {
   performanceAPI,
   PerformanceActivity,
   PerformanceParticipant,
+  PerformanceParticipantImportResult,
   PerformanceDistributionRule,
   PerformanceHRDeadlineStatus,
   PerformanceIndicatorLibrary,
   userAPI,
 } from '../services/api'
 import PerformanceActivityEditor from '../components/PerformanceActivityEditor'
-import { BarChartOutlined, PlusOutlined } from '@ant-design/icons'
+import { BarChartOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import { getCycleLabel, formatDateTime } from '../utils/format'
 import { hasPermission } from '../utils/permission'
 
@@ -30,6 +31,11 @@ const { TextArea } = Input
 
 type RejectGoalFormValues = {
   comment: string
+}
+
+type SelectOption = {
+  label: React.ReactNode
+  value: string | number
 }
 
 function normalizeIDArray(value?: string[] | string): string[] {
@@ -58,6 +64,45 @@ function getUserOption(user: any) {
   const name = user.name || user.user_name || user.employee_name || value
   const departmentName = user.department_name ? ` - ${user.department_name}` : ''
   return value ? { value, label: `${name}（${value}）${departmentName}` } : null
+}
+
+function getImportedUserOption(user: any) {
+  const value = String(user?.user_id || user?.employee_id || user?.id || '').trim()
+  if (!value) return null
+  const employeeID = String(user?.employee_id || '').trim()
+  const name = String(user?.name || user?.user_name || user?.employee_name || value).trim()
+  const employeeIDText = employeeID && employeeID !== value ? ` / ${employeeID}` : ''
+  const departmentName = user?.department_name ? ` - ${user.department_name}` : ''
+  return { value, label: `${name}（${value}${employeeIDText}）${departmentName}` }
+}
+
+function mergeSelectOptions(baseOptions: SelectOption[], extraOptions: SelectOption[]) {
+  const merged = [...baseOptions]
+  const seen = new Set(baseOptions.map(option => String(option.value)))
+
+  extraOptions.forEach(option => {
+    const key = String(option.value)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    merged.push(option)
+  })
+
+  return merged
+}
+
+function getImportedUserOptions(
+  result: PerformanceParticipantImportResult | null | undefined,
+  employeeIDs: string[],
+) {
+  const detailOptions = (result?.employees || []).flatMap(employee => {
+    const option = getImportedUserOption(employee)
+    return option ? [option] : []
+  })
+  const fallbackOptions = employeeIDs.flatMap(employeeID => {
+    const option = getImportedUserOption({ user_id: employeeID })
+    return option ? [option] : []
+  })
+  return mergeSelectOptions(detailOptions, fallbackOptions)
 }
 
 function formatRangeStart(range?: [Dayjs, Dayjs]) {
@@ -150,10 +195,12 @@ const PerformanceOverview: React.FC = () => {
   const [activitiesTotal, setActivitiesTotal] = useState(0)
   const [activityModalVisible, setActivityModalVisible] = useState(false)
   const [activitySaving, setActivitySaving] = useState(false)
+  const [participantImporting, setParticipantImporting] = useState(false)
   const [editingActivity, setEditingActivity] = useState<PerformanceActivity | null>(null)
   const [form] = Form.useForm()
   const [departments, setDepartments] = useState<any[]>([])
   const [users, setUsers] = useState<any[]>([])
+  const [importedUserOptions, setImportedUserOptions] = useState<SelectOption[]>([])
   const [scopeOptionsLoading, setScopeOptionsLoading] = useState(false)
   const [indicatorLibraries, setIndicatorLibraries] = useState<PerformanceIndicatorLibrary[]>([])
   const [indicatorLibrariesLoading, setIndicatorLibrariesLoading] = useState(false)
@@ -186,6 +233,27 @@ const PerformanceOverview: React.FC = () => {
   // 活动列表筛选
   const [activitySearchText, setActivitySearchText] = useState('')
   const [activityStatusFilter, setActivityStatusFilter] = useState<string | undefined>(undefined)
+
+  const departmentOptions = React.useMemo(
+    () => departments.flatMap(department => {
+      const option = getDepartmentOption(department)
+      return option ? [option] : []
+    }),
+    [departments],
+  )
+
+  const baseUserOptions = React.useMemo(
+    () => users.flatMap(user => {
+      const option = getUserOption(user)
+      return option ? [option] : []
+    }),
+    [users],
+  )
+
+  const userOptions = React.useMemo(
+    () => mergeSelectOptions(baseUserOptions, importedUserOptions),
+    [baseUserOptions, importedUserOptions],
+  )
 
   // 加载活动列表
   const loadActivities = useCallback(async () => {
@@ -339,7 +407,45 @@ const PerformanceOverview: React.FC = () => {
   const closeActivityEditor = () => {
     setActivityModalVisible(false)
     setEditingActivity(null)
+    setImportedUserOptions([])
     form.resetFields()
+  }
+
+  // 导入参与人名单
+  const handleImportParticipants = async (file: File) => {
+    if (participantImporting) return
+    setParticipantImporting(true)
+    try {
+      const res: any = await performanceAPI.importParticipants(file)
+      const result = (res?.data?.result || res?.result || res?.data || res) as PerformanceParticipantImportResult
+      const employeeIDs = normalizeIDArray(result.employee_ids)
+      setImportedUserOptions(previous => mergeSelectOptions(previous, getImportedUserOptions(result, employeeIDs)))
+      if (employeeIDs.length > 0) {
+        const nextValues: Record<string, any> = { target_employee_ids: employeeIDs }
+        if (result.activity_name && !String(form.getFieldValue('name') || '').trim()) {
+          nextValues.name = result.activity_name
+        }
+        form.setFieldsValue(nextValues)
+        forceUpdate()
+      }
+
+      const notes: string[] = []
+      if (result.duplicate_count) notes.push(`重复 ${result.duplicate_count}`)
+      if (result.missing_employee_ids?.length) notes.push(`未匹配 ${result.missing_employee_ids.length}`)
+      if (result.inactive_employee_ids?.length) notes.push(`非在职 ${result.inactive_employee_ids.length}`)
+      if (result.skipped_rows?.length) notes.push(`跳过 ${result.skipped_rows.length} 行`)
+      const suffix = notes.length ? `（${notes.join('，')}）` : ''
+      if (employeeIDs.length > 0) {
+        message.success(`已导入 ${employeeIDs.length} 名指定员工${suffix}`)
+      } else {
+        message.warning(`未导入有效员工${suffix}`)
+      }
+      result.warnings?.slice(0, 2).forEach(warning => message.warning(warning))
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '导入失败，请检查 Excel 模板')
+    } finally {
+      setParticipantImporting(false)
+    }
   }
 
   // 创建/编辑活动
@@ -589,6 +695,8 @@ const PerformanceOverview: React.FC = () => {
     loadScopeOptions()
     loadIndicatorLibraries()
     if (activity) {
+      const targetEmployeeIDs = normalizeIDArray(activity.target_employee_ids)
+      setImportedUserOptions(getImportedUserOptions(null, targetEmployeeIDs))
       form.setFieldsValue({
         name: activity.name,
         cycle_type: activity.cycle_type,
@@ -602,13 +710,14 @@ const PerformanceOverview: React.FC = () => {
         hr_confirm_range: activity.hr_confirm_start_at && activity.hr_confirm_end_at ? [dayjs(activity.hr_confirm_start_at), dayjs(activity.hr_confirm_end_at)] : undefined,
         hr_confirm_deadline: activity.hr_confirm_deadline ? dayjs(activity.hr_confirm_deadline) : undefined,
         target_department_ids: normalizeIDArray(activity.target_department_ids),
-        target_employee_ids: normalizeIDArray(activity.target_employee_ids),
+        target_employee_ids: targetEmployeeIDs,
         indicator_library_id: activity.indicator_library_id,
         description: activity.description,
         enable_bonus_score: activity.enable_bonus_score || false,
         strict_time_mode: activity.strict_time_mode || false,
       })
     } else {
+      setImportedUserOptions([])
       form.resetFields()
     }
     setActivityModalVisible(true)
@@ -878,6 +987,12 @@ const PerformanceOverview: React.FC = () => {
   // 统计数据
   const inProgressCount = activities.filter(a => ['target_setting', 'self_evaluation', 'manager_evaluation', 'employee_confirmation', 'manager_confirmation', 'hr_confirmation'].includes(a.status)).length
   const confirmedCount = activities.filter(a => ['locked', 'result_confirmed'].includes(a.status)).length
+  const activityListActions = (
+    <Space>
+      <Button type="primary" icon={<PlusOutlined />} onClick={() => openActivityModal()}>新建活动</Button>
+      <Button icon={<ReloadOutlined />} onClick={() => loadActivities()} disabled={activitiesLoading}>刷新</Button>
+    </Space>
+  )
 
   return (
     <PageContainer
@@ -921,6 +1036,22 @@ const PerformanceOverview: React.FC = () => {
             ))}
           </Row>
 
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 12,
+              marginBottom: 16,
+            }}
+          >
+            <Text strong style={{ fontSize: 16, color: 'var(--color-text-title)' }}>
+              绩效活动
+            </Text>
+            {activityListActions}
+          </div>
+
           <PerformanceActivityEditor
             visible={activityModalVisible}
             editing={Boolean(editingActivity)}
@@ -928,29 +1059,18 @@ const PerformanceOverview: React.FC = () => {
             saving={activitySaving}
             indicatorLibraries={indicatorLibraries}
             indicatorLibrariesLoading={indicatorLibrariesLoading}
-            departmentOptions={departments.flatMap(department => {
-              const option = getDepartmentOption(department)
-              return option ? [option] : []
-            })}
-            userOptions={users.flatMap(user => {
-              const option = getUserOption(user)
-              return option ? [option] : []
-            })}
+            departmentOptions={departmentOptions}
+            userOptions={userOptions}
             scopeOptionsLoading={scopeOptionsLoading}
+            importingParticipants={participantImporting}
+            onImportParticipants={handleImportParticipants}
             onSave={handleSaveActivity}
             onCancel={closeActivityEditor}
           />
 
           {/* 活动列表 */}
           <PageCard
-            title="绩效活动"
             style={{ marginBottom: 16 }}
-            extra={
-              <Space>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => openActivityModal()}>新建活动</Button>
-                <Button onClick={() => loadActivities()} disabled={activitiesLoading}>刷新</Button>
-              </Space>
-            }
           >
             <Space style={{ marginBottom: 16 }} wrap>
               <Input.Search

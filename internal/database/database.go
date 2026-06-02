@@ -37,11 +37,12 @@ func generateRandomPassword(length int) string {
 var DB *gorm.DB
 
 func gormConfig() *gorm.Config {
+	baseLogger := logger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), logger.Config{
+		LogLevel:                  logger.Info,
+		IgnoreRecordNotFoundError: true,
+	})
 	return &gorm.Config{
-		Logger: logger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), logger.Config{
-			LogLevel:                  logger.Info,
-			IgnoreRecordNotFoundError: true,
-		}),
+		Logger:                                   newRequestLogger(baseLogger),
 		DisableForeignKeyConstraintWhenMigrating: true,
 	}
 }
@@ -190,6 +191,9 @@ func migrate() error {
 
 	// WeekScheduleRule 建唯一索引前先去重，避免历史重复数据导致迁移失败
 	deduplicateWeekScheduleRules()
+	if err := migrateUserRolesSingleRole(); err != nil {
+		return err
+	}
 
 	if err := DB.AutoMigrate(
 		&User{},
@@ -502,6 +506,63 @@ func findUniqueIndexByColumn(tableName, columnName string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func migrateUserRolesSingleRole() error {
+	if !DB.Migrator().HasTable(&UserRole{}) {
+		return nil
+	}
+
+	if err := DB.Unscoped().Where("deleted_at IS NOT NULL").Delete(&UserRole{}).Error; err != nil {
+		return err
+	}
+
+	if err := DB.Exec(`
+		DELETE ur
+		FROM user_roles ur
+		JOIN (
+			SELECT user_id, MAX(id) AS keep_id
+			FROM user_roles
+			WHERE deleted_at IS NULL
+			GROUP BY user_id
+			HAVING COUNT(*) > 1
+		) dup ON dup.user_id = ur.user_id
+		WHERE ur.deleted_at IS NULL
+		  AND ur.id <> dup.keep_id
+	`).Error; err != nil {
+		return err
+	}
+
+	type indexInfo struct {
+		NonUnique int
+	}
+	var indexes []indexInfo
+	if err := DB.Raw(`
+		SELECT NON_UNIQUE
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'user_roles'
+		  AND INDEX_NAME = 'idx_user_roles_user_id'
+	`).Scan(&indexes).Error; err != nil {
+		return err
+	}
+	for _, index := range indexes {
+		if index.NonUnique == 0 {
+			return nil
+		}
+	}
+	if len(indexes) > 0 {
+		if err := DB.Exec("DROP INDEX `idx_user_roles_user_id` ON `user_roles`").Error; err != nil {
+			return err
+		}
+	}
+	if err := DB.Exec("CREATE UNIQUE INDEX `idx_user_roles_user_id` ON `user_roles` (`user_id`)").Error; err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate key name") {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func migrateShiftCatalogSchema() error {

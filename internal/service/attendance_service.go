@@ -6,6 +6,7 @@ import (
 	"peopleops/internal/dingtalk"
 	"peopleops/internal/repository"
 	"sort"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -91,9 +92,25 @@ func (s *AttendanceService) GetStats(filters map[string]string) (map[string]inte
 		return nil, err
 	}
 
-	records, _, err := s.attendanceRepo.FindAll(1, 100000, filters)
+	statsFilters := cloneStatsFilters(filters)
+	statsFilters["start_date"] = startDate
+	statsFilters["end_date"] = endDate
+	if userIDs := collectAttendanceUserIDs(users); len(userIDs) > 0 {
+		statsFilters["user_ids"] = strings.Join(userIDs, ",")
+	}
+
+	records, _, err := s.attendanceRepo.FindAll(1, 100000, statsFilters)
 	if err != nil {
 		return nil, err
+	}
+
+	ruleEngine := s.ruleEngine
+	if ruleEngine != nil {
+		cachedRuleEngine, err := ruleEngine.WithCachedLookups(users, startDate, endDate)
+		if err != nil {
+			return nil, err
+		}
+		ruleEngine = cachedRuleEngine
 	}
 
 	recordMap := make(map[string][]database.Attendance)
@@ -116,12 +133,12 @@ func (s *AttendanceService) GetStats(filters map[string]string) (map[string]inte
 	absentCount := 0
 
 	for _, user := range users {
-		dailyAttendances, err := s.ruleEngine.CalculateAttendance(user.UserID, user.DepartmentID, startDate, endDate)
+		dailyAttendances, err := ruleEngine.CalculateAttendance(user.UserID, user.DepartmentID, startDate, endDate)
 		if err != nil {
 			return nil, fmt.Errorf("calculate attendance for user %s failed: %w", user.UserID, err)
 		}
 
-		dailyAttendances = s.ruleEngine.AggregateAttendance(dailyAttendances, recordMap[user.UserID])
+		dailyAttendances = ruleEngine.AggregateAttendance(dailyAttendances, recordMap[user.UserID])
 
 		deptID := user.DepartmentID
 		if _, ok := departmentStats[deptID]; !ok {
@@ -327,6 +344,14 @@ func (s *AttendanceService) loadDepartmentNames() (map[string]string, error) {
 		result[dept.DepartmentID] = dept.Name
 	}
 	return result, nil
+}
+
+func cloneStatsFilters(filters map[string]string) map[string]string {
+	cloned := make(map[string]string, len(filters)+3)
+	for key, value := range filters {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func incrementAbnormalBucket(bucket map[string]*abnormalUser, userID, userName string) {

@@ -124,9 +124,7 @@ func applyDingTalkProfileFields(profile *database.EmployeeProfile, user dingtalk
 // HealthCheck 健康检查
 
 func resolveOrgScope(c *gin.Context) (*service.OrgDataScope, error) {
-	currentUserID, _ := c.Get("userID")
-	orgService := service.NewOrgService(database.DB)
-	return orgService.ResolveScopeForUser(fmt.Sprint(currentUserID))
+	return middleware.UserDataScope(c)
 }
 
 func respondOrgAccessDenied(c *gin.Context) {
@@ -141,8 +139,7 @@ func currentUserHasAnyPermission(c *gin.Context, permissionCodes ...string) bool
 	if userID == "" || len(permissionCodes) == 0 {
 		return false
 	}
-	permService := service.NewPermissionService(database.DB)
-	ok, err := permService.HasAnyPermission(userID, permissionCodes...)
+	ok, err := middleware.HasAnyPermission(c, permissionCodes...)
 	return err == nil && ok
 }
 
@@ -1877,7 +1874,7 @@ func GetAttendanceRecords(c *gin.Context) {
 		}
 	}
 
-	attendanceService := service.NewAttendanceService(database.DB)
+	attendanceService := service.NewAttendanceService(middleware.RequestDB(c))
 	records, total, err := attendanceService.GetRecords(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -1910,7 +1907,7 @@ func GetAttendanceStats(c *gin.Context) {
 		}
 	}
 
-	attendanceService := service.NewAttendanceService(database.DB)
+	attendanceService := service.NewAttendanceService(middleware.RequestDB(c))
 	stats, err := attendanceService.GetStats(filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -2525,7 +2522,7 @@ func AssignUserRole(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "分配角色失败"})
 		return
 	}
-	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "角色分配成功"})
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "角色设置成功"})
 }
 
 // RemoveUserRole 移除用户角色
@@ -3458,6 +3455,28 @@ func BatchSetWeekScheduleRules(c *gin.Context) {
 
 // GetDingTalkShifts 获取钉钉班次列表
 func GetDingTalkShifts(c *gin.Context) {
+	type ShiftItem struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+	}
+
+	catalogs, catalogErr := service.NewShiftConfigService(middleware.RequestDB(c)).ListShiftCatalogs()
+	if catalogErr == nil && len(catalogs) > 0 {
+		items := make([]ShiftItem, 0, len(catalogs))
+		for _, catalog := range catalogs {
+			if catalog.ShiftID <= 0 {
+				continue
+			}
+			items = append(items, ShiftItem{ID: catalog.ShiftID, Name: catalog.Name})
+		}
+		c.JSON(http.StatusOK, Response{
+			Code:    http.StatusOK,
+			Message: "success",
+			Data:    gin.H{"items": items},
+		})
+		return
+	}
+
 	shifts, err := dingtalk.GetShiftList()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3465,11 +3484,6 @@ func GetDingTalkShifts(c *gin.Context) {
 			Message: "获取班次列表失败: " + err.Error(),
 		})
 		return
-	}
-
-	type ShiftItem struct {
-		ID   int64  `json:"id"`
-		Name string `json:"name"`
 	}
 
 	var items []ShiftItem
@@ -3653,7 +3667,7 @@ func GetWeekCalendar(c *gin.Context) {
 		}
 	}
 
-	svc := service.NewWeekScheduleService(database.DB)
+	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
 	calendar, err := svc.GetWeekCalendar(userID, departmentID, weeks, startDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3940,7 +3954,7 @@ func DeleteHoliday(c *gin.Context) {
 
 // GetShiftConfigs 获取所有员工的下班时间配置（含默认 18:30 的员工）
 func GetShiftConfigs(c *gin.Context) {
-	svc := service.NewShiftConfigService(database.DB)
+	svc := service.NewShiftConfigService(middleware.RequestDB(c))
 	items, err := svc.GetAllWithUsers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3991,7 +4005,7 @@ func GetShiftConfigs(c *gin.Context) {
 
 // SetShiftConfigs 批量/单个设置员工下班时间（仅写本地 DB，不调用钉钉 API）
 func GetShiftCatalogs(c *gin.Context) {
-	svc := service.NewShiftConfigService(database.DB)
+	svc := service.NewShiftConfigService(middleware.RequestDB(c))
 	items, err := svc.ListShiftCatalogs()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
