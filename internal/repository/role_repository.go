@@ -80,13 +80,16 @@ func (r *UserRoleRepository) FindByUserID(userID string) ([]database.Role, error
 }
 
 func (r *UserRoleRepository) Assign(userID string, roleID uint) error {
-	userRole := database.UserRole{UserID: userID, RoleID: roleID}
-	return r.db.Where(database.UserRole{UserID: userID, RoleID: roleID}).
-		FirstOrCreate(&userRole).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.UserRole{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&database.UserRole{UserID: userID, RoleID: roleID}).Error
+	})
 }
 
 func (r *UserRoleRepository) Remove(userID string, roleID uint) error {
-	return r.db.Where("user_id = ? AND role_id = ?", userID, roleID).
+	return r.db.Unscoped().Where("user_id = ? AND role_id = ?", userID, roleID).
 		Delete(&database.UserRole{}).Error
 }
 

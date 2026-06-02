@@ -24,6 +24,7 @@ func SetupRouter() *gin.Engine {
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 	}))
+	router.Use(middleware.RequestMetrics())
 
 	router.GET("/health", HealthCheck)
 	router.GET("/api/v1/files/:filename", middleware.JWTAuthWithQuery(), ServeFile)
@@ -318,6 +319,7 @@ func SetupRouter() *gin.Engine {
 				performance.GET("/activities/:activity_id/realtime-distribution-check", GetRealtimeDistributionCheck)
 
 				performance.POST("/activities/:activity_id/refresh-participants", middleware.RequirePermission("performance:activity:manage"), RefreshPerformanceParticipants)
+				performance.POST("/participants/import", middleware.RequirePermission("performance:activity:manage"), ImportPerformanceActivityParticipants)
 				performance.GET("/activities/:activity_id/participants", GetPerformanceParticipants)
 				performance.GET("/participants/:participant_id", middleware.RequirePermission("performance:result:view"), GetParticipant)
 

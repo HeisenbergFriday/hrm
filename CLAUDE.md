@@ -521,5 +521,5 @@ AI æ–‡æ¡£æ›´æ–°ï¼š
 
 ## Recent Notes
 
-- Performance permissions: data scope controls which rows are visible; feature permissions control whether action buttons are enabled. Keep visible data APIs available by data scope, and show disabled buttons with a tooltip such as 'ÄãÈ±ÉÙxxxÈ¨ÏŞ£¬ĞèÒªÁªÏµ¹ÜÀíÔ±Ìí¼Ó' when a feature permission is missing.
+- Performance permissions: data scope controls which rows are visible; feature permissions control whether action buttons are enabled. Keep visible data APIs available by data scope, and show disabled buttons with a tooltip such as 'ä½ ç¼ºå°‘xxxæƒé™ï¼Œéœ€è¦è”ç³»ç®¡ç†å‘˜æ·»åŠ ' when a feature permission is missing.
 

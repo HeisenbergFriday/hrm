@@ -134,7 +134,7 @@ type RolePermission struct {
 // UserRole 用户角色模型
 type UserRole struct {
 	ID        uint           `gorm:"primaryKey" json:"id"`
-	UserID    string         `gorm:"type:varchar(64);not null" json:"user_id"`
+	UserID    string         `gorm:"type:varchar(64);uniqueIndex:idx_user_roles_user_id;not null" json:"user_id"`
 	RoleID    uint           `gorm:"not null" json:"role_id"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

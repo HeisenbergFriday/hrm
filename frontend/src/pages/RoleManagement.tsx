@@ -100,7 +100,7 @@ const RoleManagement: React.FC = () => {
   })
 
   // 获取角色下的用户列表
-  const { data: roleUsersData, isLoading: roleUsersLoading, refetch: refetchRoleUsers } = useQuery({
+  const { data: roleUsersData, isLoading: roleUsersLoading } = useQuery({
     queryKey: ['role-users', selectedRoleId],
     queryFn: () => permissionAPI.getRoleUsers(Number(selectedRoleId)),
     enabled: !!selectedRoleId,
@@ -267,12 +267,13 @@ const RoleManagement: React.FC = () => {
   const assignUserMutation = useMutation({
     mutationFn: (data: { user_id: string; role_id: number }) => permissionAPI.assignUserRole(data),
     onSuccess: () => {
-      message.success('用户分配成功')
+      message.success('用户角色设置成功')
       setAssignModalVisible(false)
       setSelectedUserId('')
-      refetchRoleUsers()
+      queryClient.invalidateQueries({ queryKey: ['role-users'] })
+      refreshMenuKeys()
     },
-    onError: () => message.error('用户分配失败'),
+    onError: () => message.error('用户角色设置失败'),
   })
 
   // 从角色移除用户
@@ -280,7 +281,8 @@ const RoleManagement: React.FC = () => {
     mutationFn: (data: { user_id: string; role_id: number }) => permissionAPI.removeUserRole(data),
     onSuccess: () => {
       message.success('用户移除成功')
-      refetchRoleUsers()
+      queryClient.invalidateQueries({ queryKey: ['role-users'] })
+      refreshMenuKeys()
     },
     onError: () => message.error('用户移除失败'),
   })
@@ -754,7 +756,7 @@ const RoleManagement: React.FC = () => {
       title={<Space><TeamOutlined /> <Text strong>用户分配</Text></Space>}
       extra={
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setAssignModalVisible(true)} disabled={!selectedRole || !canManagePermission}>
-          添加用户
+          设置用户角色
         </Button>
       }
     >
@@ -824,9 +826,9 @@ const RoleManagement: React.FC = () => {
                 message="用户分配说明"
                 description={
                   <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
-                    <li>一个用户可以分配多个角色</li>
+                    <li>一个用户只能分配一个角色</li>
                     <li>移除用户后，该用户将失去此角色的所有权限</li>
-                    <li>点击"添加用户"按钮可以为当前角色分配新用户</li>
+                    <li>设置为当前角色后，会自动替换该用户原有角色</li>
                   </ul>
                 }
                 type="info"
@@ -838,9 +840,9 @@ const RoleManagement: React.FC = () => {
         </>
       )}
 
-      {/* 添加用户弹窗 */}
+      {/* 设置用户角色弹窗 */}
       <Modal
-        title="添加用户到角色"
+        title="设置用户角色"
         open={assignModalVisible}
         onCancel={() => {
           setAssignModalVisible(false)
@@ -874,7 +876,7 @@ const RoleManagement: React.FC = () => {
           </Form.Item>
         </Form>
         <Alert
-          message="只能选择尚未分配当前角色的用户"
+          message="设置后会替换该用户原有角色；已属于当前角色的用户不会重复显示"
           type="info"
           showIcon
           style={{ marginTop: 16 }}
