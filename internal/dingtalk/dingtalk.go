@@ -38,10 +38,18 @@ type attendanceGroupDetailCache struct {
 	expiry time.Time
 }
 
+type shiftListCache struct {
+	key    string
+	data   []map[string]interface{}
+	expiry time.Time
+}
+
 var (
 	attGroupsCache    attendanceGroupCache
 	attGroupsCacheMu  sync.Mutex
 	attGroupDetailMap sync.Map // key: groupID(int64) → attendanceGroupDetailCache
+	shiftCache        shiftListCache
+	shiftCacheMu      sync.Mutex
 )
 
 func Init() error {
@@ -2270,6 +2278,15 @@ func summarizeAttendanceGroupRestDebug(group map[string]interface{}) string {
 }
 
 func GetShiftList() ([]map[string]interface{}, error) {
+	cacheKey := shiftListCacheKey()
+	shiftCacheMu.Lock()
+	if shiftCache.key == cacheKey && shiftCache.data != nil && time.Now().Before(shiftCache.expiry) {
+		cached := cloneShiftList(shiftCache.data)
+		shiftCacheMu.Unlock()
+		return cached, nil
+	}
+	shiftCacheMu.Unlock()
+
 	accessToken, err := GetAccessToken()
 	if err != nil {
 		return nil, err
@@ -2322,7 +2339,26 @@ func GetShiftList() ([]map[string]interface{}, error) {
 	}
 
 	logrus.Infof("get shifts complete: %d", len(allShifts))
-	return allShifts, nil
+	shiftCacheMu.Lock()
+	shiftCache = shiftListCache{key: cacheKey, data: cloneShiftList(allShifts), expiry: time.Now().Add(10 * time.Minute)}
+	shiftCacheMu.Unlock()
+	return cloneShiftList(allShifts), nil
+}
+
+func shiftListCacheKey() string {
+	return corpID + "|" + appKey
+}
+
+func cloneShiftList(shifts []map[string]interface{}) []map[string]interface{} {
+	cloned := make([]map[string]interface{}, 0, len(shifts))
+	for _, shift := range shifts {
+		item := make(map[string]interface{}, len(shift))
+		for key, value := range shift {
+			item[key] = value
+		}
+		cloned = append(cloned, item)
+	}
+	return cloned
 }
 
 // FindShiftByName 浠庣彮娆″垪琛ㄤ腑鎸夊悕绉版煡鎵?

@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
 	"peopleops/internal/repository"
@@ -377,6 +378,39 @@ func RefreshPerformanceParticipants(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"result": result}})
+}
+
+func ImportPerformanceActivityParticipants(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "请上传 Excel 文件", Data: gin.H{"error": err.Error()}})
+		return
+	}
+	if strings.ToLower(filepath.Ext(file.Filename)) != ".xlsx" {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "仅支持 .xlsx Excel 文件", Data: nil})
+		return
+	}
+
+	reader, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "读取上传文件失败", Data: gin.H{"error": err.Error()}})
+		return
+	}
+	defer reader.Close()
+
+	result, err := service.ParsePerformanceParticipantImportXLSX(reader)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
+		return
+	}
+
+	svc := service.NewPerformanceService(database.DB)
+	if err := svc.ResolveImportedPerformanceEmployees(result); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "匹配员工信息失败", Data: gin.H{"error": err.Error()}})
+		return
+	}
+
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"result": result}})
 }
 

@@ -54,6 +54,9 @@ func (r *AttendanceRepository) FindAll(page, pageSize int, filters map[string]st
 	if v, ok := filters["user_id"]; ok && v != "" {
 		query = query.Where("user_id = ?", v)
 	}
+	if userIDs := csvFilterValues(filters["user_ids"]); len(userIDs) > 0 {
+		query = query.Where("user_id IN ?", userIDs)
+	}
 	if v, ok := filters["department_id"]; ok && v != "" {
 		// 通过子查询找到该部门下所有用户的 user_id
 		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)

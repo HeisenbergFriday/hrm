@@ -252,12 +252,12 @@ func (s *PermissionService) HasAnyPermission(userID string, codes ...string) (bo
 	return false, nil
 }
 
-// GetUserRoles 获取用户的角色列表
+// GetUserRoles 获取用户当前角色。数据库约束保证同一用户最多只有一个角色。
 func (s *PermissionService) GetUserRoles(userID string) ([]database.Role, error) {
 	return s.userRoleRepo.FindByUserID(s.normalizeUserID(userID))
 }
 
-// AssignUserRole 给用户分配角色
+// AssignUserRole 设置用户角色，会替换该用户原有角色。
 func (s *PermissionService) AssignUserRole(userID string, roleID uint) error {
 	return s.userRoleRepo.Assign(s.normalizeUserID(userID), roleID)
 }
@@ -383,7 +383,7 @@ func (s *PermissionService) HasMenuPermission(userID string, menuKey string) (bo
 }
 
 // ResolveUserScope 根据 data_permissions 表统一解析用户的数据可见范围。
-// 优先级：all > department > self。多个角色取最宽松的合并结果。
+// 数据库约束保证同一用户最多只有一个角色，保留 all > department > self 作为兼容兜底。
 // 返回 nil 表示全量权限（admin 或 all scope）。
 func (s *PermissionService) ResolveUserScope(userID string) (*OrgDataScope, error) {
 	// admin 用户全量权限
