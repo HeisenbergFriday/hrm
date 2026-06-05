@@ -256,7 +256,7 @@ const PerformanceManagerEval: React.FC = () => {
     return (
       <PageCard title="配额进度" size="small" style={{ marginBottom: 16 }}>
         <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-          团队：{team.manager_name || '未分组'}（共 {team.total} 人）
+          考核上级团队：{team.manager_name || '未分组'}（共 {team.total} 人）
         </Text>
         {['S', 'A', 'B', 'CD'].map(level => {
           const q = team.levels[level]
@@ -460,7 +460,7 @@ const PerformanceManagerEval: React.FC = () => {
                       render: (val: number) => val || '-'
                     },
                     {
-                      title: '主管评分',
+                      title: '考核上级评分',
                       key: 'manager_score',
                       width: 120,
                       render: (_: any, record: any) => (

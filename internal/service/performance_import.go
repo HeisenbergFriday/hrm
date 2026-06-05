@@ -31,25 +31,53 @@ type PerformanceParticipantImportSkippedRow struct {
 }
 
 type PerformanceParticipantImportEmployee struct {
-	UserID         string `json:"user_id"`
-	EmployeeID     string `json:"employee_id"`
-	Name           string `json:"name"`
-	DepartmentID   string `json:"department_id"`
-	DepartmentName string `json:"department_name"`
+	UserID                      string `json:"user_id"`
+	EmployeeID                  string `json:"employee_id"`
+	Name                        string `json:"name"`
+	DepartmentID                string `json:"department_id"`
+	DepartmentName              string `json:"department_name"`
+	AssessmentManagerUserID     string `json:"assessment_manager_user_id,omitempty"`
+	AssessmentManagerEmployeeID string `json:"assessment_manager_employee_id,omitempty"`
+	AssessmentManagerName       string `json:"assessment_manager_name,omitempty"`
+	AssessmentManagerSource     string `json:"assessment_manager_source,omitempty"`
+	ManagerOverrideReason       string `json:"manager_override_reason,omitempty"`
+}
+
+type PerformanceParticipantImportManagerAssignment struct {
+	Row                         int    `json:"row"`
+	UserID                      string `json:"user_id"`
+	EmployeeID                  string `json:"employee_id"`
+	AssessmentManagerUserID     string `json:"assessment_manager_user_id"`
+	AssessmentManagerEmployeeID string `json:"assessment_manager_employee_id"`
+	AssessmentManagerName       string `json:"assessment_manager_name"`
+	AssessmentManagerSource     string `json:"assessment_manager_source"`
+	ManagerOverrideReason       string `json:"manager_override_reason"`
 }
 
 type PerformanceParticipantImportResult struct {
-	ActivityName        string                                   `json:"activity_name"`
-	EmployeeIDs         []string                                 `json:"employee_ids"`
-	Employees           []PerformanceParticipantImportEmployee   `json:"employees"`
-	ParsedCount         int                                      `json:"parsed_count"`
-	ImportedCount       int                                      `json:"imported_count"`
-	DuplicateCount      int                                      `json:"duplicate_count"`
-	MissingEmployeeIDs  []string                                 `json:"missing_employee_ids"`
-	InactiveEmployeeIDs []string                                 `json:"inactive_employee_ids"`
-	SkippedRows         []PerformanceParticipantImportSkippedRow `json:"skipped_rows"`
-	Warnings            []string                                 `json:"warnings"`
-	rawEmployeeIDs      []string
+	ActivityName                 string                                          `json:"activity_name"`
+	EmployeeIDs                  []string                                        `json:"employee_ids"`
+	Employees                    []PerformanceParticipantImportEmployee          `json:"employees"`
+	ManagerAssignments           []PerformanceParticipantImportManagerAssignment `json:"manager_assignments"`
+	ManagerAssignmentSkippedRows []PerformanceParticipantImportSkippedRow        `json:"manager_assignment_skipped_rows"`
+	ParsedCount                  int                                             `json:"parsed_count"`
+	ImportedCount                int                                             `json:"imported_count"`
+	DuplicateCount               int                                             `json:"duplicate_count"`
+	MissingEmployeeIDs           []string                                        `json:"missing_employee_ids"`
+	InactiveEmployeeIDs          []string                                        `json:"inactive_employee_ids"`
+	SkippedRows                  []PerformanceParticipantImportSkippedRow        `json:"skipped_rows"`
+	Warnings                     []string                                        `json:"warnings"`
+	rawEmployeeIDs               []string
+	rawRows                      []performanceParticipantImportRawRow
+}
+
+type performanceParticipantImportRawRow struct {
+	Row                         int
+	EmployeeID                  string
+	AssessmentManagerEmployeeID string
+	AssessmentManagerName       string
+	AssessmentManagerSource     string
+	ManagerOverrideReason       string
 }
 
 type xlsxWorkbook struct {
@@ -160,22 +188,44 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 	if result == nil {
 		return nil
 	}
-	sourceIDs := result.rawEmployeeIDs
-	if len(sourceIDs) == 0 {
-		sourceIDs = result.EmployeeIDs
+	sourceRows := result.rawRows
+	if len(sourceRows) == 0 {
+		sourceIDs := result.rawEmployeeIDs
+		if len(sourceIDs) == 0 {
+			sourceIDs = result.EmployeeIDs
+		}
+		for _, id := range sourceIDs {
+			sourceRows = append(sourceRows, performanceParticipantImportRawRow{EmployeeID: id})
+		}
 	}
-	result.ParsedCount = len(sourceIDs)
+	result.ParsedCount = len(sourceRows)
 	result.EmployeeIDs = []string{}
 	result.Employees = []PerformanceParticipantImportEmployee{}
+	result.ManagerAssignments = []PerformanceParticipantImportManagerAssignment{}
+	result.ManagerAssignmentSkippedRows = []PerformanceParticipantImportSkippedRow{}
 	result.ImportedCount = 0
 	result.MissingEmployeeIDs = []string{}
 	result.InactiveEmployeeIDs = []string{}
-	if len(sourceIDs) == 0 {
+	if len(sourceRows) == 0 {
 		return nil
 	}
 
+	lookupIDSet := make(map[string]struct{})
+	for _, row := range sourceRows {
+		if id := strings.TrimSpace(row.EmployeeID); id != "" {
+			lookupIDSet[id] = struct{}{}
+		}
+		if id := strings.TrimSpace(row.AssessmentManagerEmployeeID); id != "" {
+			lookupIDSet[id] = struct{}{}
+		}
+	}
+	lookupIDs := make([]string, 0, len(lookupIDSet))
+	for id := range lookupIDSet {
+		lookupIDs = append(lookupIDs, id)
+	}
+
 	var profiles []database.EmployeeProfile
-	if err := s.db.Where("(employee_id IN ? OR user_id IN ?) AND deleted_at IS NULL", sourceIDs, sourceIDs).Find(&profiles).Error; err != nil {
+	if err := s.db.Where("(employee_id IN ? OR user_id IN ?) AND deleted_at IS NULL", lookupIDs, lookupIDs).Find(&profiles).Error; err != nil {
 		return err
 	}
 	profileUserByEmployeeID := make(map[string]string)
@@ -196,7 +246,7 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 	}
 
 	candidateUserIDSet := make(map[string]struct{})
-	for _, id := range sourceIDs {
+	for _, id := range lookupIDs {
 		candidateUserIDSet[id] = struct{}{}
 		if userID := profileUserByEmployeeID[id]; userID != "" {
 			candidateUserIDSet[userID] = struct{}{}
@@ -237,7 +287,9 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 	}
 
 	seenResolved := make(map[string]struct{})
-	for _, sourceID := range sourceIDs {
+	managerSkippedCount := 0
+	for _, row := range sourceRows {
+		sourceID := strings.TrimSpace(row.EmployeeID)
 		userID := sourceID
 		user, ok := userByID[userID]
 		if !ok {
@@ -257,8 +309,20 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 		if _, exists := seenResolved[userID]; exists {
 			continue
 		}
-		seenResolved[userID] = struct{}{}
-		result.EmployeeIDs = append(result.EmployeeIDs, userID)
+
+		managerUserID, managerEmployeeID, managerName, managerSource, managerReason, err := s.resolveImportedAssessmentManager(row, profileUserByEmployeeID, profileByUserID, userByID)
+		if err != nil {
+			result.ManagerAssignmentSkippedRows = append(result.ManagerAssignmentSkippedRows, PerformanceParticipantImportSkippedRow{
+				Row:    row.Row,
+				Reason: err.Error(),
+			})
+			managerSkippedCount++
+			managerUserID = ""
+			managerEmployeeID = ""
+			managerName = ""
+			managerSource = ""
+			managerReason = ""
+		}
 
 		profile := profileByUserID[userID]
 		if strings.TrimSpace(profile.EmployeeID) == "" {
@@ -269,13 +333,32 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 			employeeID = sourceID
 		}
 		departmentID := strings.TrimSpace(user.DepartmentID)
+		seenResolved[userID] = struct{}{}
+		result.EmployeeIDs = append(result.EmployeeIDs, userID)
 		result.Employees = append(result.Employees, PerformanceParticipantImportEmployee{
-			UserID:         userID,
-			EmployeeID:     employeeID,
-			Name:           user.Name,
-			DepartmentID:   departmentID,
-			DepartmentName: departmentNameByID[departmentID],
+			UserID:                      userID,
+			EmployeeID:                  employeeID,
+			Name:                        user.Name,
+			DepartmentID:                departmentID,
+			DepartmentName:              departmentNameByID[departmentID],
+			AssessmentManagerUserID:     managerUserID,
+			AssessmentManagerEmployeeID: managerEmployeeID,
+			AssessmentManagerName:       managerName,
+			AssessmentManagerSource:     managerSource,
+			ManagerOverrideReason:       managerReason,
 		})
+		if managerUserID != "" {
+			result.ManagerAssignments = append(result.ManagerAssignments, PerformanceParticipantImportManagerAssignment{
+				Row:                         row.Row,
+				UserID:                      userID,
+				EmployeeID:                  employeeID,
+				AssessmentManagerUserID:     managerUserID,
+				AssessmentManagerEmployeeID: managerEmployeeID,
+				AssessmentManagerName:       managerName,
+				AssessmentManagerSource:     managerSource,
+				ManagerOverrideReason:       managerReason,
+			})
+		}
 	}
 	result.ImportedCount = len(result.EmployeeIDs)
 	if len(result.MissingEmployeeIDs) > 0 {
@@ -284,7 +367,79 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 	if len(result.InactiveEmployeeIDs) > 0 {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("有 %d 个工号对应员工不是在职状态", len(result.InactiveEmployeeIDs)))
 	}
+	if managerSkippedCount > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("有 %d 行考核上级未匹配或不可用，已保留员工并跳过上级覆盖", managerSkippedCount))
+	}
 	return nil
+}
+
+func (s *PerformanceService) resolveImportedAssessmentManager(
+	row performanceParticipantImportRawRow,
+	profileUserByEmployeeID map[string]string,
+	profileByUserID map[string]database.EmployeeProfile,
+	userByID map[string]database.User,
+) (string, string, string, string, string, error) {
+	managerIDInput := strings.TrimSpace(row.AssessmentManagerEmployeeID)
+	managerNameInput := strings.TrimSpace(row.AssessmentManagerName)
+	sourceInput := strings.TrimSpace(row.AssessmentManagerSource)
+	reason := strings.TrimSpace(row.ManagerOverrideReason)
+
+	if managerIDInput == "" && managerNameInput == "" {
+		if sourceInput != "" || reason != "" {
+			return "", "", "", "", reason, errors.New("考核上级为空")
+		}
+		return "", "", "", "", reason, nil
+	}
+
+	source := ManagerSourceImport
+	if sourceInput != "" {
+		normalized, err := normalizeAssessmentManagerSource(sourceInput)
+		if err != nil {
+			return "", "", "", "", reason, err
+		}
+		source = normalized
+	}
+
+	var manager database.User
+	var ok bool
+	managerUserID := managerIDInput
+	if managerUserID != "" {
+		manager, ok = userByID[managerUserID]
+		if !ok {
+			if mappedUserID := profileUserByEmployeeID[managerIDInput]; mappedUserID != "" {
+				managerUserID = mappedUserID
+				manager, ok = userByID[managerUserID]
+			}
+		}
+		if !ok {
+			return "", "", "", "", reason, fmt.Errorf("考核上级工号未匹配: %s", managerIDInput)
+		}
+	} else {
+		var managers []database.User
+		if err := s.db.Where("name = ? AND status = ? AND deleted_at IS NULL", managerNameInput, "active").Find(&managers).Error; err != nil {
+			return "", "", "", "", reason, err
+		}
+		if len(managers) == 0 {
+			return "", "", "", "", reason, fmt.Errorf("考核上级姓名未匹配: %s", managerNameInput)
+		}
+		if len(managers) > 1 {
+			return "", "", "", "", reason, fmt.Errorf("考核上级姓名不唯一: %s", managerNameInput)
+		}
+		manager = managers[0]
+	}
+
+	if strings.TrimSpace(manager.Status) != "active" {
+		return "", "", "", "", reason, fmt.Errorf("考核上级不是在职状态: %s", managerIDInput)
+	}
+	managerEmployeeID := strings.TrimSpace(profileByUserID[manager.UserID].EmployeeID)
+	if managerEmployeeID == "" && managerIDInput != manager.UserID {
+		managerEmployeeID = managerIDInput
+	}
+	managerName := strings.TrimSpace(manager.Name)
+	if managerName == "" {
+		managerName = managerNameInput
+	}
+	return manager.UserID, managerEmployeeID, managerName, source, reason, nil
 }
 
 func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
@@ -417,13 +572,20 @@ func parsePerformanceParticipantRows(rows []xlsxImportRow) (*PerformanceParticip
 
 	activityColumn := headers["activity"]
 	employeeIDColumn := headers["employee_id"]
+	managerEmployeeIDColumn, hasManagerEmployeeIDColumn := headers["assessment_manager_employee_id"]
+	managerNameColumn, hasManagerNameColumn := headers["assessment_manager_name"]
+	managerSourceColumn, hasManagerSourceColumn := headers["assessment_manager_source"]
+	managerReasonColumn, hasManagerReasonColumn := headers["manager_override_reason"]
 	result := &PerformanceParticipantImportResult{
-		EmployeeIDs:         []string{},
-		MissingEmployeeIDs:  []string{},
-		InactiveEmployeeIDs: []string{},
-		SkippedRows:         []PerformanceParticipantImportSkippedRow{},
-		Warnings:            []string{},
-		rawEmployeeIDs:      []string{},
+		EmployeeIDs:                  []string{},
+		ManagerAssignments:           []PerformanceParticipantImportManagerAssignment{},
+		ManagerAssignmentSkippedRows: []PerformanceParticipantImportSkippedRow{},
+		MissingEmployeeIDs:           []string{},
+		InactiveEmployeeIDs:          []string{},
+		SkippedRows:                  []PerformanceParticipantImportSkippedRow{},
+		Warnings:                     []string{},
+		rawEmployeeIDs:               []string{},
+		rawRows:                      []performanceParticipantImportRawRow{},
 	}
 	seenIDs := make(map[string]struct{})
 	activityNames := make(map[string]struct{})
@@ -455,6 +617,23 @@ func parsePerformanceParticipantRows(rows []xlsxImportRow) (*PerformanceParticip
 		}
 		seenIDs[employeeID] = struct{}{}
 		result.rawEmployeeIDs = append(result.rawEmployeeIDs, employeeID)
+		rawRow := performanceParticipantImportRawRow{
+			Row:        row.Number,
+			EmployeeID: employeeID,
+		}
+		if hasManagerEmployeeIDColumn {
+			rawRow.AssessmentManagerEmployeeID = normalizeImportedEmployeeID(valueAt(row.Values, managerEmployeeIDColumn))
+		}
+		if hasManagerNameColumn {
+			rawRow.AssessmentManagerName = strings.TrimSpace(valueAt(row.Values, managerNameColumn))
+		}
+		if hasManagerSourceColumn {
+			rawRow.AssessmentManagerSource = strings.TrimSpace(valueAt(row.Values, managerSourceColumn))
+		}
+		if hasManagerReasonColumn {
+			rawRow.ManagerOverrideReason = strings.TrimSpace(valueAt(row.Values, managerReasonColumn))
+		}
+		result.rawRows = append(result.rawRows, rawRow)
 		result.EmployeeIDs = append(result.EmployeeIDs, employeeID)
 	}
 
@@ -494,6 +673,14 @@ func findPerformanceImportHeader(rows []xlsxImportRow) (int, map[string]int) {
 				headers["department_level_2"] = column
 			case "三级部门":
 				headers["department_level_3"] = column
+			case "考核上级工号", "考核上级员工工号", "考核上级编号", "上级工号", "上级员工工号", "assessmentmanageremployeeid", "assessmentmanageruserid", "manageremployeeid", "manageruserid", "managerid":
+				headers["assessment_manager_employee_id"] = column
+			case "考核上级姓名", "上级姓名", "assessmentmanagername", "managername":
+				headers["assessment_manager_name"] = column
+			case "考核上级来源", "上级来源", "assessmentmanagersource", "managersource":
+				headers["assessment_manager_source"] = column
+			case "调整原因", "考核上级调整原因", "上级调整原因", "原因", "manageroverridereason", "reason":
+				headers["manager_override_reason"] = column
 			}
 		}
 		if _, ok := headers["activity"]; !ok {

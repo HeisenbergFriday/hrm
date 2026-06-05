@@ -3,6 +3,7 @@ package dingtalk
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"peopleops/internal/database"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +28,12 @@ var (
 	tokenExp  time.Time
 	tokenMu   sync.Mutex
 )
+
+var ErrUserNotNotifiable = errors.New("dingtalk user is not active/notifiable")
+
+func IsUserNotNotifiableError(err error) bool {
+	return errors.Is(err, ErrUserNotNotifiable)
+}
 
 // 考勤组缓存（5分钟 TTL）
 type attendanceGroupCache struct {
@@ -95,6 +103,18 @@ func GetAppHomeURL() string {
 	}
 
 	return fmt.Sprintf("http://localhost:%s", port)
+}
+
+func BuildAppURL(appPath string) string {
+	baseURL := strings.TrimRight(GetAppHomeURL(), "/")
+	appPath = strings.TrimSpace(appPath)
+	if appPath == "" {
+		return baseURL
+	}
+	if strings.HasPrefix(appPath, "http://") || strings.HasPrefix(appPath, "https://") {
+		return appPath
+	}
+	return baseURL + "/" + strings.TrimLeft(appPath, "/")
 }
 
 func GetConfiguredRedirectURI() string {
@@ -316,24 +336,31 @@ func GetUserIDByUnionID(unionID string) (string, error) {
 
 // DeptInfo 閮ㄩ棬淇℃伅
 type DeptInfo struct {
-	DeptID   int64  `json:"dept_id"`
-	Name     string `json:"name"`
-	ParentID int64  `json:"parent_id"`
+	DeptID             int64                  `json:"dept_id"`
+	Name               string                 `json:"name"`
+	ParentID           int64                  `json:"parent_id"`
+	DeptManagerUserIDs []string               `json:"dept_manager_userids"`
+	Extension          map[string]interface{} `json:"extension"`
 }
 
 // UserInfo 鐢ㄦ埛淇℃伅
 type UserInfo struct {
-	UserID             string  `json:"userid"`
-	Name               string  `json:"name"`
-	Email              string  `json:"email"`
-	Mobile             string  `json:"mobile"`
-	DeptIDList         []int64 `json:"dept_id_list"`
-	Position           string  `json:"title"`
-	Avatar             string  `json:"avatar"`
-	Active             bool    `json:"active"`
-	HiredDate          string  `json:"hired_date"` // 入职日期，格式 YYYY-MM-DD
-	PlannedRegularDate string  `json:"planned_regular_date"`
-	ActualRegularDate  string  `json:"actual_regular_date"`
+	UserID                 string                 `json:"userid"`
+	Name                   string                 `json:"name"`
+	Email                  string                 `json:"email"`
+	Mobile                 string                 `json:"mobile"`
+	DeptIDList             []int64                `json:"dept_id_list"`
+	Position               string                 `json:"title"`
+	PositionSource         string                 `json:"position_source"`
+	PositionSyncDiagnostic map[string]interface{} `json:"position_sync_diagnostic"`
+	ManagerUserID          string                 `json:"manager_user_id"`
+	ManagerName            string                 `json:"manager_name"`
+	ManagerSource          string                 `json:"manager_source"`
+	Avatar                 string                 `json:"avatar"`
+	Active                 bool                   `json:"active"`
+	HiredDate              string                 `json:"hired_date"` // 入职日期，格式 YYYY-MM-DD
+	PlannedRegularDate     string                 `json:"planned_regular_date"`
+	ActualRegularDate      string                 `json:"actual_regular_date"`
 }
 
 // SyncDepartments 鍚屾鎵€鏈夐儴闂?
@@ -388,10 +415,18 @@ func fetchDeptTree(accessToken string, parentID int64, result *[]DeptInfo) error
 		if !ok {
 			continue
 		}
-		dept := DeptInfo{
-			DeptID:   int64(m["dept_id"].(float64)),
-			Name:     getString(m, "name"),
-			ParentID: int64(m["parent_id"].(float64)),
+		dept := parseDeptInfo(m)
+		if detail, err := fetchDeptDetail(accessToken, dept.DeptID); err == nil && detail != nil {
+			if detail.Name != "" {
+				dept.Name = detail.Name
+			}
+			if detail.ParentID != 0 {
+				dept.ParentID = detail.ParentID
+			}
+			dept.DeptManagerUserIDs = detail.DeptManagerUserIDs
+			dept.Extension = detail.Extension
+		} else if err != nil {
+			logrus.Warnf("dingtalk department detail skipped: dept_id=%d err=%v", dept.DeptID, err)
 		}
 		*result = append(*result, dept)
 
@@ -426,11 +461,27 @@ func fetchDeptDetail(accessToken string, deptID int64) (*DeptInfo, error) {
 		return nil, fmt.Errorf("閮ㄩ棬璇︽儏鏍煎紡寮傚父")
 	}
 
-	return &DeptInfo{
-		DeptID:   int64(result["dept_id"].(float64)),
-		Name:     getString(result, "name"),
-		ParentID: int64(getFloat(result, "parent_id")),
-	}, nil
+	dept := parseDeptInfo(result)
+	return &dept, nil
+}
+
+func parseDeptInfo(result map[string]interface{}) DeptInfo {
+	dept := DeptInfo{
+		DeptID:             int64(getFloat(result, "dept_id")),
+		Name:               getString(result, "name"),
+		ParentID:           int64(getFloat(result, "parent_id")),
+		DeptManagerUserIDs: stringSliceFromMappedPaths(result, configuredDingTalkFieldPaths("DINGTALK_DEPARTMENT_HEAD_FIELD_KEYS", defaultDepartmentHeadFieldPaths())),
+	}
+	dept.Extension = map[string]interface{}{
+		"dingtalk_department_api": "topapi/v2/department/get",
+		"dingtalk_raw_field_keys": sortedMapKeys(result),
+	}
+	if len(dept.DeptManagerUserIDs) > 0 {
+		dept.Extension["department_head_user_ids"] = dept.DeptManagerUserIDs
+		dept.Extension["department_head_user_id"] = dept.DeptManagerUserIDs[0]
+		dept.Extension["dingtalk_department_head_source"] = "DINGTALK_DEPARTMENT_HEAD_FIELD_KEYS"
+	}
+	return dept
 }
 
 // SyncUsers 鍚屾鎸囧畾閮ㄩ棬鐨勬墍鏈夌敤鎴?
@@ -462,9 +513,14 @@ func SyncUsersWithDepts(depts []DeptInfo) ([]UserInfo, error) {
 		}
 	}
 
-	if err := enrichUsersWithHRMRegularDates(accessToken, userMap); err != nil {
-		logrus.Warnf("dingtalk hrm regular date sync skipped: %v", err)
+	if err := enrichUsersWithUserDetails(accessToken, userMap); err != nil {
+		logrus.Warnf("dingtalk user detail sync skipped partially: %v", err)
 	}
+	resolveManagerNames(userMap)
+	if err := enrichUsersWithHRMFields(accessToken, userMap); err != nil {
+		logrus.Warnf("dingtalk hrm field sync skipped: %v", err)
+	}
+	resolveManagerNames(userMap)
 
 	var allUsers []UserInfo
 	for _, u := range userMap {
@@ -475,12 +531,103 @@ func SyncUsersWithDepts(depts []DeptInfo) ([]UserInfo, error) {
 	return allUsers, nil
 }
 
-type hrmRegularDates struct {
-	Planned string
-	Actual  string
+func enrichUsersWithUserDetails(accessToken string, users map[string]UserInfo) error {
+	if len(users) == 0 {
+		return nil
+	}
+
+	userIDs := make([]string, 0, len(users))
+	for userID, user := range users {
+		if strings.TrimSpace(userID) == "" {
+			continue
+		}
+		if strings.TrimSpace(user.ManagerUserID) != "" {
+			continue
+		}
+		userIDs = append(userIDs, userID)
+	}
+	sort.Strings(userIDs)
+
+	var firstErr error
+	failed := 0
+	for _, userID := range userIDs {
+		detail, err := fetchDingTalkUserDetail(accessToken, userID)
+		if err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		users[userID] = mergeDingTalkUserDetail(users[userID], detail)
+	}
+	if failed > 0 {
+		return fmt.Errorf("fetch dingtalk user details failed for %d/%d users: %w", failed, len(userIDs), firstErr)
+	}
+	return nil
 }
 
-func enrichUsersWithHRMRegularDates(accessToken string, users map[string]UserInfo) error {
+func fetchDingTalkUserDetail(accessToken, userID string) (map[string]interface{}, error) {
+	body := map[string]interface{}{
+		"userid":   userID,
+		"language": "zh_CN",
+	}
+	resp, err := postJSONOAPI(
+		fmt.Sprintf("https://oapi.dingtalk.com/topapi/v2/user/get?access_token=%s", accessToken),
+		body,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	errcode, _ := resp["errcode"].(float64)
+	if errcode != 0 {
+		return nil, fmt.Errorf("fetch dingtalk user detail failed: %s", dingTalkErrorMessage(resp, errcode))
+	}
+	result, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected dingtalk user detail response: %v", resp)
+	}
+	return result, nil
+}
+
+func mergeDingTalkUserDetail(user UserInfo, detail map[string]interface{}) UserInfo {
+	if strings.TrimSpace(user.Position) == "" {
+		if position, source := resolveDingTalkPosition(detail); position != "" {
+			user.Position = position
+			user.PositionSource = prefixedDingTalkSource("topapi/v2/user/get", source)
+			user.PositionSyncDiagnostic = buildPositionSyncDiagnostic("topapi/v2/user/get", detail, user.PositionSource, user.Position, "")
+		}
+	}
+	if managerUserID, source := resolveDingTalkDirectManagerID(detail); managerUserID != "" {
+		user.ManagerUserID = managerUserID
+		user.ManagerSource = prefixedDingTalkSource("topapi/v2/user/get", source)
+	}
+	if managerName, source := resolveDingTalkDirectManagerName(detail); managerName != "" {
+		user.ManagerName = managerName
+		if strings.TrimSpace(user.ManagerSource) == "" {
+			user.ManagerSource = prefixedDingTalkSource("topapi/v2/user/get", source)
+		}
+	}
+	return user
+}
+
+func prefixedDingTalkSource(apiName, source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return ""
+	}
+	return apiName + "." + source
+}
+
+type hrmRegularDates struct {
+	Planned        string
+	Actual         string
+	Position       string
+	PositionSource string
+}
+
+func enrichUsersWithHRMFields(accessToken string, users map[string]UserInfo) error {
 	if len(users) == 0 {
 		return nil
 	}
@@ -508,6 +655,17 @@ func enrichUsersWithHRMRegularDates(accessToken string, users map[string]UserInf
 			}
 			user.PlannedRegularDate = regularDates.Planned
 			user.ActualRegularDate = regularDates.Actual
+			if strings.TrimSpace(user.Position) == "" && strings.TrimSpace(regularDates.Position) != "" {
+				user.Position = strings.TrimSpace(regularDates.Position)
+				user.PositionSource = regularDates.PositionSource
+				user.PositionSyncDiagnostic = buildPositionSyncDiagnostic(
+					"topapi/smartwork/hrm/employee/v2/list",
+					nil,
+					user.PositionSource,
+					user.Position,
+					"",
+				)
+			}
 			users[userID] = user
 		}
 	}
@@ -524,7 +682,7 @@ func fetchHRMRegularDates(accessToken string, userIDs []string) (map[string]hrmR
 	body := map[string]interface{}{
 		"agentid":           getDingTalkAgentID(),
 		"userid_list":       strings.Join(userIDs, ","),
-		"field_filter_list": "sys01-planRegularTime,sys01-regularTime",
+		"field_filter_list": strings.Join(configuredHRMFieldCodes(), ","),
 	}
 	resp, err := postJSONOAPI(
 		fmt.Sprintf("https://oapi.dingtalk.com/topapi/smartwork/hrm/employee/v2/list?access_token=%s", accessToken),
@@ -573,6 +731,10 @@ func fetchHRMRegularDates(accessToken string, userIDs []string) (map[string]hrmR
 				regularDates.Planned = value
 			case "sys01-regularTime":
 				regularDates.Actual = value
+			}
+			if regularDates.Position == "" && isHRMPositionField(fieldMap) {
+				regularDates.Position = extractHRMTextFieldValue(fieldMap)
+				regularDates.PositionSource = firstNonEmptyStringValue(getString(fieldMap, "field_code"), getString(fieldMap, "field_name"), getString(fieldMap, "name"))
 			}
 		}
 		result[userID] = regularDates
@@ -1318,6 +1480,498 @@ func dingTalkErrorMessage(resp map[string]interface{}, errcode float64) string {
 	return strings.Join(parts, "; ")
 }
 
+func resolveDingTalkPosition(raw map[string]interface{}) (string, string) {
+	return stringFromMappedPaths(raw, configuredDingTalkFieldPaths("DINGTALK_POSITION_FIELD_KEYS", defaultPositionFieldPaths()))
+}
+
+func resolveDingTalkDirectManagerID(raw map[string]interface{}) (string, string) {
+	return stringFromMappedPaths(raw, configuredDingTalkFieldPaths("DINGTALK_DIRECT_MANAGER_FIELD_KEYS", defaultDirectManagerFieldPaths()))
+}
+
+func resolveDingTalkDirectManagerName(raw map[string]interface{}) (string, string) {
+	return stringFromMappedPaths(raw, configuredDingTalkFieldPaths("DINGTALK_DIRECT_MANAGER_NAME_FIELD_KEYS", defaultDirectManagerNameFieldPaths()))
+}
+
+func defaultPositionFieldPaths() []string {
+	return []string{
+		"title",
+		"position",
+		"jobTitle",
+		"job_title",
+		"extension.title",
+		"extension.position",
+		"extension.jobTitle",
+		"extension.job_title",
+		"extension.岗位",
+		"extension.职位",
+		"extAttrs.title",
+		"extAttrs.position",
+		"extAttrs.jobTitle",
+		"extAttrs.job_title",
+		"extAttrs.岗位",
+		"extAttrs.职位",
+		"ext_attrs.title",
+		"ext_attrs.position",
+		"ext_attrs.岗位",
+		"ext_attrs.职位",
+	}
+}
+
+func defaultDirectManagerFieldPaths() []string {
+	return []string{
+		"manager_userid",
+		"manager_user_id",
+		"managerUserid",
+		"managerUserId",
+		"leader_userid",
+		"leader_user_id",
+		"supervisor_userid",
+		"supervisor_user_id",
+		"extension.manager_userid",
+		"extension.manager_user_id",
+		"extension.leader_userid",
+		"extension.leader_user_id",
+		"extension.supervisor_userid",
+		"extension.supervisor_user_id",
+		"extAttrs.manager_user_id",
+		"extAttrs.leader_user_id",
+		"extAttrs.supervisor_user_id",
+		"ext_attrs.manager_user_id",
+		"ext_attrs.leader_user_id",
+		"ext_attrs.supervisor_user_id",
+	}
+}
+
+func defaultDirectManagerNameFieldPaths() []string {
+	return []string{
+		"manager_name",
+		"managerName",
+		"leader_name",
+		"leaderName",
+		"supervisor_name",
+		"supervisorName",
+		"extension.manager_name",
+		"extension.managerName",
+		"extension.leader_name",
+		"extension.leaderName",
+		"extension.supervisor_name",
+		"extension.supervisorName",
+		"extAttrs.manager_name",
+		"extAttrs.leader_name",
+		"extAttrs.supervisor_name",
+		"ext_attrs.manager_name",
+		"ext_attrs.leader_name",
+		"ext_attrs.supervisor_name",
+	}
+}
+
+func defaultDepartmentHeadFieldPaths() []string {
+	return []string{
+		"dept_manager_userid_list",
+		"dept_manager_userids",
+		"deptManagerUseridList",
+		"manager_userid_list",
+		"manager_user_id_list",
+		"leader_userid_list",
+		"head_userid_list",
+		"owner_userid",
+		"extension.dept_manager_userid_list",
+		"extension.department_head_user_ids",
+		"extension.department_head_user_id",
+	}
+}
+
+func configuredDingTalkFieldPaths(envKey string, defaults []string) []string {
+	configured := splitConfiguredList(os.Getenv(envKey))
+	if len(configured) == 0 {
+		return uniqueNonEmptyStrings(defaults)
+	}
+	return uniqueNonEmptyStrings(append(configured, defaults...))
+}
+
+func splitConfiguredList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t'
+	})
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := normalizeFieldName(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func stringFromMappedPaths(raw map[string]interface{}, paths []string) (string, string) {
+	for _, path := range paths {
+		value := stringFromDynamicPath(raw, strings.Split(path, "."))
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value), path
+		}
+	}
+	return "", ""
+}
+
+func stringSliceFromMappedPaths(raw map[string]interface{}, paths []string) []string {
+	for _, path := range paths {
+		values := stringSliceFromDynamicPath(raw, strings.Split(path, "."))
+		if len(values) > 0 {
+			return uniqueNonEmptyStrings(values)
+		}
+	}
+	return nil
+}
+
+func stringFromDynamicPath(value interface{}, parts []string) string {
+	if len(parts) == 0 {
+		return stringFromDynamicValue(value)
+	}
+	switch current := value.(type) {
+	case map[string]interface{}:
+		if child, ok := mapValueByFieldName(current, parts[0]); ok {
+			if value := stringFromDynamicPath(child, parts[1:]); strings.TrimSpace(value) != "" {
+				return value
+			}
+		}
+		if len(parts) == 1 {
+			return stringFromDingTalkAttribute(current, parts[0])
+		}
+	case []interface{}:
+		if attrValue := stringFromDingTalkAttributeList(current, parts[0]); strings.TrimSpace(attrValue) != "" {
+			return attrValue
+		}
+		for _, item := range current {
+			if value := stringFromDynamicPath(item, parts); strings.TrimSpace(value) != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func stringSliceFromDynamicPath(value interface{}, parts []string) []string {
+	if len(parts) == 0 {
+		return stringSliceFromDynamicValue(value)
+	}
+	switch current := value.(type) {
+	case map[string]interface{}:
+		if child, ok := mapValueByFieldName(current, parts[0]); ok {
+			if values := stringSliceFromDynamicPath(child, parts[1:]); len(values) > 0 {
+				return values
+			}
+		}
+	case []interface{}:
+		for _, item := range current {
+			if values := stringSliceFromDynamicPath(item, parts); len(values) > 0 {
+				return values
+			}
+		}
+	}
+	return nil
+}
+
+func mapValueByFieldName(raw map[string]interface{}, key string) (interface{}, bool) {
+	if value, ok := raw[key]; ok {
+		return value, true
+	}
+	target := normalizeFieldName(key)
+	for rawKey, value := range raw {
+		if normalizeFieldName(rawKey) == target {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func normalizeFieldName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "_", "")
+	value = strings.ReplaceAll(value, "-", "")
+	value = strings.ReplaceAll(value, " ", "")
+	return value
+}
+
+func stringFromDingTalkAttribute(raw map[string]interface{}, wantedKey string) string {
+	label := firstNonEmptyStringValue(
+		raw["field_code"],
+		raw["fieldCode"],
+		raw["field_name"],
+		raw["fieldName"],
+		raw["name"],
+		raw["label"],
+		raw["key"],
+		raw["code"],
+	)
+	if label == "" || normalizeFieldName(label) != normalizeFieldName(wantedKey) {
+		return ""
+	}
+	return firstNonEmptyStringValue(
+		raw["value"],
+		raw["field_value"],
+		raw["fieldValue"],
+		raw["text"],
+		raw["label_value"],
+		raw["labelValue"],
+		raw["field_value_list"],
+		raw["fieldValueList"],
+	)
+}
+
+func stringFromDingTalkAttributeList(list []interface{}, wantedKey string) string {
+	for _, item := range list {
+		raw, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if value := stringFromDingTalkAttribute(raw, wantedKey); strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyStringValue(values ...interface{}) string {
+	for _, value := range values {
+		if text := stringFromDynamicValue(value); strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
+		}
+	}
+	return ""
+}
+
+func stringFromDynamicValue(value interface{}) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		if v == 0 {
+			return ""
+		}
+		return strconv.FormatInt(int64(v), 10)
+	case int64:
+		if v == 0 {
+			return ""
+		}
+		return strconv.FormatInt(v, 10)
+	case int:
+		if v == 0 {
+			return ""
+		}
+		return strconv.Itoa(v)
+	case bool:
+		return strconv.FormatBool(v)
+	case []interface{}:
+		for _, item := range v {
+			if text := stringFromDynamicValue(item); strings.TrimSpace(text) != "" {
+				return text
+			}
+		}
+	case map[string]interface{}:
+		return firstNonEmptyStringValue(v["value"], v["label"], v["name"], v["text"])
+	}
+	return ""
+}
+
+func stringSliceFromDynamicValue(value interface{}) []string {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case string:
+		parts := strings.FieldsFunc(v, func(r rune) bool {
+			return r == ',' || r == ';' || r == '，' || r == '；' || r == '\n' || r == '\r'
+		})
+		values := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				values = append(values, trimmed)
+			}
+		}
+		if len(values) == 0 && strings.TrimSpace(v) != "" {
+			values = append(values, strings.TrimSpace(v))
+		}
+		return values
+	case []interface{}:
+		values := make([]string, 0, len(v))
+		for _, item := range v {
+			values = append(values, stringSliceFromDynamicValue(item)...)
+		}
+		return values
+	default:
+		if text := stringFromDynamicValue(value); text != "" {
+			return []string{text}
+		}
+	}
+	return nil
+}
+
+func buildPositionSyncDiagnostic(apiName string, raw map[string]interface{}, source, position, failureReason string) map[string]interface{} {
+	status := "mapped"
+	if strings.TrimSpace(position) == "" {
+		status = "missing"
+		if failureReason == "" {
+			failureReason = "DingTalk response did not include a value matching the configured position field mapping; verify contact/HRM permissions and DINGTALK_POSITION_FIELD_KEYS or DINGTALK_HRM_POSITION_FIELD_CODES."
+		}
+	}
+	diag := map[string]interface{}{
+		"status":                   status,
+		"api":                      apiName,
+		"position":                 position,
+		"position_mapping_field":   source,
+		"position_mapping_fields":  configuredDingTalkFieldPaths("DINGTALK_POSITION_FIELD_KEYS", defaultPositionFieldPaths()),
+		"hrm_position_field_codes": splitConfiguredList(os.Getenv("DINGTALK_HRM_POSITION_FIELD_CODES")),
+		"app_permission_note":      "DingTalk app permissions are not introspectable from this response; verify contact user read permissions and HRM roster field permissions when HRM mapping is used.",
+		"failure_reason":           failureReason,
+	}
+	if raw != nil {
+		diag["raw_field_keys"] = sortedMapKeys(raw)
+		if truthyEnv("DINGTALK_SYNC_STORE_RAW_USER") {
+			diag["raw_response"] = raw
+		}
+	}
+	return diag
+}
+
+func logDingTalkUserFieldDiagnostic(userID string, raw map[string]interface{}, position, positionSource, managerUserID, managerSource string) {
+	if truthyEnv("DINGTALK_SYNC_LOG_RAW_USER") {
+		logrus.Infof("[dingtalk/user/list] raw_user_response user_id=%s payload=%s", userID, compactJSON(raw))
+	}
+	if strings.TrimSpace(position) == "" {
+		logrus.Warnf("[dingtalk/user/list] position missing user_id=%s fields=%v mapping_fields=%v hrm_field_codes=%v reason=%s",
+			userID,
+			sortedMapKeys(raw),
+			configuredDingTalkFieldPaths("DINGTALK_POSITION_FIELD_KEYS", defaultPositionFieldPaths()),
+			splitConfiguredList(os.Getenv("DINGTALK_HRM_POSITION_FIELD_CODES")),
+			"DingTalk response did not include a matched position field or the app lacks the required field permission",
+		)
+	} else {
+		logrus.Infof("[dingtalk/user/list] position mapped user_id=%s source=%s", userID, positionSource)
+	}
+	if strings.TrimSpace(managerUserID) == "" {
+		logrus.Infof("[dingtalk/user/list] direct manager missing user_id=%s fields=%v mapping_fields=%v; local manager will be preserved unless overwrite is explicitly requested",
+			userID,
+			sortedMapKeys(raw),
+			configuredDingTalkFieldPaths("DINGTALK_DIRECT_MANAGER_FIELD_KEYS", defaultDirectManagerFieldPaths()),
+		)
+	} else {
+		logrus.Infof("[dingtalk/user/list] direct manager mapped user_id=%s manager_user_id=%s source=%s", userID, managerUserID, managerSource)
+	}
+}
+
+func sortedMapKeys(raw map[string]interface{}) []string {
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func compactJSON(value interface{}) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprint(value)
+	}
+	return string(data)
+}
+
+func truthyEnv(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func configuredHRMFieldCodes() []string {
+	codes := []string{"sys01-planRegularTime", "sys01-regularTime"}
+	codes = append(codes, splitConfiguredList(os.Getenv("DINGTALK_HRM_POSITION_FIELD_CODES"))...)
+	return uniqueNonEmptyStrings(codes)
+}
+
+func isHRMPositionField(field map[string]interface{}) bool {
+	identifiers := []string{
+		getString(field, "field_code"),
+		getString(field, "fieldCode"),
+		getString(field, "field_name"),
+		getString(field, "fieldName"),
+		getString(field, "name"),
+		getString(field, "label"),
+	}
+	candidates := append(
+		splitConfiguredList(os.Getenv("DINGTALK_HRM_POSITION_FIELD_CODES")),
+		configuredDingTalkFieldPaths("DINGTALK_HRM_POSITION_FIELD_NAMES", []string{"岗位", "职位", "position", "jobTitle", "job_title", "title"})...,
+	)
+	for _, identifier := range identifiers {
+		if strings.TrimSpace(identifier) == "" {
+			continue
+		}
+		for _, candidate := range candidates {
+			if normalizeFieldName(identifier) == normalizeFieldName(candidate) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func extractHRMTextFieldValue(field map[string]interface{}) string {
+	values, ok := field["field_value_list"].([]interface{})
+	if !ok {
+		values, ok = field["fieldValueList"].([]interface{})
+	}
+	if ok {
+		for _, item := range values {
+			valueMap, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if value := firstNonEmptyStringValue(valueMap["value"], valueMap["label"], valueMap["text"], valueMap["name"]); value != "" {
+				return value
+			}
+		}
+	}
+	return firstNonEmptyStringValue(field["value"], field["label"], field["text"], field["name"])
+}
+
+func resolveManagerNames(users map[string]UserInfo) {
+	for userID, user := range users {
+		if strings.TrimSpace(user.ManagerUserID) == "" || strings.TrimSpace(user.ManagerName) != "" {
+			continue
+		}
+		manager, ok := users[user.ManagerUserID]
+		if !ok {
+			continue
+		}
+		user.ManagerName = manager.Name
+		users[userID] = user
+	}
+}
+
 func fetchDeptUsers(accessToken string, deptID int64) ([]UserInfo, error) {
 	var allUsers []UserInfo
 	cursor := 0
@@ -1360,15 +2014,24 @@ func fetchDeptUsers(accessToken string, deptID int64) ([]UserInfo, error) {
 			if !ok {
 				continue
 			}
+			position, positionSource := resolveDingTalkPosition(m)
+			managerUserID, managerSource := resolveDingTalkDirectManagerID(m)
+			managerName, _ := resolveDingTalkDirectManagerName(m)
 			user := UserInfo{
-				UserID:   getString(m, "userid"),
-				Name:     getString(m, "name"),
-				Email:    getString(m, "email"),
-				Mobile:   getString(m, "mobile"),
-				Position: getString(m, "title"),
-				Avatar:   getString(m, "avatar"),
-				Active:   getBool(m, "active"),
+				UserID:                 getString(m, "userid"),
+				Name:                   getString(m, "name"),
+				Email:                  getString(m, "email"),
+				Mobile:                 getString(m, "mobile"),
+				Position:               position,
+				PositionSource:         positionSource,
+				PositionSyncDiagnostic: buildPositionSyncDiagnostic("topapi/v2/user/list", m, positionSource, position, ""),
+				ManagerUserID:          managerUserID,
+				ManagerName:            managerName,
+				ManagerSource:          managerSource,
+				Avatar:                 getString(m, "avatar"),
+				Active:                 getBool(m, "active"),
 			}
+			logDingTalkUserFieldDiagnostic(user.UserID, m, user.Position, user.PositionSource, user.ManagerUserID, user.ManagerSource)
 
 			// hired_date 是毫秒时间戳，转成 YYYY-MM-DD
 			if ts, ok := m["hired_date"].(float64); ok && ts > 0 {
@@ -3020,18 +3683,29 @@ func SetAttendanceSchedule(opUserID string, userID string, workDate string, shif
 
 // SendCorpMessageToUser 发送企业内部消息通知到指定用户
 func SendCorpMessageToUser(userID, title, content string) error {
+	return sendCorpMessagePayloadToUser(userID, title, buildCorpMessagePayload(userID, title, content))
+}
+
+func SendCorpActionCardToUser(userID, title, content, actionTitle, actionURL string) error {
+	if strings.TrimSpace(actionURL) == "" {
+		return SendCorpMessageToUser(userID, title, content)
+	}
+	return sendCorpMessagePayloadToUser(userID, title, buildCorpActionCardPayload(userID, title, content, actionTitle, actionURL))
+}
+
+func sendCorpMessagePayloadToUser(userID, title string, body map[string]interface{}) error {
+	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return fmt.Errorf("userID is empty")
 	}
 	if !IsNotifiableUserID(userID) {
-		logrus.Infof("skip dingtalk message for non-dingtalk user %s", userID)
-		return nil
+		return fmt.Errorf("%w: %s", ErrUserNotNotifiable, userID)
 	}
+	body["userid_list"] = userID
 	accessToken, err := GetAccessToken()
 	if err != nil {
 		return err
 	}
-	body := buildCorpMessagePayload(userID, title, content)
 	resp, err := postJSONOAPI(
 		fmt.Sprintf("https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend?access_token=%s", accessToken),
 		body,
@@ -3043,7 +3717,13 @@ func SendCorpMessageToUser(userID, title, content string) error {
 	if errcode != 0 {
 		return fmt.Errorf("send message failed: %s", dingTalkErrorMessage(resp, errcode))
 	}
-	logrus.Infof("dingtalk message sent to user %s: %s", userID, title)
+	taskID := int64FromMap(resp, "task_id")
+	requestID := strings.TrimSpace(getString(resp, "request_id"))
+	if taskID > 0 {
+		logrus.Infof("dingtalk message send task accepted for user %s: %s task_id=%d request_id=%s", userID, title, taskID, requestID)
+	} else {
+		logrus.Infof("dingtalk message send task accepted for user %s: %s request_id=%s", userID, title, requestID)
+	}
 	return nil
 }
 
@@ -3051,11 +3731,29 @@ func buildCorpMessagePayload(userID, title, content string) map[string]interface
 	msgContent, _ := json.Marshal(map[string]interface{}{
 		"content": formatCorpMessageContent(title, content),
 	})
+	return buildCorpPayload(userID, "text", string(msgContent))
+}
+
+func buildCorpActionCardPayload(userID, title, content, actionTitle, actionURL string) map[string]interface{} {
+	actionTitle = strings.TrimSpace(actionTitle)
+	if actionTitle == "" {
+		actionTitle = "查看详情"
+	}
+	msgContent, _ := json.Marshal(map[string]interface{}{
+		"title":        strings.TrimSpace(title),
+		"markdown":     formatCorpMessageMarkdown(title, content),
+		"single_title": actionTitle,
+		"single_url":   strings.TrimSpace(actionURL),
+	})
+	return buildCorpPayload(userID, "action_card", string(msgContent))
+}
+
+func buildCorpPayload(userID, msgType, msgContent string) map[string]interface{} {
 	return map[string]interface{}{
 		"agent_id":    getDingTalkAgentID(),
 		"userid_list": strings.TrimSpace(userID),
-		"msgtype":     "text",
-		"msgcontent":  string(msgContent),
+		"msgtype":     msgType,
+		"msgcontent":  msgContent,
 	}
 }
 
@@ -3073,9 +3771,22 @@ func formatCorpMessageContent(title, content string) string {
 	}
 }
 
+func formatCorpMessageMarkdown(title, content string) string {
+	trimmedTitle := strings.TrimSpace(title)
+	trimmedContent := strings.TrimSpace(content)
+	switch {
+	case trimmedTitle == "":
+		return strings.ReplaceAll(trimmedContent, "\n", "\n\n")
+	case trimmedContent == "":
+		return "### " + trimmedTitle
+	default:
+		return "### " + trimmedTitle + "\n\n" + strings.ReplaceAll(trimmedContent, "\n", "\n\n")
+	}
+}
+
 func IsNotifiableUserID(userID string) bool {
 	trimmed := strings.TrimSpace(userID)
-	if trimmed == "" || strings.EqualFold(trimmed, "admin") {
+	if trimmed == "" || strings.EqualFold(trimmed, "admin") || strings.EqualFold(trimmed, "system") {
 		return false
 	}
 	if database.DB == nil {
@@ -3097,4 +3808,20 @@ func IsNotifiableUserID(userID string) bool {
 	}
 
 	return count > 0
+}
+
+func int64FromMap(values map[string]interface{}, key string) int64 {
+	switch value := values[key].(type) {
+	case float64:
+		return int64(value)
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		return parsed
+	default:
+		return 0
+	}
 }

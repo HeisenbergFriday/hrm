@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
 	"peopleops/internal/repository"
@@ -61,33 +62,113 @@ func (s *PerformanceService) displayNameForUser(value string) string {
 	return value
 }
 
+func PerformanceSelfEvalURL(activityID string, participantID uint) string {
+	activityID = strings.TrimSpace(activityID)
+	if activityID == "" || participantID == 0 {
+		return ""
+	}
+	return dingtalk.BuildAppURL(fmt.Sprintf("/performance-self-eval/%s/%d", url.PathEscape(activityID), participantID))
+}
+
 type CreateActivityRequest struct {
-	Name                   string
-	CycleType              string
-	StartDate              string
-	EndDate                string
-	TargetSetStartAt       string
-	TargetSetEndAt         string
-	SelfEvalStartAt        string
-	SelfEvalEndAt          string
-	ManagerEvalStartAt     string
-	ManagerEvalEndAt       string
-	ResultConfirmStartAt   string
-	ResultConfirmEndAt     string
-	EmployeeConfirmStartAt string
-	EmployeeConfirmEndAt   string
-	ManagerConfirmStartAt  string
-	ManagerConfirmEndAt    string
-	HRConfirmStartAt       string
-	HRConfirmEndAt         string
-	HRConfirmDeadline      string
-	Status                 string
-	TargetDepartmentIDs    []string
-	TargetEmployeeIDs      []string
-	IndicatorLibraryID     *uint
-	Description            string
-	EnableBonusScore       bool
-	StrictTimeMode         bool
+	Name                           string
+	CycleType                      string
+	StartDate                      string
+	EndDate                        string
+	TargetSetStartAt               string
+	TargetSetEndAt                 string
+	SelfEvalStartAt                string
+	SelfEvalEndAt                  string
+	ManagerEvalStartAt             string
+	ManagerEvalEndAt               string
+	ResultConfirmStartAt           string
+	ResultConfirmEndAt             string
+	EmployeeConfirmStartAt         string
+	EmployeeConfirmEndAt           string
+	ManagerConfirmStartAt          string
+	ManagerConfirmEndAt            string
+	HRConfirmStartAt               string
+	HRConfirmEndAt                 string
+	HRConfirmDeadline              string
+	Status                         string
+	TargetDepartmentIDs            []string
+	TargetEmployeeIDs              []string
+	ManagerAssignments             []database.PerformanceActivityManagerAssignment
+	IndicatorLibraryID             *uint
+	Description                    string
+	DefaultAssessmentManagerSource string
+	EnableBonusScore               bool
+	StrictTimeMode                 bool
+}
+
+const (
+	ManagerSourceDirectManager  = "DIRECT_MANAGER"
+	ManagerSourceDepartmentHead = "DEPARTMENT_HEAD"
+	ManagerSourceCenterHead     = "CENTER_HEAD"
+	ManagerSourceManual         = "MANUAL"
+	ManagerSourceImport         = "IMPORT"
+	ManagerSourceEmpty          = "EMPTY"
+	ManagerSourceSystem         = "SYSTEM"
+
+	ManagerConfigConfigured = "CONFIGURED"
+	ManagerConfigPending    = "PENDING"
+	ManagerConfigInvalid    = "INVALID"
+)
+
+var validPerformanceManagerSources = map[string]struct{}{
+	ManagerSourceDirectManager:  {},
+	ManagerSourceDepartmentHead: {},
+	ManagerSourceCenterHead:     {},
+	ManagerSourceManual:         {},
+	ManagerSourceImport:         {},
+	ManagerSourceEmpty:          {},
+	ManagerSourceSystem:         {},
+}
+
+func normalizeAssessmentManagerSource(source string) (string, error) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = ManagerSourceManual
+	}
+	switch source {
+	case "直属主管", "直接主管":
+		source = ManagerSourceDirectManager
+	case "部门负责人", "部门主管":
+		source = ManagerSourceDepartmentHead
+	case "中心负责人", "中心主管":
+		source = ManagerSourceCenterHead
+	case "手动指定", "手工指定":
+		source = ManagerSourceManual
+	case "导入指定", "导入":
+		source = ManagerSourceImport
+	case "暂不设置", "待配置", "不设置", "空":
+		source = ManagerSourceEmpty
+	case "系统兼容", "系统":
+		source = ManagerSourceSystem
+	default:
+		source = strings.ToUpper(source)
+	}
+	if _, ok := validPerformanceManagerSources[source]; !ok {
+		return "", fmt.Errorf("无效的考核上级来源: %s", source)
+	}
+	return source, nil
+}
+
+func normalizeDefaultAssessmentManagerSource(source string) (string, error) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return ManagerSourceDirectManager, nil
+	}
+	normalized, err := normalizeAssessmentManagerSource(source)
+	if err != nil {
+		return "", err
+	}
+	switch normalized {
+	case ManagerSourceDirectManager, ManagerSourceDepartmentHead, ManagerSourceCenterHead, ManagerSourceEmpty:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("%s 不能作为活动默认考核上级规则", assessmentManagerSourceLabel(normalized))
+	}
 }
 
 func resolveManagerInfo(user database.User) (string, string) {
@@ -127,6 +208,14 @@ func firstNonEmptyString(extension map[string]interface{}, keys ...string) strin
 	return ""
 }
 
+func stringPtrOrNil(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
 // checkTimeWindow 校验当前时间是否在指定阶段的时间窗口内（严格模式下）
 func checkTimeWindow(activity *database.PerformanceActivity, stage string) error {
 	if !activity.StrictTimeMode {
@@ -164,34 +253,44 @@ func (s *PerformanceService) CreateActivity(req CreateActivityRequest, createdBy
 	if err := s.validateActivityIndicatorLibraryCycle(req.IndicatorLibraryID, cycleType); err != nil {
 		return nil, err
 	}
+	defaultManagerSource, err := normalizeDefaultAssessmentManagerSource(req.DefaultAssessmentManagerSource)
+	if err != nil {
+		return nil, err
+	}
+	managerAssignments, err := s.normalizeActivityManagerAssignments(req.ManagerAssignments)
+	if err != nil {
+		return nil, err
+	}
 	activity := &database.PerformanceActivity{
-		Name:                   strings.TrimSpace(req.Name),
-		CycleType:              cycleType,
-		StartDate:              strings.TrimSpace(req.StartDate),
-		EndDate:                strings.TrimSpace(req.EndDate),
-		IndicatorLibraryID:     req.IndicatorLibraryID,
-		TargetSetStartAt:       strings.TrimSpace(req.TargetSetStartAt),
-		TargetSetEndAt:         strings.TrimSpace(req.TargetSetEndAt),
-		SelfEvalStartAt:        strings.TrimSpace(req.SelfEvalStartAt),
-		SelfEvalEndAt:          strings.TrimSpace(req.SelfEvalEndAt),
-		ManagerEvalStartAt:     strings.TrimSpace(req.ManagerEvalStartAt),
-		ManagerEvalEndAt:       strings.TrimSpace(req.ManagerEvalEndAt),
-		ResultConfirmStartAt:   strings.TrimSpace(req.ResultConfirmStartAt),
-		ResultConfirmEndAt:     strings.TrimSpace(req.ResultConfirmEndAt),
-		EmployeeConfirmStartAt: strings.TrimSpace(req.EmployeeConfirmStartAt),
-		EmployeeConfirmEndAt:   strings.TrimSpace(req.EmployeeConfirmEndAt),
-		ManagerConfirmStartAt:  strings.TrimSpace(req.ManagerConfirmStartAt),
-		ManagerConfirmEndAt:    strings.TrimSpace(req.ManagerConfirmEndAt),
-		HRConfirmStartAt:       strings.TrimSpace(req.HRConfirmStartAt),
-		HRConfirmEndAt:         strings.TrimSpace(req.HRConfirmEndAt),
-		HRConfirmDeadline:      strings.TrimSpace(req.HRConfirmDeadline),
-		Status:                 strings.TrimSpace(req.Status),
-		TargetDepartmentIDs:    req.TargetDepartmentIDs,
-		TargetEmployeeIDs:      req.TargetEmployeeIDs,
-		Description:            req.Description,
-		EnableBonusScore:       req.EnableBonusScore,
-		StrictTimeMode:         req.StrictTimeMode,
-		CreatedBy:              createdBy,
+		Name:                           strings.TrimSpace(req.Name),
+		CycleType:                      cycleType,
+		StartDate:                      strings.TrimSpace(req.StartDate),
+		EndDate:                        strings.TrimSpace(req.EndDate),
+		IndicatorLibraryID:             req.IndicatorLibraryID,
+		TargetSetStartAt:               strings.TrimSpace(req.TargetSetStartAt),
+		TargetSetEndAt:                 strings.TrimSpace(req.TargetSetEndAt),
+		SelfEvalStartAt:                strings.TrimSpace(req.SelfEvalStartAt),
+		SelfEvalEndAt:                  strings.TrimSpace(req.SelfEvalEndAt),
+		ManagerEvalStartAt:             strings.TrimSpace(req.ManagerEvalStartAt),
+		ManagerEvalEndAt:               strings.TrimSpace(req.ManagerEvalEndAt),
+		ResultConfirmStartAt:           strings.TrimSpace(req.ResultConfirmStartAt),
+		ResultConfirmEndAt:             strings.TrimSpace(req.ResultConfirmEndAt),
+		EmployeeConfirmStartAt:         strings.TrimSpace(req.EmployeeConfirmStartAt),
+		EmployeeConfirmEndAt:           strings.TrimSpace(req.EmployeeConfirmEndAt),
+		ManagerConfirmStartAt:          strings.TrimSpace(req.ManagerConfirmStartAt),
+		ManagerConfirmEndAt:            strings.TrimSpace(req.ManagerConfirmEndAt),
+		HRConfirmStartAt:               strings.TrimSpace(req.HRConfirmStartAt),
+		HRConfirmEndAt:                 strings.TrimSpace(req.HRConfirmEndAt),
+		HRConfirmDeadline:              strings.TrimSpace(req.HRConfirmDeadline),
+		Status:                         strings.TrimSpace(req.Status),
+		TargetDepartmentIDs:            req.TargetDepartmentIDs,
+		TargetEmployeeIDs:              req.TargetEmployeeIDs,
+		ManagerAssignments:             managerAssignments,
+		DefaultAssessmentManagerSource: defaultManagerSource,
+		Description:                    req.Description,
+		EnableBonusScore:               req.EnableBonusScore,
+		StrictTimeMode:                 req.StrictTimeMode,
+		CreatedBy:                      createdBy,
 	}
 
 	if err := s.actRepo.Create(activity); err != nil {
@@ -205,11 +304,26 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 	if err != nil {
 		return nil, err
 	}
+	oldStatus := strings.TrimSpace(activity.Status)
+	managerAssignments, err := s.normalizeActivityManagerAssignments(req.ManagerAssignments)
+	if err != nil {
+		return nil, err
+	}
+	scopeChanged := !sameStringSet(activity.TargetDepartmentIDs, req.TargetDepartmentIDs) ||
+		!sameStringSet(activity.TargetEmployeeIDs, req.TargetEmployeeIDs)
+	managerAssignmentsChanged := !sameActivityManagerAssignments(activity.ManagerAssignments, managerAssignments)
+	if oldStatus != "draft" && scopeChanged {
+		return nil, errors.New("目标设定开启后不能调整参与范围")
+	}
 	cycleType := strings.TrimSpace(req.CycleType)
 	if cycleType == "" {
 		return nil, errors.New("cycle_type 不能为空")
 	}
 	if err := s.validateActivityIndicatorLibraryCycle(req.IndicatorLibraryID, cycleType); err != nil {
+		return nil, err
+	}
+	defaultManagerSource, err := normalizeDefaultAssessmentManagerSource(req.DefaultAssessmentManagerSource)
+	if err != nil {
 		return nil, err
 	}
 	activity.Name = strings.TrimSpace(req.Name)
@@ -235,6 +349,8 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 	activity.Status = strings.TrimSpace(req.Status)
 	activity.TargetDepartmentIDs = req.TargetDepartmentIDs
 	activity.TargetEmployeeIDs = req.TargetEmployeeIDs
+	activity.ManagerAssignments = managerAssignments
+	activity.DefaultAssessmentManagerSource = defaultManagerSource
 	activity.Description = req.Description
 	activity.EnableBonusScore = req.EnableBonusScore
 	activity.StrictTimeMode = req.StrictTimeMode
@@ -242,6 +358,11 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 
 	if err := s.actRepo.Update(activity); err != nil {
 		return nil, err
+	}
+	if oldStatus == "draft" && strings.TrimSpace(activity.Status) == "draft" && (scopeChanged || managerAssignmentsChanged) {
+		if _, err := s.RefreshParticipants(activityID, updatedBy); err != nil {
+			return nil, err
+		}
 	}
 	return activity, nil
 }
@@ -612,6 +733,235 @@ func (s *PerformanceService) GetDistributionRules(activityID string) ([]database
 	return s.ruleRepo.ListByActivity(activityID)
 }
 
+func sameStringSet(left, right []string) bool {
+	leftValues := uniqueStrings(left)
+	rightValues := uniqueStrings(right)
+	if len(leftValues) != len(rightValues) {
+		return false
+	}
+	sort.Strings(leftValues)
+	sort.Strings(rightValues)
+	for i := range leftValues {
+		if leftValues[i] != rightValues[i] {
+			return false
+		}
+	}
+	return true
+}
+
+type activityManagerAssignmentComparable struct {
+	EmployeeID                  string
+	AssessmentManagerUserID     string
+	AssessmentManagerEmployeeID string
+	AssessmentManagerName       string
+	AssessmentManagerSource     string
+	ManagerOverrideReason       string
+}
+
+func normalizeActivityManagerAssignmentSource(source string) (string, error) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return ManagerSourceImport, nil
+	}
+	normalized, err := normalizeAssessmentManagerSource(source)
+	if err != nil {
+		return "", err
+	}
+	if normalized == ManagerSourceEmpty || normalized == ManagerSourceSystem {
+		return ManagerSourceImport, nil
+	}
+	return normalized, nil
+}
+
+func comparableActivityManagerAssignments(assignments []database.PerformanceActivityManagerAssignment) map[string]activityManagerAssignmentComparable {
+	values := make(map[string]activityManagerAssignmentComparable, len(assignments))
+	for _, assignment := range assignments {
+		userID := strings.TrimSpace(assignment.UserID)
+		if userID == "" {
+			continue
+		}
+		values[userID] = activityManagerAssignmentComparable{
+			EmployeeID:                  strings.TrimSpace(assignment.EmployeeID),
+			AssessmentManagerUserID:     strings.TrimSpace(assignment.AssessmentManagerUserID),
+			AssessmentManagerEmployeeID: strings.TrimSpace(assignment.AssessmentManagerEmployeeID),
+			AssessmentManagerName:       strings.TrimSpace(assignment.AssessmentManagerName),
+			AssessmentManagerSource:     strings.ToUpper(strings.TrimSpace(assignment.AssessmentManagerSource)),
+			ManagerOverrideReason:       strings.TrimSpace(assignment.ManagerOverrideReason),
+		}
+	}
+	return values
+}
+
+func sameActivityManagerAssignments(left, right []database.PerformanceActivityManagerAssignment) bool {
+	leftValues := comparableActivityManagerAssignments(left)
+	rightValues := comparableActivityManagerAssignments(right)
+	if len(leftValues) != len(rightValues) {
+		return false
+	}
+	for userID, leftValue := range leftValues {
+		if rightValue, ok := rightValues[userID]; !ok || rightValue != leftValue {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *PerformanceService) normalizeActivityManagerAssignments(assignments []database.PerformanceActivityManagerAssignment) ([]database.PerformanceActivityManagerAssignment, error) {
+	if len(assignments) == 0 {
+		return nil, nil
+	}
+
+	orderedUserIDs := make([]string, 0, len(assignments))
+	normalizedByUserID := make(map[string]database.PerformanceActivityManagerAssignment, len(assignments))
+	managerIDs := make([]string, 0, len(assignments))
+	for _, assignment := range assignments {
+		userID := strings.TrimSpace(assignment.UserID)
+		managerUserID := strings.TrimSpace(assignment.AssessmentManagerUserID)
+		if userID == "" || managerUserID == "" {
+			continue
+		}
+		if userID == managerUserID {
+			return nil, fmt.Errorf("考核上级不能设置为员工本人: %s", userID)
+		}
+		source, err := normalizeActivityManagerAssignmentSource(assignment.AssessmentManagerSource)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := normalizedByUserID[userID]; !exists {
+			orderedUserIDs = append(orderedUserIDs, userID)
+		}
+		normalizedByUserID[userID] = database.PerformanceActivityManagerAssignment{
+			UserID:                      userID,
+			EmployeeID:                  strings.TrimSpace(assignment.EmployeeID),
+			AssessmentManagerUserID:     managerUserID,
+			AssessmentManagerEmployeeID: strings.TrimSpace(assignment.AssessmentManagerEmployeeID),
+			AssessmentManagerName:       strings.TrimSpace(assignment.AssessmentManagerName),
+			AssessmentManagerSource:     source,
+			ManagerOverrideReason:       strings.TrimSpace(assignment.ManagerOverrideReason),
+		}
+		managerIDs = append(managerIDs, managerUserID)
+	}
+	if len(normalizedByUserID) == 0 {
+		return nil, nil
+	}
+
+	var managers []database.User
+	if err := s.db.Where("user_id IN ? AND status = ? AND deleted_at IS NULL", uniqueStrings(managerIDs), "active").Find(&managers).Error; err != nil {
+		return nil, err
+	}
+	managerByID := make(map[string]database.User, len(managers))
+	for _, manager := range managers {
+		managerByID[manager.UserID] = manager
+	}
+
+	result := make([]database.PerformanceActivityManagerAssignment, 0, len(orderedUserIDs))
+	for _, userID := range orderedUserIDs {
+		assignment := normalizedByUserID[userID]
+		manager, ok := managerByID[assignment.AssessmentManagerUserID]
+		if !ok {
+			return nil, fmt.Errorf("考核上级不存在或不是在职状态: %s", assignment.AssessmentManagerUserID)
+		}
+		if assignment.AssessmentManagerName == "" {
+			assignment.AssessmentManagerName = strings.TrimSpace(manager.Name)
+		}
+		result = append(result, assignment)
+	}
+	return result, nil
+}
+
+func activityManagerAssignmentsByUser(assignments []database.PerformanceActivityManagerAssignment) map[string]database.PerformanceActivityManagerAssignment {
+	assignmentByUserID := make(map[string]database.PerformanceActivityManagerAssignment, len(assignments))
+	for _, assignment := range assignments {
+		userID := strings.TrimSpace(assignment.UserID)
+		managerUserID := strings.TrimSpace(assignment.AssessmentManagerUserID)
+		if userID == "" || managerUserID == "" {
+			continue
+		}
+		assignment.UserID = userID
+		assignment.AssessmentManagerUserID = managerUserID
+		assignmentByUserID[userID] = assignment
+	}
+	return assignmentByUserID
+}
+
+func shouldApplyActivityManagerAssignment(participant *database.PerformanceParticipant) bool {
+	if participant == nil {
+		return false
+	}
+	if !participant.ManagerOverridden {
+		return true
+	}
+	source := strings.TrimSpace(participant.ManagerSource)
+	return source == "" || source == ManagerSourceEmpty || source == ManagerSourceImport
+}
+
+func applyActivityManagerAssignment(participant *database.PerformanceParticipant, assignment database.PerformanceActivityManagerAssignment, activeUsers map[string]database.User, operatorID string, now time.Time) (bool, *database.PerformanceRelationshipChangeLog) {
+	if participant == nil {
+		return false, nil
+	}
+	managerUserID := strings.TrimSpace(assignment.AssessmentManagerUserID)
+	if managerUserID == "" || managerUserID == strings.TrimSpace(participant.EmployeeID) {
+		return false, nil
+	}
+	source, err := normalizeActivityManagerAssignmentSource(assignment.AssessmentManagerSource)
+	if err != nil {
+		source = ManagerSourceImport
+	}
+	managerName := strings.TrimSpace(assignment.AssessmentManagerName)
+	configStatus := ManagerConfigInvalid
+	if manager, ok := activeUsers[managerUserID]; ok {
+		configStatus = ManagerConfigConfigured
+		if managerName == "" {
+			managerName = strings.TrimSpace(manager.Name)
+		}
+	}
+	reason := strings.TrimSpace(assignment.ManagerOverrideReason)
+	oldManagerID := ptrStringValue(participant.ManagerID)
+	oldManagerName := ptrStringValue(participant.ManagerName)
+	oldManagerSource := strings.TrimSpace(participant.ManagerSource)
+	if oldManagerSource == "" {
+		oldManagerSource = ManagerSourceSystem
+	}
+	if oldManagerID == managerUserID &&
+		oldManagerName == managerName &&
+		oldManagerSource == source &&
+		participant.ManagerOverridden &&
+		strings.TrimSpace(participant.ManagerOverrideReason) == reason &&
+		strings.TrimSpace(participant.ManagerConfigStatus) == configStatus {
+		return false, nil
+	}
+
+	participant.ManagerID = stringPtrOrNil(managerUserID)
+	participant.ManagerName = stringPtrOrNil(managerName)
+	participant.ManagerSource = source
+	participant.ManagerOverridden = true
+	participant.ManagerOverrideReason = reason
+	participant.ManagerConfigStatus = configStatus
+	participant.UpdatedBy = operatorID
+
+	log := &database.PerformanceRelationshipChangeLog{
+		ActivityID:       participant.ActivityID,
+		ParticipantID:    participant.ID,
+		UserID:           participant.EmployeeID,
+		ChangeType:       "assessment_manager_changed",
+		FieldName:        "manager_id",
+		OldValue:         formatManagerValue(oldManagerID, oldManagerName),
+		NewValue:         formatManagerValue(managerUserID, managerName),
+		ChangedAt:        now,
+		Source:           strings.ToLower(source),
+		CreatedBy:        operatorID,
+		OldManagerID:     oldManagerID,
+		OldManagerName:   oldManagerName,
+		NewManagerID:     managerUserID,
+		NewManagerName:   managerName,
+		OldManagerSource: oldManagerSource,
+		NewManagerSource: source,
+		Reason:           reason,
+		OperatorID:       operatorID,
+	}
+	return true, log
+}
+
 type RefreshResult struct {
 	AddedCount    int `json:"added_count"`
 	UpdatedCount  int `json:"updated_count"`
@@ -626,18 +976,24 @@ func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*Re
 	if err != nil {
 		return nil, errors.New("活动不存在")
 	}
+	if strings.TrimSpace(activity.Status) != "draft" {
+		return nil, errors.New("目标设定开启后不能增减参与人")
+	}
 
 	// 2. 获取所有在职员工（从 User 表）
 	var allUsers []database.User
 	if err := s.db.Where("status = ? AND deleted_at IS NULL", "active").Find(&allUsers).Error; err != nil {
 		return nil, err
 	}
+	activeUserByID := make(map[string]database.User, len(allUsers))
 	users := make([]database.User, 0, len(allUsers))
 	for _, user := range allUsers {
+		activeUserByID[user.UserID] = user
 		if activityIncludesUser(activity, user) {
 			users = append(users, user)
 		}
 	}
+	managerAssignmentByUserID := activityManagerAssignmentsByUser(activity.ManagerAssignments)
 
 	// 3. 获取部门信息映射
 	var departments []database.Department
@@ -674,74 +1030,17 @@ func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*Re
 
 			existing, exists := existingMap[user.UserID]
 			if exists {
-				changed := false
-				var changeLogs []database.PerformanceRelationshipChangeLog
-
-				if existing.EmployeeStatus != user.Status || existing.Status == "removed_from_scope" || existing.Status == "inactive" {
-					changeLogs = append(changeLogs, database.PerformanceRelationshipChangeLog{
-						ActivityID:    activityID,
-						ParticipantID: existing.ID,
-						ChangeType:    "status_changed",
-						FieldName:     "employee_status",
-						OldValue:      existing.EmployeeStatus,
-						NewValue:      user.Status,
-						ChangedAt:     now,
-						Source:        "refresh_participants",
-						CreatedBy:     userID,
-					})
-					existing.EmployeeStatus = user.Status
-					if existing.Status == "removed_from_scope" || existing.Status == "inactive" {
-						existing.Status = "pending"
+				changed, changeLogs := refreshPerformanceParticipantProfile(existing, user, deptName, activityID, userID, now)
+				if assignment, ok := managerAssignmentByUserID[user.UserID]; ok && shouldApplyActivityManagerAssignment(existing) {
+					managerChanged, managerLog := applyActivityManagerAssignment(existing, assignment, activeUserByID, userID, now)
+					if managerChanged {
+						changed = true
+						if managerLog != nil {
+							changeLogs = append(changeLogs, *managerLog)
+						}
 					}
-					changed = true
 				}
-
-				if existing.DepartmentID != user.DepartmentID {
-					changeLogs = append(changeLogs, database.PerformanceRelationshipChangeLog{
-						ActivityID:    activityID,
-						ParticipantID: existing.ID,
-						ChangeType:    "department_changed",
-						FieldName:     "department_id",
-						OldValue:      existing.DepartmentID,
-						NewValue:      user.DepartmentID,
-						ChangedAt:     now,
-						Source:        "refresh_participants",
-						CreatedBy:     userID,
-					})
-					existing.DepartmentID = user.DepartmentID
-					existing.DepartmentName = deptName
-					changed = true
-				}
-
-				oldManagerID := ""
-				if existing.ManagerID != nil {
-					oldManagerID = *existing.ManagerID
-				}
-				newManagerID, managerName := resolveManagerInfo(user)
-				if oldManagerID != newManagerID {
-					changeLogs = append(changeLogs, database.PerformanceRelationshipChangeLog{
-						ActivityID:    activityID,
-						ParticipantID: existing.ID,
-						ChangeType:    "manager_changed",
-						FieldName:     "manager_id",
-						OldValue:      oldManagerID,
-						NewValue:      newManagerID,
-						ChangedAt:     now,
-						Source:        "refresh_participants",
-						CreatedBy:     userID,
-					})
-					if newManagerID == "" {
-						existing.ManagerID = nil
-						existing.ManagerName = nil
-					} else {
-						existing.ManagerID = &newManagerID
-						existing.ManagerName = &managerName
-					}
-					changed = true
-				}
-
 				if changed {
-					existing.UpdatedBy = userID
 					if err := tx.Save(existing).Error; err != nil {
 						return err
 					}
@@ -753,25 +1052,19 @@ func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*Re
 					result.UpdatedCount++
 				}
 			} else {
-				participant := database.PerformanceParticipant{
-					ActivityID:     activityID,
-					EmployeeID:     user.UserID,
-					EmployeeName:   user.Name,
-					DepartmentID:   user.DepartmentID,
-					DepartmentName: deptName,
-					Position:       user.Position,
-					EmployeeStatus: user.Status,
-					Status:         "pending",
-					CreatedBy:      userID,
-					UpdatedBy:      userID,
-				}
-				managerUserID, managerName := resolveManagerInfo(user)
-				if managerUserID != "" {
-					participant.ManagerID = &managerUserID
-					participant.ManagerName = &managerName
+				participant := s.newPerformanceParticipantForActivity(activity, userID, user, deptName)
+				managerChanged, managerLog := false, (*database.PerformanceRelationshipChangeLog)(nil)
+				if assignment, ok := managerAssignmentByUserID[user.UserID]; ok {
+					managerChanged, managerLog = applyActivityManagerAssignment(&participant, assignment, activeUserByID, userID, now)
 				}
 				if err := tx.Create(&participant).Error; err != nil {
 					return err
+				}
+				if managerChanged && managerLog != nil {
+					managerLog.ParticipantID = participant.ID
+					if err := tx.Create(managerLog).Error; err != nil {
+						return err
+					}
 				}
 				result.AddedCount++
 			}
@@ -831,6 +1124,134 @@ func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*Re
 	return result, nil
 }
 
+func newPerformanceParticipantFromUser(activityID, operatorID string, user database.User, deptName string) database.PerformanceParticipant {
+	participant := database.PerformanceParticipant{
+		ActivityID:          activityID,
+		EmployeeID:          user.UserID,
+		EmployeeName:        user.Name,
+		DepartmentID:        user.DepartmentID,
+		DepartmentName:      deptName,
+		Position:            user.Position,
+		EmployeeStatus:      user.Status,
+		Status:              "pending",
+		CreatedBy:           operatorID,
+		UpdatedBy:           operatorID,
+		ManagerSource:       ManagerSourceEmpty,
+		ManagerConfigStatus: ManagerConfigPending,
+	}
+	managerUserID, managerName := resolveManagerInfo(user)
+	participant.DirectManagerIDSnapshot = stringPtrOrNil(managerUserID)
+	participant.DirectManagerNameSnapshot = stringPtrOrNil(managerName)
+	participant.ManagerOverridden = false
+	if managerUserID != "" {
+		participant.ManagerID = &managerUserID
+		participant.ManagerName = &managerName
+		participant.ManagerSource = ManagerSourceDirectManager
+		participant.ManagerConfigStatus = ManagerConfigConfigured
+	}
+	return participant
+}
+
+func (s *PerformanceService) newPerformanceParticipantForActivity(activity *database.PerformanceActivity, operatorID string, user database.User, deptName string) database.PerformanceParticipant {
+	activityID := ""
+	defaultSource := ManagerSourceDirectManager
+	if activity != nil {
+		activityID = strconv.FormatUint(uint64(activity.ID), 10)
+		if normalized, err := normalizeDefaultAssessmentManagerSource(activity.DefaultAssessmentManagerSource); err == nil {
+			defaultSource = normalized
+		}
+	}
+	participant := newPerformanceParticipantFromUser(activityID, operatorID, user, deptName)
+	participant.ManagerID = nil
+	participant.ManagerName = nil
+	participant.ManagerSource = ManagerSourceEmpty
+	participant.ManagerConfigStatus = ManagerConfigPending
+
+	managerUserID, managerName, source := s.resolveDefaultAssessmentManagerForParticipant(user, participant.DepartmentID, defaultSource)
+	if strings.TrimSpace(managerUserID) != "" {
+		participant.ManagerID = stringPtrOrNil(managerUserID)
+		participant.ManagerName = stringPtrOrNil(managerName)
+		participant.ManagerSource = source
+		participant.ManagerConfigStatus = ManagerConfigConfigured
+	}
+	return participant
+}
+
+func (s *PerformanceService) resolveDefaultAssessmentManagerForParticipant(user database.User, departmentID, source string) (string, string, string) {
+	switch source {
+	case ManagerSourceDirectManager:
+		managerUserID, managerName := resolveManagerInfo(user)
+		return strings.TrimSpace(managerUserID), strings.TrimSpace(managerName), ManagerSourceDirectManager
+	case ManagerSourceDepartmentHead, ManagerSourceCenterHead:
+		for _, candidate := range s.departmentManagerCandidateIDs(departmentID) {
+			normalized, err := normalizeAssessmentManagerSource(candidate.source)
+			if err != nil || normalized != source || strings.TrimSpace(candidate.userID) == "" {
+				continue
+			}
+			managerName := s.displayNameForUser(candidate.userID)
+			return strings.TrimSpace(candidate.userID), strings.TrimSpace(managerName), source
+		}
+	}
+	return "", "", ManagerSourceEmpty
+}
+
+func refreshPerformanceParticipantProfile(existing *database.PerformanceParticipant, user database.User, deptName, activityID, operatorID string, now time.Time) (bool, []database.PerformanceRelationshipChangeLog) {
+	if existing == nil {
+		return false, nil
+	}
+	changed := false
+	var changeLogs []database.PerformanceRelationshipChangeLog
+
+	if existing.EmployeeStatus != user.Status || existing.Status == "removed_from_scope" || existing.Status == "inactive" {
+		changeLogs = append(changeLogs, database.PerformanceRelationshipChangeLog{
+			ActivityID:    activityID,
+			ParticipantID: existing.ID,
+			ChangeType:    "status_changed",
+			FieldName:     "employee_status",
+			OldValue:      existing.EmployeeStatus,
+			NewValue:      user.Status,
+			ChangedAt:     now,
+			Source:        "refresh_participants",
+			CreatedBy:     operatorID,
+		})
+		existing.EmployeeStatus = user.Status
+		if existing.Status == "removed_from_scope" || existing.Status == "inactive" {
+			existing.Status = "pending"
+		}
+		changed = true
+	}
+
+	if existing.DepartmentID != user.DepartmentID {
+		changeLogs = append(changeLogs, database.PerformanceRelationshipChangeLog{
+			ActivityID:    activityID,
+			ParticipantID: existing.ID,
+			ChangeType:    "department_changed",
+			FieldName:     "department_id",
+			OldValue:      existing.DepartmentID,
+			NewValue:      user.DepartmentID,
+			ChangedAt:     now,
+			Source:        "refresh_participants",
+			CreatedBy:     operatorID,
+		})
+		existing.DepartmentID = user.DepartmentID
+		existing.DepartmentName = deptName
+		changed = true
+	}
+
+	if existing.EmployeeName != user.Name {
+		existing.EmployeeName = user.Name
+		changed = true
+	}
+	if existing.Position != user.Position {
+		existing.Position = user.Position
+		changed = true
+	}
+	if changed {
+		existing.UpdatedBy = operatorID
+	}
+	return changed, changeLogs
+}
+
 func (s *PerformanceService) ListParticipants(activityID string, page, pageSize int, departmentID, managerID, status, employeeKeyword string, scope *OrgDataScope) ([]database.PerformanceParticipant, int64, error) {
 	var visibleDepartmentIDs []string
 	var visibleUserIDs []string
@@ -841,7 +1262,44 @@ func (s *PerformanceService) ListParticipants(activityID string, page, pageSize 
 			visibleDepartmentIDs = scope.DepartmentIDs
 		}
 	}
-	return s.participantR.FindAll(activityID, page, pageSize, departmentID, managerID, status, employeeKeyword, visibleDepartmentIDs, visibleUserIDs)
+	items, total, err := s.participantR.FindAll(activityID, page, pageSize, departmentID, managerID, status, employeeKeyword, visibleDepartmentIDs, visibleUserIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+	s.hydrateManagerConfigStatus(items)
+	return items, total, nil
+}
+
+func (s *PerformanceService) hydrateManagerConfigStatus(items []database.PerformanceParticipant) {
+	managerIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		if managerID := ptrStringValue(item.ManagerID); managerID != "" {
+			managerIDs = append(managerIDs, managerID)
+		}
+	}
+	managerIDs = uniqueStrings(managerIDs)
+	activeManagers := make(map[string]struct{}, len(managerIDs))
+	if len(managerIDs) > 0 {
+		var users []database.User
+		if err := s.db.Where("user_id IN ? AND status = ? AND deleted_at IS NULL", managerIDs, "active").Find(&users).Error; err == nil {
+			for _, user := range users {
+				activeManagers[user.UserID] = struct{}{}
+			}
+		}
+	}
+	for i := range items {
+		managerID := ptrStringValue(items[i].ManagerID)
+		if managerID == "" {
+			items[i].ManagerConfigStatus = ManagerConfigPending
+			items[i].ManagerSource = ManagerSourceEmpty
+		} else {
+			if _, ok := activeManagers[managerID]; ok {
+				items[i].ManagerConfigStatus = ManagerConfigConfigured
+			} else {
+				items[i].ManagerConfigStatus = ManagerConfigInvalid
+			}
+		}
+	}
 }
 
 func (s *PerformanceService) validateActivityIndicatorLibraryCycle(indicatorLibraryID *uint, cycleType string) error {
@@ -896,6 +1354,555 @@ func activityIncludesUser(activity *database.PerformanceActivity, user database.
 
 func (s *PerformanceService) GetParticipant(participantID string) (*database.PerformanceParticipant, error) {
 	return s.participantR.GetByID(participantID)
+}
+
+type AssessmentManagerUpdateRequest struct {
+	ParticipantID uint
+	ManagerUserID string
+	ManagerSource string
+	Reason        string
+}
+
+type AssessmentManagerBatchResult struct {
+	ParticipantID uint                             `json:"participant_id"`
+	Success       bool                             `json:"success"`
+	Error         string                           `json:"error,omitempty"`
+	Participant   *database.PerformanceParticipant `json:"participant,omitempty"`
+}
+
+type AssessmentManagerCandidate struct {
+	UserID               string `json:"user_id"`
+	Name                 string `json:"name"`
+	EmployeeNo           string `json:"employee_no"`
+	DepartmentName       string `json:"department_name"`
+	CandidateSource      string `json:"candidate_source"`
+	CandidateSourceLabel string `json:"candidate_source_label"`
+}
+
+type AssessmentManagerCandidateSourceGroup struct {
+	Source      string                       `json:"source"`
+	SourceLabel string                       `json:"source_label"`
+	Items       []AssessmentManagerCandidate `json:"items"`
+	Reason      string                       `json:"reason,omitempty"`
+}
+
+func (s *PerformanceService) UpdateParticipantAssessmentManager(participantID uint, managerUserID, managerSource, reason, operatorID string) (*database.PerformanceParticipant, error) {
+	if participantID == 0 {
+		return nil, errors.New("参与人不能为空")
+	}
+	managerUserID = strings.TrimSpace(managerUserID)
+	if managerUserID == "" {
+		return nil, errors.New("考核上级不能为空")
+	}
+	normalizedSource, err := normalizeAssessmentManagerSource(managerSource)
+	if err != nil {
+		return nil, err
+	}
+	if normalizedSource == ManagerSourceImport || normalizedSource == ManagerSourceSystem || normalizedSource == ManagerSourceEmpty {
+		return nil, fmt.Errorf("%s 不能在调整入口手动选择", assessmentManagerSourceLabel(normalizedSource))
+	}
+	operatorID = strings.TrimSpace(operatorID)
+	if operatorID == "" {
+		operatorID = "system"
+	}
+
+	var updated database.PerformanceParticipant
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		manager, err := s.findActiveUserByUserIDWithDB(tx, managerUserID)
+		if err != nil {
+			return err
+		}
+
+		var participant database.PerformanceParticipant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
+			return errors.New("参与人不存在")
+		}
+		if participant.EmployeeID == manager.UserID {
+			return errors.New("考核上级不能设置为员工本人")
+		}
+		if participant.IsLocked || participant.Status == "locked" || participant.Status == "hr_confirmed" {
+			return errors.New("绩效结果已锁定，无法调整考核上级")
+		}
+
+		if !s.assessmentManagerSourceAllowsUser(&participant, manager.UserID, normalizedSource) {
+			return fmt.Errorf("考核上级与来源 %s 不匹配", assessmentManagerSourceLabel(normalizedSource))
+		}
+
+		oldManagerID := ptrStringValue(participant.ManagerID)
+		oldManagerName := ptrStringValue(participant.ManagerName)
+		oldManagerSource := strings.TrimSpace(participant.ManagerSource)
+		if oldManagerSource == "" {
+			oldManagerSource = ManagerSourceSystem
+		}
+
+		newManagerName := strings.TrimSpace(manager.Name)
+		participant.ManagerID = stringPtrOrNil(manager.UserID)
+		participant.ManagerName = stringPtrOrNil(newManagerName)
+		participant.ManagerSource = normalizedSource
+		participant.ManagerOverridden = true
+		participant.ManagerOverrideReason = strings.TrimSpace(reason)
+		participant.ManagerConfigStatus = ManagerConfigConfigured
+		participant.UpdatedBy = operatorID
+
+		if err := tx.Save(&participant).Error; err != nil {
+			return err
+		}
+		log := database.PerformanceRelationshipChangeLog{
+			ActivityID:       participant.ActivityID,
+			ParticipantID:    participant.ID,
+			UserID:           participant.EmployeeID,
+			ChangeType:       "assessment_manager_changed",
+			FieldName:        "manager_id",
+			OldValue:         formatManagerValue(oldManagerID, oldManagerName),
+			NewValue:         formatManagerValue(manager.UserID, newManagerName),
+			ChangedAt:        time.Now(),
+			Source:           strings.ToLower(normalizedSource),
+			CreatedBy:        operatorID,
+			OldManagerID:     oldManagerID,
+			OldManagerName:   oldManagerName,
+			NewManagerID:     manager.UserID,
+			NewManagerName:   newManagerName,
+			OldManagerSource: oldManagerSource,
+			NewManagerSource: normalizedSource,
+			Reason:           strings.TrimSpace(reason),
+			OperatorID:       operatorID,
+			OperatorName:     s.displayNameForUser(operatorID),
+		}
+		if log.OperatorName == "" {
+			log.OperatorName = operatorID
+		}
+		if err := tx.Create(&log).Error; err != nil {
+			return err
+		}
+		updated = participant
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (s *PerformanceService) BatchUpdateActivityAssessmentManagers(activityID string, items []AssessmentManagerUpdateRequest, operatorID string) ([]AssessmentManagerBatchResult, error) {
+	activityID = strings.TrimSpace(activityID)
+	if activityID == "" {
+		return nil, errors.New("活动不能为空")
+	}
+	if len(items) == 0 {
+		return nil, errors.New("请至少选择一个参与人")
+	}
+	if _, err := s.actRepo.GetByID(activityID); err != nil {
+		return nil, errors.New("活动不存在")
+	}
+
+	results := make([]AssessmentManagerBatchResult, 0, len(items))
+	for _, item := range items {
+		result := AssessmentManagerBatchResult{ParticipantID: item.ParticipantID}
+		if item.ParticipantID == 0 {
+			result.Error = "参与人不能为空"
+			results = append(results, result)
+			continue
+		}
+
+		participant, err := s.participantR.GetByID(strconv.FormatUint(uint64(item.ParticipantID), 10))
+		if err != nil {
+			result.Error = "参与人不存在"
+			results = append(results, result)
+			continue
+		}
+		if participant.ActivityID != activityID {
+			result.Error = "参与人不属于当前活动"
+			results = append(results, result)
+			continue
+		}
+
+		updated, err := s.UpdateParticipantAssessmentManager(item.ParticipantID, item.ManagerUserID, item.ManagerSource, item.Reason, operatorID)
+		if err != nil {
+			result.Error = err.Error()
+		} else {
+			result.Success = true
+			result.Participant = updated
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func (s *PerformanceService) assessmentManagerSourceAllowsUser(participant *database.PerformanceParticipant, managerUserID, source string) bool {
+	if participant == nil {
+		return false
+	}
+	managerUserID = strings.TrimSpace(managerUserID)
+	if managerUserID == "" {
+		return false
+	}
+	source, err := normalizeAssessmentManagerSource(source)
+	if err != nil {
+		return false
+	}
+
+	if ptrStringValue(participant.ManagerID) == managerUserID {
+		if currentSource, err := normalizeAssessmentManagerSource(participant.ManagerSource); err == nil && currentSource == source {
+			return true
+		}
+	}
+
+	switch source {
+	case ManagerSourceManual, ManagerSourceImport, ManagerSourceSystem:
+		return true
+	case ManagerSourceDirectManager:
+		if ptrStringValue(participant.DirectManagerIDSnapshot) == managerUserID {
+			return true
+		}
+		var employee database.User
+		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", participant.EmployeeID).First(&employee).Error; err == nil {
+			directManagerUserID, _ := resolveManagerInfo(employee)
+			return strings.TrimSpace(directManagerUserID) == managerUserID
+		}
+		return false
+	case ManagerSourceDepartmentHead, ManagerSourceCenterHead:
+		for _, scoped := range s.departmentManagerCandidateIDs(participant.DepartmentID) {
+			scopedSource, err := normalizeAssessmentManagerSource(scoped.source)
+			if err == nil && scopedSource == source && strings.TrimSpace(scoped.userID) == managerUserID {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func (s *PerformanceService) ListAssessmentManagerCandidates(activityID string, participantID uint, sourceFilter string, keyword string, limit int) ([]AssessmentManagerCandidate, error) {
+	activityID = strings.TrimSpace(activityID)
+	if activityID == "" {
+		return nil, errors.New("活动不能为空")
+	}
+	if _, err := s.actRepo.GetByID(activityID); err != nil {
+		return nil, errors.New("活动不存在")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	normalizedSourceFilter := ""
+	if strings.TrimSpace(sourceFilter) != "" {
+		normalized, err := normalizeAssessmentManagerSource(sourceFilter)
+		if err != nil {
+			return nil, err
+		}
+		normalizedSourceFilter = normalized
+	}
+
+	type pendingCandidate struct {
+		userID string
+		source string
+	}
+	candidateByUserID := make(map[string]string)
+	orderedCandidates := make([]pendingCandidate, 0)
+	addCandidate := func(userID, source string) {
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			return
+		}
+		source, err := normalizeAssessmentManagerSource(source)
+		if err != nil {
+			source = ManagerSourceManual
+		}
+		if normalizedSourceFilter != "" && source != normalizedSourceFilter {
+			return
+		}
+		if _, exists := candidateByUserID[userID]; exists {
+			return
+		}
+		candidateByUserID[userID] = source
+		orderedCandidates = append(orderedCandidates, pendingCandidate{userID: userID, source: source})
+	}
+
+	var participant *database.PerformanceParticipant
+	if participantID > 0 {
+		loaded, err := s.participantR.GetByID(strconv.FormatUint(uint64(participantID), 10))
+		if err != nil {
+			return nil, errors.New("参与人不存在")
+		}
+		if loaded.ActivityID != activityID {
+			return nil, errors.New("参与人不属于当前活动")
+		}
+		participant = loaded
+		addCandidate(ptrStringValue(participant.ManagerID), participant.ManagerSource)
+		addCandidate(ptrStringValue(participant.DirectManagerIDSnapshot), ManagerSourceDirectManager)
+
+		var employee database.User
+		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", participant.EmployeeID).First(&employee).Error; err == nil {
+			managerUserID, _ := resolveManagerInfo(employee)
+			addCandidate(managerUserID, ManagerSourceDirectManager)
+		}
+		for _, scoped := range s.departmentManagerCandidateIDs(participant.DepartmentID) {
+			addCandidate(scoped.userID, scoped.source)
+		}
+	}
+
+	keyword = strings.TrimSpace(keyword)
+	if normalizedSourceFilter == "" || normalizedSourceFilter == ManagerSourceManual {
+		shouldSearchManual := keyword != "" || participant == nil || normalizedSourceFilter == ManagerSourceManual
+		if shouldSearchManual {
+			manualUsers, err := s.searchActiveUsersForAssessmentManager(keyword, limit)
+			if err != nil {
+				return nil, err
+			}
+			for _, user := range manualUsers {
+				addCandidate(user.UserID, ManagerSourceManual)
+			}
+		}
+	}
+
+	if len(orderedCandidates) == 0 {
+		return []AssessmentManagerCandidate{}, nil
+	}
+	candidateUserIDs := make([]string, 0, len(orderedCandidates))
+	for _, candidate := range orderedCandidates {
+		candidateUserIDs = append(candidateUserIDs, candidate.userID)
+	}
+
+	var users []database.User
+	if err := s.db.Where("user_id IN ? AND status = ? AND deleted_at IS NULL", candidateUserIDs, "active").Find(&users).Error; err != nil {
+		return nil, err
+	}
+	userByID := make(map[string]database.User)
+	departmentIDs := make(map[string]struct{})
+	for _, user := range users {
+		userByID[user.UserID] = user
+		if strings.TrimSpace(user.DepartmentID) != "" {
+			departmentIDs[user.DepartmentID] = struct{}{}
+		}
+	}
+
+	var profiles []database.EmployeeProfile
+	if err := s.db.Where("user_id IN ? AND deleted_at IS NULL", candidateUserIDs).Find(&profiles).Error; err != nil {
+		return nil, err
+	}
+	employeeNoByUserID := make(map[string]string)
+	for _, profile := range profiles {
+		employeeNoByUserID[profile.UserID] = strings.TrimSpace(profile.EmployeeID)
+	}
+
+	departmentNames := make(map[string]string)
+	if len(departmentIDs) > 0 {
+		ids := make([]string, 0, len(departmentIDs))
+		for id := range departmentIDs {
+			ids = append(ids, id)
+		}
+		var departments []database.Department
+		if err := s.db.Where("department_id IN ? AND deleted_at IS NULL", ids).Find(&departments).Error; err != nil {
+			return nil, err
+		}
+		for _, department := range departments {
+			departmentNames[department.DepartmentID] = department.Name
+		}
+	}
+
+	candidates := make([]AssessmentManagerCandidate, 0, len(orderedCandidates))
+	for _, candidate := range orderedCandidates {
+		user, ok := userByID[candidate.userID]
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, AssessmentManagerCandidate{
+			UserID:               user.UserID,
+			Name:                 user.Name,
+			EmployeeNo:           employeeNoByUserID[user.UserID],
+			DepartmentName:       departmentNames[user.DepartmentID],
+			CandidateSource:      candidate.source,
+			CandidateSourceLabel: assessmentManagerSourceLabel(candidate.source),
+		})
+		if len(candidates) >= limit {
+			break
+		}
+	}
+	return candidates, nil
+}
+
+func (s *PerformanceService) ListAssessmentManagerCandidateSourceGroups(activityID string, participantID uint, keyword string, limit int) ([]AssessmentManagerCandidateSourceGroup, error) {
+	sources := []string{
+		ManagerSourceDirectManager,
+		ManagerSourceDepartmentHead,
+		ManagerSourceCenterHead,
+		ManagerSourceManual,
+	}
+	groups := make([]AssessmentManagerCandidateSourceGroup, 0, len(sources))
+	for _, source := range sources {
+		items, err := s.ListAssessmentManagerCandidates(activityID, participantID, source, keyword, limit)
+		if err != nil {
+			return nil, err
+		}
+		group := AssessmentManagerCandidateSourceGroup{
+			Source:      source,
+			SourceLabel: assessmentManagerSourceLabel(source),
+			Items:       items,
+		}
+		if len(items) == 0 {
+			group.Reason = s.assessmentManagerCandidateMissingReason(activityID, participantID, source, keyword)
+		}
+		groups = append(groups, group)
+	}
+	return groups, nil
+}
+
+func (s *PerformanceService) assessmentManagerCandidateMissingReason(activityID string, participantID uint, source string, keyword string) string {
+	switch source {
+	case ManagerSourceDirectManager:
+		if participantID == 0 {
+			return "未指定参与人，无法读取直属主管。"
+		}
+		participant, err := s.participantR.GetByID(strconv.FormatUint(uint64(participantID), 10))
+		if err != nil {
+			return "参与人不存在。"
+		}
+		if ptrStringValue(participant.DirectManagerIDSnapshot) == "" {
+			return "该参与人在活动创建时没有直属主管快照，且当前员工档案未配置直属主管。"
+		}
+		return "直属主管不存在、已离职或不在可选范围。"
+	case ManagerSourceDepartmentHead:
+		return "部门负责人未配置。请在部门扩展配置或钉钉部门负责人同步结果中维护 department_head_user_id。"
+	case ManagerSourceCenterHead:
+		return "中心负责人未配置。当前项目未硬编码中心负责人来源，可通过 departments.extension.center_head_user_id 等扩展字段维护。"
+	case ManagerSourceManual:
+		if strings.TrimSpace(keyword) == "" {
+			return "请输入姓名、工号或手机号搜索员工。"
+		}
+		return "没有匹配的在职员工。"
+	default:
+		return "该来源没有可用候选人。"
+	}
+}
+
+type assessmentManagerScopedCandidate struct {
+	userID string
+	source string
+}
+
+func (s *PerformanceService) departmentManagerCandidateIDs(departmentID string) []assessmentManagerScopedCandidate {
+	departmentID = strings.TrimSpace(departmentID)
+	if departmentID == "" {
+		return nil
+	}
+	candidates := make([]assessmentManagerScopedCandidate, 0)
+	visited := make(map[string]struct{})
+	for depth := 0; depth < 12 && departmentID != ""; depth++ {
+		if _, seen := visited[departmentID]; seen {
+			break
+		}
+		visited[departmentID] = struct{}{}
+
+		var department database.Department
+		if err := s.db.Where("department_id = ? AND deleted_at IS NULL", departmentID).First(&department).Error; err != nil {
+			break
+		}
+		if userID := firstNonEmptyString(department.Extension,
+			"assessment_manager_user_id",
+			"performance_manager_user_id",
+			"department_head_user_id",
+			"dept_head_user_id",
+			"head_user_id",
+			"leader_user_id",
+			"owner_user_id",
+		); userID != "" {
+			candidates = append(candidates, assessmentManagerScopedCandidate{userID: userID, source: ManagerSourceDepartmentHead})
+		}
+		if userID := firstNonEmptyString(department.Extension,
+			"center_head_user_id",
+			"center_leader_user_id",
+			"center_manager_user_id",
+		); userID != "" {
+			candidates = append(candidates, assessmentManagerScopedCandidate{userID: userID, source: ManagerSourceCenterHead})
+		}
+		departmentID = strings.TrimSpace(department.ParentID)
+	}
+	return candidates
+}
+
+func (s *PerformanceService) searchActiveUsersForAssessmentManager(keyword string, limit int) ([]database.User, error) {
+	query := s.db.Where("status = ? AND deleted_at IS NULL", "active")
+	keyword = strings.TrimSpace(keyword)
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		var profileUserIDs []string
+		if err := s.db.Model(&database.EmployeeProfile{}).Where("employee_id LIKE ? AND deleted_at IS NULL", like).Pluck("user_id", &profileUserIDs).Error; err != nil {
+			return nil, err
+		}
+		if len(profileUserIDs) > 0 {
+			query = query.Where("(name LIKE ? OR user_id LIKE ? OR mobile LIKE ? OR user_id IN ?)", like, like, like, profileUserIDs)
+		} else {
+			query = query.Where("(name LIKE ? OR user_id LIKE ? OR mobile LIKE ?)", like, like, like)
+		}
+	}
+	var users []database.User
+	if err := query.Order("name ASC").Limit(limit).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+func (s *PerformanceService) findActiveUserByUserIDWithDB(db *gorm.DB, userID string) (*database.User, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, errors.New("考核上级不能为空")
+	}
+	var user database.User
+	if err := db.Where("user_id = ? AND deleted_at IS NULL", userID).First(&user).Error; err == nil {
+		if strings.TrimSpace(user.Status) != "active" {
+			return nil, errors.New("考核上级不存在或不是在职状态")
+		}
+		return &user, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if _, err := strconv.ParseUint(userID, 10, 64); err == nil {
+		if err := db.Where("id = ? AND status = ? AND deleted_at IS NULL", userID, "active").First(&user).Error; err == nil {
+			return &user, nil
+		}
+	}
+	return nil, errors.New("考核上级不存在或不是在职状态")
+}
+
+func assessmentManagerSourceLabel(source string) string {
+	switch strings.ToUpper(strings.TrimSpace(source)) {
+	case ManagerSourceDirectManager:
+		return "直属主管"
+	case ManagerSourceDepartmentHead:
+		return "部门负责人"
+	case ManagerSourceCenterHead:
+		return "中心负责人"
+	case ManagerSourceImport:
+		return "导入指定"
+	case ManagerSourceSystem:
+		return "系统兼容"
+	case ManagerSourceEmpty:
+		return "暂未配置"
+	default:
+		return "手动指定"
+	}
+}
+
+func ptrStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
+}
+
+func formatManagerValue(userID, name string) string {
+	userID = strings.TrimSpace(userID)
+	name = strings.TrimSpace(name)
+	if userID == "" {
+		return ""
+	}
+	if name == "" {
+		return userID
+	}
+	return fmt.Sprintf("%s/%s", userID, name)
 }
 
 func (s *PerformanceService) HydrateParticipantTargetConfirmers(participant *database.PerformanceParticipant) {
@@ -1834,27 +2841,39 @@ func (s *PerformanceService) SendSelfEvalReminders(activityID string) error {
 	}
 	participants = filtered
 
-	notifiedUsers := make(map[string]struct{})
-	var succeeded, failed int
+	handledUsers := make(map[string]struct{})
+	var succeeded, skipped, failed int
 	for _, p := range participants {
 		employeeID := strings.TrimSpace(p.EmployeeID)
 		if employeeID == "" {
 			continue
 		}
-		if _, exists := notifiedUsers[employeeID]; exists {
+		if _, exists := handledUsers[employeeID]; exists {
 			continue
 		}
 		title := "绩效自评提醒"
 		content := fmt.Sprintf("您有一个绩效自评待完成，请尽快登录系统完成自评。绩效活动：%s", activity.Name)
-		if err := dingtalk.SendCorpMessageToUser(employeeID, title, content); err != nil {
+		if err := dingtalk.SendCorpActionCardToUser(employeeID, title, content, "去完成自评", PerformanceSelfEvalURL(activityID, p.ID)); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logrus.Infof("skip self eval reminder to non-notifiable user %s: %v", employeeID, err)
+				handledUsers[employeeID] = struct{}{}
+				skipped++
+				continue
+			}
 			logrus.Warnf("send self eval reminder to %s failed: %v", employeeID, err)
 			failed++
 		} else {
-			notifiedUsers[employeeID] = struct{}{}
+			handledUsers[employeeID] = struct{}{}
 			succeeded++
 		}
 	}
-	logrus.Infof("sent self eval reminders: succeeded=%d, failed=%d", succeeded, failed)
+	logrus.Infof("sent self eval reminders: succeeded=%d, skipped=%d, failed=%d", succeeded, skipped, failed)
+	if succeeded == 0 && skipped == 0 && failed == 0 {
+		return fmt.Errorf("没有需要发送自评提醒的参与人")
+	}
+	if failed > 0 {
+		return fmt.Errorf("自评提醒发送失败：成功 %d 人，跳过 %d 人，失败 %d 人，请查看后端日志", succeeded, skipped, failed)
+	}
 	return nil
 }
 
@@ -1878,18 +2897,23 @@ func (s *PerformanceService) SendManagerEvalReminders(activityID string) error {
 		managerCounts[managerID]++
 	}
 
-	var succeeded, failed int
+	var succeeded, skipped, failed int
 	for managerID, count := range managerCounts {
 		title := "绩效评分提醒"
 		content := fmt.Sprintf("您有%d位员工的绩效待评分，请尽快完成。", count)
 		if err := dingtalk.SendCorpMessageToUser(managerID, title, content); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logrus.Infof("skip manager eval reminder to non-notifiable user %s: %v", managerID, err)
+				skipped++
+				continue
+			}
 			logrus.Warnf("send manager eval reminder to %s failed: %v", managerID, err)
 			failed++
 		} else {
 			succeeded++
 		}
 	}
-	logrus.Infof("sent manager eval reminders: succeeded=%d, failed=%d", succeeded, failed)
+	logrus.Infof("sent manager eval reminders: succeeded=%d, skipped=%d, failed=%d", succeeded, skipped, failed)
 	return nil
 }
 
@@ -1914,7 +2938,11 @@ func (s *PerformanceService) TriggerPerformanceInterview(participantID string, i
 			content = fmt.Sprintf("恭喜您获得绩效等级%s，主管可以选择与您进行绩效面谈反馈。", p.FinalLevel)
 		}
 		if err := dingtalk.SendCorpMessageToUser(p.EmployeeID, "绩效面谈通知", content); err != nil {
-			logrus.Warnf("send interview notification to employee %s failed: %v", p.EmployeeID, err)
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logrus.Infof("skip interview notification to non-notifiable user %s: %v", p.EmployeeID, err)
+			} else {
+				logrus.Warnf("send interview notification to employee %s failed: %v", p.EmployeeID, err)
+			}
 		}
 	}
 
@@ -1952,6 +2980,19 @@ func (s *PerformanceService) GetGoalRecordsByActivity(activityID string) ([]data
 	return s.goalRepo.FindByActivity(activityID)
 }
 
+func targetSettingApproved(participantStatus string, records []database.PerformanceGoalRecord) bool {
+	switch participantStatus {
+	case "target_set", "self_submitted", "manager_submitted", "result_confirmed", "employee_confirmed", "manager_confirmed", "hr_confirmed", "locked":
+		return true
+	}
+	for _, record := range records {
+		if record.ApprovalStatus == "approved" {
+			return true
+		}
+	}
+	return false
+}
+
 // BatchSaveGoalRecords 批量保存目标记录
 func (s *PerformanceService) BatchSaveGoalRecords(participantID uint, records []GoalRecordRequest, userID string) ([]database.PerformanceGoalRecord, error) {
 	// 获取参与人信息
@@ -1972,6 +3013,9 @@ func (s *PerformanceService) BatchSaveGoalRecords(participantID uint, records []
 	// 权重校验
 	if participant.IsLocked {
 		return nil, fmt.Errorf("该参与人的绩效结果已锁定，无法修改目标")
+	}
+	if targetSettingApproved(participant.Status, nil) {
+		return nil, fmt.Errorf("目标设定已审批通过，无法修改")
 	}
 
 	quantitativeWeight := 0.0
@@ -2005,6 +3049,9 @@ func (s *PerformanceService) BatchSaveGoalRecords(participantID uint, records []
 			Where("id = ?", participantID).First(&lockedP).Error; err != nil {
 			return fmt.Errorf("锁定参与人失败: %w", err)
 		}
+		if lockedP.IsLocked {
+			return fmt.Errorf("该参与人的绩效结果已锁定，无法修改目标")
+		}
 
 		// 查询现有记录
 		var existing []database.PerformanceGoalRecord
@@ -2012,6 +3059,9 @@ func (s *PerformanceService) BatchSaveGoalRecords(participantID uint, records []
 			participantID, participant.ActivityID, []string{"quantitative", "key_action"}).
 			Find(&existing).Error; err != nil {
 			return err
+		}
+		if targetSettingApproved(lockedP.Status, existing) {
+			return fmt.Errorf("目标设定已审批通过，无法修改")
 		}
 		existingMap := make(map[uint]database.PerformanceGoalRecord, len(existing))
 		for _, e := range existing {
@@ -2816,7 +3866,14 @@ func (s *PerformanceService) SendHRConfirmReminders(activityID string) error {
 
 	title := "绩效 HR 确认提醒"
 	content := fmt.Sprintf("活动：%s\n当前仍有 %d 名员工待 HR 确认，请及时处理。", activity.Name, len(pending))
-	return dingtalk.SendCorpMessageToUser(recipient, title, content)
+	if err := dingtalk.SendCorpMessageToUser(recipient, title, content); err != nil {
+		if dingtalk.IsUserNotNotifiableError(err) {
+			logrus.Infof("skip HR confirm reminder to non-notifiable user %s: %v", recipient, err)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func normalizeGoalWeight(weight float64) float64 {

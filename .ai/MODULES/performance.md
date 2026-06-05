@@ -843,3 +843,42 @@ Body：
 - 检查员工确认是否已完成
 - 检查上级确认是否已完成；上级确认成功后参与人结果会立即冻结
 - 检查是否有未处理的申诉
+
+## 考核上级独立设置（2026-06-03）
+
+本节属于本次绩效考核上级独立设置的业务规则文档变更，用于固化活动内考核上级与组织直属主管解耦后的长期口径。
+
+### 字段语义
+- `users.manager_user_id` / `users.manager_name`：员工当前组织关系中的实时直属主管，只作为组织主数据使用，会随钉钉同步或组织调整变化。
+- `performance_participants.manager_id` / `manager_name`：某个绩效活动内的考核上级，用于经理评分、经理确认、分布团队统计与结果页展示。它与实时直属主管解耦，历史活动刷新参与人时不得用 `users.manager_*` 覆盖。
+- `performance_participants.direct_manager_id_snapshot` / `direct_manager_name_snapshot`：参与人进入活动时的直属主管快照，用于审计和对比。
+- `manager_source`：考核上级来源，枚举 `DIRECT_MANAGER`、`DEPARTMENT_HEAD`、`CENTER_HEAD`、`MANUAL`、`IMPORT`、`SYSTEM`。
+- `manager_overridden` / `manager_override_reason`：是否被人工、导入或其他非默认逻辑调整，以及调整原因。
+
+### 刷新规则
+- `RefreshParticipants` 新增参与人时，默认把当时的直属主管写入 `manager_id` / `manager_name`，并同步写入直属主管快照，来源为 `DIRECT_MANAGER`。
+- 对已存在参与人，刷新只更新员工姓名、岗位、部门、在职/移出范围等信息，不再覆盖 `manager_id` / `manager_name`。
+- 历史数据迁移只补充新增元数据字段，旧的 `manager_id` / `manager_name` 保持原样，`manager_source` 回填为 `SYSTEM`。
+
+### API
+- `GET /api/v1/performance/activities/:activity_id/assessment-manager-candidates`：按活动与可选参与人获取考核上级候选人。
+- `PUT /api/v1/performance/participants/:participant_id/assessment-manager`：单人调整考核上级。
+- `POST /api/v1/performance/activities/:activity_id/assessment-managers/batch`：批量调整考核上级，返回逐条成功/失败结果。
+
+### 权限
+- `performance:assessment_manager:update`：单人调整与候选人查询。
+- `performance:assessment_manager:batch_update`：批量调整。
+- 兼容迁移会给已有 `performance:activity:manage` 授权角色补发上述权限。
+
+### 校验与审计
+- 经理评分、目标评分、附加分设置、经理确认等经理侧操作，必须校验当前用户等于 `performance_participants.manager_id`（管理员和系统用户除外）。
+- 调整考核上级会写入 `performance_relationship_change_logs`，记录旧/新考核上级、旧/新来源、调整原因、操作人和时间。
+- 已锁定、HR 已确认或 locked 状态的参与人不可再调整考核上级。
+
+### 导入
+- 参与人导入模板兼容旧列，并新增可选列：`考核上级工号`、`考核上级姓名`、`考核上级来源`、`调整原因`。
+- 导入接口当前是解析/预览接口，不直接落库参与人；解析结果会返回 `manager_assignments`，无法匹配或非在职的考核上级会进入 `skipped_rows` 与 `warnings`。
+
+### 待业务确认
+- `DEPARTMENT_HEAD` / `CENTER_HEAD` 当前从部门扩展字段读取，中心层级和负责人字段口径需要组织主数据进一步明确。
+- 锁定后是否允许 HR 仅为历史展示修正考核上级，目前实现为禁止。
