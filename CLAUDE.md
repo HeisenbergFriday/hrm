@@ -439,7 +439,7 @@ AI 文档更新：
   User 模型新增 `manager_user_id`/`manager_name` 字段支撑绩效主管关系
 - 排班同步策略已调整为全员显式推送（含默认班次员工），休息日写入 `ShiftID=0`，涉及：
   `internal/service/week_schedule_service.go`
-- 钉钉企业消息通知能力已接入（`SendCorpMessageToUser`、`IsNotifiableUserID`），绩效提醒与评分通知依赖此能力，涉及：
+- 钉钉企业消息通知已接入基础发送与不可通知账号过滤（`SendCorpMessageToUser`、`IsNotifiableUserID`），绩效提醒与评分通知已处理发送、跳过与部分失败日志；成功/失败、幂等与异常路径仍需钉钉联调验证，涉及：
   `internal/dingtalk/dingtalk.go`
 - 考勤同步已修复时区问题（改用 CST 固定时区），并支持 `force` 参数强制重新拉取，涉及：
   `internal/api/handlers.go`（`SyncAttendance`）、

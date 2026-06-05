@@ -63,6 +63,8 @@ var systemPermissionDefinitions = []SystemPermissionDefinition{
 	{Name: "绩效分布规则", Code: "performance:distribution:manage", Description: "设置绩效分布规则"},
 	{Name: "绩效指标库管理", Code: "performance:indicator:manage", Description: "指标库/指标项 CRUD"},
 	{Name: "绩效目标管理", Code: "performance:goal:manage", Description: "目标设定/审批/分配"},
+	{Name: "绩效考核上级调整", Code: "performance:assessment_manager:update", Description: "调整单个绩效参与人的考核上级"},
+	{Name: "绩效考核上级批量调整", Code: "performance:assessment_manager:batch_update", Description: "批量调整绩效参与人的考核上级"},
 	{Name: "绩效结果查看", Code: "performance:result:view", Description: "查看绩效结果"},
 	{Name: "组织数据只读", Code: "org:read", Description: "查看组织架构、花名册等组织数据"},
 	{Name: "审计日志只读", Code: "audit_log:read", Description: "查看操作审计日志"},

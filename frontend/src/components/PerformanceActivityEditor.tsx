@@ -467,6 +467,22 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
               <Row gutter={[16, 12]}>
                 <Col xs={24} md={12}>
                   <Form.Item
+                    name="default_assessment_manager_source"
+                    label="默认考核上级规则"
+                    initialValue="DIRECT_MANAGER"
+                  >
+                    <Select
+                      options={[
+                        { label: '直属主管', value: 'DIRECT_MANAGER' },
+                        { label: '部门负责人', value: 'DEPARTMENT_HEAD' },
+                        { label: '中心负责人', value: 'CENTER_HEAD' },
+                        { label: '暂不设置', value: 'EMPTY' },
+                      ]}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Form.Item
                     name="enable_bonus_score"
                     label="启用附加分"
                     valuePropName="checked"

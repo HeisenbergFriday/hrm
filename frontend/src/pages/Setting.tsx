@@ -33,8 +33,7 @@ const Setting: React.FC = () => {
     }
   }
 
-  const onFinish = (values: any) => {
-    console.log('Form values:', values)
+  const onFinish = () => {
     message.success('配置保存成功')
   }
 

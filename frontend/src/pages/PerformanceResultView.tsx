@@ -237,7 +237,7 @@ const ArchivePerformanceSheet: React.FC<ArchiveSheetProps> = ({ activity, partic
             <th>三级部门</th>
             <th>职级</th>
             <th>岗位</th>
-            <th>直属上级</th>
+            <th>考核上级</th>
             <th>考核周期</th>
           </tr>
           <tr className="archive-info-value">

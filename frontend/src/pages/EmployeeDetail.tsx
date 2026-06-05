@@ -17,6 +17,7 @@ import {
   Statistic,
   Tag,
   Timeline,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -26,7 +27,8 @@ import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { useNavigate, useParams } from 'react-router-dom'
 import dayjs from 'dayjs'
-import { employeeAPI, orgAPI } from '../services/api'
+import { employeeAPI, orgAPI, userAPI } from '../services/api'
+import { hasPermission } from '../utils/permission'
 
 const { Title, Text } = Typography
 
@@ -42,6 +44,9 @@ interface Employee {
   mobile: string
   department_id: string
   position: string
+  manager_user_id?: string
+  manager_name?: string
+  extension?: Record<string, any>
   avatar: string
   status: string
 }
@@ -135,6 +140,15 @@ interface DetailData {
   warnings: WarningItem[]
 }
 
+const getPositionDiagnosticText = (employee?: Employee) => {
+  const diagnostic = employee?.extension?.dingtalk_position_sync
+  if (!diagnostic) return '钉钉岗位字段未返回或尚未执行新版同步'
+  const api = diagnostic.api ? `接口：${diagnostic.api}` : ''
+  const reason = diagnostic.failure_reason ? `原因：${diagnostic.failure_reason}` : ''
+  const fields = Array.isArray(diagnostic.raw_field_keys) ? `字段：${diagnostic.raw_field_keys.join(', ')}` : ''
+  return [api, reason, fields].filter(Boolean).join('\n') || '暂无诊断信息'
+}
+
 const EmployeeDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -143,7 +157,12 @@ const EmployeeDetail: React.FC = () => {
   const [syncing, setSyncing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [managerEditOpen, setManagerEditOpen] = useState(false)
+  const [managerSaving, setManagerSaving] = useState(false)
+  const [managerUsers, setManagerUsers] = useState<Employee[]>([])
   const [form] = Form.useForm()
+  const [managerForm] = Form.useForm()
+  const canMaintainManager = hasPermission('user_manage')
 
   const scopeLabel = useMemo(() => {
     if (!detail?.scope) {
@@ -266,6 +285,44 @@ const EmployeeDetail: React.FC = () => {
     }
   }
 
+  const loadManagerUsers = async () => {
+    const response = await userAPI.getUsers({ page: 1, page_size: 2000 })
+    const data = response.data?.items || response.data?.data?.items || []
+    setManagerUsers(data)
+    return data as Employee[]
+  }
+
+  const openManagerEdit = async () => {
+    if (!detail?.employee) return
+    managerForm.setFieldsValue({ manager_user_id: detail.employee.manager_user_id || undefined })
+    setManagerEditOpen(true)
+    if (!managerUsers.length) {
+      try {
+        await loadManagerUsers()
+      } catch {
+        message.error('加载员工候选失败')
+      }
+    }
+  }
+
+  const handleSaveManager = async () => {
+    if (!detail?.employee) return
+    const values = await managerForm.validateFields()
+    setManagerSaving(true)
+    try {
+      await userAPI.updateUser(String(detail.employee.id), {
+        manager_user_id: values.manager_user_id || '',
+      })
+      message.success('直属上级已更新')
+      setManagerEditOpen(false)
+      await loadDetail(false)
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || '保存直属上级失败')
+    } finally {
+      setManagerSaving(false)
+    }
+  }
+
   const statusTag = (value?: string) => (
     <StatusTag color={value === 'active' ? 'success' : 'default'}>
       {value === 'active' ? '在职' : value === 'inactive' ? '离职/停用' : value || '未设置'}
@@ -319,6 +376,13 @@ const EmployeeDetail: React.FC = () => {
     )
   }
 
+  const managerOptions = managerUsers
+    .filter(user => user.user_id !== detail?.employee?.user_id && user.status === 'active')
+    .map(user => ({
+      value: user.user_id,
+      label: `${user.name} / ${user.position || '未设置岗位'} / ${user.user_id}`,
+    }))
+
   return (
     <PageContainer
       title={detail?.employee?.name || '员工详情'}
@@ -349,7 +413,13 @@ const EmployeeDetail: React.FC = () => {
               <Avatar size={80} src={detail.employee.avatar} icon={<UserOutlined />} />
               <div style={{ flex: 1 }}>
                 <div style={{ marginBottom: 8 }}>
-                  <Text>{detail.employee.position || '未设置岗位'}</Text>
+                  {detail.employee.position ? (
+                    <Text>{detail.employee.position}</Text>
+                  ) : (
+                    <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{getPositionDiagnosticText(detail.employee)}</span>}>
+                      <Tag color="orange">未同步岗位</Tag>
+                    </Tooltip>
+                  )}
                   <Text type="secondary"> / {detail.department.name || detail.employee.department_id}</Text>
                 </div>
                 <Space wrap>
@@ -454,6 +524,12 @@ const EmployeeDetail: React.FC = () => {
 
             <Col xs={24} lg={10}>
               <PageCard title="汇报关系">
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="直属上级是实时汇报关系，不等同于绩效活动中的考核上级。"
+                />
                 <Descriptions column={1} bordered size="small">
                   <Descriptions.Item label="直属上级">
                     {detail.org_relation.manager
@@ -467,6 +543,11 @@ const EmployeeDetail: React.FC = () => {
                     {detail.org_relation.same_department_count}
                   </Descriptions.Item>
                 </Descriptions>
+                {canMaintainManager && (
+                  <Button style={{ marginTop: 12 }} icon={<EditOutlined />} onClick={() => void openManagerEdit()}>
+                    维护直属上级
+                  </Button>
+                )}
 
                 <div style={{ marginTop: 16 }}>
                   <Title level={5}>直属下属</Title>
@@ -513,6 +594,32 @@ const EmployeeDetail: React.FC = () => {
       ) : (
         <Alert type="warning" showIcon message="没有找到该员工" />
       )}
+
+      <Modal
+        title="维护直属上级"
+        open={managerEditOpen}
+        onCancel={() => setManagerEditOpen(false)}
+        onOk={() => void handleSaveManager()}
+        confirmLoading={managerSaving}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="这里只维护员工实时直属上级；绩效活动中的考核上级请在绩效活动参与人列表中单独设置。"
+        />
+        <Form form={managerForm} layout="vertical">
+          <Form.Item name="manager_user_id" label="直属上级">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="搜索员工"
+              options={managerOptions}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         title="编辑员工档案"
