@@ -46,6 +46,16 @@ type PerformanceTemplateItem struct {
 	DeletedAt   *time.Time `gorm:"index" json:"-"`
 }
 
+type PerformanceActivityManagerAssignment struct {
+	UserID                      string `json:"user_id"`
+	EmployeeID                  string `json:"employee_id,omitempty"`
+	AssessmentManagerUserID     string `json:"assessment_manager_user_id"`
+	AssessmentManagerEmployeeID string `json:"assessment_manager_employee_id,omitempty"`
+	AssessmentManagerName       string `json:"assessment_manager_name"`
+	AssessmentManagerSource     string `json:"assessment_manager_source"`
+	ManagerOverrideReason       string `json:"manager_override_reason,omitempty"`
+}
+
 type PerformanceActivity struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 
@@ -84,8 +94,11 @@ type PerformanceActivity struct {
 	Description string `gorm:"type:text" json:"description"`
 
 	// 参与人范围筛选
-	TargetDepartmentIDs []string `gorm:"type:json;serializer:json" json:"target_department_ids"`
-	TargetEmployeeIDs   []string `gorm:"type:json;serializer:json" json:"target_employee_ids"`
+	TargetDepartmentIDs []string                               `gorm:"type:json;serializer:json" json:"target_department_ids"`
+	TargetEmployeeIDs   []string                               `gorm:"type:json;serializer:json" json:"target_employee_ids"`
+	ManagerAssignments  []PerformanceActivityManagerAssignment `gorm:"type:json;serializer:json" json:"manager_assignments"`
+	// DefaultAssessmentManagerSource controls manager assignment only for newly added participants.
+	DefaultAssessmentManagerSource string `gorm:"type:varchar(32);default:'DIRECT_MANAGER'" json:"default_assessment_manager_source"`
 
 	// 附加分配置
 	EnableBonusScore bool `gorm:"default:false" json:"enable_bonus_score"` // 启用后附加分计入总分并影响等级
@@ -158,8 +171,17 @@ type PerformanceParticipant struct {
 	Level          string `gorm:"type:varchar(32)" json:"level"`
 	EmployeeStatus string `gorm:"type:varchar(32)" json:"employee_status"`
 
-	ManagerID   *string `gorm:"type:varchar(64)" json:"manager_id"`
+	// ManagerID/ManagerName are the assessment manager inside this performance activity.
+	// They are intentionally independent from users.manager_user_id / manager_name.
+	ManagerID   *string `gorm:"type:varchar(64);index" json:"manager_id"`
 	ManagerName *string `gorm:"type:varchar(128)" json:"manager_name"`
+
+	DirectManagerIDSnapshot   *string `gorm:"type:varchar(64)" json:"direct_manager_id_snapshot"`
+	DirectManagerNameSnapshot *string `gorm:"type:varchar(128)" json:"direct_manager_name_snapshot"`
+	ManagerSource             string  `gorm:"type:varchar(32);default:'DIRECT_MANAGER';index" json:"manager_source"`
+	ManagerOverridden         bool    `gorm:"default:false" json:"manager_overridden"`
+	ManagerOverrideReason     string  `gorm:"type:text" json:"manager_override_reason"`
+	ManagerConfigStatus       string  `gorm:"type:varchar(32);default:'CONFIGURED';index" json:"manager_config_status"`
 
 	Status string `gorm:"type:varchar(32);not null;index" json:"status"`
 
@@ -291,6 +313,7 @@ type PerformanceRelationshipChangeLog struct {
 	ID            uint   `gorm:"primaryKey" json:"id"`
 	ActivityID    string `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 	ParticipantID uint   `gorm:"not null;index" json:"participant_id"`
+	UserID        string `gorm:"type:varchar(64);index" json:"user_id"`
 
 	ChangeType string    `gorm:"type:varchar(64);not null;index" json:"change_type"`
 	FieldName  string    `gorm:"type:varchar(64)" json:"field_name"`
@@ -299,6 +322,16 @@ type PerformanceRelationshipChangeLog struct {
 	ChangedAt  time.Time `json:"changed_at"`
 	Source     string    `gorm:"type:varchar(64)" json:"source"`
 	CreatedBy  string    `gorm:"type:varchar(64)" json:"created_by"`
+
+	OldManagerID     string `gorm:"type:varchar(64)" json:"old_manager_id"`
+	OldManagerName   string `gorm:"type:varchar(128)" json:"old_manager_name"`
+	NewManagerID     string `gorm:"type:varchar(64)" json:"new_manager_id"`
+	NewManagerName   string `gorm:"type:varchar(128)" json:"new_manager_name"`
+	OldManagerSource string `gorm:"type:varchar(32)" json:"old_manager_source"`
+	NewManagerSource string `gorm:"type:varchar(32)" json:"new_manager_source"`
+	Reason           string `gorm:"type:text" json:"reason"`
+	OperatorID       string `gorm:"type:varchar(64)" json:"operator_id"`
+	OperatorName     string `gorm:"type:varchar(128)" json:"operator_name"`
 
 	CreatedAt time.Time  `json:"-"`
 	UpdatedAt time.Time  `json:"-"`

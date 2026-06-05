@@ -62,7 +62,7 @@ export const authAPI = {
 export const userAPI = {
   getUsers: (params: { page: number; page_size: number }) => api.get('/users', { params }),
   getUser: (id: string) => api.get(`/users/${id}`),
-  updateUser: (id: string, data: { extension: any }) => api.put(`/users/${id}`, data),
+  updateUser: (id: string, data: { extension?: any; manager_user_id?: string; manager_name?: string }) => api.put(`/users/${id}`, data),
 }
 
 export const departmentAPI = {
@@ -83,6 +83,7 @@ export const orgAPI = {
   getEmployees: (params: { page?: number; page_size?: number; department_id?: string; search?: string; status?: string }) =>
     api.get('/org/employees', { params }),
   getEmployee: (id: string) => api.get(`/org/employees/${id}`),
+  getEmployeePositionDiagnostic: (id: string) => api.get(`/org/employees/${id}/position-sync-diagnostic`),
   syncOrg: () => api.post('/org/sync'),
 }
 
@@ -330,6 +331,8 @@ export interface PerformanceActivity {
   description?: string
   target_department_ids?: string[]
   target_employee_ids?: string[]
+  manager_assignments?: PerformanceActivityManagerAssignment[]
+  default_assessment_manager_source?: AssessmentManagerSource
   enable_bonus_score?: boolean
   strict_time_mode?: boolean
   created_at: string
@@ -340,6 +343,20 @@ export interface PerformanceActivity {
 
 // 绩效参与人状态
 export type PerformanceParticipantStatus = 'pending' | 'target_pending_approval' | 'target_rejected' | 'target_set' | 'self_submitted' | 'manager_submitted' | 'result_confirmed' | 'inactive' | 'removed_from_scope' | 'employee_confirmed' | 'manager_confirmed' | 'hr_confirmed' | 'locked'
+
+export type AssessmentManagerSource = 'DIRECT_MANAGER' | 'DEPARTMENT_HEAD' | 'CENTER_HEAD' | 'MANUAL' | 'IMPORT' | 'EMPTY' | 'SYSTEM'
+export type AssessmentManagerConfigStatus = 'CONFIGURED' | 'PENDING' | 'INVALID'
+
+export interface PerformanceActivityManagerAssignment {
+  row?: number
+  user_id: string
+  employee_id?: string
+  assessment_manager_user_id: string
+  assessment_manager_employee_id?: string
+  assessment_manager_name: string
+  assessment_manager_source: AssessmentManagerSource
+  manager_override_reason?: string
+}
 
 // 绩效参与人
 export interface PerformanceParticipant {
@@ -354,6 +371,12 @@ export interface PerformanceParticipant {
   employee_status: string
   manager_id?: string
   manager_name?: string
+  direct_manager_id_snapshot?: string
+  direct_manager_name_snapshot?: string
+  manager_source?: AssessmentManagerSource
+  manager_overridden?: boolean
+  manager_override_reason?: string
+  manager_config_status?: AssessmentManagerConfigStatus
   status: PerformanceParticipantStatus
   self_score: number
   self_level: string
@@ -549,7 +572,14 @@ export interface PerformanceParticipantImportResult {
     name?: string
     department_id?: string
     department_name?: string
+    assessment_manager_user_id?: string
+    assessment_manager_employee_id?: string
+    assessment_manager_name?: string
+    assessment_manager_source?: AssessmentManagerSource
+    manager_override_reason?: string
   }[]
+  manager_assignments?: PerformanceActivityManagerAssignment[]
+  manager_assignment_skipped_rows?: { row: number; reason: string }[]
   parsed_count: number
   imported_count: number
   duplicate_count: number
@@ -662,6 +692,7 @@ export interface RelationshipChangeLog {
   id: number
   activity_id: string
   participant_id: number
+  user_id?: string
   change_type: string
   field_name: string
   old_value: string
@@ -669,6 +700,41 @@ export interface RelationshipChangeLog {
   changed_at: string
   source: string
   created_by: string
+  old_manager_id?: string
+  old_manager_name?: string
+  new_manager_id?: string
+  new_manager_name?: string
+  old_manager_source?: AssessmentManagerSource
+  new_manager_source?: AssessmentManagerSource
+  reason?: string
+  operator_id?: string
+  operator_name?: string
+}
+
+export interface AssessmentManagerCandidate {
+  user_id: string
+  name: string
+  employee_no?: string
+  department_name?: string
+  candidate_source: AssessmentManagerSource
+  candidate_source_label: string
+}
+
+export interface AssessmentManagerCandidateSourceGroup {
+  source: AssessmentManagerSource
+  source_label: string
+  items: AssessmentManagerCandidate[]
+  reason?: string
+}
+
+export interface AssessmentManagerUpdatePayload {
+  manager_user_id: string
+  manager_source: AssessmentManagerSource
+  reason?: string
+}
+
+export interface AssessmentManagerBatchItem extends AssessmentManagerUpdatePayload {
+  participant_id: number
 }
 
 export interface PerformanceCompanyFinance {
@@ -752,6 +818,8 @@ export const performanceAPI = {
     status: string
     target_department_ids?: string[]
     target_employee_ids?: string[]
+    manager_assignments?: PerformanceActivityManagerAssignment[]
+    default_assessment_manager_source?: AssessmentManagerSource
     indicator_library_id?: number
     description?: string
     enable_bonus_score?: boolean
@@ -783,6 +851,8 @@ export const performanceAPI = {
     status: string
     target_department_ids?: string[]
     target_employee_ids?: string[]
+    manager_assignments?: PerformanceActivityManagerAssignment[]
+    default_assessment_manager_source?: AssessmentManagerSource
     indicator_library_id?: number
     description?: string
     enable_bonus_score?: boolean
@@ -853,6 +923,19 @@ export const performanceAPI = {
 
   getParticipant: (participantId: number) =>
     api.get(`/performance/participants/${participantId}`),
+
+  updateAssessmentManager: (participantId: number, data: AssessmentManagerUpdatePayload) =>
+    api.put(`/performance/participants/${participantId}/assessment-manager`, data),
+
+  batchUpdateAssessmentManagers: (activityId: number, items: AssessmentManagerBatchItem[]) =>
+    api.post(`/performance/activities/${activityId}/assessment-managers/batch`, { items }),
+
+  getAssessmentManagerCandidates: (activityId: number, params?: {
+    participant_id?: number
+    source?: AssessmentManagerSource
+    keyword?: string
+    limit?: number
+  }) => api.get(`/performance/activities/${activityId}/assessment-manager-candidates`, { params }),
 
   // ===== 自评 =====
   submitSelfEvaluation: (participantId: number, data: {

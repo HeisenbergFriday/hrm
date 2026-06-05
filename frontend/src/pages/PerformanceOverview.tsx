@@ -16,9 +16,13 @@ import {
   PerformanceActivity,
   PerformanceParticipant,
   PerformanceParticipantImportResult,
+  PerformanceActivityManagerAssignment,
   PerformanceDistributionRule,
   PerformanceHRDeadlineStatus,
   PerformanceIndicatorLibrary,
+  AssessmentManagerCandidate,
+  AssessmentManagerCandidateSourceGroup,
+  AssessmentManagerSource,
   userAPI,
 } from '../services/api'
 import PerformanceActivityEditor from '../components/PerformanceActivityEditor'
@@ -36,6 +40,10 @@ type RejectGoalFormValues = {
 type SelectOption = {
   label: React.ReactNode
   value: string | number
+}
+
+type AssessmentManagerSelectOption = SelectOption & {
+  searchText: string
 }
 
 function normalizeIDArray(value?: string[] | string): string[] {
@@ -105,6 +113,73 @@ function getImportedUserOptions(
   return mergeSelectOptions(detailOptions, fallbackOptions)
 }
 
+function normalizeImportedManagerAssignments(
+  assignments?: PerformanceActivityManagerAssignment[] | null,
+  employeeIDs?: string[],
+): PerformanceActivityManagerAssignment[] {
+  const allowedEmployeeIDs = employeeIDs ? new Set(normalizeIDArray(employeeIDs)) : null
+  const byUserID = new Map<string, PerformanceActivityManagerAssignment>()
+  ;(assignments || []).forEach(assignment => {
+    const userID = String(assignment.user_id || '').trim()
+    const managerUserID = String(assignment.assessment_manager_user_id || '').trim()
+    if (!userID || !managerUserID) return
+    if (allowedEmployeeIDs && !allowedEmployeeIDs.has(userID)) return
+    byUserID.set(userID, {
+      ...assignment,
+      user_id: userID,
+      employee_id: String(assignment.employee_id || '').trim() || undefined,
+      assessment_manager_user_id: managerUserID,
+      assessment_manager_employee_id: String(assignment.assessment_manager_employee_id || '').trim() || undefined,
+      assessment_manager_name: String(assignment.assessment_manager_name || '').trim(),
+      assessment_manager_source: assignment.assessment_manager_source || 'IMPORT',
+      manager_override_reason: String(assignment.manager_override_reason || '').trim() || undefined,
+    })
+  })
+  return Array.from(byUserID.values())
+}
+
+function getAssessmentCandidateOption(candidate: AssessmentManagerCandidate): AssessmentManagerSelectOption | null {
+  const value = String(candidate.user_id || '').trim()
+  if (!value) return null
+  const name = String(candidate.name || value).trim()
+  const employeeNo = String(candidate.employee_no || '').trim()
+  const departmentName = String(candidate.department_name || '').trim()
+  const sourceLabel = candidate.candidate_source_label || MANAGER_SOURCE_LABELS[candidate.candidate_source] || '候选'
+  return {
+    value,
+    searchText: [name, value, employeeNo, departmentName].filter(Boolean).join(' '),
+    label: (
+      <Space size={6}>
+        <Text>{name}</Text>
+        <Text type="secondary">{employeeNo || value}</Text>
+        {departmentName && <Text type="secondary">{departmentName}</Text>}
+        <Tag color="blue">{sourceLabel}</Tag>
+      </Space>
+    ),
+  }
+}
+
+function getAssessmentUserOption(user: any): AssessmentManagerSelectOption | null {
+  if (String(user?.status || 'active').trim() !== 'active') return null
+  const value = String(user?.user_id || user?.employee_id || user?.id || '').trim()
+  if (!value) return null
+  const name = String(user?.name || user?.user_name || user?.employee_name || value).trim()
+  const employeeNo = String(user?.employee_id || user?.employee_no || '').trim()
+  const departmentName = String(user?.department_name || '').trim()
+  return {
+    value,
+    searchText: [name, value, employeeNo, departmentName, user?.mobile].filter(Boolean).join(' '),
+    label: (
+      <Space size={6}>
+        <Text>{name}</Text>
+        <Text type="secondary">{employeeNo || value}</Text>
+        {departmentName && <Text type="secondary">{departmentName}</Text>}
+        <Tag>手动指定</Tag>
+      </Space>
+    ),
+  }
+}
+
 function formatRangeStart(range?: [Dayjs, Dayjs]) {
   return range?.[0]?.format('YYYY-MM-DD') || ''
 }
@@ -128,6 +203,63 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 }
 
 const STATUS_OPTIONS = Object.entries(STATUS_MAP).map(([value, { label }]) => ({ value, label }))
+
+const ACTIVITY_STATUS_FILTER_IN_PROGRESS = '__in_progress__'
+const ACTIVITY_STATUS_FILTER_CONFIRMED = '__confirmed__'
+const IN_PROGRESS_ACTIVITY_STATUSES = [
+  'target_setting',
+  'self_evaluation',
+  'manager_evaluation',
+  'employee_confirmation',
+  'manager_confirmation',
+  'hr_confirmation',
+]
+const CONFIRMED_ACTIVITY_STATUSES = ['locked', 'result_confirmed']
+const ACTIVITY_STATUS_FILTER_GROUPS: Record<string, string[]> = {
+  [ACTIVITY_STATUS_FILTER_IN_PROGRESS]: IN_PROGRESS_ACTIVITY_STATUSES,
+  [ACTIVITY_STATUS_FILTER_CONFIRMED]: CONFIRMED_ACTIVITY_STATUSES,
+}
+const ACTIVITY_STATUS_FILTER_OPTIONS = [
+  { value: ACTIVITY_STATUS_FILTER_IN_PROGRESS, label: '进行中活动' },
+  { value: ACTIVITY_STATUS_FILTER_CONFIRMED, label: '已确认结果' },
+  ...STATUS_OPTIONS,
+]
+
+function resolveActivityStatusFilter(statusFilter?: string) {
+  if (!statusFilter) return undefined
+  return ACTIVITY_STATUS_FILTER_GROUPS[statusFilter] || [statusFilter]
+}
+
+const MANAGER_SOURCE_LABELS: Record<AssessmentManagerSource, string> = {
+  DIRECT_MANAGER: '直属主管',
+  DEPARTMENT_HEAD: '部门负责人',
+  CENTER_HEAD: '中心负责人',
+  MANUAL: '手动指定',
+  IMPORT: '导入指定',
+  EMPTY: '暂未配置',
+  SYSTEM: '系统兼容',
+}
+
+const MANAGER_CONFIG_STATUS_LABELS: Record<string, { label: string; color: string }> = {
+  CONFIGURED: { label: '已配置', color: 'green' },
+  PENDING: { label: '待配置考核上级', color: 'orange' },
+  INVALID: { label: '考核上级不可用', color: 'red' },
+}
+
+const ADJUSTABLE_MANAGER_SOURCES: AssessmentManagerSource[] = [
+  'DIRECT_MANAGER',
+  'DEPARTMENT_HEAD',
+  'CENTER_HEAD',
+  'MANUAL',
+]
+
+const getAdjustableManagerSource = (source?: AssessmentManagerSource): AssessmentManagerSource =>
+  source && ADJUSTABLE_MANAGER_SOURCES.includes(source) ? source : 'MANUAL'
+
+const MANAGER_SOURCE_OPTIONS = ADJUSTABLE_MANAGER_SOURCES.map(value => ({
+  value,
+  label: MANAGER_SOURCE_LABELS[value],
+}))
 
 // 参与人状态映射
 const PARTICIPANT_STATUS_MAP: Record<string, { label: string; color: string }> = {
@@ -184,10 +316,13 @@ const PERFORMANCE_PERMISSION_LABELS: Record<string, string> = {
   'performance:manager_eval:submit': '绩效主管评分',
   'performance:result:view': '绩效结果查看',
   'performance:hr_confirm:submit': '绩效HR确认',
+  'performance:assessment_manager:update': '考核上级调整',
+  'performance:assessment_manager:batch_update': '批量考核上级调整',
 }
 
 const PerformanceOverview: React.FC = () => {
   const navigate = useNavigate()
+  const activityListRef = React.useRef<HTMLDivElement | null>(null)
   const [, forceRender] = React.useState(0)
   const forceUpdate = () => forceRender(n => n + 1)
   const [activities, setActivities] = useState<PerformanceActivity[]>([])
@@ -201,6 +336,7 @@ const PerformanceOverview: React.FC = () => {
   const [departments, setDepartments] = useState<any[]>([])
   const [users, setUsers] = useState<any[]>([])
   const [importedUserOptions, setImportedUserOptions] = useState<SelectOption[]>([])
+  const [importedManagerAssignments, setImportedManagerAssignments] = useState<PerformanceActivityManagerAssignment[]>([])
   const [scopeOptionsLoading, setScopeOptionsLoading] = useState(false)
   const [indicatorLibraries, setIndicatorLibraries] = useState<PerformanceIndicatorLibrary[]>([])
   const [indicatorLibrariesLoading, setIndicatorLibrariesLoading] = useState(false)
@@ -229,6 +365,16 @@ const PerformanceOverview: React.FC = () => {
   const [batchEvalLoading, setBatchEvalLoading] = useState(false)
   const [batchEvalForm] = Form.useForm()
   const [batchEvalScore, setBatchEvalScore] = useState<number>(0)
+  const [selectedParticipantIds, setSelectedParticipantIds] = useState<React.Key[]>([])
+  const [managerModalVisible, setManagerModalVisible] = useState(false)
+  const [managerModalMode, setManagerModalMode] = useState<'single' | 'batch'>('single')
+  const [managerTargetParticipant, setManagerTargetParticipant] = useState<PerformanceParticipant | null>(null)
+  const [managerCandidates, setManagerCandidates] = useState<AssessmentManagerCandidate[]>([])
+  const [managerCandidateSources, setManagerCandidateSources] = useState<AssessmentManagerCandidateSourceGroup[]>([])
+  const [managerCandidateLoading, setManagerCandidateLoading] = useState(false)
+  const [managerUpdating, setManagerUpdating] = useState(false)
+  const [managerForm] = Form.useForm()
+  const selectedManagerSource = Form.useWatch('manager_source', managerForm) as AssessmentManagerSource | undefined
 
   // 活动列表筛选
   const [activitySearchText, setActivitySearchText] = useState('')
@@ -253,6 +399,29 @@ const PerformanceOverview: React.FC = () => {
   const userOptions = React.useMemo(
     () => mergeSelectOptions(baseUserOptions, importedUserOptions),
     [baseUserOptions, importedUserOptions],
+  )
+
+  const managerSelectOptions = React.useMemo(() => {
+    const options: AssessmentManagerSelectOption[] = []
+    const seen = new Set<string>()
+    const addOption = (option: AssessmentManagerSelectOption | null) => {
+      if (!option) return
+      const key = String(option.value)
+      if (!key || seen.has(key)) return
+      seen.add(key)
+      options.push(option)
+    }
+
+    managerCandidates.forEach(candidate => addOption(getAssessmentCandidateOption(candidate)))
+    if (selectedManagerSource === 'MANUAL') {
+      users.forEach(user => addOption(getAssessmentUserOption(user)))
+    }
+    return options
+  }, [managerCandidates, selectedManagerSource, users])
+
+  const selectedManagerSourceGroup = React.useMemo(
+    () => managerCandidateSources.find(item => item.source === selectedManagerSource),
+    [managerCandidateSources, selectedManagerSource],
   )
 
   // 加载活动列表
@@ -320,7 +489,8 @@ const PerformanceOverview: React.FC = () => {
   // 首次加载活动列表
   React.useEffect(() => {
     loadActivities()
-  }, [loadActivities])
+    loadScopeOptions()
+  }, [loadActivities, loadScopeOptions])
 
   // 加载活动详情
   const loadActivityDetail = async (activity: PerformanceActivity) => {
@@ -346,8 +516,10 @@ const PerformanceOverview: React.FC = () => {
       const res = participantsResult.value as any
       const pData = res?.data || res
       setParticipants(pData?.items || [])
+      setSelectedParticipantIds([])
     } else {
       setParticipants([])
+      setSelectedParticipantIds([])
     }
     setParticipantsLoading(false)
 
@@ -397,8 +569,10 @@ const PerformanceOverview: React.FC = () => {
       const res: any = await performanceAPI.getParticipants(activityId, { page: 1, page_size: 200 })
       const pData = res?.data || res
       setParticipants(pData?.items || [])
+      setSelectedParticipantIds([])
     } catch {
       setParticipants([])
+      setSelectedParticipantIds([])
     } finally {
       setParticipantsLoading(false)
     }
@@ -408,6 +582,7 @@ const PerformanceOverview: React.FC = () => {
     setActivityModalVisible(false)
     setEditingActivity(null)
     setImportedUserOptions([])
+    setImportedManagerAssignments([])
     form.resetFields()
   }
 
@@ -419,6 +594,8 @@ const PerformanceOverview: React.FC = () => {
       const res: any = await performanceAPI.importParticipants(file)
       const result = (res?.data?.result || res?.result || res?.data || res) as PerformanceParticipantImportResult
       const employeeIDs = normalizeIDArray(result.employee_ids)
+      const managerAssignments = normalizeImportedManagerAssignments(result.manager_assignments, employeeIDs)
+      setImportedManagerAssignments(managerAssignments)
       setImportedUserOptions(previous => mergeSelectOptions(previous, getImportedUserOptions(result, employeeIDs)))
       if (employeeIDs.length > 0) {
         const nextValues: Record<string, any> = { target_employee_ids: employeeIDs }
@@ -434,6 +611,8 @@ const PerformanceOverview: React.FC = () => {
       if (result.missing_employee_ids?.length) notes.push(`未匹配 ${result.missing_employee_ids.length}`)
       if (result.inactive_employee_ids?.length) notes.push(`非在职 ${result.inactive_employee_ids.length}`)
       if (result.skipped_rows?.length) notes.push(`跳过 ${result.skipped_rows.length} 行`)
+      if (result.manager_assignment_skipped_rows?.length) notes.push(`上级跳过 ${result.manager_assignment_skipped_rows.length} 行`)
+      if (managerAssignments.length) notes.push(`上级 ${managerAssignments.length}`)
       const suffix = notes.length ? `（${notes.join('，')}）` : ''
       if (employeeIDs.length > 0) {
         message.success(`已导入 ${employeeIDs.length} 名指定员工${suffix}`)
@@ -454,6 +633,11 @@ const PerformanceOverview: React.FC = () => {
     setActivitySaving(true)
     try {
       const values = await form.validateFields()
+      const targetEmployeeIDs = normalizeIDArray(values.target_employee_ids)
+      const managerAssignments = normalizeImportedManagerAssignments(
+        importedManagerAssignments,
+        targetEmployeeIDs.length ? targetEmployeeIDs : undefined,
+      )
       const data = {
         name: values.name,
         cycle_type: values.cycle_type,
@@ -476,7 +660,9 @@ const PerformanceOverview: React.FC = () => {
         hr_confirm_deadline: values.hr_confirm_deadline?.format('YYYY-MM-DD') || '',
         status: editingActivity?.status || 'draft',
         target_department_ids: normalizeIDArray(values.target_department_ids),
-        target_employee_ids: normalizeIDArray(values.target_employee_ids),
+        target_employee_ids: targetEmployeeIDs,
+        manager_assignments: managerAssignments,
+        default_assessment_manager_source: values.default_assessment_manager_source || 'DIRECT_MANAGER',
         indicator_library_id: values.indicator_library_id,
         description: values.description,
         enable_bonus_score: values.enable_bonus_score || false,
@@ -640,12 +826,120 @@ const PerformanceOverview: React.FC = () => {
   const renderManagerEvalButton = (button: React.ReactElement) =>
     renderPermissionButton('performance:manager_eval:submit', button)
 
+  const loadAssessmentManagerCandidates = async (keyword = '', participantId?: number, source?: AssessmentManagerSource) => {
+    if (!currentActivity) return
+    setManagerCandidateLoading(true)
+    try {
+      const managerSource = source || managerForm.getFieldValue('manager_source')
+      const res: any = await performanceAPI.getAssessmentManagerCandidates(currentActivity.id, {
+        participant_id: participantId,
+        source: managerSource,
+        keyword,
+        limit: 30,
+      })
+      const data = res?.data?.data || res?.data || res
+      setManagerCandidates(data?.items || [])
+      setManagerCandidateSources(data?.sources || [])
+    } catch (err: any) {
+      setManagerCandidates([])
+      setManagerCandidateSources([])
+      message.error(err?.response?.data?.message || '考核上级候选人加载失败')
+    } finally {
+      setManagerCandidateLoading(false)
+    }
+  }
+
+  const openAssessmentManagerModal = (record?: PerformanceParticipant) => {
+    if (!currentActivity) return
+    if (!record && selectedParticipantIds.length === 0) {
+      message.warning('请先选择参与人')
+      return
+    }
+    setManagerModalMode(record ? 'single' : 'batch')
+    setManagerTargetParticipant(record || null)
+    if (!users.length) {
+      loadScopeOptions()
+    }
+    const managerSource = getAdjustableManagerSource(record?.manager_source)
+    managerForm.setFieldsValue({
+      manager_user_id: record?.manager_id || undefined,
+      manager_source: managerSource,
+      reason: '',
+    })
+    setManagerModalVisible(true)
+    loadAssessmentManagerCandidates('', record?.id, managerSource)
+  }
+
+  const handleAssessmentManagerSearch = (keyword: string) => {
+    loadAssessmentManagerCandidates(keyword, managerTargetParticipant?.id)
+  }
+
+  const handleAssessmentManagerSourceChange = (source: AssessmentManagerSource) => {
+    managerForm.setFieldsValue({ manager_user_id: undefined })
+    setManagerCandidates([])
+    setManagerCandidateSources([])
+    loadAssessmentManagerCandidates('', managerTargetParticipant?.id, source)
+  }
+
+  const handleSaveAssessmentManager = async () => {
+    if (!currentActivity) return
+    try {
+      const values = await managerForm.validateFields()
+      setManagerUpdating(true)
+      if (managerModalMode === 'single' && managerTargetParticipant) {
+        await performanceAPI.updateAssessmentManager(managerTargetParticipant.id, {
+          manager_user_id: values.manager_user_id,
+          manager_source: values.manager_source,
+          reason: values.reason,
+        })
+        message.success('考核上级已更新')
+      } else {
+        const items = selectedParticipantIds.map(id => ({
+          participant_id: Number(id),
+          manager_user_id: values.manager_user_id,
+          manager_source: values.manager_source,
+          reason: values.reason,
+        }))
+        const res: any = await performanceAPI.batchUpdateAssessmentManagers(currentActivity.id, items)
+        const data = res?.data?.data || res?.data || res
+        const results = data?.results || []
+        const successCount = results.filter((item: any) => item.success).length
+        const failedCount = results.length - successCount
+        if (failedCount > 0) {
+          message.warning(`已更新 ${successCount} 人，${failedCount} 人失败`)
+        } else {
+          message.success(`已更新 ${successCount} 人`)
+        }
+      }
+      setManagerModalVisible(false)
+      setSelectedParticipantIds([])
+      managerForm.resetFields()
+      refreshParticipants(currentActivity.id)
+    } catch (err: any) {
+      if (err.errorFields) return
+      message.error(err?.response?.data?.message || '考核上级更新失败')
+    } finally {
+      setManagerUpdating(false)
+    }
+  }
+
   const renderDetailActionButtons = (activity: PerformanceActivity) => {
     const actions: React.ReactNode[] = []
     const activityManage = (button: React.ReactElement) => renderActivityManageButton(button)
 
+    if (!['locked', 'archived'].includes(activity.status)) {
+      actions.push(
+        renderPermissionButton(
+          'performance:assessment_manager:batch_update',
+          <Button key="batch-manager" size="small" onClick={() => openAssessmentManagerModal()}>批量调整考核上级</Button>,
+        ),
+      )
+    }
+
     if (activity.status === 'draft') {
       actions.push(
+        activityManage(<Button key="edit-participants" size="small" onClick={() => { setDetailDrawerVisible(false); openActivityModal(activity) }}>编辑参与人</Button>),
+        activityManage(<Button key="refresh-participants" size="small" onClick={() => handleActivityAction('refresh', activity)}>刷新参与人</Button>),
         activityManage(<Button key="open-target-setting" type="primary" size="small" onClick={() => handleActivityAction('open-target-setting', activity)}>开启目标设定</Button>),
         activityManage(<Button key="publish" size="small" onClick={() => handleActivityAction('publish', activity)}>直接开启自评</Button>),
       )
@@ -683,9 +977,6 @@ const PerformanceOverview: React.FC = () => {
     if (activity.status === 'locked' || activity.status === 'result_confirmed') {
       actions.push(activityManage(<Button key="archive" size="small" onClick={() => handleActivityAction('archive', activity)}>归档活动</Button>))
     }
-    if (['draft', 'target_setting', 'self_evaluation', 'manager_evaluation'].includes(activity.status)) {
-      actions.push(activityManage(<Button key="refresh-participants" size="small" onClick={() => handleActivityAction('refresh', activity)}>刷新参与人</Button>))
-    }
     return actions
   }
 
@@ -696,6 +987,10 @@ const PerformanceOverview: React.FC = () => {
     loadIndicatorLibraries()
     if (activity) {
       const targetEmployeeIDs = normalizeIDArray(activity.target_employee_ids)
+      setImportedManagerAssignments(normalizeImportedManagerAssignments(
+        activity.manager_assignments,
+        targetEmployeeIDs.length ? targetEmployeeIDs : undefined,
+      ))
       setImportedUserOptions(getImportedUserOptions(null, targetEmployeeIDs))
       form.setFieldsValue({
         name: activity.name,
@@ -711,6 +1006,7 @@ const PerformanceOverview: React.FC = () => {
         hr_confirm_deadline: activity.hr_confirm_deadline ? dayjs(activity.hr_confirm_deadline) : undefined,
         target_department_ids: normalizeIDArray(activity.target_department_ids),
         target_employee_ids: targetEmployeeIDs,
+        default_assessment_manager_source: activity.default_assessment_manager_source || 'DIRECT_MANAGER',
         indicator_library_id: activity.indicator_library_id,
         description: activity.description,
         enable_bonus_score: activity.enable_bonus_score || false,
@@ -718,7 +1014,9 @@ const PerformanceOverview: React.FC = () => {
       })
     } else {
       setImportedUserOptions([])
+      setImportedManagerAssignments([])
       form.resetFields()
+      form.setFieldsValue({ default_assessment_manager_source: 'DIRECT_MANAGER' })
     }
     setActivityModalVisible(true)
     window.requestAnimationFrame(() => {
@@ -737,38 +1035,33 @@ const PerformanceOverview: React.FC = () => {
 
     if (status === 'draft') {
       buttons.push(
+        <Button size="small" type="link" onClick={() => openActivityModal(record)} key="edit">编辑参与人</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('open-target-setting', record)} key="start">开启目标</Button>
       )
     } else if (status === 'target_setting') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('open-self-evaluation', record)} key="open-self">开启自评</Button>
       )
     } else if (status === 'self_evaluation') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('notify-self-eval', record)} key="notify-self">提醒自评</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('open-manager-evaluation', record)} key="open-mgr">开启主管评分</Button>
       )
     } else if (status === 'manager_evaluation') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('open-employee-confirmation', record)} key="confirm">员工确认</Button>
       )
     } else if (status === 'employee_confirmation') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('open-manager-confirmation', record)} key="manager-confirm">主管确认</Button>
       )
     } else if (status === 'manager_confirmation') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('open-hr-confirmation', record)} key="hr-confirm">HR确认</Button>
       )
     } else if (status === 'hr_confirmation') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" danger onClick={() => handleActivityAction('lock', record)} key="lock">锁定</Button>
       )
     } else if (status === 'locked') {
@@ -777,7 +1070,6 @@ const PerformanceOverview: React.FC = () => {
       )
     } else if (status === 'result_confirmed') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" onClick={() => handleActivityAction('archive', record)} key="archive">归档</Button>
       )
     }
@@ -813,16 +1105,36 @@ const PerformanceOverview: React.FC = () => {
     { title: '部门', dataIndex: 'department_name', key: 'department_name', width: 110, ellipsis: true },
     { title: '岗位', dataIndex: 'position', key: 'position', width: 90, ellipsis: true },
     {
-      title: '直属主管', dataIndex: 'manager_name', key: 'manager_name', width: 90,
+      title: '考核上级', dataIndex: 'manager_name', key: 'manager_name', width: 100,
       render: (name: string, record: PerformanceParticipant) => {
         if (!name && (record.manager_id === null || record.manager_id === undefined || record.manager_id === '')) {
           return (
-            <Tooltip title="该员工未设置直属主管，无法进入绩效流程">
-              <StatusTag color="error" style={{ cursor: 'default' }}>未设置</StatusTag>
+            <Tooltip title="该参与人未设置考核上级，经理侧评分与确认将不可操作">
+              <StatusTag color="warning" style={{ cursor: 'default' }}>待配置考核上级</StatusTag>
             </Tooltip>
           )
         }
         return name || '-'
+      }
+    },
+    { title: '当期直属主管', dataIndex: 'direct_manager_name_snapshot', key: 'direct_manager_name_snapshot', width: 110, render: (name: string) => name || '-' },
+    {
+      title: '来源', dataIndex: 'manager_source', key: 'manager_source', width: 110,
+      render: (source: AssessmentManagerSource, record: PerformanceParticipant) => (
+        <Space size={4} wrap>
+          <Tag color={source === 'EMPTY' ? 'default' : record.manager_overridden ? 'orange' : 'blue'}>
+            {MANAGER_SOURCE_LABELS[source] || source || '-'}
+          </Tag>
+          {record.manager_overridden && <Tag color="gold">已调整</Tag>}
+        </Space>
+      )
+    },
+    {
+      title: '配置状态', dataIndex: 'manager_config_status', key: 'manager_config_status', width: 120,
+      render: (status: string, record: PerformanceParticipant) => {
+        const normalized = status || (record.manager_id ? 'CONFIGURED' : 'PENDING')
+        const config = MANAGER_CONFIG_STATUS_LABELS[normalized] || { label: normalized, color: 'default' }
+        return <Tag color={config.color}>{config.label}</Tag>
       }
     },
     {
@@ -891,6 +1203,11 @@ const PerformanceOverview: React.FC = () => {
         const links: React.ReactNode[] = []
         const linkStyle = { fontSize: 'var(--font-size-sm)', padding: '0 2px' }
         const activityStatus = currentActivity?.status
+
+        links.push(renderPermissionButton(
+          'performance:assessment_manager:update',
+          <Button key="manager" size="small" type="link" style={linkStyle} onClick={() => openAssessmentManagerModal(record)}>调上级</Button>,
+        ))
 
         if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && !hasPermission('performance:goal:manage')) {
           links.push(renderPermissionButton('performance:goal:manage', <Button key="target-disabled" size="small" type="link" style={linkStyle}>目标</Button>))
@@ -985,8 +1302,33 @@ const PerformanceOverview: React.FC = () => {
   ]
 
   // 统计数据
-  const inProgressCount = activities.filter(a => ['target_setting', 'self_evaluation', 'manager_evaluation', 'employee_confirmation', 'manager_confirmation', 'hr_confirmation'].includes(a.status)).length
-  const confirmedCount = activities.filter(a => ['locked', 'result_confirmed'].includes(a.status)).length
+  const selectedActivityStatuses = React.useMemo(
+    () => resolveActivityStatusFilter(activityStatusFilter),
+    [activityStatusFilter],
+  )
+  const filteredActivities = React.useMemo(
+    () => activities.filter(item => {
+      const matchName = !activitySearchText || item.name?.toLowerCase().includes(activitySearchText.toLowerCase())
+      const matchStatus = !selectedActivityStatuses || selectedActivityStatuses.includes(item.status)
+      return matchName && matchStatus
+    }),
+    [activities, activitySearchText, selectedActivityStatuses],
+  )
+  const handleActivityStatClick = useCallback((statusFilter?: string) => {
+    setActivityStatusFilter(statusFilter)
+    window.requestAnimationFrame(() => {
+      activityListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }, [])
+  const inProgressCount = activities.filter(a => IN_PROGRESS_ACTIVITY_STATUSES.includes(a.status)).length
+  const confirmedCount = activities.filter(a => CONFIRMED_ACTIVITY_STATUSES.includes(a.status)).length
+  const archivedCount = activities.filter(a => a.status === 'archived').length
+  const activityStatCards = [
+    { title: '绩效活动总数', value: activitiesTotal, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
+    { title: '进行中活动', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe', filter: ACTIVITY_STATUS_FILTER_IN_PROGRESS },
+    { title: '已确认结果', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
+    { title: '已归档活动', value: archivedCount, color: 'var(--color-text-secondary)', bg: 'var(--color-bg-hover)', filter: 'archived' },
+  ]
   const activityListActions = (
     <Space>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => openActivityModal()}>新建活动</Button>
@@ -1006,23 +1348,30 @@ const PerformanceOverview: React.FC = () => {
         styles={{ header: { background: 'var(--color-bg-card-header)', borderBottom: '1px solid var(--color-border-light)' } }}
       >
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            {[
-              { title: '绩效活动总数', value: activitiesTotal, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
-              { title: '进行中活动', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe' },
-              { title: '已确认结果', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7' },
-              { title: '已归档活动', value: activities.filter(a => a.status === 'archived').length, color: 'var(--color-text-secondary)', bg: 'var(--color-bg-hover)' },
-            ].map((item) => (
+            {activityStatCards.map((item) => {
+              const active = item.filter !== undefined && activityStatusFilter === item.filter
+              return (
               <Col xs={24} sm={12} lg={6} key={item.title}>
-                <div style={{
+                <button
+                  type="button"
+                  aria-label={`查看${item.title}`}
+                  onClick={() => handleActivityStatClick(item.filter)}
+                  style={{
                   background: 'var(--color-bg-card)',
                   borderRadius: 'var(--radius-md)',
                   padding: '18px 20px',
-                  boxShadow: 'var(--shadow-card)',
-                  border: '1px solid var(--color-border)',
+                  boxShadow: active ? '0 0 0 2px var(--color-primary-bg), var(--shadow-card)' : 'var(--shadow-card)',
+                  border: active ? '1px solid var(--color-primary)' : '1px solid var(--color-border)',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 14,
-                }}>
+                  width: '100%',
+                  font: 'inherit',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  transition: 'border-color 0.2s, box-shadow 0.2s, transform 0.2s',
+                }}
+                >
                   <div style={{
                     width: 44, height: 44, borderRadius: 'var(--radius-md)', background: item.bg,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1031,9 +1380,10 @@ const PerformanceOverview: React.FC = () => {
                     {item.value}
                   </div>
                   <Text style={{ color: 'var(--color-text)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.title}</Text>
-                </div>
+                </button>
               </Col>
-            ))}
+              )
+            })}
           </Row>
 
           <div
@@ -1069,6 +1419,7 @@ const PerformanceOverview: React.FC = () => {
           />
 
           {/* 活动列表 */}
+          <div ref={activityListRef}>
           <PageCard
             style={{ marginBottom: 16 }}
           >
@@ -1086,17 +1437,13 @@ const PerformanceOverview: React.FC = () => {
                 style={{ width: 140 }}
                 value={activityStatusFilter}
                 onChange={setActivityStatusFilter}
-                options={STATUS_OPTIONS}
+                options={ACTIVITY_STATUS_FILTER_OPTIONS}
               />
             </Space>
             <Spin spinning={activitiesLoading}>
               <Table
                 columns={activityColumns}
-                dataSource={activities.filter(item => {
-                  const matchName = !activitySearchText || item.name?.toLowerCase().includes(activitySearchText.toLowerCase())
-                  const matchStatus = !activityStatusFilter || item.status === activityStatusFilter
-                  return matchName && matchStatus
-                })}
+                dataSource={filteredActivities}
                 rowKey="id"
                 pagination={{ pageSize: 10 }}
                 size="small"
@@ -1104,6 +1451,7 @@ const PerformanceOverview: React.FC = () => {
               />
             </Spin>
           </PageCard>
+          </div>
 
       </Card>
 
@@ -1113,7 +1461,7 @@ const PerformanceOverview: React.FC = () => {
         placement="right"
         width={1000}
         open={detailDrawerVisible}
-        onClose={() => { setDetailDrawerVisible(false); setCurrentActivity(null); setParticipants([]); setSummary(null); setDistributionCheck(null); setDistributionRules([]); setHrDeadlineStatus(null); }}
+        onClose={() => { setDetailDrawerVisible(false); setCurrentActivity(null); setParticipants([]); setSelectedParticipantIds([]); setManagerModalVisible(false); setSummary(null); setDistributionCheck(null); setDistributionRules([]); setHrDeadlineStatus(null); }}
         styles={{ footer: { paddingTop: 12 } }}
       >
         {currentActivity && (
@@ -1188,7 +1536,7 @@ const PerformanceOverview: React.FC = () => {
               {currentActivity.status === 'result_confirmed' && (
                 <Button size="small" onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
               )}
-              {['draft', 'target_setting', 'self_evaluation', 'manager_evaluation'].includes(currentActivity.status) && (
+              {currentActivity.status === 'draft' && (
                 <Button size="small" onClick={() => handleActivityAction('refresh', currentActivity)}>刷新参与人</Button>
               )}
                 </>
@@ -1283,14 +1631,74 @@ const PerformanceOverview: React.FC = () => {
                 columns={participantColumns}
                 dataSource={participants}
                 rowKey="id"
+                rowSelection={hasPermission('performance:assessment_manager:batch_update') ? {
+                  selectedRowKeys: selectedParticipantIds,
+                  onChange: setSelectedParticipantIds,
+                } : undefined}
                 pagination={{ pageSize: 10, size: 'small' }}
                 size="small"
-                scroll={{ x: 900 }}
+                scroll={{ x: 1250 }}
               />
             </Spin>
           </>
         )}
       </Drawer>
+
+      <Modal
+        title={managerModalMode === 'single' ? '调整考核上级' : '批量调整考核上级'}
+        open={managerModalVisible}
+        onOk={handleSaveAssessmentManager}
+        onCancel={() => { setManagerModalVisible(false); managerForm.resetFields(); setManagerCandidates([]); setManagerCandidateSources([]) }}
+        confirmLoading={managerUpdating}
+        width={560}
+        destroyOnClose
+      >
+        <Alert
+          showIcon
+          type="info"
+          style={{ marginBottom: 16 }}
+          message={managerModalMode === 'single'
+            ? `调整对象：${managerTargetParticipant?.employee_name || '-'}`
+            : `已选择 ${selectedParticipantIds.length} 名参与人`}
+        />
+        <Form form={managerForm} layout="vertical">
+          <Form.Item name="manager_user_id" label="考核上级" rules={[{ required: true, message: '请选择考核上级' }]}>
+            <Select
+              showSearch
+              filterOption={(input, option) => {
+                const searchText = String((option as AssessmentManagerSelectOption | undefined)?.searchText || option?.value || '')
+                return searchText.toLowerCase().includes(input.trim().toLowerCase())
+              }}
+              onSearch={handleAssessmentManagerSearch}
+              loading={managerCandidateLoading}
+              placeholder="搜索姓名、UserID 或工号"
+              notFoundContent={managerCandidateLoading ? <Spin size="small" /> : null}
+              options={managerSelectOptions}
+            />
+          </Form.Item>
+          <Form.Item name="manager_source" label="来源" rules={[{ required: true, message: '请选择来源' }]}>
+            <Select options={MANAGER_SOURCE_OPTIONS} onChange={handleAssessmentManagerSourceChange} />
+          </Form.Item>
+          {selectedManagerSourceGroup?.reason ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={selectedManagerSourceGroup.reason}
+            />
+          ) : selectedManagerSourceGroup ? (
+            <Alert
+              type="success"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={`${selectedManagerSourceGroup.source_label}候选人 ${selectedManagerSourceGroup.items.length} 人`}
+            />
+          ) : null}
+          <Form.Item name="reason" label="调整原因">
+            <TextArea rows={3} maxLength={500} showCount placeholder="记录本次调整原因" />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       {/* 强制分布规则弹窗 */}
       <Modal

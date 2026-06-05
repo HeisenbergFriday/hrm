@@ -31,6 +31,15 @@ var (
 	dingtalkStateTTL = 5 * time.Minute
 )
 
+func updateSyncStatus(syncService *service.SyncService, syncType, status, message string) {
+	if syncService == nil {
+		return
+	}
+	if err := syncService.UpdateSyncStatus(syncType, status, message); err != nil {
+		log.Printf("[sync-status] update %s=%s failed: %v", syncType, status, err)
+	}
+}
+
 func generateLoginState() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -302,9 +311,79 @@ func dingtalkDepartmentsToOrgSyncItems(depts []dingtalk.DeptInfo) []service.OrgD
 			DepartmentID: fmt.Sprintf("%d", d.DeptID),
 			Name:         d.Name,
 			ParentID:     fmt.Sprintf("%d", d.ParentID),
+			HeadUserIDs:  d.DeptManagerUserIDs,
+			Extension:    d.Extension,
 		})
 	}
 	return items
+}
+
+func shouldOverwriteEmptyDingTalkOrgFields(c *gin.Context) bool {
+	raw := strings.ToLower(strings.TrimSpace(firstNonEmptyQuery(c, "overwrite_empty", "full_overwrite", "overwrite_empty_manager")))
+	return raw == "1" || raw == "true" || raw == "yes"
+}
+
+func firstNonEmptyQuery(c *gin.Context, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(c.Query(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func newLocalUserFromDingTalk(u dingtalk.UserInfo, deptID, status string) *database.User {
+	user := &database.User{
+		UserID:        u.UserID,
+		Name:          u.Name,
+		Email:         u.Email,
+		Mobile:        u.Mobile,
+		DepartmentID:  deptID,
+		Position:      u.Position,
+		Avatar:        u.Avatar,
+		Status:        status,
+		ManagerUserID: strings.TrimSpace(u.ManagerUserID),
+		ManagerName:   strings.TrimSpace(u.ManagerName),
+	}
+	applyDingTalkOrgDiagnostics(user, u)
+	return user
+}
+
+func applyDingTalkOrgUser(existing *database.User, u dingtalk.UserInfo, deptID, status string, overwriteEmpty bool) {
+	existing.Name = u.Name
+	existing.Email = u.Email
+	existing.Mobile = u.Mobile
+	existing.DepartmentID = deptID
+	if strings.TrimSpace(u.Position) != "" || overwriteEmpty {
+		existing.Position = strings.TrimSpace(u.Position)
+	}
+	existing.Avatar = u.Avatar
+	existing.Status = status
+	if strings.TrimSpace(u.ManagerUserID) != "" || overwriteEmpty {
+		existing.ManagerUserID = strings.TrimSpace(u.ManagerUserID)
+		existing.ManagerName = strings.TrimSpace(u.ManagerName)
+	}
+	applyDingTalkOrgDiagnostics(existing, u)
+}
+
+func applyDingTalkOrgDiagnostics(user *database.User, u dingtalk.UserInfo) {
+	if user.Extension == nil {
+		user.Extension = map[string]interface{}{}
+	}
+	if u.PositionSyncDiagnostic != nil {
+		user.Extension["dingtalk_position_sync"] = u.PositionSyncDiagnostic
+	}
+	user.Extension["dingtalk_org_user_sync"] = map[string]interface{}{
+		"user_api":                    "topapi/v2/user/list",
+		"hrm_api":                     "topapi/smartwork/hrm/employee/v2/list",
+		"position":                    strings.TrimSpace(u.Position),
+		"position_source":             strings.TrimSpace(u.PositionSource),
+		"direct_manager_user_id":      strings.TrimSpace(u.ManagerUserID),
+		"direct_manager_name":         strings.TrimSpace(u.ManagerName),
+		"direct_manager_source":       strings.TrimSpace(u.ManagerSource),
+		"direct_manager_missing_note": "When DingTalk has no direct manager value, local users.manager_user_id/users.manager_name are preserved unless full overwrite is requested.",
+		"synced_at":                   time.Now().Format(time.RFC3339),
+	}
 }
 
 func createOperationAuditLog(c *gin.Context, operation, resource string, details map[string]interface{}) {
@@ -583,7 +662,9 @@ func UpdateUser(c *gin.Context) {
 	id := c.Param("id")
 
 	var updateData struct {
-		Extension map[string]interface{} `json:"extension"`
+		Extension     *map[string]interface{} `json:"extension"`
+		ManagerUserID *string                 `json:"manager_user_id"`
+		ManagerName   *string                 `json:"manager_name"`
 	}
 
 	if err := c.ShouldBindJSON(&updateData); err != nil {
@@ -606,7 +687,38 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
-	user.Extension = updateData.Extension
+	if updateData.Extension != nil {
+		user.Extension = *updateData.Extension
+	}
+	if updateData.ManagerUserID != nil {
+		managerUserID := strings.TrimSpace(*updateData.ManagerUserID)
+		if managerUserID == "" {
+			user.ManagerUserID = ""
+			user.ManagerName = ""
+		} else {
+			if managerUserID == user.UserID {
+				c.JSON(http.StatusBadRequest, Response{
+					Code:    http.StatusBadRequest,
+					Message: "直属主管不能设置为员工本人",
+				})
+				return
+			}
+			manager, managerErr := userService.GetUserByUserID(managerUserID)
+			if managerErr != nil || strings.TrimSpace(manager.Status) != "active" {
+				c.JSON(http.StatusBadRequest, Response{
+					Code:    http.StatusBadRequest,
+					Message: "直属主管不存在或不是在职状态",
+				})
+				return
+			}
+			user.ManagerUserID = manager.UserID
+			if updateData.ManagerName != nil && strings.TrimSpace(*updateData.ManagerName) != "" {
+				user.ManagerName = strings.TrimSpace(*updateData.ManagerName)
+			} else {
+				user.ManagerName = manager.Name
+			}
+		}
+	}
 	if err := userService.UpdateUser(user); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -672,7 +784,7 @@ func SyncUsers(c *gin.Context) {
 	// 从钉钉拉取用户
 	users, err := dingtalk.SyncUsers()
 	if err != nil {
-		syncService.UpdateSyncStatus("users", "failed", err.Error())
+		updateSyncStatus(syncService, "users", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "同步用户失败: " + err.Error(),
@@ -684,6 +796,8 @@ func SyncUsers(c *gin.Context) {
 	userService := service.NewUserService(database.DB)
 	employeeService := service.NewEmployeeService(database.DB)
 	count := 0
+	positionMissingCount := 0
+	overwriteEmpty := shouldOverwriteEmptyDingTalkOrgFields(c)
 	for _, u := range users {
 		deptID := ""
 		if len(u.DeptIDList) > 0 {
@@ -697,27 +811,21 @@ func SyncUsers(c *gin.Context) {
 		existing, err := userService.GetUserByUserID(u.UserID)
 		if err != nil {
 			// 新建
-			newUser := &database.User{
-				UserID:       u.UserID,
-				Name:         u.Name,
-				Email:        u.Email,
-				Mobile:       u.Mobile,
-				DepartmentID: deptID,
-				Position:     u.Position,
-				Avatar:       u.Avatar,
-				Status:       status,
+			newUser := newLocalUserFromDingTalk(u, deptID, status)
+			if err := userService.CreateUser(newUser); err != nil {
+				log.Printf("[SyncUsers] 创建用户 %s 失败: %v", u.UserID, err)
+				continue
 			}
-			userService.CreateUser(newUser)
 		} else {
 			// 更新
-			existing.Name = u.Name
-			existing.Email = u.Email
-			existing.Mobile = u.Mobile
-			existing.DepartmentID = deptID
-			existing.Position = u.Position
-			existing.Avatar = u.Avatar
-			existing.Status = status
-			userService.UpdateUser(existing)
+			applyDingTalkOrgUser(existing, u, deptID, status, overwriteEmpty)
+			if err := userService.UpdateUser(existing); err != nil {
+				log.Printf("[SyncUsers] 更新用户 %s 失败: %v", u.UserID, err)
+				continue
+			}
+		}
+		if strings.TrimSpace(u.Position) == "" {
+			positionMissingCount++
 		}
 
 		profile, profileErr := employeeService.GetProfileByUserID(u.UserID)
@@ -727,20 +835,26 @@ func SyncUsers(c *gin.Context) {
 				EmployeeID: u.UserID,
 			}
 			applyDingTalkProfileFields(profile, u, status)
-			employeeService.CreateProfile(profile)
+			if err := employeeService.CreateProfile(profile); err != nil {
+				log.Printf("[SyncUsers] 创建员工档案 %s 失败: %v", u.UserID, err)
+				continue
+			}
 		} else {
 			applyDingTalkProfileFields(profile, u, status)
-			employeeService.UpdateProfile(profile)
+			if err := employeeService.UpdateProfile(profile); err != nil {
+				log.Printf("[SyncUsers] 更新员工档案 %s 失败: %v", u.UserID, err)
+				continue
+			}
 		}
 		count++
 	}
 
-	syncService.UpdateSyncStatus("users", "success", fmt.Sprintf("同步 %d 个用户", count))
+	updateSyncStatus(syncService, "users", "success", fmt.Sprintf("同步 %d 个用户", count))
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
 		Message: "success",
-		Data:    gin.H{"count": count},
+		Data:    gin.H{"count": count, "position_missing_count": positionMissingCount, "overwrite_empty": overwriteEmpty},
 	})
 }
 
@@ -751,7 +865,7 @@ func SyncDepartments(c *gin.Context) {
 	// 从钉钉拉取部门
 	depts, err := dingtalk.SyncDepartments()
 	if err != nil {
-		syncService.UpdateSyncStatus("departments", "failed", err.Error())
+		updateSyncStatus(syncService, "departments", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "同步部门失败: " + err.Error(),
@@ -759,37 +873,22 @@ func SyncDepartments(c *gin.Context) {
 		return
 	}
 
-	// 写入数据库
-	deptService := service.NewDepartmentService(database.DB)
-	count := 0
-	for _, d := range depts {
-		deptID := fmt.Sprintf("%d", d.DeptID)
-		parentID := fmt.Sprintf("%d", d.ParentID)
-
-		existing, err := deptService.GetDepartmentByDepartmentID(deptID)
-		if err != nil {
-			// 新建
-			newDept := &database.Department{
-				DepartmentID: deptID,
-				Name:         d.Name,
-				ParentID:     parentID,
-			}
-			deptService.CreateDepartment(newDept)
-		} else {
-			// 更新
-			existing.Name = d.Name
-			existing.ParentID = parentID
-			deptService.UpdateDepartment(existing)
-		}
-		count++
+	orgService := service.NewOrgService(database.DB)
+	result, err := orgService.SyncDepartmentsWithChangeLog(dingtalkDepartmentsToOrgSyncItems(depts), "dingtalk_sync")
+	if err != nil {
+		updateSyncStatus(syncService, "departments", "failed", err.Error())
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "同步部门失败: " + err.Error(),
+		})
+		return
 	}
-
-	syncService.UpdateSyncStatus("departments", "success", fmt.Sprintf("同步 %d 个部门", count))
+	updateSyncStatus(syncService, "departments", "success", fmt.Sprintf("同步 %d 个部门", result.Count))
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
 		Message: "success",
-		Data:    gin.H{"count": count},
+		Data:    gin.H{"count": result.Count, "change_log_count": result.ChangeLogCount},
 	})
 }
 
@@ -1637,6 +1736,44 @@ func GetOrgEmployeeDetail(c *gin.Context) {
 	})
 }
 
+func GetOrgEmployeePositionSyncDiagnostic(c *gin.Context) {
+	scope, err := resolveOrgScope(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "获取组织范围失败",
+			Data:    gin.H{"error": err.Error()},
+		})
+		return
+	}
+	var user database.User
+	if err := database.DB.Where("id = ? AND deleted_at IS NULL", c.Param("id")).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, Response{
+			Code:    http.StatusNotFound,
+			Message: "员工不存在",
+		})
+		return
+	}
+	if !canAccessUserByScope(scope, &user) {
+		respondOrgAccessDenied(c)
+		return
+	}
+	var diagnostic interface{} = nil
+	if user.Extension != nil {
+		diagnostic = user.Extension["dingtalk_position_sync"]
+	}
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data: gin.H{
+			"user_id":    user.UserID,
+			"name":       user.Name,
+			"position":   user.Position,
+			"diagnostic": diagnostic,
+		},
+	})
+}
+
 // GetDepartmentTree 获取部门树
 func GetDepartmentTree(c *gin.Context) {
 	departmentService := service.NewDepartmentService(database.DB)
@@ -1760,30 +1897,25 @@ func SyncOrgData(c *gin.Context) {
 		deptErrMsg = deptErr.Error()
 		log.Printf("[SyncOrgData] 部门同步失败: %v", deptErr)
 	} else {
-		deptService := service.NewDepartmentService(database.DB)
-		for _, d := range depts {
-			deptID := fmt.Sprintf("%d", d.DeptID)
-			parentID := fmt.Sprintf("%d", d.ParentID)
-			existing, err := deptService.GetDepartmentByDepartmentID(deptID)
-			if err != nil {
-				deptService.CreateDepartment(&database.Department{
-					DepartmentID: deptID, Name: d.Name, ParentID: parentID,
-				})
-			} else {
-				existing.Name = d.Name
-				existing.ParentID = parentID
-				deptService.UpdateDepartment(existing)
-			}
-			deptCount++
+		orgService := service.NewOrgService(database.DB)
+		deptResult, err := orgService.SyncDepartmentsWithChangeLog(dingtalkDepartmentsToOrgSyncItems(depts), "dingtalk_sync")
+		if err != nil {
+			deptStatus = "failed"
+			deptErrMsg = err.Error()
+			log.Printf("[SyncOrgData] 部门落库失败: %v", err)
+		} else {
+			deptCount = deptResult.Count
+			updateSyncStatus(syncService, "departments", "success", fmt.Sprintf("同步 %d 个部门", deptCount))
 		}
-		syncService.UpdateSyncStatus("departments", "success", fmt.Sprintf("同步 %d 个部门", deptCount))
 	}
 
 	// 同步用户（复用已有部门列表，避免重复调用 SyncDepartments）
 	users, userErr := dingtalk.SyncUsersWithDepts(depts)
 	userCount := 0
+	positionMissingCount := 0
 	userStatus := "success"
 	userErrMsg := ""
+	overwriteEmpty := shouldOverwriteEmptyDingTalkOrgFields(c)
 	if userErr != nil {
 		userStatus = "failed"
 		userErrMsg = userErr.Error()
@@ -1802,27 +1934,32 @@ func SyncOrgData(c *gin.Context) {
 			}
 			existing, err := userService.GetUserByUserID(u.UserID)
 			if err != nil {
-				userService.CreateUser(&database.User{
-					UserID: u.UserID, Name: u.Name, Email: u.Email,
-					Mobile: u.Mobile, DepartmentID: deptID,
-					Position: u.Position, Avatar: u.Avatar, Status: status,
-				})
+				if err := userService.CreateUser(newLocalUserFromDingTalk(u, deptID, status)); err != nil {
+					userStatus = "failed"
+					userErrMsg = err.Error()
+					log.Printf("[SyncOrgData] 创建用户 %s 失败: %v", u.UserID, err)
+					continue
+				}
 				// 同时创建员工档案
 				profile := &database.EmployeeProfile{
 					UserID:     u.UserID,
 					EmployeeID: u.UserID,
 				}
 				applyDingTalkProfileFields(profile, u, status)
-				employeeService.CreateProfile(profile)
+				if err := employeeService.CreateProfile(profile); err != nil {
+					userStatus = "failed"
+					userErrMsg = err.Error()
+					log.Printf("[SyncOrgData] 创建员工档案 %s 失败: %v", u.UserID, err)
+					continue
+				}
 			} else {
-				existing.Name = u.Name
-				existing.Email = u.Email
-				existing.Mobile = u.Mobile
-				existing.DepartmentID = deptID
-				existing.Position = u.Position
-				existing.Avatar = u.Avatar
-				existing.Status = status
-				userService.UpdateUser(existing)
+				applyDingTalkOrgUser(existing, u, deptID, status, overwriteEmpty)
+				if err := userService.UpdateUser(existing); err != nil {
+					userStatus = "failed"
+					userErrMsg = err.Error()
+					log.Printf("[SyncOrgData] 更新用户 %s 失败: %v", u.UserID, err)
+					continue
+				}
 				// 检查是否存在员工档案
 				profile, profileErr := employeeService.GetProfileByUserID(u.UserID)
 				if profileErr != nil {
@@ -1832,16 +1969,33 @@ func SyncOrgData(c *gin.Context) {
 						EmployeeID: u.UserID,
 					}
 					applyDingTalkProfileFields(profile, u, status)
-					employeeService.CreateProfile(profile)
+					if err := employeeService.CreateProfile(profile); err != nil {
+						userStatus = "failed"
+						userErrMsg = err.Error()
+						log.Printf("[SyncOrgData] 创建员工档案 %s 失败: %v", u.UserID, err)
+						continue
+					}
 				} else {
 					// 更新员工档案：始终同步入职日期（若钉钉有值则覆盖）
 					applyDingTalkProfileFields(profile, u, status)
-					employeeService.UpdateProfile(profile)
+					if err := employeeService.UpdateProfile(profile); err != nil {
+						userStatus = "failed"
+						userErrMsg = err.Error()
+						log.Printf("[SyncOrgData] 更新员工档案 %s 失败: %v", u.UserID, err)
+						continue
+					}
 				}
+			}
+			if strings.TrimSpace(u.Position) == "" {
+				positionMissingCount++
 			}
 			userCount++
 		}
-		syncService.UpdateSyncStatus("users", "success", fmt.Sprintf("同步 %d 个用户", userCount))
+		userSyncMessage := fmt.Sprintf("同步 %d 个用户", userCount)
+		if userStatus == "failed" && userErrMsg != "" {
+			userSyncMessage = fmt.Sprintf("同步 %d 个用户，部分失败: %s", userCount, userErrMsg)
+		}
+		updateSyncStatus(syncService, "users", userStatus, userSyncMessage)
 	}
 
 	c.JSON(http.StatusOK, Response{
@@ -1850,7 +2004,7 @@ func SyncOrgData(c *gin.Context) {
 		Data: gin.H{
 			"sync_status": gin.H{
 				"departments": gin.H{"count": deptCount, "status": deptStatus, "error": deptErrMsg},
-				"employees":   gin.H{"count": userCount, "status": userStatus, "error": userErrMsg},
+				"employees":   gin.H{"count": userCount, "status": userStatus, "error": userErrMsg, "position_missing_count": positionMissingCount, "overwrite_empty": overwriteEmpty},
 				"sync_time":   time.Now(),
 			},
 		},
@@ -1971,7 +2125,7 @@ func SyncAttendance(c *gin.Context) {
 	}
 
 	if len(userIDs) == 0 {
-		syncService.UpdateSyncStatus("attendance", "success", "没有需要同步的用户")
+		updateSyncStatus(syncService, "attendance", "success", "没有需要同步的用户")
 		c.JSON(http.StatusOK, Response{
 			Code:    http.StatusOK,
 			Message: "success",
@@ -1984,7 +2138,7 @@ func SyncAttendance(c *gin.Context) {
 
 	records, err := dingtalk.GetAttendance(userIDs, req.StartDate, req.EndDate)
 	if err != nil {
-		syncService.UpdateSyncStatus("attendance", "failed", err.Error())
+		updateSyncStatus(syncService, "attendance", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "同步考勤失败: " + err.Error(),
@@ -2023,7 +2177,7 @@ func SyncAttendance(c *gin.Context) {
 		}
 
 		if err := service.NewAttendanceService(database.DB).SaveRecord(record); err != nil {
-			syncService.UpdateSyncStatus("attendance", "failed", err.Error())
+			updateSyncStatus(syncService, "attendance", "failed", err.Error())
 			c.JSON(http.StatusInternalServerError, Response{
 				Code:    http.StatusInternalServerError,
 				Message: "鍚屾鑰冨嫟澶辫触: " + err.Error(),
@@ -2033,7 +2187,7 @@ func SyncAttendance(c *gin.Context) {
 		count++
 	}
 
-	syncService.UpdateSyncStatus("attendance", "success", fmt.Sprintf("同步 %d 条考勤记录", count))
+	updateSyncStatus(syncService, "attendance", "success", fmt.Sprintf("同步 %d 条考勤记录", count))
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
@@ -2281,7 +2435,7 @@ func SyncApproval(c *gin.Context) {
 
 	req.ProcessCode = strings.TrimSpace(req.ProcessCode)
 	if req.ProcessCode == "" {
-		syncService.UpdateSyncStatus("approvals", "failed", "缺少 process_code，未执行审批同步")
+		updateSyncStatus(syncService, "approvals", "failed", "缺少 process_code，未执行审批同步")
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
 			Message: "请在请求中提供 process_code 参数",
@@ -2291,7 +2445,7 @@ func SyncApproval(c *gin.Context) {
 
 	instances, err := dingtalk.GetApprovals(req.ProcessCode, req.StartDate, req.EndDate)
 	if err != nil {
-		syncService.UpdateSyncStatus("approvals", "failed", err.Error())
+		updateSyncStatus(syncService, "approvals", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "同步审批失败: " + err.Error(),
@@ -2347,7 +2501,7 @@ func SyncApproval(c *gin.Context) {
 		count++
 	}
 
-	syncService.UpdateSyncStatus("approvals", "success", fmt.Sprintf("同步 %d 个审批实例", count))
+	updateSyncStatus(syncService, "approvals", "success", fmt.Sprintf("同步 %d 个审批实例", count))
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
@@ -2808,7 +2962,7 @@ func RunJob(c *gin.Context) {
 	}
 
 	syncService := service.NewSyncService(database.DB)
-	syncService.UpdateSyncStatus(syncType, "success", "手动执行任务")
+	updateSyncStatus(syncService, syncType, "success", "手动执行任务")
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,

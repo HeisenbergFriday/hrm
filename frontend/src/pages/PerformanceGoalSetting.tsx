@@ -17,6 +17,17 @@ import AttachmentUpload from '../components/AttachmentUpload'
 const { Title, Text } = Typography
 const { TextArea } = Input
 
+const targetReadonlyParticipantStatuses = new Set([
+  'target_set',
+  'self_submitted',
+  'manager_submitted',
+  'result_confirmed',
+  'employee_confirmed',
+  'manager_confirmed',
+  'hr_confirmed',
+  'locked',
+])
+
 const PerformanceGoalSetting: React.FC = () => {
   const { activityId, participantId } = useParams<{ activityId: string; participantId: string }>()
   const navigate = useNavigate()
@@ -59,6 +70,7 @@ const PerformanceGoalSetting: React.FC = () => {
           scoring_rule: i.scoring_rule,
           actual_result: i.actual_result,
           attachments: i.attachments || [],
+          approval_status: i.approval_status,
           sort_order: i.sort_order
         }))
 
@@ -73,6 +85,7 @@ const PerformanceGoalSetting: React.FC = () => {
           target_value: i.target_value || i.scoring_rule,
           actual_result: i.actual_result,
           attachments: i.attachments || [],
+          approval_status: i.approval_status,
           sort_order: i.sort_order
         }))
 
@@ -119,10 +132,18 @@ const PerformanceGoalSetting: React.FC = () => {
   }
 
   const handleAddQuantItem = () => {
+    if (targetSettingReadonly) {
+      message.warning('目标设定已审批通过，无法修改')
+      return
+    }
     setQuantItems([...quantItems, newQuantItem()])
   }
 
   const handleRemoveQuantItem = (index: number) => {
+    if (targetSettingReadonly) {
+      message.warning('目标设定已审批通过，无法修改')
+      return
+    }
     if (quantItems.length <= 1) {
       message.warning('至少保留一个量化指标')
       return
@@ -131,10 +152,18 @@ const PerformanceGoalSetting: React.FC = () => {
   }
 
   const handleAddActionItem = () => {
+    if (targetSettingReadonly) {
+      message.warning('目标设定已审批通过，无法修改')
+      return
+    }
     setActionItems([...actionItems, newActionItem()])
   }
 
   const handleRemoveActionItem = (index: number) => {
+    if (targetSettingReadonly) {
+      message.warning('目标设定已审批通过，无法修改')
+      return
+    }
     if (actionItems.length <= 1) {
       message.warning('至少保留一个关键行动')
       return
@@ -143,6 +172,7 @@ const PerformanceGoalSetting: React.FC = () => {
   }
 
   const handleQuantItemChange = (index: number, field: string, value: any) => {
+    if (targetSettingReadonly) return
     const updated = [...quantItems]
     updated[index] = {
       ...updated[index],
@@ -153,6 +183,7 @@ const PerformanceGoalSetting: React.FC = () => {
   }
 
   const handleActionItemChange = (index: number, field: string, value: any) => {
+    if (targetSettingReadonly) return
     const updated = [...actionItems]
     updated[index] = {
       ...updated[index],
@@ -165,8 +196,15 @@ const PerformanceGoalSetting: React.FC = () => {
   const quantWeightTotal = quantItems.reduce((sum, i) => sum + (i.weight || 0), 0)
   const actionWeightTotal = actionItems.reduce((sum, i) => sum + (i.weight || 0), 0)
   const totalWeight = quantWeightTotal + actionWeightTotal
+  const targetSettingReadonly =
+    Boolean(participant && targetReadonlyParticipantStatuses.has(participant.status)) ||
+    [...quantItems, ...actionItems].some(item => item.approval_status === 'approved')
 
   const loadSuggestions = async () => {
+    if (targetSettingReadonly) {
+      message.warning('目标设定已审批通过，无法修改')
+      return
+    }
     if (!participantId) return
     try {
       const res = await performanceAPI.getGoalSuggestions(Number(participantId))
@@ -178,6 +216,10 @@ const PerformanceGoalSetting: React.FC = () => {
   }
 
   const applySuggestion = (suggestion: any) => {
+    if (targetSettingReadonly) {
+      message.warning('目标设定已审批通过，无法修改')
+      return
+    }
     const newItem = {
       ...newQuantItem(),
       item_name: suggestion.name || suggestion.item_name,
@@ -204,6 +246,7 @@ const PerformanceGoalSetting: React.FC = () => {
   }
 
   const searchIndicators = useCallback((keyword: string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number, sectionType: string) => {
+    if (targetSettingReadonly) return
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
     if (!keyword || keyword.trim().length < 1) {
       resultsSetter(prev => ({ ...prev, [rowIndex]: [] }))
@@ -219,7 +262,7 @@ const PerformanceGoalSetting: React.FC = () => {
         resultsSetter(prev => ({ ...prev, [rowIndex]: [] }))
       }
     }, 300)
-  }, [])
+  }, [targetSettingReadonly])
 
   const getSearchOptions = (results: any[]) =>
     results.map((item: any) => ({
@@ -285,6 +328,10 @@ const PerformanceGoalSetting: React.FC = () => {
 
   const handleSaveDraft = async () => {
     if (!participantId) return
+    if (targetSettingReadonly) {
+      message.warning('目标设定已审批通过，无法修改')
+      return
+    }
     const items = buildPayload()
     if (items.some(i => !i.item_name)) {
       message.warning('请填写所有指标名称')
@@ -336,6 +383,10 @@ const PerformanceGoalSetting: React.FC = () => {
 
   const handleSubmit = async () => {
     if (!participantId) return
+    if (targetSettingReadonly) {
+      message.warning('目标设定已审批通过，无法修改')
+      return
+    }
     if (Math.abs(totalWeight - 1) > 0.001) {
       message.error(`权重合计必须为100%，当前为 ${(totalWeight * 100).toFixed(0)}%`)
       return
@@ -387,6 +438,7 @@ const PerformanceGoalSetting: React.FC = () => {
           onChange={(val) => handleQuantItemChange(idx, 'item_name', val)}
           onSelect={(val) => handleIndicatorSelect(val, idx, quantSearchResults[idx] || [], setQuantItems, quantItems, true)}
           placeholder="输入关键词搜索指标"
+          disabled={targetSettingReadonly}
           style={{ width: '100%' }}
         />
       )
@@ -403,6 +455,7 @@ const PerformanceGoalSetting: React.FC = () => {
           onChange={val => handleQuantItemChange(idx, 'weight', (val || 0) / 100)}
           style={{ width: '100%' }}
           addonAfter="%"
+          disabled={targetSettingReadonly}
         />
       )
     },
@@ -416,6 +469,7 @@ const PerformanceGoalSetting: React.FC = () => {
           value={quantItems[idx]?.target_value}
           onChange={e => handleQuantItemChange(idx, 'target_value', e.target.value)}
           placeholder="标准"
+          disabled={targetSettingReadonly}
         />
       )
     },
@@ -429,6 +483,7 @@ const PerformanceGoalSetting: React.FC = () => {
           danger
           icon={<DeleteOutlined />}
           onClick={() => handleRemoveQuantItem(idx)}
+          disabled={targetSettingReadonly}
         />
       )
     }
@@ -444,6 +499,7 @@ const PerformanceGoalSetting: React.FC = () => {
             onChange={e => handleQuantItemChange(idx, 'item_definition', e.target.value)}
             rows={2}
             placeholder="明确指标范围和计算公式"
+            disabled={targetSettingReadonly}
           />
         </div>
         <div>
@@ -452,6 +508,7 @@ const PerformanceGoalSetting: React.FC = () => {
             value={quantItems[idx]?.red_line_value}
             onChange={e => handleQuantItemChange(idx, 'red_line_value', e.target.value)}
             placeholder="最低"
+            disabled={targetSettingReadonly}
           />
         </div>
         <div>
@@ -460,6 +517,7 @@ const PerformanceGoalSetting: React.FC = () => {
             value={quantItems[idx]?.challenge_value}
             onChange={e => handleQuantItemChange(idx, 'challenge_value', e.target.value)}
             placeholder="挑战"
+            disabled={targetSettingReadonly}
           />
         </div>
         <div>
@@ -469,6 +527,7 @@ const PerformanceGoalSetting: React.FC = () => {
             onChange={e => handleQuantItemChange(idx, 'scoring_rule', e.target.value)}
             rows={2}
             placeholder="定量按区间/上限设置"
+            disabled={targetSettingReadonly}
           />
         </div>
       </div>
@@ -480,6 +539,7 @@ const PerformanceGoalSetting: React.FC = () => {
           value={quantItems[idx]?.attachments || []}
           onChange={(urls) => handleQuantItemChange(idx, 'attachments', urls)}
           maxCount={5}
+          disabled={targetSettingReadonly}
         />
       </div>
     </div>
@@ -499,6 +559,7 @@ const PerformanceGoalSetting: React.FC = () => {
           onChange={(val) => handleActionItemChange(idx, 'item_name', val)}
           onSelect={(val) => handleIndicatorSelect(val, idx, actionSearchResults[idx] || [], setActionItems, actionItems, false)}
           placeholder="输入关键词搜索指标"
+          disabled={targetSettingReadonly}
           style={{ width: '100%' }}
         />
       )
@@ -514,6 +575,7 @@ const PerformanceGoalSetting: React.FC = () => {
           onChange={e => handleActionItemChange(idx, 'item_definition', e.target.value)}
           rows={2}
           placeholder="明确行动范围和完成口径"
+          disabled={targetSettingReadonly}
         />
       )
     },
@@ -529,6 +591,7 @@ const PerformanceGoalSetting: React.FC = () => {
           onChange={val => handleActionItemChange(idx, 'weight', (val || 0) / 100)}
           style={{ width: '100%' }}
           addonAfter="%"
+          disabled={targetSettingReadonly}
         />
       )
     },
@@ -543,6 +606,7 @@ const PerformanceGoalSetting: React.FC = () => {
           onChange={e => handleActionItemChange(idx, 'target_value', e.target.value)}
           rows={3}
           placeholder="描述关键结果、交付物或完成标准"
+          disabled={targetSettingReadonly}
         />
       )
     },
@@ -555,6 +619,7 @@ const PerformanceGoalSetting: React.FC = () => {
           value={actionItems[idx]?.attachments || []}
           onChange={(urls) => handleActionItemChange(idx, 'attachments', urls)}
           maxCount={5}
+          disabled={targetSettingReadonly}
         />
       )
     },
@@ -568,6 +633,7 @@ const PerformanceGoalSetting: React.FC = () => {
           danger
           icon={<DeleteOutlined />}
           onClick={() => handleRemoveActionItem(idx)}
+          disabled={targetSettingReadonly}
         />
       )
     }
@@ -591,6 +657,9 @@ const PerformanceGoalSetting: React.FC = () => {
               {participant.employee_name || participant.employee_id}
             </Text>
           )}
+          {targetSettingReadonly && (
+            <StatusTag color="success">目标已审批通过，不可修改</StatusTag>
+          )}
         </div>
         {/* Row 2: Weight + Actions */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 8, paddingBottom: 12 }}>
@@ -609,6 +678,7 @@ const PerformanceGoalSetting: React.FC = () => {
               icon={<SaveOutlined />}
               loading={saving}
               onClick={handleSaveDraft}
+              disabled={targetSettingReadonly}
             >
               保存草稿
             </Button>
@@ -617,7 +687,7 @@ const PerformanceGoalSetting: React.FC = () => {
               icon={<CheckCircleOutlined />}
               loading={submitting}
               onClick={handleSubmit}
-              disabled={Math.abs(totalWeight - 1) > 0.001}
+              disabled={targetSettingReadonly || Math.abs(totalWeight - 1) > 0.001}
             >
               提交目标
             </Button>
@@ -643,6 +713,7 @@ const PerformanceGoalSetting: React.FC = () => {
           type="dashed"
           icon={<PlusOutlined />}
           onClick={handleAddQuantItem}
+          disabled={targetSettingReadonly}
           style={{ marginTop: 12, width: '100%' }}
         >
           添加量化指标
@@ -665,6 +736,7 @@ const PerformanceGoalSetting: React.FC = () => {
           type="dashed"
           icon={<PlusOutlined />}
           onClick={handleAddActionItem}
+          disabled={targetSettingReadonly}
           style={{ marginTop: 12, width: '100%' }}
         >
           添加关键行动
@@ -677,7 +749,7 @@ const PerformanceGoalSetting: React.FC = () => {
           <span>指标库建议</span>
         </Space>
       } style={{ marginTop: 24 }}>
-        <Button type="primary" icon={<BulbOutlined />} onClick={loadSuggestions} style={{ marginBottom: showSuggestions ? 12 : 0 }}>
+        <Button type="primary" icon={<BulbOutlined />} onClick={loadSuggestions} disabled={targetSettingReadonly} style={{ marginBottom: showSuggestions ? 12 : 0 }}>
           从指标库获取建议
         </Button>
         {showSuggestions && suggestions.length > 0 && (
@@ -690,8 +762,8 @@ const PerformanceGoalSetting: React.FC = () => {
                 <Tag
                   key={idx}
                   color={s.section_type === 'key_action' ? 'green' : 'blue'}
-                  style={{ cursor: 'pointer', padding: '4px 8px' }}
-                  onClick={() => applySuggestion(s)}
+                  style={{ cursor: targetSettingReadonly ? 'default' : 'pointer', padding: '4px 8px' }}
+                  onClick={targetSettingReadonly ? undefined : () => applySuggestion(s)}
                 >
                   {s.name || s.item_name}
                 </Tag>

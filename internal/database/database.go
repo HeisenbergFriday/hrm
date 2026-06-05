@@ -251,6 +251,9 @@ func migrate() error {
 	if err := migratePerformanceReviewVersionSchema(); err != nil {
 		return err
 	}
+	if err := migratePerformanceParticipantAssessmentManagerSchema(); err != nil {
+		return err
+	}
 
 	return cleanupDeletedWeekScheduleRules()
 }
@@ -277,6 +280,31 @@ func migrateAnnualLeaveGrantColumns() {
 			}
 		}
 	}
+}
+
+func migratePerformanceParticipantAssessmentManagerSchema() error {
+	if !DB.Migrator().HasTable(&PerformanceParticipant{}) {
+		return nil
+	}
+
+	// Historical manager_id / manager_name are already the activity assessment manager.
+	// Only backfill new metadata columns; never derive manager_id from current users here.
+	if err := DB.Model(&PerformanceParticipant{}).
+		Where("(manager_source IS NULL OR manager_source = '') AND deleted_at IS NULL").
+		Update("manager_source", "SYSTEM").Error; err != nil {
+		return err
+	}
+	if err := DB.Model(&PerformanceParticipant{}).
+		Where("manager_overridden IS NULL AND deleted_at IS NULL").
+		Update("manager_overridden", false).Error; err != nil {
+		return err
+	}
+	if err := DB.Model(&PerformanceParticipant{}).
+		Where("(manager_config_status IS NULL OR manager_config_status = '') AND deleted_at IS NULL").
+		Update("manager_config_status", gorm.Expr("CASE WHEN manager_id IS NULL OR manager_id = '' THEN 'PENDING' ELSE 'CONFIGURED' END")).Error; err != nil {
+		return err
+	}
+	return nil
 }
 
 func migratePerformanceReviewVersionSchema() error {
@@ -735,6 +763,8 @@ func seed() {
 			{Name: "绩效分布规则", Code: "performance:distribution:manage", Description: "设置绩效分布规则"},
 			{Name: "绩效指标库管理", Code: "performance:indicator:manage", Description: "指标库/指标项CRUD"},
 			{Name: "绩效目标管理", Code: "performance:goal:manage", Description: "目标设定/审批/分配"},
+			{Name: "绩效考核上级调整", Code: "performance:assessment_manager:update", Description: "调整单个绩效参与人的考核上级"},
+			{Name: "绩效考核上级批量调整", Code: "performance:assessment_manager:batch_update", Description: "批量调整绩效参与人的考核上级"},
 			{Name: "绩效结果查看", Code: "performance:result:view", Description: "查看绩效结果"},
 			// 细粒度权限（用于菜单派生）
 			{Name: "组织数据只读", Code: "org:read", Description: "查看组织架构、花名册等组织数据"},
@@ -785,7 +815,8 @@ func seedRolePermissions() {
 		"performance:activity:manage", "performance:self_eval:submit", "performance:manager_eval:submit",
 		"performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit",
 		"performance:level_adjust:manage", "performance:distribution:manage", "performance:indicator:manage",
-		"performance:goal:manage", "performance:result:view",
+		"performance:goal:manage", "performance:assessment_manager:update", "performance:assessment_manager:batch_update",
+		"performance:result:view",
 		"org:read", "audit_log:read",
 	}
 
@@ -802,7 +833,8 @@ func seedRolePermissions() {
 	managerCodes := []string{
 		"performance:activity:manage", "performance:self_eval:submit", "performance:manager_eval:submit",
 		"performance:manager_confirm:submit", "performance:level_adjust:manage", "performance:distribution:manage",
-		"performance:indicator:manage", "performance:goal:manage", "performance:result:view",
+		"performance:indicator:manage", "performance:goal:manage", "performance:assessment_manager:update",
+		"performance:assessment_manager:batch_update", "performance:result:view",
 	}
 	if managerID, ok := roleMap["部门负责人"]; ok {
 		for _, code := range managerCodes {
@@ -853,6 +885,8 @@ func migratePermissions() {
 		{Name: "创建审批模板", Code: "approval:create", Description: "创建审批模板"},
 		{Name: "编辑审批模板", Code: "approval:update", Description: "编辑审批模板"},
 		{Name: "删除审批模板", Code: "approval:delete", Description: "删除审批模板"},
+		{Name: "绩效考核上级调整", Code: "performance:assessment_manager:update", Description: "调整单个绩效参与人的考核上级"},
+		{Name: "绩效考核上级批量调整", Code: "performance:assessment_manager:batch_update", Description: "批量调整绩效参与人的考核上级"},
 	}
 	for _, p := range newPerms {
 		var existing Permission
@@ -882,6 +916,9 @@ func migratePermissions() {
 	grantCompatPermission("approval_manage", "approval:create", permMap)
 	grantCompatPermission("approval_manage", "approval:update", permMap)
 	grantCompatPermission("approval_manage", "approval:delete", permMap)
+	// 7. 拥有绩效活动管理的角色默认可维护活动内考核上级。
+	grantCompatPermission("performance:activity:manage", "performance:assessment_manager:update", permMap)
+	grantCompatPermission("performance:activity:manage", "performance:assessment_manager:batch_update", permMap)
 }
 
 // grantCompatPermission 给已拥有 sourcePerm 的角色自动补充 targetPerm（幂等）

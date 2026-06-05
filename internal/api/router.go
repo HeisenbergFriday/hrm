@@ -109,6 +109,7 @@ func SetupRouter() *gin.Engine {
 
 				org.GET("/employees", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployees)
 				org.GET("/employees/:id", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployeeDetail)
+				org.GET("/employees/:id/position-sync-diagnostic", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployeePositionSyncDiagnostic)
 
 				org.POST("/sync", middleware.RequirePermission("attendance_manage"), SyncOrgData)
 			}
@@ -321,7 +322,10 @@ func SetupRouter() *gin.Engine {
 				performance.POST("/activities/:activity_id/refresh-participants", middleware.RequirePermission("performance:activity:manage"), RefreshPerformanceParticipants)
 				performance.POST("/participants/import", middleware.RequirePermission("performance:activity:manage"), ImportPerformanceActivityParticipants)
 				performance.GET("/activities/:activity_id/participants", GetPerformanceParticipants)
-				performance.GET("/participants/:participant_id", middleware.RequirePermission("performance:result:view"), GetParticipant)
+				performance.GET("/activities/:activity_id/assessment-manager-candidates", middleware.RequirePermission("performance:assessment_manager:update"), GetAssessmentManagerCandidates)
+				performance.GET("/participants/:participant_id", middleware.RequirePermission("performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:self_eval:submit", "performance:manager_eval:submit", "performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit"), GetParticipant)
+				performance.PUT("/participants/:participant_id/assessment-manager", middleware.RequirePermission("performance:assessment_manager:update"), UpdateParticipantAssessmentManager)
+				performance.POST("/activities/:activity_id/assessment-managers/batch", middleware.RequirePermission("performance:assessment_manager:batch_update"), BatchUpdateAssessmentManagers)
 
 				performance.POST("/participants/:participant_id/self-evaluation", middleware.RequirePermission("performance:self_eval:submit"), SubmitSelfEvaluation)
 				performance.POST("/participants/:participant_id/manager-evaluation", middleware.RequirePermission("performance:manager_eval:submit"), SubmitManagerEvaluation)

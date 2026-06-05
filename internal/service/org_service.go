@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -159,6 +160,8 @@ type OrgDepartmentSyncItem struct {
 	Name         string
 	ParentID     string
 	Order        int
+	HeadUserIDs  []string
+	Extension    map[string]interface{}
 }
 
 type OrgDepartmentSyncResult struct {
@@ -475,6 +478,7 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(items []OrgDepartmentSyncItem,
 					Name:         item.Name,
 					ParentID:     item.ParentID,
 					Order:        item.Order,
+					Extension:    departmentSyncExtension(nil, item),
 				}
 				if err := tx.Create(&department).Error; err != nil {
 					return err
@@ -502,6 +506,11 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(items []OrgDepartmentSyncItem,
 				logs = append(logs, newDepartmentChangeLog(item.DepartmentID, item.Name, "updated", "order", strconv.Itoa(existing.Order), strconv.Itoa(item.Order), source, s.nowFn()))
 				existing.Order = item.Order
 			}
+			nextExtension := departmentSyncExtension(existing.Extension, item)
+			if !reflect.DeepEqual(existing.Extension, nextExtension) {
+				logs = append(logs, newDepartmentChangeLog(item.DepartmentID, item.Name, "updated", "extension", "", "dingtalk_department_head_sync", source, s.nowFn()))
+				existing.Extension = nextExtension
+			}
 			if len(logs) == 0 {
 				continue
 			}
@@ -516,6 +525,28 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(items []OrgDepartmentSyncItem,
 		return nil
 	})
 	return result, err
+}
+
+func departmentSyncExtension(existing map[string]interface{}, item OrgDepartmentSyncItem) map[string]interface{} {
+	next := make(map[string]interface{}, len(existing)+len(item.Extension)+4)
+	for key, value := range existing {
+		next[key] = value
+	}
+	for key, value := range item.Extension {
+		next[key] = value
+	}
+	headUserIDs := uniqueStrings(item.HeadUserIDs)
+	if len(headUserIDs) > 0 {
+		next["department_head_user_ids"] = headUserIDs
+		next["department_head_user_id"] = headUserIDs[0]
+		next["dingtalk_department_head_user_ids"] = headUserIDs
+	} else if _, ok := next["department_head_user_ids"]; !ok {
+		next["dingtalk_department_head_sync"] = map[string]interface{}{
+			"status": "missing",
+			"reason": "DingTalk department response did not include a department head field matching DINGTALK_DEPARTMENT_HEAD_FIELD_KEYS.",
+		}
+	}
+	return next
 }
 
 func (s *OrgService) GetDepartmentHistory(scope *OrgDataScope, departmentID string, limit int) ([]database.DepartmentChangeLog, error) {
@@ -1179,7 +1210,7 @@ func (s *OrgService) collectOverspanManagerWarnings(departmentIDs []string, depa
 		userMap[users[i].UserID] = &users[i]
 	}
 	for _, u := range users {
-		managerID := firstStringValue(u.Extension, "manager_user_id", "leader_user_id", "supervisor_user_id")
+		managerID, _ := resolveManagerInfo(u)
 		if managerID == "" {
 			continue
 		}
@@ -1338,7 +1369,7 @@ func (s *OrgService) buildOrgRelation(scope *OrgDataScope, user *database.User, 
 		return relation, nil
 	}
 
-	managerUserID := firstStringValue(user.Extension, "manager_user_id", "leader_user_id", "supervisor_user_id")
+	managerUserID, _ := resolveManagerInfo(*user)
 	if managerUserID != "" {
 		var manager database.User
 		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", managerUserID).First(&manager).Error; err == nil {
@@ -1374,7 +1405,8 @@ func (s *OrgService) buildOrgRelation(scope *OrgDataScope, user *database.User, 
 		if candidate.UserID == user.UserID {
 			continue
 		}
-		if firstStringValue(candidate.Extension, "manager_user_id", "leader_user_id", "supervisor_user_id") != user.UserID {
+		managerUserID, _ := resolveManagerInfo(candidate)
+		if managerUserID != user.UserID {
 			continue
 		}
 		relation.DirectReports = append(relation.DirectReports, EmployeeMemberRef{
