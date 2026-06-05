@@ -305,7 +305,7 @@ func (r *PerformanceParticipantRepository) FindAll(activityID string, page, page
 		query = query.Where("department_id = ?", departmentID)
 	}
 	if managerID != "" {
-		query = query.Where("manager_id = ? OR manager_id IS NULL", managerID)
+		query = query.Where("manager_id = ?", managerID)
 	}
 	if status != "" {
 		query = query.Where("status = ?", status)

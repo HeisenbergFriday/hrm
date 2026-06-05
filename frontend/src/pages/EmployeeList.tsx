@@ -8,7 +8,9 @@ import {
   Select,
   Space,
   Spin,
+  Tag,
   Table,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -37,6 +39,7 @@ interface EmployeeItem {
   department_id: string
   position: string
   status: string
+  extension?: Record<string, any>
   created_at?: string
 }
 
@@ -102,6 +105,15 @@ const statConfig = [
   { key: 'probation', title: '试用期人数', icon: <TeamOutlined />, color: '#0369a1', bg: '#e0f2fe' },
   { key: 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: '#b45309', bg: '#fef3c7' },
 ] as const
+
+const getPositionDiagnosticText = (record: EmployeeItem) => {
+  const diagnostic = record.extension?.dingtalk_position_sync
+  if (!diagnostic) return '钉钉岗位字段未返回或尚未执行新版同步'
+  const api = diagnostic.api ? `接口：${diagnostic.api}` : ''
+  const reason = diagnostic.failure_reason ? `原因：${diagnostic.failure_reason}` : ''
+  const fields = Array.isArray(diagnostic.raw_field_keys) ? `字段：${diagnostic.raw_field_keys.join(', ')}` : ''
+  return [api, reason, fields].filter(Boolean).join('\n') || '暂无诊断信息'
+}
 
 const EmployeeList: React.FC = () => {
   const navigate = useNavigate()
@@ -204,7 +216,13 @@ const EmployeeList: React.FC = () => {
     },
     {
       title: '岗位', dataIndex: 'position', key: 'position',
-      render: (value: string) => <span style={{ color: '#374151' }}>{value || '-'}</span>,
+      render: (value: string, record: EmployeeItem) => value ? (
+        <span style={{ color: '#374151' }}>{value}</span>
+      ) : (
+        <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{getPositionDiagnosticText(record)}</span>}>
+          <Tag color="orange">未同步岗位</Tag>
+        </Tooltip>
+      ),
     },
     {
       title: '联系方式', key: 'contact',

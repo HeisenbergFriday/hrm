@@ -29,6 +29,17 @@ func currentOperatorID(c *gin.Context) string {
 	return userID
 }
 
+func logPerformanceNotifyError(action, userID string, err error) {
+	if err == nil {
+		return
+	}
+	if dingtalk.IsUserNotNotifiableError(err) {
+		logrus.Infof("%s skipped for non-notifiable user %s: %v", action, userID, err)
+		return
+	}
+	logrus.Warnf("%s failed: %v", action, err)
+}
+
 // resolvePerformanceScope 获取用户的数据范围（绩效模块专用）
 func resolvePerformanceScope(c *gin.Context) (*service.OrgDataScope, error) {
 	userID := currentOperatorID(c)
@@ -49,6 +60,18 @@ func requirePermission(c *gin.Context, codes ...string) bool {
 		return false
 	}
 	return true
+}
+
+func hasPerformancePermission(c *gin.Context, codes ...string) (bool, error) {
+	if len(codes) == 0 {
+		return false, nil
+	}
+	userID := currentOperatorID(c)
+	if userID == "admin" || userID == "system" {
+		return true, nil
+	}
+	svc := service.NewPermissionService(database.DB)
+	return svc.HasAnyPermission(userID, codes...)
 }
 
 // resolveAndVerifyScope 获取 scope 并验证指定部门是否在可见范围内
@@ -76,17 +99,63 @@ func verifySelfParticipant(c *gin.Context, participant *database.PerformancePart
 	return true
 }
 
-// verifyManagerOfParticipant 验证当前用户是指定参与人的主管
+// verifyManagerOfParticipant 验证当前用户是指定参与人的考核上级
 func verifyManagerOfParticipant(c *gin.Context, participant *database.PerformanceParticipant) bool {
 	userID := currentOperatorID(c)
 	if userID == "admin" || userID == "system" {
 		return true
 	}
 	if participant.ManagerID == nil || *participant.ManagerID != userID {
-		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "只能评分直接下属的绩效", Data: nil})
+		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "只能操作自己作为考核上级的绩效", Data: nil})
 		return false
 	}
 	return true
+}
+
+func verifyPerformanceParticipantAccess(c *gin.Context, participant *database.PerformanceParticipant, privilegedCodes, selfCodes, managerCodes []string) bool {
+	if participant == nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return false
+	}
+
+	userID := currentOperatorID(c)
+	if userID == "admin" || userID == "system" {
+		return true
+	}
+
+	hasSelfPermission, err := hasPerformancePermission(c, selfCodes...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "权限检查失败", Data: nil})
+		return false
+	}
+	if hasSelfPermission && strings.TrimSpace(participant.EmployeeID) == userID {
+		return true
+	}
+
+	hasManagerPermission, err := hasPerformancePermission(c, managerCodes...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "权限检查失败", Data: nil})
+		return false
+	}
+	if hasManagerPermission && participant.ManagerID != nil && strings.TrimSpace(*participant.ManagerID) == userID {
+		return true
+	}
+
+	hasPrivilegedPermission, err := hasPerformancePermission(c, privilegedCodes...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "权限检查失败", Data: nil})
+		return false
+	}
+	if hasPrivilegedPermission {
+		if _, err := resolveAndVerifyScope(c, participant.DepartmentID); err != nil {
+			c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "无权访问该参与人数据", Data: nil})
+			return false
+		}
+		return true
+	}
+
+	c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "无权访问该参与人数据", Data: nil})
+	return false
 }
 
 func GetPerformanceActivities(c *gin.Context) {
@@ -119,32 +188,34 @@ func CreatePerformanceActivity(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Name                   string   `json:"name" binding:"required"`
-		CycleType              string   `json:"cycle_type" binding:"required"`
-		StartDate              string   `json:"start_date" binding:"required"`
-		EndDate                string   `json:"end_date" binding:"required"`
-		TargetSetStartAt       string   `json:"target_set_start_at"`
-		TargetSetEndAt         string   `json:"target_set_end_at"`
-		SelfEvalStartAt        string   `json:"self_eval_start_at" binding:"required"`
-		SelfEvalEndAt          string   `json:"self_eval_end_at" binding:"required"`
-		ManagerEvalStartAt     string   `json:"manager_eval_start_at" binding:"required"`
-		ManagerEvalEndAt       string   `json:"manager_eval_end_at" binding:"required"`
-		ResultConfirmStartAt   string   `json:"result_confirm_start_at" binding:"required"`
-		ResultConfirmEndAt     string   `json:"result_confirm_end_at" binding:"required"`
-		EmployeeConfirmStartAt string   `json:"employee_confirm_start_at"`
-		EmployeeConfirmEndAt   string   `json:"employee_confirm_end_at"`
-		ManagerConfirmStartAt  string   `json:"manager_confirm_start_at"`
-		ManagerConfirmEndAt    string   `json:"manager_confirm_end_at"`
-		HRConfirmStartAt       string   `json:"hr_confirm_start_at"`
-		HRConfirmEndAt         string   `json:"hr_confirm_end_at"`
-		HRConfirmDeadline      string   `json:"hr_confirm_deadline"`
-		Status                 string   `json:"status" binding:"required"`
-		TargetDepartmentIDs    []string `json:"target_department_ids"`
-		TargetEmployeeIDs      []string `json:"target_employee_ids"`
-		IndicatorLibraryID     *uint    `json:"indicator_library_id"`
-		Description            string   `json:"description"`
-		EnableBonusScore       bool     `json:"enable_bonus_score"`
-		StrictTimeMode         bool     `json:"strict_time_mode"`
+		Name                           string                                          `json:"name" binding:"required"`
+		CycleType                      string                                          `json:"cycle_type" binding:"required"`
+		StartDate                      string                                          `json:"start_date" binding:"required"`
+		EndDate                        string                                          `json:"end_date" binding:"required"`
+		TargetSetStartAt               string                                          `json:"target_set_start_at"`
+		TargetSetEndAt                 string                                          `json:"target_set_end_at"`
+		SelfEvalStartAt                string                                          `json:"self_eval_start_at" binding:"required"`
+		SelfEvalEndAt                  string                                          `json:"self_eval_end_at" binding:"required"`
+		ManagerEvalStartAt             string                                          `json:"manager_eval_start_at" binding:"required"`
+		ManagerEvalEndAt               string                                          `json:"manager_eval_end_at" binding:"required"`
+		ResultConfirmStartAt           string                                          `json:"result_confirm_start_at" binding:"required"`
+		ResultConfirmEndAt             string                                          `json:"result_confirm_end_at" binding:"required"`
+		EmployeeConfirmStartAt         string                                          `json:"employee_confirm_start_at"`
+		EmployeeConfirmEndAt           string                                          `json:"employee_confirm_end_at"`
+		ManagerConfirmStartAt          string                                          `json:"manager_confirm_start_at"`
+		ManagerConfirmEndAt            string                                          `json:"manager_confirm_end_at"`
+		HRConfirmStartAt               string                                          `json:"hr_confirm_start_at"`
+		HRConfirmEndAt                 string                                          `json:"hr_confirm_end_at"`
+		HRConfirmDeadline              string                                          `json:"hr_confirm_deadline"`
+		Status                         string                                          `json:"status" binding:"required"`
+		TargetDepartmentIDs            []string                                        `json:"target_department_ids"`
+		TargetEmployeeIDs              []string                                        `json:"target_employee_ids"`
+		ManagerAssignments             []database.PerformanceActivityManagerAssignment `json:"manager_assignments"`
+		IndicatorLibraryID             *uint                                           `json:"indicator_library_id"`
+		Description                    string                                          `json:"description"`
+		DefaultAssessmentManagerSource string                                          `json:"default_assessment_manager_source"`
+		EnableBonusScore               bool                                            `json:"enable_bonus_score"`
+		StrictTimeMode                 bool                                            `json:"strict_time_mode"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: gin.H{"error": err.Error()}})
@@ -153,32 +224,34 @@ func CreatePerformanceActivity(c *gin.Context) {
 
 	svc := service.NewPerformanceService(database.DB)
 	activity, err := svc.CreateActivity(service.CreateActivityRequest{
-		Name:                   req.Name,
-		CycleType:              req.CycleType,
-		StartDate:              req.StartDate,
-		EndDate:                req.EndDate,
-		TargetSetStartAt:       req.TargetSetStartAt,
-		TargetSetEndAt:         req.TargetSetEndAt,
-		SelfEvalStartAt:        req.SelfEvalStartAt,
-		SelfEvalEndAt:          req.SelfEvalEndAt,
-		ManagerEvalStartAt:     req.ManagerEvalStartAt,
-		ManagerEvalEndAt:       req.ManagerEvalEndAt,
-		ResultConfirmStartAt:   req.ResultConfirmStartAt,
-		ResultConfirmEndAt:     req.ResultConfirmEndAt,
-		EmployeeConfirmStartAt: req.EmployeeConfirmStartAt,
-		EmployeeConfirmEndAt:   req.EmployeeConfirmEndAt,
-		ManagerConfirmStartAt:  req.ManagerConfirmStartAt,
-		ManagerConfirmEndAt:    req.ManagerConfirmEndAt,
-		HRConfirmStartAt:       req.HRConfirmStartAt,
-		HRConfirmEndAt:         req.HRConfirmEndAt,
-		HRConfirmDeadline:      req.HRConfirmDeadline,
-		Status:                 req.Status,
-		TargetDepartmentIDs:    req.TargetDepartmentIDs,
-		TargetEmployeeIDs:      req.TargetEmployeeIDs,
-		IndicatorLibraryID:     req.IndicatorLibraryID,
-		Description:            req.Description,
-		EnableBonusScore:       req.EnableBonusScore,
-		StrictTimeMode:         req.StrictTimeMode,
+		Name:                           req.Name,
+		CycleType:                      req.CycleType,
+		StartDate:                      req.StartDate,
+		EndDate:                        req.EndDate,
+		TargetSetStartAt:               req.TargetSetStartAt,
+		TargetSetEndAt:                 req.TargetSetEndAt,
+		SelfEvalStartAt:                req.SelfEvalStartAt,
+		SelfEvalEndAt:                  req.SelfEvalEndAt,
+		ManagerEvalStartAt:             req.ManagerEvalStartAt,
+		ManagerEvalEndAt:               req.ManagerEvalEndAt,
+		ResultConfirmStartAt:           req.ResultConfirmStartAt,
+		ResultConfirmEndAt:             req.ResultConfirmEndAt,
+		EmployeeConfirmStartAt:         req.EmployeeConfirmStartAt,
+		EmployeeConfirmEndAt:           req.EmployeeConfirmEndAt,
+		ManagerConfirmStartAt:          req.ManagerConfirmStartAt,
+		ManagerConfirmEndAt:            req.ManagerConfirmEndAt,
+		HRConfirmStartAt:               req.HRConfirmStartAt,
+		HRConfirmEndAt:                 req.HRConfirmEndAt,
+		HRConfirmDeadline:              req.HRConfirmDeadline,
+		Status:                         req.Status,
+		TargetDepartmentIDs:            req.TargetDepartmentIDs,
+		TargetEmployeeIDs:              req.TargetEmployeeIDs,
+		ManagerAssignments:             req.ManagerAssignments,
+		IndicatorLibraryID:             req.IndicatorLibraryID,
+		Description:                    req.Description,
+		DefaultAssessmentManagerSource: req.DefaultAssessmentManagerSource,
+		EnableBonusScore:               req.EnableBonusScore,
+		StrictTimeMode:                 req.StrictTimeMode,
 	}, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -210,32 +283,34 @@ func UpdatePerformanceActivity(c *gin.Context) {
 	}
 	id := c.Param("activity_id")
 	var req struct {
-		Name                   string   `json:"name" binding:"required"`
-		CycleType              string   `json:"cycle_type" binding:"required"`
-		StartDate              string   `json:"start_date" binding:"required"`
-		EndDate                string   `json:"end_date" binding:"required"`
-		TargetSetStartAt       string   `json:"target_set_start_at"`
-		TargetSetEndAt         string   `json:"target_set_end_at"`
-		SelfEvalStartAt        string   `json:"self_eval_start_at" binding:"required"`
-		SelfEvalEndAt          string   `json:"self_eval_end_at" binding:"required"`
-		ManagerEvalStartAt     string   `json:"manager_eval_start_at" binding:"required"`
-		ManagerEvalEndAt       string   `json:"manager_eval_end_at" binding:"required"`
-		ResultConfirmStartAt   string   `json:"result_confirm_start_at" binding:"required"`
-		ResultConfirmEndAt     string   `json:"result_confirm_end_at" binding:"required"`
-		EmployeeConfirmStartAt string   `json:"employee_confirm_start_at"`
-		EmployeeConfirmEndAt   string   `json:"employee_confirm_end_at"`
-		ManagerConfirmStartAt  string   `json:"manager_confirm_start_at"`
-		ManagerConfirmEndAt    string   `json:"manager_confirm_end_at"`
-		HRConfirmStartAt       string   `json:"hr_confirm_start_at"`
-		HRConfirmEndAt         string   `json:"hr_confirm_end_at"`
-		HRConfirmDeadline      string   `json:"hr_confirm_deadline"`
-		Status                 string   `json:"status" binding:"required"`
-		TargetDepartmentIDs    []string `json:"target_department_ids"`
-		TargetEmployeeIDs      []string `json:"target_employee_ids"`
-		IndicatorLibraryID     *uint    `json:"indicator_library_id"`
-		Description            string   `json:"description"`
-		EnableBonusScore       bool     `json:"enable_bonus_score"`
-		StrictTimeMode         bool     `json:"strict_time_mode"`
+		Name                           string                                          `json:"name" binding:"required"`
+		CycleType                      string                                          `json:"cycle_type" binding:"required"`
+		StartDate                      string                                          `json:"start_date" binding:"required"`
+		EndDate                        string                                          `json:"end_date" binding:"required"`
+		TargetSetStartAt               string                                          `json:"target_set_start_at"`
+		TargetSetEndAt                 string                                          `json:"target_set_end_at"`
+		SelfEvalStartAt                string                                          `json:"self_eval_start_at" binding:"required"`
+		SelfEvalEndAt                  string                                          `json:"self_eval_end_at" binding:"required"`
+		ManagerEvalStartAt             string                                          `json:"manager_eval_start_at" binding:"required"`
+		ManagerEvalEndAt               string                                          `json:"manager_eval_end_at" binding:"required"`
+		ResultConfirmStartAt           string                                          `json:"result_confirm_start_at" binding:"required"`
+		ResultConfirmEndAt             string                                          `json:"result_confirm_end_at" binding:"required"`
+		EmployeeConfirmStartAt         string                                          `json:"employee_confirm_start_at"`
+		EmployeeConfirmEndAt           string                                          `json:"employee_confirm_end_at"`
+		ManagerConfirmStartAt          string                                          `json:"manager_confirm_start_at"`
+		ManagerConfirmEndAt            string                                          `json:"manager_confirm_end_at"`
+		HRConfirmStartAt               string                                          `json:"hr_confirm_start_at"`
+		HRConfirmEndAt                 string                                          `json:"hr_confirm_end_at"`
+		HRConfirmDeadline              string                                          `json:"hr_confirm_deadline"`
+		Status                         string                                          `json:"status" binding:"required"`
+		TargetDepartmentIDs            []string                                        `json:"target_department_ids"`
+		TargetEmployeeIDs              []string                                        `json:"target_employee_ids"`
+		ManagerAssignments             []database.PerformanceActivityManagerAssignment `json:"manager_assignments"`
+		IndicatorLibraryID             *uint                                           `json:"indicator_library_id"`
+		Description                    string                                          `json:"description"`
+		DefaultAssessmentManagerSource string                                          `json:"default_assessment_manager_source"`
+		EnableBonusScore               bool                                            `json:"enable_bonus_score"`
+		StrictTimeMode                 bool                                            `json:"strict_time_mode"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: gin.H{"error": err.Error()}})
@@ -244,32 +319,34 @@ func UpdatePerformanceActivity(c *gin.Context) {
 
 	svc := service.NewPerformanceService(database.DB)
 	activity, err := svc.UpdateActivity(id, service.CreateActivityRequest{
-		Name:                   req.Name,
-		CycleType:              req.CycleType,
-		StartDate:              req.StartDate,
-		EndDate:                req.EndDate,
-		TargetSetStartAt:       req.TargetSetStartAt,
-		TargetSetEndAt:         req.TargetSetEndAt,
-		SelfEvalStartAt:        req.SelfEvalStartAt,
-		SelfEvalEndAt:          req.SelfEvalEndAt,
-		ManagerEvalStartAt:     req.ManagerEvalStartAt,
-		ManagerEvalEndAt:       req.ManagerEvalEndAt,
-		ResultConfirmStartAt:   req.ResultConfirmStartAt,
-		ResultConfirmEndAt:     req.ResultConfirmEndAt,
-		EmployeeConfirmStartAt: req.EmployeeConfirmStartAt,
-		EmployeeConfirmEndAt:   req.EmployeeConfirmEndAt,
-		ManagerConfirmStartAt:  req.ManagerConfirmStartAt,
-		ManagerConfirmEndAt:    req.ManagerConfirmEndAt,
-		HRConfirmStartAt:       req.HRConfirmStartAt,
-		HRConfirmEndAt:         req.HRConfirmEndAt,
-		HRConfirmDeadline:      req.HRConfirmDeadline,
-		Status:                 req.Status,
-		TargetDepartmentIDs:    req.TargetDepartmentIDs,
-		TargetEmployeeIDs:      req.TargetEmployeeIDs,
-		IndicatorLibraryID:     req.IndicatorLibraryID,
-		Description:            req.Description,
-		EnableBonusScore:       req.EnableBonusScore,
-		StrictTimeMode:         req.StrictTimeMode,
+		Name:                           req.Name,
+		CycleType:                      req.CycleType,
+		StartDate:                      req.StartDate,
+		EndDate:                        req.EndDate,
+		TargetSetStartAt:               req.TargetSetStartAt,
+		TargetSetEndAt:                 req.TargetSetEndAt,
+		SelfEvalStartAt:                req.SelfEvalStartAt,
+		SelfEvalEndAt:                  req.SelfEvalEndAt,
+		ManagerEvalStartAt:             req.ManagerEvalStartAt,
+		ManagerEvalEndAt:               req.ManagerEvalEndAt,
+		ResultConfirmStartAt:           req.ResultConfirmStartAt,
+		ResultConfirmEndAt:             req.ResultConfirmEndAt,
+		EmployeeConfirmStartAt:         req.EmployeeConfirmStartAt,
+		EmployeeConfirmEndAt:           req.EmployeeConfirmEndAt,
+		ManagerConfirmStartAt:          req.ManagerConfirmStartAt,
+		ManagerConfirmEndAt:            req.ManagerConfirmEndAt,
+		HRConfirmStartAt:               req.HRConfirmStartAt,
+		HRConfirmEndAt:                 req.HRConfirmEndAt,
+		HRConfirmDeadline:              req.HRConfirmDeadline,
+		Status:                         req.Status,
+		TargetDepartmentIDs:            req.TargetDepartmentIDs,
+		TargetEmployeeIDs:              req.TargetEmployeeIDs,
+		ManagerAssignments:             req.ManagerAssignments,
+		IndicatorLibraryID:             req.IndicatorLibraryID,
+		Description:                    req.Description,
+		DefaultAssessmentManagerSource: req.DefaultAssessmentManagerSource,
+		EnableBonusScore:               req.EnableBonusScore,
+		StrictTimeMode:                 req.StrictTimeMode,
 	}, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -397,7 +474,11 @@ func ImportPerformanceActivityParticipants(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "读取上传文件失败", Data: gin.H{"error": err.Error()}})
 		return
 	}
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			logrus.Warnf("close performance participant import file failed: %v", err)
+		}
+	}()
 
 	result, err := service.ParsePerformanceParticipantImportXLSX(reader)
 	if err != nil {
@@ -447,9 +528,13 @@ func GetParticipant(c *gin.Context) {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: gin.H{"error": err.Error()}})
 		return
 	}
-	// 部门隔离：验证参与人部门是否在当前用户可见范围内
-	if _, err := resolveAndVerifyScope(c, participant.DepartmentID); err != nil {
-		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "无权访问该参与人数据", Data: nil})
+	if !verifyPerformanceParticipantAccess(
+		c,
+		participant,
+		[]string{"performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:hr_confirm:submit"},
+		[]string{"performance:self_eval:submit", "performance:employee_confirm:submit"},
+		[]string{"performance:manager_eval:submit", "performance:manager_confirm:submit"},
+	) {
 		return
 	}
 	svc.HydrateParticipantTargetConfirmers(participant)
@@ -459,6 +544,157 @@ func GetParticipant(c *gin.Context) {
 		activity, _ = svc.GetActivity(participant.ActivityID)
 	}
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"participant": participant, "activity": activity}})
+}
+
+func flexibleJSONString(value interface{}) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		return strings.TrimSpace(strconv.FormatFloat(v, 'f', -1, 64))
+	case float32:
+		return strings.TrimSpace(strconv.FormatFloat(float64(v), 'f', -1, 32))
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case uint:
+		return strconv.FormatUint(uint64(v), 10)
+	case uint64:
+		return strconv.FormatUint(v, 10)
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+func UpdateParticipantAssessmentManager(c *gin.Context) {
+	if !requirePermission(c, "performance:assessment_manager:update") {
+		return
+	}
+	participantID, err := strconv.ParseUint(c.Param("participant_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的参与人 ID", Data: nil})
+		return
+	}
+	var req struct {
+		ManagerUserID interface{} `json:"manager_user_id" binding:"required"`
+		ManagerSource string      `json:"manager_source"`
+		Reason        string      `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: gin.H{"error": err.Error()}})
+		return
+	}
+
+	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if _, err := resolveAndVerifyScope(c, participant.DepartmentID); err != nil {
+		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "无权调整该参与人的考核上级", Data: nil})
+		return
+	}
+
+	updated, err := svc.UpdateParticipantAssessmentManager(uint(participantID), flexibleJSONString(req.ManagerUserID), req.ManagerSource, req.Reason, currentOperatorID(c))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"participant": updated}})
+}
+
+func BatchUpdateAssessmentManagers(c *gin.Context) {
+	if !requirePermission(c, "performance:assessment_manager:batch_update") {
+		return
+	}
+	activityID := c.Param("activity_id")
+	var req struct {
+		Items []struct {
+			ParticipantID uint        `json:"participant_id" binding:"required"`
+			ManagerUserID interface{} `json:"manager_user_id" binding:"required"`
+			ManagerSource string      `json:"manager_source"`
+			Reason        string      `json:"reason"`
+		} `json:"items" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误", Data: gin.H{"error": err.Error()}})
+		return
+	}
+
+	svc := service.NewPerformanceService(database.DB)
+	items := make([]service.AssessmentManagerUpdateRequest, 0, len(req.Items))
+	for _, item := range req.Items {
+		participant, err := svc.GetParticipant(strconv.FormatUint(uint64(item.ParticipantID), 10))
+		if err != nil {
+			c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: gin.H{"participant_id": item.ParticipantID}})
+			return
+		}
+		if participant.ActivityID != activityID {
+			c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参与人不属于当前活动", Data: gin.H{"participant_id": item.ParticipantID}})
+			return
+		}
+		if _, err := resolveAndVerifyScope(c, participant.DepartmentID); err != nil {
+			c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "无权调整部分参与人的考核上级", Data: gin.H{"participant_id": item.ParticipantID}})
+			return
+		}
+		items = append(items, service.AssessmentManagerUpdateRequest{
+			ParticipantID: item.ParticipantID,
+			ManagerUserID: flexibleJSONString(item.ManagerUserID),
+			ManagerSource: item.ManagerSource,
+			Reason:        item.Reason,
+		})
+	}
+
+	results, err := svc.BatchUpdateActivityAssessmentManagers(activityID, items, currentOperatorID(c))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"results": results}})
+}
+
+func GetAssessmentManagerCandidates(c *gin.Context) {
+	if !requirePermission(c, "performance:assessment_manager:update") {
+		return
+	}
+	activityID := c.Param("activity_id")
+	var participantID uint
+	if raw := strings.TrimSpace(c.Query("participant_id")); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 32)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "无效的参与人 ID", Data: nil})
+			return
+		}
+		participantID = uint(parsed)
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	svc := service.NewPerformanceService(database.DB)
+	if participantID > 0 {
+		participant, err := svc.GetParticipant(strconv.FormatUint(uint64(participantID), 10))
+		if err != nil {
+			c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+			return
+		}
+		if _, err := resolveAndVerifyScope(c, participant.DepartmentID); err != nil {
+			c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "无权访问该参与人数据", Data: nil})
+			return
+		}
+	}
+	candidates, err := svc.ListAssessmentManagerCandidates(activityID, participantID, c.Query("source"), c.Query("keyword"), limit)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
+		return
+	}
+	sources, err := svc.ListAssessmentManagerCandidateSourceGroups(activityID, participantID, c.Query("keyword"), limit)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"items": candidates, "sources": sources}})
 }
 
 func SubmitSelfEvaluation(c *gin.Context) {
@@ -600,6 +836,21 @@ func BatchSubmitManagerEvaluation(c *gin.Context) {
 	activity, _ := svc.GetActivity(activityID)
 	enableBonus := activity != nil && activity.EnableBonusScore
 
+	for _, eval := range req.Evaluations {
+		participant, err := svc.GetParticipant(strconv.FormatUint(uint64(eval.ParticipantID), 10))
+		if err != nil {
+			c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: gin.H{"participant_id": eval.ParticipantID}})
+			return
+		}
+		if participant.ActivityID != activityID {
+			c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参与人不属于当前活动", Data: gin.H{"participant_id": eval.ParticipantID}})
+			return
+		}
+		if !verifyManagerOfParticipant(c, participant) {
+			return
+		}
+	}
+
 	// 手动构造匿名结构体切片
 	evaluations := make([]struct {
 		ParticipantID   uint
@@ -680,6 +931,14 @@ func ConfirmResult(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(participantID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifyManagerOfParticipant(c, participant) {
+		return
+	}
 	version, err := svc.ConfirmResult(participantID, req.ConfirmComment, currentOperatorName(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -762,6 +1021,14 @@ func ConfirmEmployeeResultHandler(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(strconv.Itoa(participantID))
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifySelfParticipant(c, participant) {
+		return
+	}
 	if err := svc.ConfirmEmployeeResult(uint(participantID), currentOperatorName(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -780,6 +1047,14 @@ func ConfirmManagerResultHandler(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(strconv.Itoa(participantID))
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifyManagerOfParticipant(c, participant) {
+		return
+	}
 	if err := svc.ConfirmManagerResult(uint(participantID), currentOperatorName(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -790,7 +1065,7 @@ func ConfirmManagerResultHandler(c *gin.Context) {
 			if err := dingtalk.SendCorpMessageToUser(participant.EmployeeID,
 				"绩效结果锁定通知",
 				fmt.Sprintf("您的绩效结果已锁定，最终等级为 %s。", participant.FinalLevel)); err != nil {
-				logrus.Warnf("notify employee on manager confirm lock failed: %v", err)
+				logPerformanceNotifyError("notify employee on manager confirm lock", participant.EmployeeID, err)
 			}
 		}
 	}()
@@ -960,7 +1235,7 @@ func OpenManagerConfirmationHandler(c *gin.Context) {
 }
 
 func OpenHRConfirmationHandler(c *gin.Context) {
-	if !requirePermission(c, "performance:hr_confirm:submit") {
+	if !requirePermission(c, "performance:activity:manage") {
 		return
 	}
 	activityID := c.Param("activity_id")
@@ -1164,6 +1439,20 @@ func SubmitReviewSelfEvaluation(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(participantID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifyPerformanceParticipantAccess(
+		c,
+		participant,
+		nil,
+		[]string{"performance:self_eval:submit"},
+		nil,
+	) {
+		return
+	}
 
 	// 1. 写入自评版本记录
 	_, submitErr := svc.SubmitSelfEvaluation(participantID, struct {
@@ -1180,13 +1469,12 @@ func SubmitReviewSelfEvaluation(c *gin.Context) {
 	}
 
 	// 2. 获取参与人信息，用于钉钉消息推送
-	participant, err2 := svc.GetParticipant(participantID)
-	if err2 == nil && participant != nil && participant.ManagerID != nil && *participant.ManagerID != "" {
+	if participant != nil && participant.ManagerID != nil && *participant.ManagerID != "" {
 		go func() {
 			if notifyErr := dingtalk.SendCorpMessageToUser(*participant.ManagerID,
 				fmt.Sprintf("【绩效提醒】%s 已提交自评", participant.EmployeeName),
 				fmt.Sprintf("员工：%s\n部门：%s\n岗位：%s\n\n请及时进行主管评分。", participant.EmployeeName, participant.DepartmentName, participant.Position)); notifyErr != nil {
-				logrus.Warnf("notify manager on self eval failed: %v", notifyErr)
+				logPerformanceNotifyError("notify manager on self eval", *participant.ManagerID, notifyErr)
 			}
 		}()
 	}
@@ -1213,6 +1501,14 @@ func SubmitReviewManagerEvaluation(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(participantID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifyManagerOfParticipant(c, participant) {
+		return
+	}
 
 	managerScore := float64(0)
 	scoreValues := make([]float64, 0)
@@ -1229,7 +1525,6 @@ func SubmitReviewManagerEvaluation(c *gin.Context) {
 
 	// 如果活动启用了附加分，将附加分加入总分并重新计算等级
 	finalLevel := req.FinalLevel
-	participant, _ := svc.GetParticipant(participantID)
 	if participant != nil {
 		activity, _ := svc.GetActivity(participant.ActivityID)
 		if activity != nil && activity.EnableBonusScore && req.BonusScore != 0 {
@@ -1289,6 +1584,20 @@ func SubmitGoalSelfEvaluationHandler(c *gin.Context) {
 	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifyPerformanceParticipantAccess(
+		c,
+		participant,
+		nil,
+		[]string{"performance:self_eval:submit"},
+		nil,
+	) {
+		return
+	}
 	if err := svc.SubmitGoalSelfEvaluation(uint(participantID), req.Items, req.BonusItems, req.EvaluationGood, req.EvaluationImprovement, userID); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1336,6 +1645,14 @@ func SubmitGoalManagerEvaluationHandler(c *gin.Context) {
 	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifyManagerOfParticipant(c, participant) {
+		return
+	}
 	if err := svc.SubmitGoalManagerEvaluation(uint(participantID), req.Items, req.BonusItems, req.SuggestedLevel, req.EvaluationGood, req.EvaluationImprovement, userID); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1354,9 +1671,16 @@ func notifyEmployeeOnManagerEval(participantID, finalLevel, comment string) erro
 	if participant == nil {
 		return fmt.Errorf("participant %s not found", participantID)
 	}
-	return dingtalk.SendCorpMessageToUser(participant.EmployeeID,
-		fmt.Sprintf("【绩效提醒】您的评分结果已出具"),
-		fmt.Sprintf("员工：%s\n最终等级：%s\n主管评语：%s\n\n如对结果有疑问，请联系主管。", participant.EmployeeName, finalLevel, comment))
+	if err := dingtalk.SendCorpMessageToUser(participant.EmployeeID,
+		"【绩效提醒】您的评分结果已出具",
+		fmt.Sprintf("员工：%s\n最终等级：%s\n主管评语：%s\n\n如对结果有疑问，请联系主管。", participant.EmployeeName, finalLevel, comment)); err != nil {
+		if dingtalk.IsUserNotNotifiableError(err) {
+			logPerformanceNotifyError("notify employee on manager eval", participant.EmployeeID, err)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func shouldNotifyOnSelfEvaluationOpen(svc *service.PerformanceService, activityID string) bool {
@@ -1396,6 +1720,7 @@ func notifyParticipantsOnSelfEvaluationOpen(activityID string) error {
 	title := fmt.Sprintf("【绩效提醒】%s 已开启自评", activity.Name)
 	window := formatSelfEvaluationWindow(activity.SelfEvalStartAt, activity.SelfEvalEndAt)
 	sent := 0
+	skipped := 0
 	failures := make([]string, 0)
 
 	for _, participant := range participants {
@@ -1409,7 +1734,12 @@ func notifyParticipantsOnSelfEvaluationOpen(activityID string) error {
 			activity.Name,
 			window,
 		)
-		if err := dingtalk.SendCorpMessageToUser(participant.EmployeeID, title, content); err != nil {
+		if err := dingtalk.SendCorpActionCardToUser(participant.EmployeeID, title, content, "去完成自评", service.PerformanceSelfEvalURL(activityID, participant.ID)); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logPerformanceNotifyError("notify participant on self evaluation open", participant.EmployeeID, err)
+				skipped++
+				continue
+			}
 			failures = append(failures, fmt.Sprintf("%s(%s): %v", participant.EmployeeName, participant.EmployeeID, err))
 			continue
 		}
@@ -1417,13 +1747,14 @@ func notifyParticipantsOnSelfEvaluationOpen(activityID string) error {
 	}
 
 	if len(failures) > 0 {
+		failed := len(failures)
 		if len(failures) > 3 {
 			failures = failures[:3]
 		}
-		return fmt.Errorf("sent=%d failed=%d sample=%s", sent, len(failures), strings.Join(failures, "; "))
+		return fmt.Errorf("sent=%d skipped=%d failed=%d sample=%s", sent, skipped, failed, strings.Join(failures, "; "))
 	}
 
-	logrus.Infof("self evaluation notifications sent for activity %s: %d", activityID, sent)
+	logrus.Infof("self evaluation notifications sent for activity %s: sent=%d skipped=%d", activityID, sent, skipped)
 	return nil
 }
 
@@ -1444,6 +1775,7 @@ func notifyParticipantsResultReady(activityID string) error {
 		return nil
 	}
 	var sent int
+	var skipped int
 	var failures []string
 	for _, p := range participants {
 		if !shouldNotifyParticipant(p) {
@@ -1452,15 +1784,24 @@ func notifyParticipantsResultReady(activityID string) error {
 		if err := dingtalk.SendCorpMessageToUser(p.EmployeeID,
 			"绩效结果确认通知",
 			"您的绩效结果已出，请进入系统确认。"); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logPerformanceNotifyError("notify participant result ready", p.EmployeeID, err)
+				skipped++
+				continue
+			}
 			failures = append(failures, fmt.Sprintf("%s(%s): %v", p.EmployeeName, p.EmployeeID, err))
 			continue
 		}
 		sent++
 	}
 	if len(failures) > 0 {
-		logrus.Warnf("result ready notifications partially failed: sent=%d failed=%d sample=%s", sent, len(failures), strings.Join(failures, "; "))
+		failed := len(failures)
+		if len(failures) > 3 {
+			failures = failures[:3]
+		}
+		return fmt.Errorf("sent=%d skipped=%d failed=%d sample=%s", sent, skipped, failed, strings.Join(failures, "; "))
 	}
-	logrus.Infof("result ready notifications sent for activity %s: %d", activityID, sent)
+	logrus.Infof("result ready notifications sent for activity %s: sent=%d skipped=%d", activityID, sent, skipped)
 	return nil
 }
 
@@ -1481,6 +1822,7 @@ func notifyParticipantsResultLocked(activityID string) error {
 		return nil
 	}
 	var sent int
+	var skipped int
 	var failures []string
 	for _, p := range participants {
 		if !shouldNotifyParticipant(p) {
@@ -1489,15 +1831,24 @@ func notifyParticipantsResultLocked(activityID string) error {
 		if err := dingtalk.SendCorpMessageToUser(p.EmployeeID,
 			"绩效结果锁定通知",
 			fmt.Sprintf("您的绩效结果已锁定，最终等级为 %s。", p.FinalLevel)); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logPerformanceNotifyError("notify participant result locked", p.EmployeeID, err)
+				skipped++
+				continue
+			}
 			failures = append(failures, fmt.Sprintf("%s(%s): %v", p.EmployeeName, p.EmployeeID, err))
 			continue
 		}
 		sent++
 	}
 	if len(failures) > 0 {
-		logrus.Warnf("result locked notifications partially failed: sent=%d failed=%d sample=%s", sent, len(failures), strings.Join(failures, "; "))
+		failed := len(failures)
+		if len(failures) > 3 {
+			failures = failures[:3]
+		}
+		return fmt.Errorf("sent=%d skipped=%d failed=%d sample=%s", sent, skipped, failed, strings.Join(failures, "; "))
 	}
-	logrus.Infof("result locked notifications sent for activity %s: %d", activityID, sent)
+	logrus.Infof("result locked notifications sent for activity %s: sent=%d skipped=%d", activityID, sent, skipped)
 	return nil
 }
 
@@ -2133,6 +2484,21 @@ func GetGoalRecords(c *gin.Context) {
 	}
 
 	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifyPerformanceParticipantAccess(
+		c,
+		participant,
+		[]string{"performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:hr_confirm:submit"},
+		[]string{"performance:self_eval:submit", "performance:employee_confirm:submit"},
+		[]string{"performance:manager_eval:submit", "performance:manager_confirm:submit"},
+	) {
+		return
+	}
+
 	records, err := svc.GetGoalRecords(uint(participantID))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取目标记录失败", Data: gin.H{"error": err.Error()}})
@@ -2364,6 +2730,14 @@ func SetBonusPenaltyScoreHandler(c *gin.Context) {
 	userID := currentOperatorID(c)
 
 	svc := service.NewPerformanceService(database.DB)
+	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
+	if err != nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
+		return
+	}
+	if !verifyManagerOfParticipant(c, participant) {
+		return
+	}
 	if err := svc.SetBonusPenaltyScore(uint(participantID), req.BonusScore, req.PenaltyScore, userID); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return

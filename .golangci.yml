@@ -1,0 +1,13 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  exclusions:
+    paths:
+      - frontend/node_modules
+      - frontend/dist
+
+issues:
+  new: true
