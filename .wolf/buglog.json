@@ -2256,6 +2256,975 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-05-26T11:32:45.044Z"
+    },
+    {
+      "id": "bug-142",
+      "timestamp": "2026-06-05T07:44:04.244Z",
+      "error_message": "Wrong reference: sql should be stdsql",
+      "file": "internal/service/performance_indicator_service_test.go",
+      "root_cause": "Used \"sql\" instead of \"stdsql\"",
+      "fix": "Changed sql → stdsql",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T07:44:04.244Z"
+    },
+    {
+      "id": "bug-143",
+      "timestamp": "2026-06-05T07:53:21.169Z",
+      "error_message": "Type error",
+      "file": "frontend/src/utils/performanceHelpers.test.ts",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T07:53:21.169Z"
+    },
+    {
+      "id": "bug-144",
+      "timestamp": "2026-06-05T08:21:10.783Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/performance_repository_test.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 19→30 lines (2 removed) | Also: // GORM Migrator queries - Information_schema quer; return strings.Contains(strings.ToLower(query), \"i",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-05T08:22:17.617Z"
+    },
+    {
+      "id": "bug-145",
+      "timestamp": "2026-06-05T08:57:25.317Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/performance_service_extended_test.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 16→26 lines (2 removed) | Also: svc := newStubPerformanceService(t, stubQueryRespo; columns: []string{\"id\", \"name\", \"status\"}, | Also: columns: []string{\"id\", \"name\", \"status\"},; }) | Also: svc := newStubPerformanceService(t, stubQueryRespo; })",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 7,
+      "last_seen": "2026-06-05T09:00:32.789Z"
+    },
+    {
+      "id": "bug-146",
+      "timestamp": "2026-06-05T08:59:38.270Z",
+      "error_message": "Wrong operator: || should be &&",
+      "file": "internal/service/performance_service_extended_test.go",
+      "root_cause": "Used \"||\" instead of \"&&\"",
+      "fix": "Changed operator || → &&",
+      "tags": [
+        "auto-detected",
+        "operator-fix",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T08:59:38.270Z"
+    },
+    {
+      "id": "bug-147",
+      "timestamp": "2026-06-05T09:06:02.702Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/performance_service_extended_test.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 23→28 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T09:06:02.702Z"
+    },
+    {
+      "id": "bug-148",
+      "timestamp": "2026-06-05T10:44:36.868Z",
+      "error_message": "Type error",
+      "file": "frontend/src/pages/PerformanceOverview.interaction.test.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T10:44:36.868Z"
+    },
+    {
+      "id": "bug-149",
+      "timestamp": "2026-06-05T10:45:26.111Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/PerformanceOverview.interaction.test.tsx",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 4→4 lines (3 removed) | Also: it('选择状态筛选下拉后表格应过滤', async () => {; const user = userEvent.setup()",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-05T10:48:05.853Z"
+    },
+    {
+      "id": "bug-150",
+      "timestamp": "2026-06-05T10:47:21.190Z",
+      "error_message": "CSS fix: data",
+      "file": "frontend/src/pages/PerformanceOverview.interaction.test.tsx",
+      "root_cause": "data: { items: MOCK_ACTIVITIES, total: 3 → { items: MOCK_ACTIVITIES, total: 4",
+      "fix": "Changed data: { items: MOCK_ACTIVITIES, total: 3 → { items: MOCK_ACTIVITIES, total: 4",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T10:47:21.190Z"
+    },
+    {
+      "id": "bug-151",
+      "timestamp": "2026-06-05T11:08:08.352Z",
+      "error_message": "Type error",
+      "file": "frontend/src/App.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:08:08.352Z"
+    },
+    {
+      "id": "bug-152",
+      "timestamp": "2026-06-05T11:08:44.892Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/App.tsx",
+      "root_cause": "25 lines replaced/restructured",
+      "fix": "Rewrote 25→7 lines (25 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:08:44.892Z"
+    },
+    {
+      "id": "bug-153",
+      "timestamp": "2026-06-05T11:10:18.014Z",
+      "error_message": "Wrong reference: destroyOnClose should be destroyOnHidden",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "Used \"destroyOnClose\" instead of \"destroyOnHidden\"",
+      "fix": "Changed destroyOnClose → destroyOnHidden",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:10:18.014Z"
+    },
+    {
+      "id": "bug-154",
+      "timestamp": "2026-06-05T11:15:05.858Z",
+      "error_message": "Wrong reference: null should be Form",
+      "file": "frontend/src/components/PerformanceActivityEditor.tsx",
+      "root_cause": "Used \"null\" instead of \"Form\"",
+      "fix": "Changed null → Form",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:15:05.858Z"
+    },
+    {
+      "id": "bug-155",
+      "timestamp": "2026-06-05T11:15:42.172Z",
+      "error_message": "Wrong reference: destroyOnHidden should be forceRender",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "Used \"destroyOnHidden\" instead of \"forceRender\"",
+      "fix": "Changed destroyOnHidden → forceRender",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:15:42.172Z"
+    },
+    {
+      "id": "bug-156",
+      "timestamp": "2026-06-05T11:16:02.708Z",
+      "error_message": "Type error",
+      "file": "frontend/src/pages/PerformanceGoalSetting.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:16:02.708Z"
+    },
+    {
+      "id": "bug-157",
+      "timestamp": "2026-06-05T11:17:02.196Z",
+      "error_message": "Null/undefined access in ",
+      "file": "frontend/src/pages/PerformanceGoalSetting.tsx",
+      "root_cause": "Property access on potentially null/undefined value",
+      "fix": "Added null safety (optional chaining or null check) | Also: rowKey={record => record.id ?? record.draft_key}",
+      "tags": [
+        "auto-detected",
+        "null-safety",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-05T11:17:18.674Z"
+    },
+    {
+      "id": "bug-158",
+      "timestamp": "2026-06-05T11:19:04.399Z",
+      "error_message": "Type error",
+      "file": "frontend/src/main.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:19:04.399Z"
+    },
+    {
+      "id": "bug-159",
+      "timestamp": "2026-06-05T11:22:27.462Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "27 lines replaced/restructured",
+      "fix": "Rewrote 32→6 lines (27 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:22:27.462Z"
+    },
+    {
+      "id": "bug-160",
+      "timestamp": "2026-06-05T11:22:55.345Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:22:55.345Z"
+    },
+    {
+      "id": "bug-161",
+      "timestamp": "2026-06-05T11:25:08.498Z",
+      "error_message": "Wrong return value",
+      "file": "frontend/src/pages/PerformanceSelfEval.tsx",
+      "root_cause": "Was returning: <div style={{ textAlign: 'center', padding: 100 }}",
+      "fix": "Now returns: (",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:25:08.498Z"
+    },
+    {
+      "id": "bug-162",
+      "timestamp": "2026-06-05T11:25:18.403Z",
+      "error_message": "Wrong return value",
+      "file": "frontend/src/pages/PerformanceManagerEval.tsx",
+      "root_cause": "Was returning: <div style={{ textAlign: 'center', padding: 100 }}",
+      "fix": "Now returns: (",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:25:18.403Z"
+    },
+    {
+      "id": "bug-163",
+      "timestamp": "2026-06-05T11:25:33.400Z",
+      "error_message": "Wrong return value",
+      "file": "frontend/src/pages/PerformanceResultView.tsx",
+      "root_cause": "Was returning: <div style={{ textAlign: 'center', padding: 100 }}",
+      "fix": "Now returns: (",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:25:33.400Z"
+    },
+    {
+      "id": "bug-164",
+      "timestamp": "2026-06-05T11:35:12.000Z",
+      "error_message": "Missing guard clause",
+      "file": "frontend/src/components/PerformanceActivityEditor.tsx",
+      "root_cause": "No early return/throw for edge case: !visible",
+      "fix": "Added guard clause: if (!visible)",
+      "tags": [
+        "auto-detected",
+        "guard-clause",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-05T11:36:59.063Z"
+    },
+    {
+      "id": "bug-165",
+      "timestamp": "2026-06-05T11:36:11.221Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/components/PerformanceActivityEditor.tsx",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 15→16 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:36:11.221Z"
+    },
+    {
+      "id": "bug-166",
+      "timestamp": "2026-06-05T11:45:49.114Z",
+      "error_message": "Wrong return value",
+      "file": "frontend/src/components/PerformanceActivityEditor.tsx",
+      "root_cause": "Was returning: <Form form={form} component={false} />",
+      "fix": "Now returns: <Form form={form} style={{ display: 'none' }} />",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:45:49.114Z"
+    },
+    {
+      "id": "bug-167",
+      "timestamp": "2026-06-05T11:47:27.447Z",
+      "error_message": "Type error",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:47:27.447Z"
+    },
+    {
+      "id": "bug-168",
+      "timestamp": "2026-06-05T11:54:05.191Z",
+      "error_message": "Wrong reference: forceRender should be okText",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "Used \"forceRender\" instead of \"okText\"",
+      "fix": "Changed forceRender → okText",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T11:54:05.191Z"
+    },
+    {
+      "id": "bug-169",
+      "timestamp": "2026-06-05T12:19:20.811Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 10→5 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T12:19:20.811Z"
+    },
+    {
+      "id": "bug-170",
+      "timestamp": "2026-06-05T12:21:33.511Z",
+      "error_message": "Wrong return value",
+      "file": "frontend/src/components/PerformanceActivityEditor.tsx",
+      "root_cause": "Was returning: <Form form={form} style={{ display: 'none' }} />",
+      "fix": "Now returns: null",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-05T12:26:01.988Z"
+    },
+    {
+      "id": "bug-171",
+      "timestamp": "2026-06-05T12:26:10.285Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 11→9 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T12:26:10.285Z"
+    },
+    {
+      "id": "bug-172",
+      "timestamp": "2026-06-05T12:41:51.973Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 11→5 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-05T12:41:51.973Z"
+    },
+    {
+      "id": "bug-173",
+      "timestamp": "2026-06-06T01:11:47.496Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/performance_repository_test.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 19→30 lines (2 removed) | Also: // HasColumn check; return strings.Contains(strings.ToLower(query), \"i",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-06T01:12:15.247Z"
+    },
+    {
+      "id": "bug-174",
+      "timestamp": "2026-06-06T01:12:42.330Z",
+      "error_message": "Wrong operator: != should be ==",
+      "file": "internal/repository/performance_repository_test.go",
+      "root_cause": "Used \"!=\" instead of \"==\"",
+      "fix": "Changed operator != → ==",
+      "tags": [
+        "auto-detected",
+        "operator-fix",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-06T01:12:42.330Z"
+    },
+    {
+      "id": "bug-175",
+      "timestamp": "2026-06-06T02:39:56.504Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/playwright.config.ts",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 18→25 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-06T02:39:56.504Z"
+    },
+    {
+      "id": "bug-176",
+      "timestamp": "2026-06-06T02:57:46.458Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/components/PerformanceActivityEditor.interaction.test.tsx",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 7→8 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-06T02:57:46.458Z"
+    },
+    {
+      "id": "bug-177",
+      "timestamp": "2026-06-06T02:58:02.942Z",
+      "error_message": "CSS fix: name",
+      "file": "frontend/src/components/PerformanceActivityEditor.interaction.test.tsx",
+      "root_cause": "name: '取消' → /取消/",
+      "fix": "Changed name: '取消' → /取消/",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-06T02:58:14.225Z"
+    },
+    {
+      "id": "bug-178",
+      "timestamp": "2026-06-06T10:08:07.438Z",
+      "error_message": "Missing await",
+      "file": "frontend/tests/e2e/performance.spec.ts",
+      "root_cause": "Async call without await — returned Promise instead of value",
+      "fix": "Added await to async call | Also: await seedAuth(page, options.permissions)",
+      "tags": [
+        "auto-detected",
+        "async-fix",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-06T10:08:14.431Z"
+    },
+    {
+      "id": "bug-179",
+      "timestamp": "2026-06-06T10:09:37.656Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/tests/e2e/performance.spec.ts",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 8→39 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-06T10:09:37.656Z"
+    },
+    {
+      "id": "bug-180",
+      "timestamp": "2026-06-06T10:09:47.180Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "frontend/tests/e2e/performance.spec.ts",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-06T10:09:47.180Z"
+    },
+    {
+      "id": "bug-181",
+      "timestamp": "2026-06-06T10:09:57.152Z",
+      "error_message": "Wrong return value",
+      "file": "frontend/tests/e2e/performance.spec.ts",
+      "root_cause": "Was returning: json(route, { rules: (await route.request().postDa",
+      "fix": "Now returns: json(route, { rules: payload.rules || [] })",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-06T10:09:57.152Z"
+    },
+    {
+      "id": "bug-182",
+      "timestamp": "2026-06-06T10:11:29.980Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/tests/e2e/performance.spec.ts",
+      "root_cause": "Had 'renders overview, validates activity form, import",
+      "fix": "Changed to 'renders overview, validates activity form, import",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-06T10:11:29.980Z"
+    },
+    {
+      "id": "bug-183",
+      "timestamp": "2026-06-06T10:11:49.299Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/tests/e2e/README.md",
+      "root_cause": "Had `reuseExistingServer: true`",
+      "fix": "Changed to `npm run test:e2e`",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-06T10:11:49.299Z"
+    },
+    {
+      "id": "bug-184",
+      "timestamp": "2026-06-06T10:15:02.706Z",
+      "error_message": "Significant refactor of ",
+      "file": ".ai/COMMANDS.md",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 8→8 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-06T10:15:02.706Z"
+    },
+    {
+      "id": "bug-185",
+      "timestamp": "2026-06-06T10:16:30.000Z",
+      "error_message": "Playwright E2E could discover tests without proving a cold-started Vite run",
+      "file": "frontend/playwright.config.ts; frontend/tests/e2e/performance.spec.ts",
+      "root_cause": "Local Playwright config could reuse an existing server, and the performance E2E auth init script was not awaited while mock endpoints did not cover refresh/stage-transition paths.",
+      "fix": "Disabled default server reuse, excluded the warning probe from the default suite, awaited seedAuth, expanded mock API coverage, and verified npm run test:e2e passed 15 tests across chromium/firefox/webkit with Vite on 5273.",
+      "tags": [
+        "playwright",
+        "e2e",
+        "vite",
+        "performance",
+        "mock-api"
+      ],
+      "related_bugs": [
+        "bug-175",
+        "bug-178"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-06-06T10:16:30.000Z"
+    },
+    {
+      "id": "bug-186",
+      "timestamp": "2026-06-08T01:13:44.979Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/performance_handlers_coverage_test.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 15→19 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T01:13:44.979Z"
+    },
+    {
+      "id": "bug-187",
+      "timestamp": "2026-06-08T01:21:30.071Z",
+      "error_message": "Wrong reference: interface should be any",
+      "file": "internal/service/performance_service_coverage_test.go",
+      "root_cause": "Used \"interface\" instead of \"any\"",
+      "fix": "Changed interface → any",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T01:21:30.071Z"
+    },
+    {
+      "id": "bug-188",
+      "timestamp": "2026-06-08T01:18:33.000Z",
+      "error_message": "Targeted performance API handler coverage tests initially failed 403 expectations",
+      "file": "internal/api/performance_handlers_coverage_test.go",
+      "root_cause": "Non-manager branch tests used performanceHandlerTestDBWith, whose broad users stub let currentOperatorID resolve the test user as admin and bypass verifyManagerOfParticipant/participant access checks.",
+      "fix": "Changed the non-manager/forbidden branch tests to use performanceCoverageDBWith without the broad base users response, so currentOperatorID falls back to the context user and the handlers return 403 as intended.",
+      "tags": [
+        "go",
+        "test",
+        "coverage",
+        "performance-api"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T01:18:33.000Z"
+    },
+    {
+      "id": "bug-189",
+      "timestamp": "2026-06-08T09:50:00.000Z",
+      "error_message": "golangci-lint reported unused repository test helpers while adding performance repository coverage tests",
+      "file": "internal/repository/performance_repository_coverage_test.go; internal/repository/performance_goal_record_repository_test.go; internal/repository/performance_repository_test.go",
+      "root_cause": "New coverage tests initially did not reuse existing helper functions goalRecordMatcher and stubPerformanceRowsAffected, so package-level lint still flagged those helpers as unused.",
+      "fix": "Reused goalRecordMatcher for goal-record query matching and stubPerformanceRowsAffected for a participant update exec response in the new coverage test file; golangci-lint run ./internal/repository then passed with 0 issues.",
+      "tags": [
+        "go",
+        "lint",
+        "test",
+        "coverage",
+        "performance-repository"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T09:50:00.000Z"
+    },
+    {
+      "id": "bug-190",
+      "timestamp": "2026-06-08T02:00:00.000Z",
+      "error_message": "Performance service notification tests could trigger real DingTalk network calls",
+      "file": "internal/service/performance_service_coverage_test.go",
+      "root_cause": "Coverage tests used ordinary user and manager IDs in SendSelfEvalReminders/SendManagerEvalReminders paths, so dingtalk.IsNotifiableUserID could allow SendCorpMessageToUser/SendCorpActionCardToUser to request real DingTalk tokens or messages; the tests also had weak assertions that ignored send failures.",
+      "fix": "Replaced those notification test inputs with admin/system non-notifiable recipients and asserted nil errors on the skip paths, preserving branch coverage without external network dependency.",
+      "tags": [
+        "go",
+        "test",
+        "coverage",
+        "dingtalk",
+        "network-avoidance",
+        "performance-service"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T02:00:00.000Z"
+    },
+    {
+      "id": "bug-191",
+      "timestamp": "2026-06-08T02:04:16.839Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/performance_repository_coverage_test.go",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 29→49 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T02:04:16.839Z"
+    },
+    {
+      "id": "bug-192",
+      "timestamp": "2026-06-08T02:04:47.509Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/performance_repository_test.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 5→5 lines (2 removed) | Also: func TestActivityRepo_FindAllByUserID_EmptyUserIDs; db := newPerformanceTestDB(t,",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-08T02:06:23.047Z"
+    },
+    {
+      "id": "bug-193",
+      "timestamp": "2026-06-08T10:10:00.000Z",
+      "error_message": "Existing performance repository tests could pass without proving repository query/update behavior",
+      "file": "internal/repository/performance_repository_test.go",
+      "root_cause": "Some legacy tests used broad stubPerformanceTableMatcher responses or hard-coded stub rows, so they did not prove empty userIDs skipped participant filtering, batch lookups constrained participant/activity IDs, or weighted goal records were actually updated with computed scores.",
+      "fix": "Renamed and strengthened the empty userIDs test to assert SQL omits participant filtering, made batch participant stubs argument-aware, and asserted goal-record update calls include expected weighted scores 54/36 and record IDs 1/2.",
+      "tags": [
+        "go",
+        "test",
+        "coverage",
+        "performance-repository",
+        "stub-assertion"
+      ],
+      "related_bugs": [
+        "bug-192"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T10:10:00.000Z"
+    },
+    {
+      "id": "bug-194",
+      "timestamp": "2026-06-08T09:05:53.040Z",
+      "error_message": "Significant refactor of ",
+      "file": ".github/workflows/ci.yml",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 7→4 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T09:05:53.040Z"
+    },
+    {
+      "id": "bug-195",
+      "timestamp": "2026-06-08T09:13:00.141Z",
+      "error_message": "Wrong reference: require should be PerformanceGoalSetting",
+      "file": "frontend/src/pages/PerformanceGoalSetting.interaction.test.tsx",
+      "root_cause": "Used \"require\" instead of \"PerformanceGoalSetting\"",
+      "fix": "Changed require → PerformanceGoalSetting",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T09:13:00.141Z"
+    },
+    {
+      "id": "bug-196",
+      "timestamp": "2026-06-08T09:13:01.513Z",
+      "error_message": "Wrong reference: require should be PerformanceManagerEval",
+      "file": "frontend/src/pages/PerformanceManagerEval.interaction.test.tsx",
+      "root_cause": "Used \"require\" instead of \"PerformanceManagerEval\"",
+      "fix": "Changed require → PerformanceManagerEval",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T09:13:01.513Z"
+    },
+    {
+      "id": "bug-197",
+      "timestamp": "2026-06-08T09:13:03.141Z",
+      "error_message": "Wrong reference: require should be PerformanceSelfEval",
+      "file": "frontend/src/pages/PerformanceSelfEval.interaction.test.tsx",
+      "root_cause": "Used \"require\" instead of \"PerformanceSelfEval\"",
+      "fix": "Changed require → PerformanceSelfEval",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T09:13:03.141Z"
+    },
+    {
+      "id": "bug-198",
+      "timestamp": "2026-06-08T09:13:04.039Z",
+      "error_message": "Wrong reference: require should be PerformanceResultView",
+      "file": "frontend/src/pages/PerformanceResultView.interaction.test.tsx",
+      "root_cause": "Used \"require\" instead of \"PerformanceResultView\"",
+      "fix": "Changed require → PerformanceResultView",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T09:13:04.039Z"
+    },
+    {
+      "id": "bug-199",
+      "timestamp": "2026-06-08T09:28:15.651Z",
+      "error_message": "Missing await",
+      "file": "frontend/src/pages/PerformanceGoalSetting.interaction.test.tsx",
+      "root_cause": "Async call without await — returned Promise instead of value",
+      "fix": "Added await to async call | Also: await waitFor(() => {; expect(screen.getAllByTestId(/performance-goal-action-name-/",
+      "tags": [
+        "auto-detected",
+        "async-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-08T09:28:17.363Z"
+    },
+    {
+      "id": "bug-200",
+      "timestamp": "2026-06-08T09:35:00.000Z",
+      "error_message": "Vitest failed with Cannot find module './Performance*' and stale interaction assertions",
+      "file": "frontend/src/pages/PerformanceGoalSetting.interaction.test.tsx; frontend/src/pages/PerformanceManagerEval.interaction.test.tsx; frontend/src/pages/PerformanceSelfEval.interaction.test.tsx; frontend/src/pages/PerformanceResultView.interaction.test.tsx; frontend/src/test/setup.ts; .github/workflows/ci.yml",
+      "root_cause": "Four interaction tests used CommonJS require('./Performance*').default in a Vite/Vitest ESM test environment, so TSX modules were not resolved. After switching to static imports, additional stale assertions assumed unique page titles, text nodes for editable AutoComplete values, clickable readonly buttons, and single Antd message/modal nodes, which no longer matched current UI behavior.",
+      "fix": "Replaced require calls with static component imports, updated assertions to use getAllByText/getByDisplayValue/testid-based row counts, filled required self-eval form fields before testing API failure, cleaned Antd message/modal overlays in test setup, and restored npm run test to the CI workflow after verifying all 352 frontend tests passed.",
+      "tags": [
+        "frontend",
+        "vitest",
+        "test",
+        "esm",
+        "antd",
+        "ci",
+        "performance"
+      ],
+      "related_bugs": [
+        "bug-195",
+        "bug-196",
+        "bug-197",
+        "bug-198",
+        "bug-199"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-06-08T09:35:00.000Z"
     }
   ]
 }
