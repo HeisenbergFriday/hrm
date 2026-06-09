@@ -31,6 +31,8 @@ const targetReadonlyParticipantStatuses = new Set([
 const PerformanceGoalSetting: React.FC = () => {
   const { activityId, participantId } = useParams<{ activityId: string; participantId: string }>()
   const navigate = useNavigate()
+  const draftKeyRef = useRef(0)
+  const nextDraftKey = (prefix: string) => `${prefix}-${draftKeyRef.current++}`
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -102,6 +104,7 @@ const PerformanceGoalSetting: React.FC = () => {
 
   function newQuantItem() {
     return {
+      draft_key: nextDraftKey('quant'),
       id: undefined,
       item_name: '',
       item_definition: '',
@@ -119,6 +122,7 @@ const PerformanceGoalSetting: React.FC = () => {
 
   function newActionItem() {
     return {
+      draft_key: nextDraftKey('action'),
       id: undefined,
       item_name: '',
       item_definition: '',
@@ -432,6 +436,7 @@ const PerformanceGoalSetting: React.FC = () => {
       width: '40%',
       render: (_: any, __: any, idx: number) => (
         <AutoComplete
+          data-testid={`performance-goal-quant-name-${idx}`}
           value={quantItems[idx]?.item_name}
           options={getSearchOptions(quantSearchResults[idx] || [])}
           onSearch={(val) => searchIndicators(val, setQuantSearchResults, idx, 'quantitative')}
@@ -448,15 +453,18 @@ const PerformanceGoalSetting: React.FC = () => {
       key: 'weight',
       width: 140,
       render: (_: any, __: any, idx: number) => (
-        <InputNumber
-          min={0}
-          max={100}
-          value={quantItems[idx]?.weight ? quantItems[idx].weight * 100 : 0}
-          onChange={val => handleQuantItemChange(idx, 'weight', (val || 0) / 100)}
-          style={{ width: '100%' }}
-          addonAfter="%"
-          disabled={targetSettingReadonly}
-        />
+        <Space.Compact style={{ width: '100%' }}>
+          <InputNumber
+            data-testid={`performance-goal-quant-weight-${idx}`}
+            min={0}
+            max={100}
+            value={quantItems[idx]?.weight ? quantItems[idx].weight * 100 : 0}
+            onChange={val => handleQuantItemChange(idx, 'weight', (val || 0) / 100)}
+            style={{ width: '100%' }}
+            disabled={targetSettingReadonly}
+          />
+          <Button disabled>%</Button>
+        </Space.Compact>
       )
     },
     {
@@ -466,6 +474,7 @@ const PerformanceGoalSetting: React.FC = () => {
       width: '35%',
       render: (_: any, __: any, idx: number) => (
         <Input
+          data-testid={`performance-goal-quant-target-${idx}`}
           value={quantItems[idx]?.target_value}
           onChange={e => handleQuantItemChange(idx, 'target_value', e.target.value)}
           placeholder="标准"
@@ -495,6 +504,7 @@ const PerformanceGoalSetting: React.FC = () => {
         <div>
           <Text style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', fontWeight: 'var(--font-weight-medium)', marginBottom: 6, display: 'block' }}>指标定义</Text>
           <TextArea
+            data-testid={`performance-goal-quant-definition-${idx}`}
             value={quantItems[idx]?.item_definition}
             onChange={e => handleQuantItemChange(idx, 'item_definition', e.target.value)}
             rows={2}
@@ -505,6 +515,7 @@ const PerformanceGoalSetting: React.FC = () => {
         <div>
           <Text style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', fontWeight: 'var(--font-weight-medium)', marginBottom: 6, display: 'block' }}>红线值</Text>
           <Input
+            data-testid={`performance-goal-quant-red-line-${idx}`}
             value={quantItems[idx]?.red_line_value}
             onChange={e => handleQuantItemChange(idx, 'red_line_value', e.target.value)}
             placeholder="最低"
@@ -514,6 +525,7 @@ const PerformanceGoalSetting: React.FC = () => {
         <div>
           <Text style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', fontWeight: 'var(--font-weight-medium)', marginBottom: 6, display: 'block' }}>挑战值</Text>
           <Input
+            data-testid={`performance-goal-quant-challenge-${idx}`}
             value={quantItems[idx]?.challenge_value}
             onChange={e => handleQuantItemChange(idx, 'challenge_value', e.target.value)}
             placeholder="挑战"
@@ -523,6 +535,7 @@ const PerformanceGoalSetting: React.FC = () => {
         <div>
           <Text style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', fontWeight: 'var(--font-weight-medium)', marginBottom: 6, display: 'block' }}>考核标准</Text>
           <TextArea
+            data-testid={`performance-goal-quant-scoring-rule-${idx}`}
             value={quantItems[idx]?.scoring_rule}
             onChange={e => handleQuantItemChange(idx, 'scoring_rule', e.target.value)}
             rows={2}
@@ -553,6 +566,7 @@ const PerformanceGoalSetting: React.FC = () => {
       width: 180,
       render: (_: any, __: any, idx: number) => (
         <AutoComplete
+          data-testid={`performance-goal-action-name-${idx}`}
           value={actionItems[idx]?.item_name}
           options={getSearchOptions(actionSearchResults[idx] || [])}
           onSearch={(val) => searchIndicators(val, setActionSearchResults, idx, 'key_action')}
@@ -571,6 +585,7 @@ const PerformanceGoalSetting: React.FC = () => {
       width: '30%',
       render: (_: any, __: any, idx: number) => (
         <TextArea
+          data-testid={`performance-goal-action-definition-${idx}`}
           value={actionItems[idx]?.item_definition}
           onChange={e => handleActionItemChange(idx, 'item_definition', e.target.value)}
           rows={2}
@@ -584,15 +599,18 @@ const PerformanceGoalSetting: React.FC = () => {
       key: 'weight',
       width: 120,
       render: (_: any, __: any, idx: number) => (
-        <InputNumber
-          min={0}
-          max={100}
-          value={actionItems[idx]?.weight ? actionItems[idx].weight * 100 : 0}
-          onChange={val => handleActionItemChange(idx, 'weight', (val || 0) / 100)}
-          style={{ width: '100%' }}
-          addonAfter="%"
-          disabled={targetSettingReadonly}
-        />
+        <Space.Compact style={{ width: '100%' }}>
+          <InputNumber
+            data-testid={`performance-goal-action-weight-${idx}`}
+            min={0}
+            max={100}
+            value={actionItems[idx]?.weight ? actionItems[idx].weight * 100 : 0}
+            onChange={val => handleActionItemChange(idx, 'weight', (val || 0) / 100)}
+            style={{ width: '100%' }}
+            disabled={targetSettingReadonly}
+          />
+          <Button disabled>%</Button>
+        </Space.Compact>
       )
     },
     {
@@ -602,6 +620,7 @@ const PerformanceGoalSetting: React.FC = () => {
       width: '30%',
       render: (_: any, __: any, idx: number) => (
         <TextArea
+          data-testid={`performance-goal-action-target-${idx}`}
           value={actionItems[idx]?.target_value}
           onChange={e => handleActionItemChange(idx, 'target_value', e.target.value)}
           rows={3}
@@ -642,7 +661,7 @@ const PerformanceGoalSetting: React.FC = () => {
   if (loading) return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
 
   return (
-    <PageContainer noPadding title="目标设定" subtitle={participant ? (participant.employee_name || participant.employee_id) : undefined}>
+    <PageContainer data-testid="performance-goal-setting-page" noPadding title="目标设定" subtitle={participant ? (participant.employee_name || participant.employee_id) : undefined}>
       <div style={{
         position: 'sticky', top: 0, zIndex: 10,
         background: 'var(--color-bg-card)', borderBottom: '1px solid var(--color-border-light)',
@@ -675,6 +694,7 @@ const PerformanceGoalSetting: React.FC = () => {
           </Text>
           <Space>
             <Button
+              data-testid="performance-goal-save-draft"
               icon={<SaveOutlined />}
               loading={saving}
               onClick={handleSaveDraft}
@@ -683,6 +703,7 @@ const PerformanceGoalSetting: React.FC = () => {
               保存草稿
             </Button>
             <Button
+              data-testid="performance-goal-submit"
               type="primary"
               icon={<CheckCircleOutlined />}
               loading={submitting}
@@ -699,7 +720,7 @@ const PerformanceGoalSetting: React.FC = () => {
         <Table
           dataSource={quantItems}
           columns={quantColumns}
-          rowKey={(_, idx) => String(idx)}
+          rowKey={record => record.id ?? record.draft_key}
           pagination={false}
           size="small"
           bordered
@@ -710,6 +731,7 @@ const PerformanceGoalSetting: React.FC = () => {
           }}
         />
         <Button
+          data-testid="performance-goal-add-quant"
           type="dashed"
           icon={<PlusOutlined />}
           onClick={handleAddQuantItem}
@@ -727,12 +749,13 @@ const PerformanceGoalSetting: React.FC = () => {
         <Table
           dataSource={actionItems}
           columns={actionColumns}
-          rowKey={(_, idx) => String(idx)}
+          rowKey={record => record.id ?? record.draft_key}
           pagination={false}
           size="small"
           bordered
         />
         <Button
+          data-testid="performance-goal-add-action"
           type="dashed"
           icon={<PlusOutlined />}
           onClick={handleAddActionItem}
@@ -749,7 +772,7 @@ const PerformanceGoalSetting: React.FC = () => {
           <span>指标库建议</span>
         </Space>
       } style={{ marginTop: 24 }}>
-        <Button type="primary" icon={<BulbOutlined />} onClick={loadSuggestions} disabled={targetSettingReadonly} style={{ marginBottom: showSuggestions ? 12 : 0 }}>
+        <Button data-testid="performance-goal-load-suggestions" type="primary" icon={<BulbOutlined />} onClick={loadSuggestions} disabled={targetSettingReadonly} style={{ marginBottom: showSuggestions ? 12 : 0 }}>
           从指标库获取建议
         </Button>
         {showSuggestions && suggestions.length > 0 && (

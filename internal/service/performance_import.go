@@ -310,7 +310,7 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 			continue
 		}
 
-		managerUserID, managerEmployeeID, managerName, managerSource, managerReason, err := s.resolveImportedAssessmentManager(row, profileUserByEmployeeID, profileByUserID, userByID)
+		managerUserID, managerEmployeeID, managerName, managerSource, managerReason, err := s.resolveImportedAssessmentManager(row, userID, profileUserByEmployeeID, profileByUserID, userByID)
 		if err != nil {
 			result.ManagerAssignmentSkippedRows = append(result.ManagerAssignmentSkippedRows, PerformanceParticipantImportSkippedRow{
 				Row:    row.Row,
@@ -375,6 +375,7 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 
 func (s *PerformanceService) resolveImportedAssessmentManager(
 	row performanceParticipantImportRawRow,
+	employeeUserID string,
 	profileUserByEmployeeID map[string]string,
 	profileByUserID map[string]database.EmployeeProfile,
 	userByID map[string]database.User,
@@ -430,6 +431,9 @@ func (s *PerformanceService) resolveImportedAssessmentManager(
 
 	if strings.TrimSpace(manager.Status) != "active" {
 		return "", "", "", "", reason, fmt.Errorf("考核上级不是在职状态: %s", managerIDInput)
+	}
+	if strings.TrimSpace(manager.UserID) == strings.TrimSpace(employeeUserID) {
+		return "", "", "", "", reason, errors.New("考核上级不能设置为员工本人")
 	}
 	managerEmployeeID := strings.TrimSpace(profileByUserID[manager.UserID].EmployeeID)
 	if managerEmployeeID == "" && managerIDInput != manager.UserID {

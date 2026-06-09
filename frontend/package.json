@@ -8,6 +8,13 @@
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
+    "test": "vitest run --config vite.config.test.ts",
+    "test:watch": "vitest --config vite.config.test.ts",
+    "test:coverage": "vitest run --config vite.config.test.ts --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:chromium": "playwright test --project=chromium",
+    "test:e2e:install": "playwright install --with-deps",
+    "test:e2e:report": "playwright show-report tests/reports/html",
     "generate-report": "node scripts/generate-report.js"
   },
   "dependencies": {
@@ -22,6 +29,11 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/jsdom": "^28.0.3",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@typescript-eslint/eslint-plugin": "^8.60.0",
@@ -30,8 +42,10 @@
     "eslint": "^8.57.1",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
+    "jsdom": "^29.1.1",
     "rollup-plugin-visualizer": "^7.0.1",
     "typescript": "^5.2.2",
-    "vite": "^8.0.14"
+    "vite": "^8.0.14",
+    "vitest": "^4.1.8"
   }
 }

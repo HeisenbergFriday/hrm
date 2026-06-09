@@ -711,7 +711,14 @@ const PerformanceResultView: React.FC = () => {
     }
   ]
 
-  if (loading) return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
+  if (loading) {
+    return (
+      <>
+        <Form form={bonusPenaltyForm} component={false} />
+        <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
+      </>
+    )
+  }
 
   const isLocked = participant?.is_locked
   const status = participant?.status
@@ -726,7 +733,7 @@ const PerformanceResultView: React.FC = () => {
   }
 
   return (
-    <PageContainer title="绩效结果" style={{ padding: '24px 32px' }}>
+    <PageContainer data-testid="performance-result-page" title="绩效结果" style={{ padding: '24px 32px' }}>
       <style>{archiveStyles}</style>
       <div style={{ marginBottom: 24 }}>
         <Space size={16} align="center">
@@ -875,6 +882,7 @@ const PerformanceResultView: React.FC = () => {
               </Descriptions>
               {!isLocked && (status === 'manager_submitted' || status === 'employee_confirmed') && activity?.enable_bonus_score && (
                 <Button
+                  data-testid="performance-result-set-bonus-penalty"
                   type="dashed"
                   icon={<EditOutlined />}
                   onClick={handleSetBonusPenalty}
@@ -918,6 +926,7 @@ const PerformanceResultView: React.FC = () => {
 
             {confirmAction && (
               <Button
+                data-testid={`performance-result-confirm-${confirmAction.type}`}
                 type="primary"
                 icon={<CheckCircleOutlined />}
                 loading={confirming && confirmType === confirmAction.type}
@@ -959,6 +968,7 @@ const PerformanceResultView: React.FC = () => {
       <Modal
         title="设置附加项分数"
         open={bonusPenaltyModalVisible}
+        forceRender
         onOk={handleSaveBonusPenalty}
         onCancel={() => setBonusPenaltyModalVisible(false)}
         confirmLoading={savingBonusPenalty}

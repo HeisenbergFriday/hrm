@@ -1,5 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from 'react'
 import { Layout, Menu, ConfigProvider, Spin, message, Button } from 'antd'
+import type { MenuProps } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import {
@@ -114,6 +115,43 @@ function selectedMenuKeyForPath(pathname: string) {
   return routeMenuKeys[pathname] || ''
 }
 
+function buildSiderMenuItems(
+  items: ReturnType<typeof filterMenuByKeys>,
+  onLogout: () => void,
+): MenuProps['items'] {
+  const visibleItems: NonNullable<MenuProps['items']> = items.map(item => {
+    if (item.children) {
+      return {
+        key: item.key,
+        icon: item.icon,
+        label: item.label,
+        children: item.children.map(child => ({
+          key: child.key,
+          icon: child.icon,
+          label: child.label,
+        })),
+      }
+    }
+
+    return {
+      key: item.key,
+      icon: item.icon,
+      label: item.label,
+    }
+  })
+
+  if (items.length > 0) {
+    visibleItems.push({
+      key: logoutMenuItem.key,
+      icon: logoutMenuItem.icon,
+      label: logoutMenuItem.label,
+      onClick: onLogout,
+    })
+  }
+
+  return visibleItems
+}
+
 function PageLoading() {
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 200 }}>
@@ -170,6 +208,8 @@ function App() {
       navigate('/login?mode=scan', { replace: true })
     }
   }
+  const filteredMenuItems = filterMenuByKeys(menuConfig, menuKeys)
+  const siderMenuItems = buildSiderMenuItems(filteredMenuItems, handleLogout)
 
   // 刷新菜单权限（启动时 + 页面获焦时）
   useEffect(() => {
@@ -298,31 +338,13 @@ function App() {
             人事管理系统
           </div>
           <div className="app-sider-menu-scroll">
-            <Menu theme="dark" mode="inline" selectedKeys={[selectedMenuKey]} defaultOpenKeys={location.pathname.startsWith('/performance') ? [menuPermissionKey('performance-group')] : [menuPermissionKey('organization-group')]}>
-              {filterMenuByKeys(menuConfig, menuKeys).map((item) => {
-                if (item.children) {
-                  return (
-                    <Menu.SubMenu key={item.key} icon={item.icon} title={item.label}>
-                      {item.children.map((child) => (
-                        <Menu.Item key={child.key} icon={child.icon}>
-                          {child.label}
-                        </Menu.Item>
-                      ))}
-                    </Menu.SubMenu>
-                  )
-                }
-                return (
-                  <Menu.Item key={item.key} icon={item.icon}>
-                    {item.label}
-                  </Menu.Item>
-                )
-              })}
-              {menuKeys.length > 0 && (
-                <Menu.Item key={logoutMenuItem.key} icon={logoutMenuItem.icon} onClick={handleLogout}>
-                  {logoutMenuItem.label}
-                </Menu.Item>
-              )}
-            </Menu>
+            <Menu
+              theme="dark"
+              mode="inline"
+              selectedKeys={[selectedMenuKey]}
+              defaultOpenKeys={location.pathname.startsWith('/performance') ? [menuPermissionKey('performance-group')] : [menuPermissionKey('organization-group')]}
+              items={siderMenuItems}
+            />
           </div>
           <div
             className="app-sider-trigger"
