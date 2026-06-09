@@ -3225,6 +3225,47 @@
       ],
       "occurrences": 1,
       "last_seen": "2026-06-08T09:35:00.000Z"
+    },
+    {
+      "id": "bug-201",
+      "timestamp": "2026-06-09T09:36:00.000Z",
+      "error_message": "GitHub Actions frontend build failed with TS2352 in src/test/setup.ts requestAnimationFrame polyfill",
+      "file": "frontend/src/test/setup.ts",
+      "root_cause": "The polyfill called unqualified setTimeout/clearTimeout in a Vitest/jsdom project with Node types present, so TypeScript inferred NodeJS.Timeout while DOM requestAnimationFrame must return a numeric handle.",
+      "fix": "Changed the polyfill to call window.setTimeout and window.clearTimeout, returning the DOM numeric timeout id and passing performance.now() to the callback; npm run build passed.",
+      "tags": [
+        "frontend",
+        "typescript",
+        "ci",
+        "vitest",
+        "jsdom",
+        "polyfill"
+      ],
+      "related_bugs": [
+        "bug-200"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-06-09T09:36:00.000Z"
+    },
+    {
+      "id": "bug-202",
+      "timestamp": "2026-06-09T09:36:00.000Z",
+      "error_message": "Vitest PerformanceSelfEval interaction test timed out in submit-failure case",
+      "file": "frontend/src/pages/PerformanceSelfEval.interaction.test.tsx",
+      "root_cause": "The test filled multiple Ant Design TextArea/InputNumber controls with userEvent.type/clear loops, making the case exceed Vitest's 5000ms timeout on the full frontend suite.",
+      "fix": "Replaced the slow typing loop with fireEvent.change for setup-only form field population while keeping userEvent.click for the actual submit interaction; npm run test passed 352/352.",
+      "tags": [
+        "frontend",
+        "vitest",
+        "test-timeout",
+        "antd",
+        "performance"
+      ],
+      "related_bugs": [
+        "bug-200"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-06-09T09:36:00.000Z"
     }
   ]
 }
