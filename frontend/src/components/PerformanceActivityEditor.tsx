@@ -114,8 +114,9 @@ const fieldHeaderStyle: React.CSSProperties = {
   marginBottom: 8,
 }
 
-const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
-  visible,
+type PerformanceActivityEditorContentProps = Omit<PerformanceActivityEditorProps, 'visible'>
+
+const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorContentProps> = ({
   editing,
   form,
   saving = false,
@@ -130,10 +131,11 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
   onCancel,
 }) => {
   const [, forceFormRerender] = React.useState(0)
+
   const values = form.getFieldsValue(true)
-  const cycleType = Form.useWatch('cycle_type', form) as string | undefined
-  const targetEmployeeIDs = normalizeEditorIDArray(Form.useWatch('target_employee_ids', form))
-  const selectedIndicatorLibraryId = Form.useWatch('indicator_library_id', form) as number | string | undefined
+  const cycleType = values.cycle_type as string | undefined
+  const targetEmployeeIDs = normalizeEditorIDArray(values.target_employee_ids)
+  const selectedIndicatorLibraryId = values.indicator_library_id as number | string | undefined
   const normalizedCycleType = normalizeCycleType(cycleType)
   const selectedIndicatorLibraryIdKey = selectedIndicatorLibraryId == null ? '' : String(selectedIndicatorLibraryId)
   const selectedIndicatorLibrary = React.useMemo(
@@ -176,14 +178,12 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
   const progress = Math.round((doneCount / requiredChecks.length) * 100)
   const getRequiredCheck = (sectionId: string) => requiredChecks.find(item => item.id === sectionId)
 
-  if (!visible) return null
-
   const saveActions = (
     <Space wrap>
       <Button icon={<CloseOutlined />} onClick={onCancel} disabled={saving}>
         取消
       </Button>
-      <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave} style={{ background: '#4338ca', borderColor: '#4338ca' }}>
+      <Button data-testid="performance-editor-save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave} style={{ background: '#4338ca', borderColor: '#4338ca' }}>
         {editing ? '保存修改' : '保存活动'}
       </Button>
     </Space>
@@ -192,6 +192,7 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
   return (
     <div
       id="performance-activity-editor"
+      data-testid="performance-activity-editor"
       style={{
         background: '#fff',
         height: '100%',
@@ -276,7 +277,7 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
               <Row gutter={[16, 12]}>
                 <Col xs={24} md={8}>
                   <Form.Item name="name" label="活动名称" rules={[{ required: true, message: '请输入活动名称' }]}>
-                    <Input placeholder="如：2026 Q2 绩效评估" />
+                    <Input data-testid="performance-editor-activity-name" placeholder="如：2026 Q2 绩效评估" />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={8}>
@@ -431,7 +432,7 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
                         return false
                       }}
                     >
-                      <Button size="small" type="text" icon={<UploadOutlined />} loading={importingParticipants}>
+                      <Button data-testid="performance-import-participants" size="small" type="text" icon={<UploadOutlined />} loading={importingParticipants}>
                         导入 Excel
                       </Button>
                     </Upload>
@@ -549,6 +550,14 @@ const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({
         </Text>
         {saveActions}
       </div>
+    </div>
+  )
+}
+
+const PerformanceActivityEditor: React.FC<PerformanceActivityEditorProps> = ({ visible, form, ...props }) => {
+  return (
+    <div style={{ display: visible ? 'block' : 'none' }}>
+      <PerformanceActivityEditorContent form={form} {...props} />
     </div>
   )
 }

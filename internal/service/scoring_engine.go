@@ -114,7 +114,7 @@ func parseNumber(s string) *float64 {
 	s = strings.TrimRight(s, "%")
 	s = strings.TrimSpace(s)
 	val, err := strconv.ParseFloat(s, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(val) || math.IsInf(val, 0) {
 		return nil
 	}
 	return &val

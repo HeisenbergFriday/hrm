@@ -380,16 +380,23 @@ const PerformanceManagerEval: React.FC = () => {
       render: (_: any, __: any, idx: number) => (
         <Form.Item name={['items', idx, 'manager_score']} style={{ margin: 0 }}
           rules={[{ required: true, message: '请评分' }]}>
-          <InputNumber min={0} max={120} style={{ width: '100%' }} />
+          <InputNumber data-testid={`performance-manager-score-${idx}`} min={0} max={120} style={{ width: '100%' }} />
         </Form.Item>
       )
     }
   ]
 
-  if (loading) return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
+  if (loading) {
+    return (
+      <>
+        <Form form={form} component={false} />
+        <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
+      </>
+    )
+  }
 
   return (
-    <PageContainer title="上级绩效评分">
+    <PageContainer data-testid="performance-manager-eval-page" title="上级绩效评分">
       <Row gutter={24}>
         <Col span={18}>
           <Space style={{ marginBottom: 16 }}>
@@ -401,6 +408,7 @@ const PerformanceManagerEval: React.FC = () => {
             <PageCard title="指标评分" extra={
               !['locked', 'hr_confirmed', 'manager_confirmed'].includes(participant?.status || '') ? (
                 <Button
+                  data-testid="performance-manager-auto-score"
                   type="primary"
                   icon={<ThunderboltOutlined />}
                   loading={autoScoring}
@@ -538,19 +546,19 @@ const PerformanceManagerEval: React.FC = () => {
               <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="evaluation_good" label="做得好的地方">
-                    <TextArea rows={4} placeholder="请描述员工做得好的地方" />
+                    <TextArea data-testid="performance-manager-good" rows={4} placeholder="请描述员工做得好的地方" />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
                   <Form.Item name="evaluation_improvement" label="需要改进的地方">
-                    <TextArea rows={4} placeholder="请描述需要改进的地方" />
+                    <TextArea data-testid="performance-manager-improvement" rows={4} placeholder="请描述需要改进的地方" />
                   </Form.Item>
                 </Col>
               </Row>
             </PageCard>
 
             <div style={{ textAlign: 'center', marginTop: 24 }}>
-              <Button type="primary" icon={<CheckCircleOutlined />} loading={saving} onClick={handleSubmit} size="large">
+              <Button data-testid="performance-manager-submit" type="primary" icon={<CheckCircleOutlined />} loading={saving} onClick={handleSubmit} size="large">
                 提交评分
               </Button>
             </div>

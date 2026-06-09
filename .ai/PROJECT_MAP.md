@@ -1,6 +1,6 @@
 ---
 purpose: 项目目录结构、模块职责、代码入口索引
-last_updated: 2026-05-26
+last_updated: 2026-06-08
 source_of_truth:
   - 项目实际目录结构
   - internal/api/router.go（后端路由）
@@ -26,6 +26,9 @@ PeopleOps 是一个以钉钉为主数据源的人事后台系统。系统负责�
 
 ```text
 D:\ai项目
+├─ .github\
+│  └─ workflows\
+│     └─ ci.yml                      # GitHub Actions 最小 CI（后端核心测试 + 前端构建）
 ├─ cmd\main.go                      # 后端入口
 ├─ internal\
 │  ├─ api\                          # 路由注册与 HTTP handlers
