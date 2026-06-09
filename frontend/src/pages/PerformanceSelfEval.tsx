@@ -187,7 +187,7 @@ const PerformanceSelfEval: React.FC = () => {
       render: (_: any, __: any, idx: number) => (
         <Form.Item name={['items', idx, 'actual_result']} style={{ margin: 0 }}
           rules={[{ required: true, message: '请填写达成结果' }]}>
-          <TextArea rows={2} placeholder="描述实际完成情况" />
+          <TextArea data-testid={`performance-self-actual-${idx}`} rows={2} placeholder="描述实际完成情况" />
         </Form.Item>
       )
     },
@@ -198,16 +198,23 @@ const PerformanceSelfEval: React.FC = () => {
       render: (_: any, __: any, idx: number) => (
         <Form.Item name={['items', idx, 'self_score']} style={{ margin: 0 }}
           rules={[{ required: true, message: '请评分' }]}>
-          <InputNumber min={0} max={120} style={{ width: '100%' }} />
+          <InputNumber data-testid={`performance-self-score-${idx}`} min={0} max={120} style={{ width: '100%' }} />
         </Form.Item>
       )
     }
   ]
 
-  if (loading) return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
+  if (loading) {
+    return (
+      <>
+        <Form form={form} component={false} />
+        <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>
+      </>
+    )
+  }
 
   return (
-    <PageContainer title="绩效自评">
+    <PageContainer data-testid="performance-self-eval-page" title="绩效自评">
       <Space style={{ marginBottom: 16 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
         <Title level={4} style={{ margin: 0 }}>绩效自评</Title>
@@ -277,19 +284,19 @@ const PerformanceSelfEval: React.FC = () => {
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="evaluation_good" label="做得好的地方">
-                <TextArea rows={4} placeholder="请描述本周期做得好的地方" />
+                <TextArea data-testid="performance-self-good" rows={4} placeholder="请描述本周期做得好的地方" />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="evaluation_improvement" label="需要改进的地方">
-                <TextArea rows={4} placeholder="请描述需要改进的地方" />
+                <TextArea data-testid="performance-self-improvement" rows={4} placeholder="请描述需要改进的地方" />
               </Form.Item>
             </Col>
           </Row>
         </PageCard>
 
         <div style={{ textAlign: 'center', marginTop: 24 }}>
-          <Button type="primary" icon={<CheckCircleOutlined />} loading={saving} onClick={handleSubmit} size="large">
+          <Button data-testid="performance-self-submit" type="primary" icon={<CheckCircleOutlined />} loading={saving} onClick={handleSubmit} size="large">
             提交自评
           </Button>
         </div>
