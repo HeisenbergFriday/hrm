@@ -74,7 +74,9 @@ window.scrollTo = vi.fn() as typeof window.scrollTo
 
 // matchMedia 在部分 antd 内部以 getComputedStyle 兜底，确保 requestAnimationFrame 存在
 if (!window.requestAnimationFrame) {
-  window.requestAnimationFrame = ((cb: FrameRequestCallback) =>
-    setTimeout(() => cb(Date.now()), 0)) as typeof window.requestAnimationFrame
-  window.cancelAnimationFrame = ((id: number) => clearTimeout(id)) as typeof window.cancelAnimationFrame
+  window.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+    const id = window.setTimeout(() => cb(performance.now()), 0)
+    return id
+  }) as typeof window.requestAnimationFrame
+  window.cancelAnimationFrame = ((id: number) => window.clearTimeout(id)) as typeof window.cancelAnimationFrame
 }

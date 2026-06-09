@@ -9,7 +9,7 @@
  * - 接口失败
  */
 import React from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import PerformanceSelfEval from './PerformanceSelfEval'
@@ -271,13 +271,12 @@ describe('PerformanceSelfEval 交互测试', () => {
 
       const actualInputs = screen.getAllByPlaceholderText('描述实际完成情况')
       for (const input of actualInputs) {
-        await user.type(input, '已完成')
+        fireEvent.change(input, { target: { value: '已完成' } })
       }
 
       const scoreInputs = screen.getAllByRole('spinbutton')
       for (const input of scoreInputs) {
-        await user.clear(input)
-        await user.type(input, '80')
+        fireEvent.change(input, { target: { value: '80' } })
       }
 
       await user.click(screen.getByTestId('performance-self-submit'))

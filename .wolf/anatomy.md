@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-06-08T09:30:47.348Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-06-09T01:35:50.287Z
 > Files: 52 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ./
@@ -85,7 +85,7 @@
 - `PerformanceResultView.interaction.test.tsx` — PerformanceResultView 组件交互测试 (~3867 tok)
 - `PerformanceResultView.test.ts` — 测试辅助函数 (~2199 tok)
 - `PerformanceResultView.tsx` — LEVEL_COLOR — renders table (~10317 tok)
-- `PerformanceSelfEval.interaction.test.tsx` — PerformanceSelfEval 组件交互测试 (~2797 tok)
+- `PerformanceSelfEval.interaction.test.tsx` — PerformanceSelfEval 组件交互测试；提交失败场景用 fireEvent 快速填表避免超时 (~2804 tok)
 - `PerformanceSelfEval.test.ts` — 测试辅助函数 (~1322 tok)
 - `PerformanceSelfEval.tsx` — PerformanceSelfEval — renders form, table (~3189 tok)
 
@@ -97,7 +97,7 @@
 
 ## frontend/src/test/
 
-- `setup.ts` — 每个用例结束后自动卸载组件，避免跨用例 DOM 残留导致随机失败 (~743 tok)
+- `setup.ts` — Vitest/jsdom 全局清理与浏览器 API polyfills；requestAnimationFrame 使用 window.setTimeout 返回 number (~758 tok)
 
 ## frontend/src/utils/
 
@@ -173,3 +173,4 @@
 
 
 ## tools/setup/create_vacation/
+
