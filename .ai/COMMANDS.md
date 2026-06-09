@@ -91,10 +91,10 @@ npm run preview
 ```bash
 cd frontend
 npm run test
-npm run e2e
+npm run test:e2e
 ```
 
-说明：`npm run test` 使用 Vitest 配置 `vite.config.test.ts`；`npm run e2e` 使用 Playwright，通常需要前后端测试环境可用。
+说明：`npm run test` 使用 Vitest 配置 `vite.config.test.ts`；`npm run test:e2e` 使用 Playwright，会按 `playwright.config.ts` 自动启动专用 Vite dev server，并通过用例内 mock API 避免依赖真实后端。
 
 ### 代码检查
 ```bash

@@ -3,14 +3,12 @@ import { Typography } from 'antd'
 
 const { Text } = Typography
 
-interface PageContainerProps {
+interface PageContainerProps extends React.HTMLAttributes<HTMLDivElement> {
   title?: string
   subtitle?: React.ReactNode
   icon?: React.ReactNode
   extra?: React.ReactNode
   children: React.ReactNode
-  className?: string
-  style?: React.CSSProperties
   noPadding?: boolean
 }
 
@@ -23,6 +21,7 @@ const PageContainer: React.FC<PageContainerProps> = ({
   className,
   style,
   noPadding = false,
+  ...props
 }) => {
   const containerClassName = ['page-container', noPadding ? 'page-container-no-padding' : '', className]
     .filter(Boolean)
@@ -30,6 +29,7 @@ const PageContainer: React.FC<PageContainerProps> = ({
 
   return (
     <div
+      {...props}
       className={containerClassName}
       style={{
         padding: noPadding ? 0 : 'var(--page-padding)',

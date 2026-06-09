@@ -356,7 +356,12 @@ const PerformanceOverview: React.FC = () => {
   // 评分弹窗
   // 强制分布弹窗
   const [distributionModalVisible, setDistributionModalVisible] = useState(false)
+  // 注意：以下 Modal 相关的 Form 实例在 Modal 关闭时会产生 antd 的 "not connected" warning
+  // 这是因为 useForm() 在组件挂载时创建实例，但 Modal 内的 <Form> 组件在 Modal 打开时才渲染
+  // 这个 warning 不影响功能，是 antd Form 设计模式的固有特性，已在 E2E 测试中验证功能正常
   const [distributionForm] = Form.useForm()
+  const [rejectGoalModalVisible, setRejectGoalModalVisible] = useState(false)
+  const [rejectGoalTarget, setRejectGoalTarget] = useState<PerformanceParticipant | null>(null)
   const [rejectGoalForm] = Form.useForm<RejectGoalFormValues>()
 
   // 批量评分相关
@@ -374,7 +379,7 @@ const PerformanceOverview: React.FC = () => {
   const [managerCandidateLoading, setManagerCandidateLoading] = useState(false)
   const [managerUpdating, setManagerUpdating] = useState(false)
   const [managerForm] = Form.useForm()
-  const selectedManagerSource = Form.useWatch('manager_source', managerForm) as AssessmentManagerSource | undefined
+  const [selectedManagerSource, setSelectedManagerSource] = useState<AssessmentManagerSource | undefined>(undefined)
 
   // 活动列表筛选
   const [activitySearchText, setActivitySearchText] = useState('')
@@ -769,34 +774,8 @@ const PerformanceOverview: React.FC = () => {
 
   const handleRejectGoalRecords = (record: PerformanceParticipant) => {
     rejectGoalForm.resetFields()
-    Modal.confirm({
-      title: '驳回目标',
-      content: (
-        <Form form={rejectGoalForm} layout="vertical" preserve={false}>
-          <Form.Item
-            name="comment"
-            label="驳回原因"
-            rules={[{ required: true, message: '请输入驳回原因' }]}
-          >
-            <TextArea rows={3} placeholder="请说明需要员工调整的内容" />
-          </Form.Item>
-        </Form>
-      ),
-      okText: '确认驳回',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: async () => {
-        const values = await rejectGoalForm.validateFields()
-        try {
-          await performanceAPI.rejectGoalRecords(record.id, { comment: values.comment })
-          message.success('目标已驳回')
-          if (currentActivity) loadActivityDetail(currentActivity)
-        } catch (err: any) {
-          message.error(err?.response?.data?.message || '驳回失败')
-          throw err
-        }
-      },
-    })
+    setRejectGoalTarget(record)
+    setRejectGoalModalVisible(true)
   }
 
   const renderPermissionButton = (
@@ -806,7 +785,7 @@ const PerformanceOverview: React.FC = () => {
   ) => {
     if (hasPermission(permissionCode)) return button
     return (
-      <Tooltip title={`你缺少${permissionName}权限，需要联系管理员添加`}>
+      <Tooltip key={button.key || permissionCode} title={`你缺少${permissionName}权限，需要联系管理员添加`}>
         <span>
           {React.cloneElement(button, {
             disabled: true,
@@ -866,6 +845,7 @@ const PerformanceOverview: React.FC = () => {
       manager_source: managerSource,
       reason: '',
     })
+    setSelectedManagerSource(managerSource)
     setManagerModalVisible(true)
     loadAssessmentManagerCandidates('', record?.id, managerSource)
   }
@@ -875,6 +855,7 @@ const PerformanceOverview: React.FC = () => {
   }
 
   const handleAssessmentManagerSourceChange = (source: AssessmentManagerSource) => {
+    setSelectedManagerSource(source)
     managerForm.setFieldsValue({ manager_user_id: undefined })
     setManagerCandidates([])
     setManagerCandidateSources([])
@@ -1030,47 +1011,47 @@ const PerformanceOverview: React.FC = () => {
     const status = record.status
 
     buttons.push(
-      <Button size="small" type="link" onClick={() => loadActivityDetail(record)} key="view">详情</Button>
+        <Button size="small" type="link" data-testid={`performance-activity-view-${record.id}`} onClick={() => loadActivityDetail(record)} key="view">详情</Button>
     )
 
     if (status === 'draft') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => openActivityModal(record)} key="edit">编辑参与人</Button>,
-        <Button size="small" type="link" onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
-        <Button size="small" type="link" onClick={() => handleActivityAction('open-target-setting', record)} key="start">开启目标</Button>
+        <Button size="small" type="link" data-testid={`performance-activity-edit-${record.id}`} onClick={() => openActivityModal(record)} key="edit">编辑参与人</Button>,
+        <Button size="small" type="link" data-testid={`performance-activity-refresh-${record.id}`} onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
+        <Button size="small" type="link" data-testid={`performance-activity-open-target-${record.id}`} onClick={() => handleActivityAction('open-target-setting', record)} key="start">开启目标</Button>
       )
     } else if (status === 'target_setting') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('open-self-evaluation', record)} key="open-self">开启自评</Button>
+        <Button size="small" type="link" data-testid={`performance-activity-open-self-${record.id}`} onClick={() => handleActivityAction('open-self-evaluation', record)} key="open-self">开启自评</Button>
       )
     } else if (status === 'self_evaluation') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('notify-self-eval', record)} key="notify-self">提醒自评</Button>,
-        <Button size="small" type="link" onClick={() => handleActivityAction('open-manager-evaluation', record)} key="open-mgr">开启主管评分</Button>
+        <Button size="small" type="link" data-testid={`performance-activity-notify-self-${record.id}`} onClick={() => handleActivityAction('notify-self-eval', record)} key="notify-self">提醒自评</Button>,
+        <Button size="small" type="link" data-testid={`performance-activity-open-manager-${record.id}`} onClick={() => handleActivityAction('open-manager-evaluation', record)} key="open-mgr">开启主管评分</Button>
       )
     } else if (status === 'manager_evaluation') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('open-employee-confirmation', record)} key="confirm">员工确认</Button>
+        <Button size="small" type="link" data-testid={`performance-activity-open-employee-confirm-${record.id}`} onClick={() => handleActivityAction('open-employee-confirmation', record)} key="confirm">员工确认</Button>
       )
     } else if (status === 'employee_confirmation') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('open-manager-confirmation', record)} key="manager-confirm">主管确认</Button>
+        <Button size="small" type="link" data-testid={`performance-activity-open-manager-confirm-${record.id}`} onClick={() => handleActivityAction('open-manager-confirmation', record)} key="manager-confirm">主管确认</Button>
       )
     } else if (status === 'manager_confirmation') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('open-hr-confirmation', record)} key="hr-confirm">HR确认</Button>
+        <Button size="small" type="link" data-testid={`performance-activity-open-hr-confirm-${record.id}`} onClick={() => handleActivityAction('open-hr-confirmation', record)} key="hr-confirm">HR确认</Button>
       )
     } else if (status === 'hr_confirmation') {
       buttons.push(
-        <Button size="small" type="link" danger onClick={() => handleActivityAction('lock', record)} key="lock">锁定</Button>
+        <Button size="small" type="link" danger data-testid={`performance-activity-lock-${record.id}`} onClick={() => handleActivityAction('lock', record)} key="lock">锁定</Button>
       )
     } else if (status === 'locked') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('archive', record)} key="archive">归档</Button>
+        <Button size="small" type="link" data-testid={`performance-activity-archive-${record.id}`} onClick={() => handleActivityAction('archive', record)} key="archive">归档</Button>
       )
     } else if (status === 'result_confirmed') {
       buttons.push(
-        <Button size="small" type="link" onClick={() => handleActivityAction('archive', record)} key="archive">归档</Button>
+        <Button size="small" type="link" data-testid={`performance-activity-archive-${record.id}`} onClick={() => handleActivityAction('archive', record)} key="archive">归档</Button>
       )
     }
 
@@ -1232,7 +1213,7 @@ const PerformanceOverview: React.FC = () => {
         // 目标设定：活动必须处于 target_setting 状态，且参与人状态允许
         if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && hasPermission('performance:goal:manage')) {
           links.push(
-            <Button key="target" size="small" type="link" style={linkStyle}
+            <Button key="target" size="small" type="link" style={linkStyle} data-testid={`performance-participant-target-${record.id}`}
               onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}`)}
             >目标</Button>
           )
@@ -1240,7 +1221,7 @@ const PerformanceOverview: React.FC = () => {
         // 自评：活动必须处于 self_evaluation 状态，且参与人状态允许
         if (activityStatus === 'self_evaluation' && ['target_set', 'self_submitted'].includes(record.status) && hasPermission('performance:self_eval:submit')) {
           links.push(
-            <Button key="self" size="small" type="link" style={linkStyle}
+            <Button key="self" size="small" type="link" style={linkStyle} data-testid={`performance-participant-self-${record.id}`}
               onClick={() => navigate(`/performance-self-eval/${activityId}/${record.id}`)}
             >自评</Button>
           )
@@ -1248,21 +1229,21 @@ const PerformanceOverview: React.FC = () => {
         // 主管评分：活动必须处于 manager_evaluation 状态，且参与人状态允许
         if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && hasPermission('performance:manager_eval:submit')) {
           links.push(
-            <Button key="mgr" size="small" type="link" style={linkStyle}
+            <Button key="mgr" size="small" type="link" style={linkStyle} data-testid={`performance-participant-manager-${record.id}`}
               onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}
             >评分</Button>
           )
         }
         if (['manager_submitted', 'employee_confirmed', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && hasPermission('performance:result:view')) {
           links.push(
-            <Button key="result" size="small" type="link" style={linkStyle}
+            <Button key="result" size="small" type="link" style={linkStyle} data-testid={`performance-participant-result-${record.id}`}
               onClick={() => navigate(`/performance-result/${activityId}/${record.id}`)}
             >结果</Button>
           )
         }
         if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && hasPermission('performance:hr_confirm:submit')) {
           links.push(
-            <Button key="hr-confirm" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }}
+            <Button key="hr-confirm" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }} data-testid={`performance-participant-hr-confirm-${record.id}`}
               onClick={async () => {
                 try {
                   await performanceAPI.confirmHRResult(record.id)
@@ -1277,7 +1258,7 @@ const PerformanceOverview: React.FC = () => {
         }
         if (record.status === 'target_pending_approval' && hasPermission('performance:goal:manage')) {
           links.push(
-            <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }}
+            <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }} data-testid={`performance-participant-approve-${record.id}`}
               onClick={async () => {
                 try {
                   await performanceAPI.approveGoalRecords(record.id)
@@ -1290,7 +1271,7 @@ const PerformanceOverview: React.FC = () => {
             >通过</Button>
           )
           links.push(
-            <Button key="reject" size="small" type="link" danger style={linkStyle}
+            <Button key="reject" size="small" type="link" danger style={linkStyle} data-testid={`performance-participant-reject-${record.id}`}
               onClick={() => handleRejectGoalRecords(record)}
             >驳回</Button>
           )
@@ -1331,19 +1312,21 @@ const PerformanceOverview: React.FC = () => {
   ]
   const activityListActions = (
     <Space>
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => openActivityModal()}>新建活动</Button>
-      <Button icon={<ReloadOutlined />} onClick={() => loadActivities()} disabled={activitiesLoading}>刷新</Button>
+      <Button type="primary" data-testid="performance-create-activity" icon={<PlusOutlined />} onClick={() => openActivityModal()}>新建活动</Button>
+      <Button data-testid="performance-refresh-activities" icon={<ReloadOutlined />} onClick={() => loadActivities()} disabled={activitiesLoading}>刷新</Button>
     </Space>
   )
 
   return (
     <PageContainer
+      data-testid="performance-overview-page"
       title="绩效管理"
       icon={<BarChartOutlined />}
       subtitle="绩效活动管理与评分工作台"
     >
 
       <Card
+        data-testid="performance-overview-card"
         style={{ borderRadius: 'var(--radius-xl)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)' }}
         styles={{ header: { background: 'var(--color-bg-card-header)', borderBottom: '1px solid var(--color-border-light)' } }}
       >
@@ -1421,6 +1404,7 @@ const PerformanceOverview: React.FC = () => {
           {/* 活动列表 */}
           <div ref={activityListRef}>
           <PageCard
+            data-testid="performance-activity-list"
             style={{ marginBottom: 16 }}
           >
             <Space style={{ marginBottom: 16 }} wrap>
@@ -1465,7 +1449,7 @@ const PerformanceOverview: React.FC = () => {
         styles={{ footer: { paddingTop: 12 } }}
       >
         {currentActivity && (
-          <>
+          <div data-testid="performance-detail-content">
             <Steps
               current={getActivityStepIndex(currentActivity.status)}
               items={ACTIVITY_FLOW.map(item => ({
@@ -1640,9 +1624,47 @@ const PerformanceOverview: React.FC = () => {
                 scroll={{ x: 1250 }}
               />
             </Spin>
-          </>
+          </div>
         )}
       </Drawer>
+
+      <Modal
+        title="驳回目标"
+        open={rejectGoalModalVisible}
+        okText="确认驳回"
+        okButtonProps={{ danger: true }}
+        cancelText="取消"
+        onCancel={() => {
+          setRejectGoalModalVisible(false)
+          setRejectGoalTarget(null)
+          rejectGoalForm.resetFields()
+        }}
+        onOk={async () => {
+          if (!rejectGoalTarget) return
+          const values = await rejectGoalForm.validateFields()
+          try {
+            await performanceAPI.rejectGoalRecords(rejectGoalTarget.id, { comment: values.comment })
+            message.success('目标已驳回')
+            setRejectGoalModalVisible(false)
+            setRejectGoalTarget(null)
+            rejectGoalForm.resetFields()
+            if (currentActivity) loadActivityDetail(currentActivity)
+          } catch (err: any) {
+            message.error(err?.response?.data?.message || '驳回失败')
+            throw err
+          }
+        }}
+      >
+        <Form form={rejectGoalForm} layout="vertical" preserve={false}>
+          <Form.Item
+            name="comment"
+            label="驳回原因"
+            rules={[{ required: true, message: '请输入驳回原因' }]}
+          >
+            <TextArea rows={3} placeholder="请说明需要员工调整的内容" />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         title={managerModalMode === 'single' ? '调整考核上级' : '批量调整考核上级'}
@@ -1651,7 +1673,6 @@ const PerformanceOverview: React.FC = () => {
         onCancel={() => { setManagerModalVisible(false); managerForm.resetFields(); setManagerCandidates([]); setManagerCandidateSources([]) }}
         confirmLoading={managerUpdating}
         width={560}
-        destroyOnClose
       >
         <Alert
           showIcon

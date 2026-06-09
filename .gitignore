@@ -27,6 +27,11 @@ logs
 frontend/dist/
 *.msi
 
+# Test reports
+frontend/playwright-report/
+frontend/test-results/
+frontend/tests/reports/
+
 # Frontend
 node_modules/
 frontend/node_modules/
