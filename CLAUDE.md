@@ -522,4 +522,5 @@ AI 文档更新：
 ## Recent Notes
 
 - Performance permissions: data scope controls which rows are visible; feature permissions control whether action buttons are enabled. Keep visible data APIs available by data scope, and show disabled buttons with a tooltip such as '你缺少xxx权限，需要联系管理员添加' when a feature permission is missing.
+- Performance module tests now cover backend API/service/repository paths, frontend helper/component/page unit tests, and Playwright e2e smoke flows. Playwright e2e uses the dedicated mocked test server configured in `frontend/playwright.config.ts` and should be run with `npm run test:e2e` or `npm run test:e2e:chromium`.
 
