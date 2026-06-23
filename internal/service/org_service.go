@@ -52,6 +52,9 @@ func (s *OrgDataScope) AllowsDepartment(departmentID string) bool {
 	if s == nil || s.IsAll() {
 		return true
 	}
+	if s.departmentIDSet == nil {
+		s.init()
+	}
 	_, ok := s.departmentIDSet[departmentID]
 	return ok
 }

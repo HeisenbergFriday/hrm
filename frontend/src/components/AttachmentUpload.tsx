@@ -5,6 +5,18 @@ import type { UploadFile, UploadProps } from 'antd'
 import { useAuthStore } from '../store/authStore'
 import { withFileAccessToken } from '../utils/authFileUrl'
 
+const maxUploadSize = 10 * 1024 * 1024
+const allowedAttachmentExtensions = [
+  '.jpg', '.jpeg', '.png', '.gif', '.webp',
+  '.pdf',
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.wps', '.et', '.dps',
+  '.txt', '.csv', '.md',
+  '.zip', '.rar', '.7z',
+]
+const attachmentAccept = allowedAttachmentExtensions.join(',')
+const allowedAttachmentText = allowedAttachmentExtensions.map(ext => ext.slice(1)).join('/')
+
 interface AttachmentUploadProps {
   value?: string[]
   onChange?: (urls: string[]) => void
@@ -18,6 +30,19 @@ const AttachmentUpload: React.FC<AttachmentUploadProps> = ({
   maxCount = 5,
   disabled = false,
 }) => {
+  const validateFile = (file: File) => {
+    const ext = `.${file.name.split('.').pop() || ''}`.toLowerCase()
+    if (file.size > maxUploadSize) {
+      message.error('文件大小不能超过10MB')
+      return false
+    }
+    if (!allowedAttachmentExtensions.includes(ext)) {
+      message.error(`不支持的文件类型，允许: ${allowedAttachmentText}`)
+      return false
+    }
+    return true
+  }
+
   const fileList: UploadFile[] = value.map((url, index) => ({
     uid: `-${index}`,
     name: url.split('/').pop() || `附件${index + 1}`,
@@ -41,12 +66,12 @@ const AttachmentUpload: React.FC<AttachmentUploadProps> = ({
         },
         body: formData,
       })
+      const result = await response.json().catch(() => ({}))
 
       if (!response.ok) {
-        throw new Error('上传失败')
+        throw new Error(result?.message || '上传失败')
       }
 
-      const result = await response.json()
       const url = result.data?.url || result.url
 
       if (url) {
@@ -59,7 +84,7 @@ const AttachmentUpload: React.FC<AttachmentUploadProps> = ({
       }
     } catch (err) {
       onError?.(err as Error)
-      message.error('上传失败，请重试')
+      message.error(err instanceof Error && err.message ? err.message : '上传失败，请重试')
     }
   }
 
@@ -80,6 +105,8 @@ const AttachmentUpload: React.FC<AttachmentUploadProps> = ({
     <div>
       <Upload
         fileList={fileList}
+        accept={attachmentAccept}
+        beforeUpload={(file) => validateFile(file) || Upload.LIST_IGNORE}
         customRequest={handleUpload}
         onRemove={handleRemove}
         maxCount={maxCount}

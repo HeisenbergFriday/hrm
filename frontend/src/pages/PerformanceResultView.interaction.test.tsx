@@ -88,6 +88,7 @@ function makeRecords() {
         {
           id: 1,
           section_type: 'quantitative',
+          goal_phase: 'review',
           item_name: '销售额',
           item_definition: '月度销售额',
           weight: 0.35,
@@ -103,6 +104,7 @@ function makeRecords() {
         {
           id: 2,
           section_type: 'quantitative',
+          goal_phase: 'review',
           item_name: '客户满意度',
           item_definition: 'NPS',
           weight: 0.35,
@@ -118,6 +120,7 @@ function makeRecords() {
         {
           id: 3,
           section_type: 'key_action',
+          goal_phase: 'review',
           item_name: '客户拜访',
           item_definition: '每月拜访',
           weight: 0.15,
@@ -130,6 +133,7 @@ function makeRecords() {
         {
           id: 4,
           section_type: 'key_action',
+          goal_phase: 'review',
           item_name: '培训完成',
           item_definition: '完成培训',
           weight: 0.15,
@@ -138,6 +142,27 @@ function makeRecords() {
           self_score: 95,
           manager_score: 92,
           sort_order: 3,
+        },
+        {
+          id: 5,
+          section_type: 'quantitative',
+          goal_phase: 'plan',
+          item_name: '下季度销售目标',
+          item_definition: '下季度销售额计划',
+          weight: 0.7,
+          target_value: '110%',
+          scoring_rule: '按比例',
+          sort_order: 10,
+        },
+        {
+          id: 6,
+          section_type: 'key_action',
+          goal_phase: 'plan',
+          item_name: '下季度客户计划',
+          item_definition: '完成重点客户拓展计划',
+          weight: 0.3,
+          target_value: '完成计划',
+          sort_order: 11,
         },
       ],
     },
@@ -170,6 +195,7 @@ function setupDefaultMocks() {
 describe('PerformanceResultView 交互测试', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    document.getElementById('performance-print-root')?.remove()
     setupDefaultMocks()
   })
 
@@ -415,6 +441,124 @@ describe('PerformanceResultView 交互测试', () => {
       await waitFor(() => {
         expect(screen.getByText('导出 Excel')).toBeInTheDocument()
       })
+    })
+
+    it('未展开归档面板时点击打印应创建专用打印内容', async () => {
+      const user = userEvent.setup()
+      const printSpy = vi.spyOn(window, 'print').mockImplementation(() => {})
+
+      render(React.createElement(PerformanceResultView))
+
+      await waitFor(() => {
+        expect(screen.getByText(/打印.*导出 PDF/)).toBeInTheDocument()
+      })
+      expect(document.getElementById('performance-archive-sheet')).toBeNull()
+      expect(document.getElementById('performance-print-root')).toBeNull()
+
+      await user.click(screen.getByText(/打印.*导出 PDF/))
+
+      await waitFor(() => {
+        const printRoot = document.getElementById('performance-print-root')
+        expect(printRoot).toBeInTheDocument()
+        expect(printRoot?.querySelector('.archive-table')).toBeInTheDocument()
+        expect(printSpy).toHaveBeenCalled()
+      })
+
+      window.dispatchEvent(new Event('afterprint'))
+      expect(document.getElementById('performance-print-root')).toBeNull()
+    })
+
+    it('未展开归档面板时点击导出 Excel 应自动展开并下载', async () => {
+      const user = userEvent.setup()
+      const createObjectURL = vi.fn(() => 'blob:archive')
+      const revokeObjectURL = vi.fn()
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+      const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+      render(React.createElement(PerformanceResultView))
+
+      await waitFor(() => {
+        expect(screen.getByText('导出 Excel')).toBeInTheDocument()
+      })
+      expect(document.getElementById('performance-archive-sheet')).toBeNull()
+
+      await user.click(screen.getByText('导出 Excel'))
+
+      await waitFor(() => {
+        expect(document.getElementById('performance-archive-sheet')).toBeInTheDocument()
+        expect(createObjectURL).toHaveBeenCalled()
+      })
+      const exportedBlob = createObjectURL.mock.calls[0]?.[0] as Blob
+      const exportedHtml = await exportedBlob.text()
+      expect(exportedHtml).toContain('xmlns:x="urn:schemas-microsoft-com:office:excel"')
+      expect(exportedHtml).toContain('mso-page-orientation: landscape')
+      expect(exportedHtml).toContain('border: 0.5pt solid #000')
+      expect(exportedHtml).toContain('mso-number-format')
+      expect(exportedHtml).toContain('height: 58px')
+      expect(exportedHtml).toContain('excel-head-title')
+      expect(exportedHtml).toContain('excel-head-note')
+      expect(exportedHtml).toContain('font-size: 7pt')
+      expect(exportedHtml).toContain('mso-data-placement: same-cell')
+      expect(exportedHtml).toContain('定量分段设置，上限120分；')
+      expect(exportedHtml).toContain('单项不低于10%')
+      expect(clickSpy).toHaveBeenCalled()
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:archive')
+    })
+  })
+
+  // ==================== 场景 9: 归档模板 ====================
+  describe('归档模板', () => {
+    it('旧流程应显示 PARTB 个人绩效归档表', async () => {
+      const user = userEvent.setup()
+      render(React.createElement(PerformanceResultView))
+
+      await waitFor(() => {
+        expect(screen.getByText('个人绩效考核表（归档 / 导出）')).toBeInTheDocument()
+      })
+      await user.click(screen.getByText('个人绩效考核表（归档 / 导出）'))
+
+      expect(screen.getByText('PARTB: 个人绩效（员工绩效）')).toBeInTheDocument()
+      expect(screen.getByText('定量/定性目标')).toBeInTheDocument()
+      expect(screen.getByText('员工绩效等级（S A B C D）')).toBeInTheDocument()
+    })
+
+    it('新流程应显示上季度指标完成情况和下季度目标计划', async () => {
+      const user = userEvent.setup()
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant(),
+          activity: {
+            id: 1,
+            name: '2026年Q2绩效',
+            status: 'manager_evaluation',
+            start_date: '2026-04-01',
+            end_date: '2026-06-30',
+            flow_type: 'new',
+            enable_bonus_score: false,
+          },
+        },
+      })
+
+      render(React.createElement(PerformanceResultView))
+
+      await waitFor(() => {
+        expect(screen.getByText('个人绩效考核表（归档 / 导出）')).toBeInTheDocument()
+      })
+      await user.click(screen.getByText('个人绩效考核表（归档 / 导出）'))
+
+      expect(screen.getByText('员工绩效考核表')).toBeInTheDocument()
+      expect(screen.getByText('上季度指标完成情况')).toBeInTheDocument()
+      expect(screen.getByText('下季度目标计划')).toBeInTheDocument()
+
+      const archiveText = document.getElementById('performance-archive-sheet')?.textContent || ''
+      const reviewSectionIndex = archiveText.indexOf('\u4e0a\u5b63\u5ea6\u6307\u6807\u5b8c\u6210\u60c5\u51b5')
+      const salesIndex = archiveText.indexOf('\u9500\u552e\u989d')
+      const nextPlanIndex = archiveText.indexOf('\u4e0b\u5b63\u5ea6\u76ee\u6807\u8ba1\u5212')
+      const nextSalesIndex = archiveText.indexOf('\u4e0b\u5b63\u5ea6\u9500\u552e\u76ee\u6807')
+      expect(salesIndex).toBeGreaterThan(reviewSectionIndex)
+      expect(salesIndex).toBeLessThan(nextPlanIndex)
+      expect(nextSalesIndex).toBeGreaterThan(nextPlanIndex)
     })
   })
 

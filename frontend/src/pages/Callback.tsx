@@ -4,6 +4,7 @@ import { CloseCircleOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
+import { consumeAuthRedirect } from '../utils/authRedirect'
 
 function isDingTalkEnv(): boolean {
   return /DingTalk/i.test(navigator.userAgent)
@@ -34,7 +35,7 @@ const Callback: React.FC = () => {
 
       if (!code) {
         if (isDingTalkEnv()) {
-          navigate('/', { replace: true })
+          navigate(consumeAuthRedirect() || '/', { replace: true })
           return
         }
         setError('缺少 code 参数')
@@ -51,7 +52,7 @@ const Callback: React.FC = () => {
           const { token, user } = response.data.data
           login(user, token)
           message.success('登录成功', 0.6)
-          navigate('/', { replace: true })
+          navigate(consumeAuthRedirect() || '/', { replace: true })
           return
         }
 

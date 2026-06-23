@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"math"
 	"peopleops/internal/database"
 	"strings"
@@ -362,6 +363,9 @@ func (r *PerformanceReviewVersionRepository) CreateSelfEvaluationVersion(partici
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 			return err
 		}
+		if p.IsLocked {
+			return fmt.Errorf("该参与人的绩效结果已锁定，无法提交自评")
+		}
 
 		version = &database.PerformanceReviewVersion{
 			ParticipantID:       p.ID,
@@ -403,6 +407,9 @@ func (r *PerformanceReviewVersionRepository) CreateManagerEvaluationVersion(part
 		var p database.PerformanceParticipant
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 			return err
+		}
+		if p.IsLocked {
+			return fmt.Errorf("该参与人的绩效结果已锁定，无法提交主管评分")
 		}
 
 		version = &database.PerformanceReviewVersion{
@@ -453,6 +460,9 @@ func (r *PerformanceReviewVersionRepository) BatchCreateManagerEvaluationVersion
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND activity_id = ? AND deleted_at IS NULL", e.ParticipantID, activityID).First(&p).Error; err != nil {
 				return err
 			}
+			if p.IsLocked {
+				return fmt.Errorf("参与人 %d 的绩效结果已锁定，无法提交主管评分", e.ParticipantID)
+			}
 			v := database.PerformanceReviewVersion{
 				ParticipantID:       e.ParticipantID,
 				ActivityID:          activityID,
@@ -470,8 +480,8 @@ func (r *PerformanceReviewVersionRepository) BatchCreateManagerEvaluationVersion
 			// 没有逐项评分时，按权重分摊总分到各指标
 			if len(e.EvaluationItems) == 0 {
 				var records []database.PerformanceGoalRecord
-				if err := tx.Where("participant_id = ? AND deleted_at IS NULL AND section_type != ?",
-					e.ParticipantID, "bonus_penalty").Find(&records).Error; err == nil && len(records) > 0 {
+				if err := tx.Where("participant_id = ? AND deleted_at IS NULL AND section_type != ? AND (goal_phase = ? OR goal_phase = '' OR goal_phase IS NULL)",
+					e.ParticipantID, "bonus_penalty", "review").Find(&records).Error; err == nil && len(records) > 0 {
 					totalWeight := 0.0
 					for _, r := range records {
 						totalWeight += r.Weight

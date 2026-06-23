@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"strings"
 	"testing"
+	"time"
 
 	"peopleops/internal/database"
 )
@@ -225,8 +226,8 @@ func TestGetGoalSuggestions_WithLibraryAndItems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetGoalSuggestions error = %v", err)
 	}
-	if len(suggestions) != 2 {
-		t.Fatalf("GetGoalSuggestions = %d suggestions, want 2", len(suggestions))
+	if len(suggestions) != 1 {
+		t.Fatalf("GetGoalSuggestions = %d suggestions, want 1", len(suggestions))
 	}
 	if suggestions[0].IndicatorItemID == nil || *suggestions[0].IndicatorItemID != 1 {
 		t.Fatalf("suggestions[0].IndicatorItemID = %v, want 1", suggestions[0].IndicatorItemID)
@@ -234,12 +235,128 @@ func TestGetGoalSuggestions_WithLibraryAndItems(t *testing.T) {
 	if suggestions[0].Weight != 0.3 {
 		t.Fatalf("suggestions[0].Weight = %v, want 0.3", suggestions[0].Weight)
 	}
-	if suggestions[1].Weight != 0.2 {
-		t.Fatalf("suggestions[1].Weight = %v, want 0.2 (from item.Weight when default_weight=0)", suggestions[1].Weight)
+}
+
+func TestGetGoalSuggestionsQueriesOnlyAssociatedActivityLibrary(t *testing.T) {
+	activityLibID := uint(10)
+	var itemQueryArgs []driver.NamedValue
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "target_set", "", 0, 0, "", false, nil, nil, nil),
+			},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_activities"),
+			columns: []string{"id", "name", "cycle_type", "status", "indicator_library_id"},
+			rows: [][]driver.Value{
+				{int64(1), "Q2", "quarterly", "draft", activityLibID},
+			},
+		},
+		stubQueryResponse{
+			match: func(query string, args []driver.NamedValue) bool {
+				if !strings.Contains(strings.ToLower(query), "performance_indicator_items") {
+					return false
+				}
+				itemQueryArgs = append([]driver.NamedValue(nil), args...)
+				return true
+			},
+			columns: []string{"id", "library_id", "section_type", "name", "description", "weight", "default_weight", "is_default", "sort_order"},
+			rows: [][]driver.Value{
+				{uint(1), activityLibID, "quantitative", "Revenue", "Revenue target", 0.3, 0.3, true, 1},
+			},
+		},
+	)
+	suggestions, err := svc.GetGoalSuggestions(1)
+	if err != nil {
+		t.Fatalf("GetGoalSuggestions error = %v", err)
+	}
+	if len(suggestions) != 1 {
+		t.Fatalf("GetGoalSuggestions = %d suggestions, want 1", len(suggestions))
+	}
+	if !hasNamedArgValue(itemQueryArgs, activityLibID) {
+		t.Fatalf("indicator item query args = %#v, want activity library %d", itemQueryArgs, activityLibID)
+	}
+	if hasNamedArgValue(itemQueryArgs, uint(11)) {
+		t.Fatalf("indicator item query args = %#v, should not include department libraries", itemQueryArgs)
 	}
 }
 
+func hasNamedArgValue(args []driver.NamedValue, want uint) bool {
+	for _, arg := range args {
+		switch value := arg.Value.(type) {
+		case uint:
+			if value == want {
+				return true
+			}
+		case uint64:
+			if value == uint64(want) {
+				return true
+			}
+		case int:
+			if value >= 0 && uint(value) == want {
+				return true
+			}
+		case int64:
+			if value >= 0 && uint(value) == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ======================== SendSelfEvalReminders 测试 ========================
+
+func TestSelfEvalDeadlineReminderText(t *testing.T) {
+	cases := []struct {
+		name     string
+		endAt    string
+		now      time.Time
+		expected string
+	}{
+		{
+			name:     "future deadline uses calendar days",
+			endAt:    "2026-06-05",
+			now:      time.Date(2026, 6, 2, 9, 30, 0, 0, time.Local),
+			expected: "距离截止还有 3 天",
+		},
+		{
+			name:     "today deadline",
+			endAt:    "2026-06-05",
+			now:      time.Date(2026, 6, 5, 9, 30, 0, 0, time.Local),
+			expected: "今天截止",
+		},
+		{
+			name:     "overdue deadline",
+			endAt:    "2026-06-05",
+			now:      time.Date(2026, 6, 6, 0, 1, 0, 0, time.Local),
+			expected: "当前已逾期",
+		},
+		{
+			name:     "empty deadline",
+			endAt:    "",
+			now:      time.Date(2026, 6, 2, 9, 30, 0, 0, time.Local),
+			expected: "请关注绩效活动配置的自评截止时间",
+		},
+		{
+			name:     "invalid deadline",
+			endAt:    "2026/06/05",
+			now:      time.Date(2026, 6, 2, 9, 30, 0, 0, time.Local),
+			expected: "自评截止时间：2026/06/05。",
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			result := selfEvalDeadlineReminderText(tt.endAt, tt.now)
+			if !strings.Contains(result, tt.expected) {
+				t.Fatalf("selfEvalDeadlineReminderText() = %q, want containing %q", result, tt.expected)
+			}
+		})
+	}
+}
 
 func TestSendSelfEvalReminders_ActivityNotFound(t *testing.T) {
 	svc := newStubPerformanceService(t, stubQueryResponse{
@@ -343,7 +460,7 @@ func TestSendManagerEvalReminders_FiltersOnlySelfSubmitted(t *testing.T) {
 
 // ======================== 复杂场景补充测试 ========================
 
-func TestGetGoalSuggestions_MultipleLibrariesWithDedup(t *testing.T) {
+func TestGetGoalSuggestions_MultipleLibrariesUsesOnlyActivityLibrary(t *testing.T) {
 	// 测试多指标库去重逻辑：activity 指定的库 + 部门的库，ID 相同时去重
 	activityLibID := uint(10)
 	svc := newStubPerformanceService(t,
@@ -386,12 +503,12 @@ func TestGetGoalSuggestions_MultipleLibrariesWithDedup(t *testing.T) {
 	}
 	// 应该查询 3 个库（10, 11, 12），但 10 已在 activity 中，最终 libraryIDs = [10, 11, 12]
 	// 返回 3 个指标
-	if len(suggestions) != 3 {
-		t.Fatalf("GetGoalSuggestions = %d suggestions, want 3", len(suggestions))
+	if len(suggestions) != 1 {
+		t.Fatalf("GetGoalSuggestions = %d suggestions, want 1", len(suggestions))
 	}
 }
 
-func TestGetGoalSuggestions_OnlyDepartmentLibraries(t *testing.T) {
+func TestGetGoalSuggestions_NoActivityLibraryDoesNotUseDepartmentLibraries(t *testing.T) {
 	// 测试 activity.IndicatorLibraryID 为 nil，只使用部门指标库
 	svc := newStubPerformanceService(t,
 		stubQueryResponse{
@@ -427,11 +544,8 @@ func TestGetGoalSuggestions_OnlyDepartmentLibraries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetGoalSuggestions error = %v", err)
 	}
-	if len(suggestions) != 1 {
-		t.Fatalf("GetGoalSuggestions = %d suggestions, want 1", len(suggestions))
-	}
-	if suggestions[0].Weight != 0.5 {
-		t.Fatalf("suggestions[0].Weight = %v, want 0.5", suggestions[0].Weight)
+	if len(suggestions) != 0 {
+		t.Fatalf("GetGoalSuggestions = %d suggestions, want 0", len(suggestions))
 	}
 }
 

@@ -20,6 +20,7 @@ import {
   PerformanceDistributionRule,
   PerformanceHRDeadlineStatus,
   PerformanceIndicatorLibrary,
+  PerformanceTemplate,
   AssessmentManagerCandidate,
   AssessmentManagerCandidateSourceGroup,
   AssessmentManagerSource,
@@ -59,6 +60,75 @@ function getListFromResponse(res: any, keys: string[]): any[] {
     if (Array.isArray(data?.[key])) return data[key]
   }
   return []
+}
+
+const FLOW_TYPE_LABELS: Record<string, string> = {
+  old: '旧流程',
+  new: '新流程',
+}
+
+const FLOW_TEMPLATE_LABELS: Record<string, string> = {
+  old: '小铁文娱流程模版',
+  new: '沐腾科技流程模版',
+}
+
+const BUILT_IN_FLOW_TEMPLATE_NAMES = new Set([
+  '旧绩效流程模板',
+  '新绩效流程模板',
+  '旧绩效流程模版',
+  '新绩效流程模版',
+  '旧流程模板',
+  '新流程模板',
+  '旧流程模版',
+  '新流程模版',
+  '旧流程',
+  '新流程',
+])
+
+function getFlowTypeLabel(flowType?: string) {
+  return FLOW_TYPE_LABELS[String(flowType || '').trim()] || '未配置流程'
+}
+
+function getTemplateDisplayName(templateName?: string, flowType?: string) {
+  const normalizedName = String(templateName || '').trim()
+  const normalizedFlowType = String(flowType || '').trim()
+  if (normalizedName && !BUILT_IN_FLOW_TEMPLATE_NAMES.has(normalizedName)) return normalizedName
+  return FLOW_TEMPLATE_LABELS[normalizedFlowType] || normalizedName
+}
+
+function getActivityTemplateDisplay(
+  activity: PerformanceActivity,
+  templateById: Map<string, PerformanceTemplate>,
+) {
+  const templateId = activity.template_id == null ? '' : String(activity.template_id)
+  const inlineTemplate = (activity as any).template
+  const inlineTemplateName = String((activity as any).template_name || inlineTemplate?.name || '').trim()
+  const matchedTemplate = templateId ? templateById.get(templateId) : undefined
+  const templateName = inlineTemplateName || String(matchedTemplate?.name || '').trim()
+  const flowType = String(inlineTemplate?.flow_type || matchedTemplate?.flow_type || activity.flow_type || '').trim()
+  const templateDisplayName = getTemplateDisplayName(templateName, flowType)
+
+  if (templateDisplayName) {
+    return {
+      label: templateDisplayName,
+      color: flowType === 'new' ? 'purple' : 'default',
+      tooltip: `流程类型：${getFlowTypeLabel(flowType)}`,
+    }
+  }
+
+  if (templateId) {
+    return {
+      label: `模板 #${templateId}`,
+      color: 'warning',
+      tooltip: `未找到模板详情，流程类型：${getFlowTypeLabel(flowType)}`,
+    }
+  }
+
+  return {
+    label: getTemplateDisplayName('', flowType) || getFlowTypeLabel(flowType),
+    color: flowType === 'new' ? 'purple' : 'default',
+    tooltip: '历史活动未关联绩效模板',
+  }
 }
 
 function getDepartmentOption(department: any) {
@@ -145,6 +215,7 @@ function getAssessmentCandidateOption(candidate: AssessmentManagerCandidate): As
   const employeeNo = String(candidate.employee_no || '').trim()
   const departmentName = String(candidate.department_name || '').trim()
   const sourceLabel = candidate.candidate_source_label || MANAGER_SOURCE_LABELS[candidate.candidate_source] || '候选'
+  const sourceTag = candidate.is_self_final_candidate ? '自评即终评' : sourceLabel
   return {
     value,
     searchText: [name, value, employeeNo, departmentName].filter(Boolean).join(' '),
@@ -153,7 +224,7 @@ function getAssessmentCandidateOption(candidate: AssessmentManagerCandidate): As
         <Text>{name}</Text>
         <Text type="secondary">{employeeNo || value}</Text>
         {departmentName && <Text type="secondary">{departmentName}</Text>}
-        <Tag color="blue">{sourceLabel}</Tag>
+        <Tag color={candidate.is_self_final_candidate ? 'purple' : 'blue'}>{sourceTag}</Tag>
       </Space>
     ),
   }
@@ -178,6 +249,90 @@ function getAssessmentUserOption(user: any): AssessmentManagerSelectOption | nul
       </Space>
     ),
   }
+}
+
+function normalizedIdentityValues(values: unknown[]) {
+  return values.map(value => String(value ?? '').trim()).filter(Boolean)
+}
+
+function identitiesIntersect(leftValues: unknown[], rightValues: unknown[]) {
+  const right = new Set(normalizedIdentityValues(rightValues))
+  return normalizedIdentityValues(leftValues).some(value => right.has(value))
+}
+
+function participantIdentityValues(participant?: PerformanceParticipant | null) {
+  if (!participant) return []
+  const extra = participant as any
+  return normalizedIdentityValues([
+    participant.employee_id,
+    extra.user_id,
+    extra.employee_no,
+  ])
+}
+
+function candidateIdentityValues(candidate: AssessmentManagerCandidate) {
+  return normalizedIdentityValues([
+    candidate.user_id,
+    candidate.employee_no,
+  ])
+}
+
+function userIdentityValues(user: any) {
+  return normalizedIdentityValues([
+    user?.user_id,
+    user?.employee_id,
+    user?.employee_no,
+    user?.id,
+  ])
+}
+
+function valueMatchesParticipant(value: unknown, participant?: PerformanceParticipant | null) {
+  return identitiesIntersect([value], participantIdentityValues(participant))
+}
+
+function valueMatchesAnyParticipant(value: unknown, participants: Array<PerformanceParticipant | null | undefined>) {
+  return participants.some(participant => valueMatchesParticipant(value, participant))
+}
+
+function candidateMatchesAnyParticipant(candidate: AssessmentManagerCandidate, participants: Array<PerformanceParticipant | null | undefined>) {
+  return participants.some(participant => identitiesIntersect(candidateIdentityValues(candidate), participantIdentityValues(participant)))
+}
+
+function selfFinalCandidateMatchesValue(candidate: AssessmentManagerCandidate, value: unknown) {
+  return Boolean(candidate.is_self_final_candidate) && identitiesIntersect(candidateIdentityValues(candidate), [value])
+}
+
+function valueIsAllowedSelfFinalCandidate(value: unknown, candidates: AssessmentManagerCandidate[]) {
+  return candidates.some(candidate => selfFinalCandidateMatchesValue(candidate, value))
+}
+
+function userMatchesAnyParticipant(user: any, participants: Array<PerformanceParticipant | null | undefined>) {
+  return participants.some(participant => identitiesIntersect(userIdentityValues(user), participantIdentityValues(participant)))
+}
+
+function isSelfFinalAssessmentRecord(record: PerformanceParticipant) {
+  return record.manager_source === 'MANUAL' && valueMatchesParticipant(record.manager_id, record)
+}
+
+function getEffectiveManagerConfigStatus(record: PerformanceParticipant) {
+  if (record.manager_config_status === 'INVALID' && isSelfFinalAssessmentRecord(record)) {
+    return 'CONFIGURED'
+  }
+  return String(record.manager_config_status || '').trim()
+}
+
+function isAssessmentManagerConfigured(record: PerformanceParticipant) {
+  const managerID = String(record.manager_id || '').trim()
+  const configStatus = getEffectiveManagerConfigStatus(record)
+  return Boolean(managerID) && configStatus !== 'PENDING' && configStatus !== 'INVALID'
+}
+
+function getManagerEvaluationBlockedReason(record: PerformanceParticipant) {
+  const configStatus = getEffectiveManagerConfigStatus(record)
+  if (!String(record.manager_id || '').trim()) return '请先配置考核上级'
+  if (configStatus === 'PENDING') return '请先配置考核上级'
+  if (configStatus === 'INVALID') return '考核上级不可用，请先调整'
+  return ''
 }
 
 function formatRangeStart(range?: [Dayjs, Dayjs]) {
@@ -215,6 +370,21 @@ const IN_PROGRESS_ACTIVITY_STATUSES = [
   'hr_confirmation',
 ]
 const CONFIRMED_ACTIVITY_STATUSES = ['locked', 'result_confirmed']
+const PERSONAL_ENTRY_ACTIVITY_STATUSES = [
+  'target_setting',
+  'self_evaluation',
+  'manager_evaluation',
+  'employee_confirmation',
+  'manager_confirmation',
+  'hr_confirmation',
+  'locked',
+  'result_confirmed',
+]
+const PERSONAL_TARGET_STATUSES = ['pending', 'target_pending_approval', 'target_rejected', 'target_set']
+const PERSONAL_SELF_EVAL_STATUSES = ['target_set', 'self_submitted']
+const PERSONAL_RESULT_STATUSES = ['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed']
+const SELF_EVAL_EDITABLE_ACTIVITY_STATUSES = ['self_evaluation', 'manager_evaluation', 'employee_confirmation', 'manager_confirmation', 'hr_confirmation', 'result_confirmed']
+const SELF_EVAL_EDITABLE_PARTICIPANT_STATUSES = ['target_set', 'self_submitted', 'manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed']
 const ACTIVITY_STATUS_FILTER_GROUPS: Record<string, string[]> = {
   [ACTIVITY_STATUS_FILTER_IN_PROGRESS]: IN_PROGRESS_ACTIVITY_STATUSES,
   [ACTIVITY_STATUS_FILTER_CONFIRMED]: CONFIRMED_ACTIVITY_STATUSES,
@@ -270,6 +440,7 @@ const PARTICIPANT_STATUS_MAP: Record<string, { label: string; color: string }> =
   self_submitted: { label: '已自评', color: 'processing' },
   manager_submitted: { label: '已评分', color: 'warning' },
   employee_confirmed: { label: '已员工确认', color: 'blue' },
+  manager_recheck: { label: '待领导复核', color: 'warning' },
   manager_confirmed: { label: '已主管确认', color: 'orange' },
   hr_confirmed: { label: '已HR确认', color: 'purple' },
   locked: { label: '已冻结', color: 'orange' },
@@ -340,6 +511,12 @@ const PerformanceOverview: React.FC = () => {
   const [scopeOptionsLoading, setScopeOptionsLoading] = useState(false)
   const [indicatorLibraries, setIndicatorLibraries] = useState<PerformanceIndicatorLibrary[]>([])
   const [indicatorLibrariesLoading, setIndicatorLibrariesLoading] = useState(false)
+  const [performanceTemplates, setPerformanceTemplates] = useState<PerformanceTemplate[]>([])
+  const [performanceTemplatesLoading, setPerformanceTemplatesLoading] = useState(false)
+  const performanceTemplateById = React.useMemo(
+    () => new Map(performanceTemplates.map(template => [String(template.id), template])),
+    [performanceTemplates],
+  )
 
   // 活动详情抽屉
   const [detailDrawerVisible, setDetailDrawerVisible] = useState(false)
@@ -405,6 +582,13 @@ const PerformanceOverview: React.FC = () => {
     () => mergeSelectOptions(baseUserOptions, importedUserOptions),
     [baseUserOptions, importedUserOptions],
   )
+  const managerTargetParticipants = React.useMemo(() => {
+    if (managerModalMode === 'single') {
+      return managerTargetParticipant ? [managerTargetParticipant] : []
+    }
+    const selected = new Set(selectedParticipantIds.map(id => String(id)))
+    return participants.filter(participant => selected.has(String(participant.id)))
+  }, [managerModalMode, managerTargetParticipant, participants, selectedParticipantIds])
 
   const managerSelectOptions = React.useMemo(() => {
     const options: AssessmentManagerSelectOption[] = []
@@ -417,12 +601,20 @@ const PerformanceOverview: React.FC = () => {
       options.push(option)
     }
 
-    managerCandidates.forEach(candidate => addOption(getAssessmentCandidateOption(candidate)))
+    managerCandidates.forEach(candidate => {
+      if (candidate.is_self_final_candidate || !candidateMatchesAnyParticipant(candidate, managerTargetParticipants)) {
+        addOption(getAssessmentCandidateOption(candidate))
+      }
+    })
     if (selectedManagerSource === 'MANUAL') {
-      users.forEach(user => addOption(getAssessmentUserOption(user)))
+      users.forEach(user => {
+        if (!userMatchesAnyParticipant(user, managerTargetParticipants)) {
+          addOption(getAssessmentUserOption(user))
+        }
+      })
     }
     return options
-  }, [managerCandidates, selectedManagerSource, users])
+  }, [managerCandidates, managerTargetParticipants, selectedManagerSource, users])
 
   const selectedManagerSourceGroup = React.useMemo(
     () => managerCandidateSources.find(item => item.source === selectedManagerSource),
@@ -491,11 +683,29 @@ const PerformanceOverview: React.FC = () => {
     }
   }, [])
 
+  const loadPerformanceTemplates = useCallback(async () => {
+    setPerformanceTemplatesLoading(true)
+    try {
+      const res: any = await performanceAPI.getTemplates({
+        page: 1,
+        page_size: 1000,
+        status: 'active',
+      })
+      setPerformanceTemplates(getListFromResponse(res, ['items', 'templates']))
+    } catch {
+      setPerformanceTemplates([])
+      message.error('流程模板选项加载失败')
+    } finally {
+      setPerformanceTemplatesLoading(false)
+    }
+  }, [])
+
   // 首次加载活动列表
   React.useEffect(() => {
     loadActivities()
     loadScopeOptions()
-  }, [loadActivities, loadScopeOptions])
+    loadPerformanceTemplates()
+  }, [loadActivities, loadScopeOptions, loadPerformanceTemplates])
 
   // 加载活动详情
   const loadActivityDetail = async (activity: PerformanceActivity) => {
@@ -568,7 +778,7 @@ const PerformanceOverview: React.FC = () => {
     }
   }
 
-  const refreshParticipants = async (activityId: number) => {
+  const reloadParticipants = async (activityId: number) => {
     setParticipantsLoading(true)
     try {
       const res: any = await performanceAPI.getParticipants(activityId, { page: 1, page_size: 200 })
@@ -638,18 +848,27 @@ const PerformanceOverview: React.FC = () => {
     setActivitySaving(true)
     try {
       const values = await form.validateFields()
+      const isCreating = !editingActivity
       const targetEmployeeIDs = normalizeIDArray(values.target_employee_ids)
       const managerAssignments = normalizeImportedManagerAssignments(
         importedManagerAssignments,
         targetEmployeeIDs.length ? targetEmployeeIDs : undefined,
       )
+      const selectedTemplate = performanceTemplates.find(template => String(template.id) === String(values.template_id))
+      const flowType = selectedTemplate?.flow_type || values.flow_type || 'old'
       const data = {
         name: values.name,
         cycle_type: values.cycle_type,
         start_date: values.date_range[0].format('YYYY-MM-DD'),
         end_date: values.date_range[1].format('YYYY-MM-DD'),
+        template_id: values.template_id,
+        flow_type: flowType,
+        organization_id: values.organization_id || '',
+        applicable_org_scope: normalizeIDArray(values.applicable_org_scope),
         target_set_start_at: formatRangeStart(values.target_set_range),
         target_set_end_at: formatRangeEnd(values.target_set_range),
+        snapshot_as_of_date: values.snapshot_as_of_date?.format('YYYY-MM-DD') || '',
+        snapshot_source: values.snapshot_as_of_date ? 'assessment_period' : 'current_user',
         self_eval_start_at: values.self_eval_range[0].format('YYYY-MM-DD'),
         self_eval_end_at: values.self_eval_range[1].format('YYYY-MM-DD'),
         manager_eval_start_at: values.manager_eval_range[0].format('YYYY-MM-DD'),
@@ -677,11 +896,21 @@ const PerformanceOverview: React.FC = () => {
         await performanceAPI.updateActivity(editingActivity.id, data)
         message.success('更新成功')
       } else {
-        await performanceAPI.createActivity(data)
+        const res: any = await performanceAPI.createActivity(data)
+        const resData = res?.data || res
+        const createdActivity = (resData?.activity || resData) as PerformanceActivity | undefined
         message.success('创建成功')
+        closeActivityEditor()
+        await loadActivities()
+        if (isCreating && createdActivity?.id) {
+          const detailRes: any = await performanceAPI.getActivity(createdActivity.id)
+          const latestActivity = detailRes?.data?.activity || detailRes?.data || detailRes || createdActivity
+          await loadActivityDetail(latestActivity)
+        }
+        return
       }
       closeActivityEditor()
-      loadActivities()
+      await loadActivities()
     } catch (err: any) {
       if (err.errorFields) {
         const firstField = err.errorFields[0]?.name
@@ -708,7 +937,6 @@ const PerformanceOverview: React.FC = () => {
         archive: performanceAPI.archiveActivity,
         publish: performanceAPI.publishActivity,
         close: performanceAPI.closeActivity,
-        refresh: performanceAPI.refreshParticipants,
         'open-target-setting': performanceAPI.openTargetSetting,
         'open-employee-confirmation': performanceAPI.openEmployeeConfirmation,
         'open-manager-confirmation': performanceAPI.openManagerConfirmation,
@@ -723,10 +951,6 @@ const PerformanceOverview: React.FC = () => {
       message.success('操作成功')
       loadActivities()
       if (detailDrawerVisible && currentActivity?.id === activity.id) {
-        const detailRes: any = await performanceAPI.getActivity(activity.id)
-        const updated = detailRes.data?.activity || detailRes.data || detailRes
-        await loadActivityDetail(updated)
-      } else if (action === 'refresh') {
         const detailRes: any = await performanceAPI.getActivity(activity.id)
         const updated = detailRes.data?.activity || detailRes.data || detailRes
         await loadActivityDetail(updated)
@@ -840,8 +1064,14 @@ const PerformanceOverview: React.FC = () => {
       loadScopeOptions()
     }
     const managerSource = getAdjustableManagerSource(record?.manager_source)
+    const currentManagerID = record?.manager_id || undefined
+    const currentManagerIsSelfFinal = Boolean(
+      record &&
+      managerSource === 'MANUAL' &&
+      valueMatchesParticipant(currentManagerID, record),
+    )
     managerForm.setFieldsValue({
-      manager_user_id: record?.manager_id || undefined,
+      manager_user_id: valueMatchesParticipant(currentManagerID, record) && !currentManagerIsSelfFinal ? undefined : currentManagerID,
       manager_source: managerSource,
       reason: '',
     })
@@ -866,6 +1096,28 @@ const PerformanceOverview: React.FC = () => {
     if (!currentActivity) return
     try {
       const values = await managerForm.validateFields()
+      if (valueMatchesAnyParticipant(values.manager_user_id, managerTargetParticipants)) {
+        const currentManagerIsSelfFinal = Boolean(
+          managerModalMode === 'single' &&
+          managerTargetParticipant &&
+          getAdjustableManagerSource(managerTargetParticipant.manager_source) === 'MANUAL' &&
+          valueMatchesParticipant(managerTargetParticipant.manager_id, managerTargetParticipant) &&
+          valueMatchesParticipant(values.manager_user_id, managerTargetParticipant),
+        )
+        const isAllowedSelfFinal =
+          managerModalMode === 'single' &&
+          values.manager_source === 'MANUAL' &&
+          (valueIsAllowedSelfFinalCandidate(values.manager_user_id, managerCandidates) || currentManagerIsSelfFinal)
+        if (!isAllowedSelfFinal) {
+          const names = managerTargetParticipants
+            .filter(participant => valueMatchesParticipant(values.manager_user_id, participant))
+            .map(participant => participant?.employee_name)
+            .filter(Boolean)
+            .join('、')
+          message.error(names ? `只有最高级或无可用组织上级人员可选择本人自评即终评：${names}` : '只有最高级或无可用组织上级人员可选择本人自评即终评')
+          return
+        }
+      }
       setManagerUpdating(true)
       if (managerModalMode === 'single' && managerTargetParticipant) {
         await performanceAPI.updateAssessmentManager(managerTargetParticipant.id, {
@@ -895,7 +1147,7 @@ const PerformanceOverview: React.FC = () => {
       setManagerModalVisible(false)
       setSelectedParticipantIds([])
       managerForm.resetFields()
-      refreshParticipants(currentActivity.id)
+      reloadParticipants(currentActivity.id)
     } catch (err: any) {
       if (err.errorFields) return
       message.error(err?.response?.data?.message || '考核上级更新失败')
@@ -920,7 +1172,6 @@ const PerformanceOverview: React.FC = () => {
     if (activity.status === 'draft') {
       actions.push(
         activityManage(<Button key="edit-participants" size="small" onClick={() => { setDetailDrawerVisible(false); openActivityModal(activity) }}>编辑参与人</Button>),
-        activityManage(<Button key="refresh-participants" size="small" onClick={() => handleActivityAction('refresh', activity)}>刷新参与人</Button>),
         activityManage(<Button key="open-target-setting" type="primary" size="small" onClick={() => handleActivityAction('open-target-setting', activity)}>开启目标设定</Button>),
         activityManage(<Button key="publish" size="small" onClick={() => handleActivityAction('publish', activity)}>直接开启自评</Button>),
       )
@@ -938,7 +1189,7 @@ const PerformanceOverview: React.FC = () => {
       actions.push(
         activityManage(<Button key="open-employee-confirmation" type="primary" size="small" onClick={() => handleActivityAction('open-employee-confirmation', activity)}>开启员工确认</Button>),
         renderDistributionButton(<Button key="distribution" size="small" onClick={() => setDistributionModalVisible(true)}>强制分布</Button>),
-        renderManagerEvalButton(<Button key="batch-eval" size="small" onClick={() => { const selectable = participants.filter(p => p.status === 'self_submitted' || p.status === 'manager_submitted'); setBatchEvalSelected(selectable.map(p => p.id)); setBatchEvalModalVisible(true) }}>批量评分</Button>),
+        renderManagerEvalButton(<Button key="batch-eval" size="small" onClick={() => { const selectable = participants.filter(p => (p.status === 'self_submitted' || p.status === 'manager_submitted') && isAssessmentManagerConfigured(p)); setBatchEvalSelected(selectable.map(p => p.id)); setBatchEvalModalVisible(true) }}>批量评分</Button>),
         activityManage(<Button key="send-manager-reminder" size="small" onClick={async () => { try { await performanceAPI.sendManagerEvalReminder(activity.id); message.success('已发送评分提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒评分</Button>),
       )
     }
@@ -966,6 +1217,7 @@ const PerformanceOverview: React.FC = () => {
     setEditingActivity(activity || null)
     loadScopeOptions()
     loadIndicatorLibraries()
+    loadPerformanceTemplates()
     if (activity) {
       const targetEmployeeIDs = normalizeIDArray(activity.target_employee_ids)
       setImportedManagerAssignments(normalizeImportedManagerAssignments(
@@ -976,8 +1228,13 @@ const PerformanceOverview: React.FC = () => {
       form.setFieldsValue({
         name: activity.name,
         cycle_type: activity.cycle_type,
+        template_id: activity.template_id,
+        flow_type: activity.flow_type || 'old',
+        organization_id: activity.organization_id || '',
+        applicable_org_scope: normalizeIDArray(activity.applicable_org_scope),
         date_range: [dayjs(activity.start_date), dayjs(activity.end_date)],
         target_set_range: activity.target_set_start_at && activity.target_set_end_at ? [dayjs(activity.target_set_start_at), dayjs(activity.target_set_end_at)] : undefined,
+        snapshot_as_of_date: activity.snapshot_as_of_date ? dayjs(activity.snapshot_as_of_date) : undefined,
         self_eval_range: [dayjs(activity.self_eval_start_at), dayjs(activity.self_eval_end_at)],
         manager_eval_range: [dayjs(activity.manager_eval_start_at), dayjs(activity.manager_eval_end_at)],
         result_confirm_range: [dayjs(activity.result_confirm_start_at), dayjs(activity.result_confirm_end_at)],
@@ -997,7 +1254,7 @@ const PerformanceOverview: React.FC = () => {
       setImportedUserOptions([])
       setImportedManagerAssignments([])
       form.resetFields()
-      form.setFieldsValue({ default_assessment_manager_source: 'DIRECT_MANAGER' })
+      form.setFieldsValue({ default_assessment_manager_source: 'DIRECT_MANAGER', flow_type: 'old' })
     }
     setActivityModalVisible(true)
     window.requestAnimationFrame(() => {
@@ -1005,10 +1262,84 @@ const PerformanceOverview: React.FC = () => {
     })
   }
 
+  const renderMyParticipantActionButton = (activity: PerformanceActivity): React.ReactNode => {
+    const participant = activity.my_participant
+    if (!participant) return null
+
+    const linkStyle: React.CSSProperties = { paddingInline: 0, fontWeight: 600 }
+    const activityId = activity.id
+    const participantId = participant.id
+
+    if (activity.status === 'target_setting' && PERSONAL_TARGET_STATUSES.includes(participant.status)) {
+      const targetLabel = ['pending', 'target_rejected'].includes(participant.status) ? '填写目标' : '我的目标'
+      return renderPermissionButton(
+        'performance:goal:manage',
+        <Button
+          key="my-target"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-my-target-${activity.id}`}
+          onClick={() => navigate(`/performance-goal-setting/${activityId}/${participantId}`)}
+        >
+          {targetLabel}
+        </Button>,
+        '绩效目标填写',
+      )
+    }
+
+    const canEditSelfEvaluation = SELF_EVAL_EDITABLE_ACTIVITY_STATUSES.includes(activity.status) &&
+      SELF_EVAL_EDITABLE_PARTICIPANT_STATUSES.includes(participant.status)
+
+    if (canEditSelfEvaluation && (activity.status === 'self_evaluation' || participant.status === 'manager_recheck' || participant.status === 'manager_confirmed')) {
+      return renderPermissionButton(
+        'performance:self_eval:submit',
+        <Button
+          key="my-self-eval"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-my-self-${activity.id}`}
+          onClick={() => navigate(`/performance-self-eval/${activityId}/${participantId}`)}
+        >
+          {PERSONAL_SELF_EVAL_STATUSES.includes(participant.status) ? '填写自评' : '修改自评'}
+        </Button>,
+        '绩效自评提交',
+      )
+    }
+
+    if (PERSONAL_RESULT_STATUSES.includes(participant.status)) {
+      const resultLabel = activity.status === 'employee_confirmation' && participant.status === 'manager_submitted'
+        ? '确认结果'
+        : '查看结果'
+      return renderPermissionButton(
+        'performance:result:view',
+        <Button
+          key="my-result"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-my-result-${activity.id}`}
+          onClick={() => navigate(`/performance-result/${activityId}/${participantId}`)}
+        >
+          {resultLabel}
+        </Button>,
+        '绩效结果查看',
+      )
+    }
+
+    return null
+  }
+
   // 活动列表操作按钮
   const getActionButtons = (record: PerformanceActivity) => {
     const buttons: React.ReactNode[] = []
     const status = record.status
+    const personalActionButton = renderMyParticipantActionButton(record)
+
+    if (personalActionButton) {
+      buttons.push(personalActionButton)
+    }
 
     buttons.push(
         <Button size="small" type="link" data-testid={`performance-activity-view-${record.id}`} onClick={() => loadActivityDetail(record)} key="view">详情</Button>
@@ -1017,7 +1348,6 @@ const PerformanceOverview: React.FC = () => {
     if (status === 'draft') {
       buttons.push(
         <Button size="small" type="link" data-testid={`performance-activity-edit-${record.id}`} onClick={() => openActivityModal(record)} key="edit">编辑参与人</Button>,
-        <Button size="small" type="link" data-testid={`performance-activity-refresh-${record.id}`} onClick={() => handleActivityAction('refresh', record)} key="refresh">刷新</Button>,
         <Button size="small" type="link" data-testid={`performance-activity-open-target-${record.id}`} onClick={() => handleActivityAction('open-target-setting', record)} key="start">开启目标</Button>
       )
     } else if (status === 'target_setting') {
@@ -1056,7 +1386,7 @@ const PerformanceOverview: React.FC = () => {
     }
 
     return buttons.map(button => (
-      React.isValidElement(button) && button.key !== 'view'
+      React.isValidElement(button) && button.key !== 'view' && !String(button.key || '').startsWith('my-')
         ? renderActivityManageButton(button)
         : button
     ))
@@ -1067,6 +1397,22 @@ const PerformanceOverview: React.FC = () => {
     { title: '活动名称', dataIndex: 'name', key: 'name', width: 180, ellipsis: true },
     { title: '周期', dataIndex: 'cycle_type', key: 'cycle_type', width: 80, render: (v: string) => getCycleLabel(v) },
     {
+      title: '模板',
+      dataIndex: 'template_id',
+      key: 'template_id',
+      width: 140,
+      render: (_: number | undefined, record: PerformanceActivity) => {
+        const templateDisplay = getActivityTemplateDisplay(record, performanceTemplateById)
+        return (
+          <Tooltip title={templateDisplay.tooltip}>
+            <Tag color={templateDisplay.color} style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'middle' }}>
+              {templateDisplay.label}
+            </Tag>
+          </Tooltip>
+        )
+      }
+    },
+    {
       title: '状态', dataIndex: 'status', key: 'status', width: 90,
       render: (status: string) => {
         const s = STATUS_MAP[status] || { label: status, color: 'default' }
@@ -1075,7 +1421,7 @@ const PerformanceOverview: React.FC = () => {
     },
     { title: '自评时间', key: 'self_eval', width: 200, render: (_, r) => `${formatDateTime(r.self_eval_start_at)} ~ ${formatDateTime(r.self_eval_end_at)}` },
     { title: '主管评分时间', key: 'mgr_eval', width: 200, render: (_, r) => `${formatDateTime(r.manager_eval_start_at)} ~ ${formatDateTime(r.manager_eval_end_at)}` },
-    { title: '操作', key: 'actions', fixed: 'right', width: 220, render: (_, record) => (
+    { title: '操作', key: 'actions', fixed: 'right', width: 280, render: (_, record) => (
       <Space size={2} wrap>{getActionButtons(record)}</Space>
     )},
   ]
@@ -1113,7 +1459,7 @@ const PerformanceOverview: React.FC = () => {
     {
       title: '配置状态', dataIndex: 'manager_config_status', key: 'manager_config_status', width: 120,
       render: (status: string, record: PerformanceParticipant) => {
-        const normalized = status || (record.manager_id ? 'CONFIGURED' : 'PENDING')
+        const normalized = getEffectiveManagerConfigStatus(record) || (record.manager_id ? 'CONFIGURED' : 'PENDING')
         const config = MANAGER_CONFIG_STATUS_LABELS[normalized] || { label: normalized, color: 'default' }
         return <Tag color={config.color}>{config.label}</Tag>
       }
@@ -1193,13 +1539,15 @@ const PerformanceOverview: React.FC = () => {
         if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && !hasPermission('performance:goal:manage')) {
           links.push(renderPermissionButton('performance:goal:manage', <Button key="target-disabled" size="small" type="link" style={linkStyle}>目标</Button>))
         }
-        if (activityStatus === 'self_evaluation' && ['target_set', 'self_submitted'].includes(record.status) && !hasPermission('performance:self_eval:submit')) {
+        const canSelfEvaluateRecord = SELF_EVAL_EDITABLE_ACTIVITY_STATUSES.includes(activityStatus || '') &&
+          SELF_EVAL_EDITABLE_PARTICIPANT_STATUSES.includes(record.status)
+        if (canSelfEvaluateRecord && !hasPermission('performance:self_eval:submit')) {
           links.push(renderPermissionButton('performance:self_eval:submit', <Button key="self-disabled" size="small" type="link" style={linkStyle}>自评</Button>))
         }
         if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && !hasPermission('performance:manager_eval:submit')) {
           links.push(renderPermissionButton('performance:manager_eval:submit', <Button key="mgr-disabled" size="small" type="link" style={linkStyle}>评分</Button>))
         }
-        if (['manager_submitted', 'employee_confirmed', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && !hasPermission('performance:result:view')) {
+        if (['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && !hasPermission('performance:result:view')) {
           links.push(renderPermissionButton('performance:result:view', <Button key="result-disabled" size="small" type="link" style={linkStyle}>结果</Button>))
         }
         if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && !hasPermission('performance:hr_confirm:submit')) {
@@ -1217,24 +1565,60 @@ const PerformanceOverview: React.FC = () => {
               onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}`)}
             >目标</Button>
           )
+          if (currentActivity?.flow_type === 'new') {
+            links.push(
+              <Button key="review-supplement" size="small" type="link" style={linkStyle} data-testid={`performance-participant-review-supplement-${record.id}`}
+                onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}?phase=review`)}
+              >补录</Button>
+            )
+          }
         }
-        // 自评：活动必须处于 self_evaluation 状态，且参与人状态允许
-        if (activityStatus === 'self_evaluation' && ['target_set', 'self_submitted'].includes(record.status) && hasPermission('performance:self_eval:submit')) {
+        // 自评：HR确认前可修改自评，主管确认后提交会进入待领导复核
+        if (canSelfEvaluateRecord && hasPermission('performance:self_eval:submit')) {
           links.push(
             <Button key="self" size="small" type="link" style={linkStyle} data-testid={`performance-participant-self-${record.id}`}
               onClick={() => navigate(`/performance-self-eval/${activityId}/${record.id}`)}
-            >自评</Button>
+            >{PERSONAL_SELF_EVAL_STATUSES.includes(record.status) ? '自评' : '改自评'}</Button>
           )
         }
         // 主管评分：活动必须处于 manager_evaluation 状态，且参与人状态允许
         if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && hasPermission('performance:manager_eval:submit')) {
+          const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
           links.push(
-            <Button key="mgr" size="small" type="link" style={linkStyle} data-testid={`performance-participant-manager-${record.id}`}
-              onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}
-            >评分</Button>
+            managerEvalBlockedReason ? (
+              <Tooltip key="mgr" title={managerEvalBlockedReason}>
+                <span>
+                  <Button size="small" type="link" disabled style={linkStyle} data-testid={`performance-participant-manager-${record.id}`}>评分</Button>
+                </span>
+              </Tooltip>
+            ) : (
+              <Button key="mgr" size="small" type="link" style={linkStyle} data-testid={`performance-participant-manager-${record.id}`}
+                onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}
+              >评分</Button>
+            )
           )
         }
-        if (['manager_submitted', 'employee_confirmed', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && hasPermission('performance:result:view')) {
+        if (['manager_confirmation', 'hr_confirmation'].includes(activityStatus || '') && record.status === 'manager_recheck') {
+          if (!hasPermission('performance:manager_confirm:submit')) {
+            links.push(renderPermissionButton('performance:manager_confirm:submit', <Button key="manager-recheck-disabled" size="small" type="link" style={linkStyle}>复核</Button>))
+          } else {
+            const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
+            links.push(
+              managerEvalBlockedReason ? (
+                <Tooltip key="manager-recheck" title={managerEvalBlockedReason}>
+                  <span>
+                    <Button size="small" type="link" disabled style={linkStyle} data-testid={`performance-participant-manager-recheck-${record.id}`}>复核</Button>
+                  </span>
+                </Tooltip>
+              ) : (
+                <Button key="manager-recheck" size="small" type="link" style={linkStyle} data-testid={`performance-participant-manager-recheck-${record.id}`}
+                  onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}
+                >复核</Button>
+              )
+            )
+          }
+        }
+        if (['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && hasPermission('performance:result:view')) {
           links.push(
             <Button key="result" size="small" type="link" style={linkStyle} data-testid={`performance-participant-result-${record.id}`}
               onClick={() => navigate(`/performance-result/${activityId}/${record.id}`)}
@@ -1390,6 +1774,8 @@ const PerformanceOverview: React.FC = () => {
             editing={Boolean(editingActivity)}
             form={form}
             saving={activitySaving}
+            performanceTemplates={performanceTemplates}
+            performanceTemplatesLoading={performanceTemplatesLoading}
             indicatorLibraries={indicatorLibraries}
             indicatorLibrariesLoading={indicatorLibrariesLoading}
             departmentOptions={departmentOptions}
@@ -1465,6 +1851,11 @@ const PerformanceOverview: React.FC = () => {
                 <StatusTag color={STATUS_MAP[currentActivity.status]?.color}>{STATUS_MAP[currentActivity.status]?.label}</StatusTag>
               </Descriptions.Item>
               <Descriptions.Item label="周期类型">{getCycleLabel(currentActivity.cycle_type)}</Descriptions.Item>
+              <Descriptions.Item label="流程类型">
+                <Tag color={currentActivity.flow_type === 'new' ? 'purple' : 'default'}>
+                  {currentActivity.flow_type === 'new' ? '新流程' : '旧流程'}
+                </Tag>
+              </Descriptions.Item>
               <Descriptions.Item label="绩效周期">{formatDateTime(currentActivity.start_date)} ~ {formatDateTime(currentActivity.end_date)}</Descriptions.Item>
               <Descriptions.Item label="自评时间">{formatDateTime(currentActivity.self_eval_start_at)} ~ {formatDateTime(currentActivity.self_eval_end_at)}</Descriptions.Item>
               <Descriptions.Item label="主管评分">{formatDateTime(currentActivity.manager_eval_start_at)} ~ {formatDateTime(currentActivity.manager_eval_end_at)}</Descriptions.Item>
@@ -1495,7 +1886,7 @@ const PerformanceOverview: React.FC = () => {
                 <>
                   <Button type="primary" size="small" onClick={() => handleActivityAction('open-employee-confirmation', currentActivity)}>开启员工确认</Button>
                   <Button size="small" onClick={() => setDistributionModalVisible(true)}>强制分布</Button>
-                  <Button size="small" onClick={() => { const selectable = participants.filter(p => p.status === 'self_submitted' || p.status === 'manager_submitted'); setBatchEvalSelected(selectable.map(p => p.id)); setBatchEvalModalVisible(true) }}>批量评分</Button>
+                    <Button size="small" onClick={() => { const selectable = participants.filter(p => (p.status === 'self_submitted' || p.status === 'manager_submitted') && isAssessmentManagerConfigured(p)); setBatchEvalSelected(selectable.map(p => p.id)); setBatchEvalModalVisible(true) }}>批量评分</Button>
                   <Button size="small" onClick={async () => { try { await performanceAPI.sendManagerEvalReminder(currentActivity.id); message.success('已发送评分提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒评分</Button>
                 </>
               )}
@@ -1520,9 +1911,6 @@ const PerformanceOverview: React.FC = () => {
               {currentActivity.status === 'result_confirmed' && (
                 <Button size="small" onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
               )}
-              {currentActivity.status === 'draft' && (
-                <Button size="small" onClick={() => handleActivityAction('refresh', currentActivity)}>刷新参与人</Button>
-              )}
                 </>
               )}
             </div>
@@ -1543,7 +1931,14 @@ const PerformanceOverview: React.FC = () => {
                   {[
                     { title: '参与人数', value: summary.total_participants, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
                     { title: '已自评', value: summary.self_submitted_count, color: '#0369a1', bg: '#e0f2fe' },
-                    { title: '已评分', value: summary.manager_submitted_count, color: '#b45309', bg: '#fef3c7' },
+                    {
+                      title: '已评分',
+                      value: summary.manager_submitted_count + participants.filter(record =>
+                        record.status === 'self_submitted' && isSelfFinalAssessmentRecord(record)
+                      ).length,
+                      color: '#b45309',
+                      bg: '#fef3c7',
+                    },
                     { title: '已确认', value: summary.result_confirmed_count, color: 'var(--color-success)', bg: '#dcfce7' },
                   ].map((item, idx) => (
                     <div key={item.title} style={{
@@ -1681,6 +2076,9 @@ const PerformanceOverview: React.FC = () => {
           message={managerModalMode === 'single'
             ? `调整对象：${managerTargetParticipant?.employee_name || '-'}`
             : `已选择 ${selectedParticipantIds.length} 名参与人`}
+          description={managerModalMode === 'single'
+            ? '普通员工不能选择本人；最高级或无可用组织上级人员可在“手动指定”下选择本人，按自评即终评处理。'
+            : '批量调整不能把任一已选参与人设置为自己的考核上级；自评即终评请单独调整。'}
         />
         <Form form={managerForm} layout="vertical">
           <Form.Item name="manager_user_id" label="考核上级" rules={[{ required: true, message: '请选择考核上级' }]}>
@@ -1821,7 +2219,7 @@ const PerformanceOverview: React.FC = () => {
             setBatchEvalModalVisible(false)
             batchEvalForm.resetFields()
             setBatchEvalScore(0)
-            refreshParticipants(currentActivity.id)
+            reloadParticipants(currentActivity.id)
           } catch (err: any) {
             if (err.errorFields) return
             message.error(err?.response?.data?.message || '批量评分失败')

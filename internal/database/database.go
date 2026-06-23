@@ -109,6 +109,7 @@ func Init() error {
 
 	// 增量迁移：为已有部署补充新权限码
 	migratePermissions()
+	migratePerformanceIndicatorRolePresets()
 	migrateMenuPermissions()
 
 	// 绩效表已随主库 migrate() 一并迁移，无需独立数据源
@@ -232,6 +233,7 @@ func migrate() error {
 		&PerformanceActivity{},
 		&PerformanceDistributionRule{},
 		&PerformanceDistributionException{},
+		&PerformanceReminderLog{},
 		&PerformanceParticipant{},
 		&PerformanceReview{},
 		&PerformanceReviewVersion{},
@@ -942,6 +944,247 @@ func grantCompatPermission(sourcePerm, targetPerm string, permMap map[string]uin
 			log.Printf("迁移：角色 %d 已补充权限 %s", rp.RoleID, targetPerm)
 		}
 	}
+}
+
+type indicatorRolePreset struct {
+	Name           string
+	Description    string
+	DataScope      string
+	DepartmentKeys string
+}
+
+var performanceIndicatorRolePresets = []indicatorRolePreset{
+	{
+		Name:           "绩效管理者-人事",
+		Description:    "维护全公司绩效指标库，核查并配置各部门绩效指标",
+		DataScope:      "all",
+		DepartmentKeys: "[]",
+	},
+	{
+		Name:           "人力负责人",
+		Description:    "维护全公司绩效指标库，查看并配置各部门绩效指标",
+		DataScope:      "all",
+		DepartmentKeys: "[]",
+	},
+	{
+		Name:           "HRBP",
+		Description:    "维护负责组织范围内的绩效指标库",
+		DataScope:      "department",
+		DepartmentKeys: "[]",
+	},
+	{
+		Name:           "部门负责人",
+		Description:    "维护所在组织架构管理范围内的绩效指标库",
+		DataScope:      "department",
+		DepartmentKeys: "[]",
+	},
+	{
+		Name:           "部门助理",
+		Description:    "协助维护负责组织范围内的绩效指标库",
+		DataScope:      "department",
+		DepartmentKeys: "[]",
+	},
+	{
+		Name:           "部门主管",
+		Description:    "维护主管负责组织范围内的绩效指标库",
+		DataScope:      "department",
+		DepartmentKeys: "[]",
+	},
+	{
+		Name:           "经理",
+		Description:    "维护经理负责组织范围内的绩效指标库",
+		DataScope:      "department",
+		DepartmentKeys: "[]",
+	},
+}
+
+func migratePerformanceIndicatorRolePresets() {
+	permMap := make(map[string]uint)
+	var permissions []Permission
+	if err := DB.Find(&permissions).Error; err != nil {
+		log.Printf("迁移绩效指标库角色：读取权限失败: %v", err)
+		return
+	}
+	for _, permission := range permissions {
+		permMap[permission.Code] = permission.ID
+	}
+
+	for _, preset := range performanceIndicatorRolePresets {
+		role, err := ensureRolePreset(preset.Name, preset.Description)
+		if err != nil {
+			log.Printf("迁移绩效指标库角色：角色 %s 创建/恢复失败: %v", preset.Name, err)
+			continue
+		}
+		for _, code := range []string{"performance:indicator:manage", "org:read"} {
+			if err := ensureRolePermission(role.ID, code, permMap); err != nil {
+				log.Printf("迁移绩效指标库角色：角色 %s 补充权限 %s 失败: %v", preset.Name, code, err)
+			}
+		}
+		if err := ensureRoleMenuPermission(role.ID, []string{"menu:home", "menu:performance-indicator-library"}); err != nil {
+			log.Printf("迁移绩效指标库角色：角色 %s 补充菜单权限失败: %v", preset.Name, err)
+		}
+		if err := ensureRoleDataPermission(role.ID, preset.DataScope, preset.DepartmentKeys); err != nil {
+			log.Printf("迁移绩效指标库角色：角色 %s 补充数据权限失败: %v", preset.Name, err)
+		}
+	}
+}
+
+func ensureRolePreset(name, description string) (Role, error) {
+	var role Role
+	err := DB.Unscoped().Where("name = ?", name).First(&role).Error
+	if err == gorm.ErrRecordNotFound {
+		role = Role{Name: name, Description: description}
+		return role, DB.Create(&role).Error
+	}
+	if err != nil {
+		return role, err
+	}
+	updates := map[string]interface{}{}
+	if role.DeletedAt.Valid {
+		updates["deleted_at"] = nil
+	}
+	if strings.TrimSpace(role.Description) == "" {
+		updates["description"] = description
+		role.Description = description
+	}
+	if len(updates) > 0 {
+		if err := DB.Unscoped().Model(&role).Updates(updates).Error; err != nil {
+			return role, err
+		}
+	}
+	role.DeletedAt.Valid = false
+	return role, nil
+}
+
+func ensureRolePermission(roleID uint, permissionCode string, permMap map[string]uint) error {
+	permissionID, ok := permMap[permissionCode]
+	if !ok {
+		return fmt.Errorf("permission %s not found", permissionCode)
+	}
+	var existing RolePermission
+	err := DB.Unscoped().
+		Where("role_id = ? AND permission_id = ?", roleID, permissionID).
+		Order("deleted_at IS NULL DESC, id ASC").
+		First(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		return DB.Create(&RolePermission{RoleID: roleID, PermissionID: permissionID}).Error
+	}
+	if err != nil {
+		return err
+	}
+	if existing.DeletedAt.Valid {
+		return DB.Unscoped().Model(&existing).Update("deleted_at", nil).Error
+	}
+	return nil
+}
+
+func ensureRoleMenuPermission(roleID uint, menuKeys []string) error {
+	var existing MenuPermission
+	err := DB.Unscoped().
+		Where("role_id = ?", roleID).
+		Order("deleted_at IS NULL DESC, id ASC").
+		First(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		payload, err := json.Marshal(normalizeMenuPermissionKeys(menuKeys))
+		if err != nil {
+			return err
+		}
+		return DB.Create(&MenuPermission{RoleID: roleID, MenuKeys: string(payload)}).Error
+	}
+	if err != nil {
+		return err
+	}
+	mergedKeys := normalizeMenuPermissionKeys(menuKeys)
+	var existingKeys []string
+	existingKeysParsed := false
+	if err := json.Unmarshal([]byte(strings.TrimSpace(existing.MenuKeys)), &existingKeys); err == nil {
+		existingKeysParsed = true
+		mergedKeys = normalizeMenuPermissionKeys(append(existingKeys, menuKeys...))
+	}
+	normalizedExistingKeys := normalizeMenuPermissionKeys(existingKeys)
+	updates := map[string]interface{}{}
+	if !existingKeysParsed || !stringSlicesEqual(normalizedExistingKeys, mergedKeys) {
+		payload, err := json.Marshal(mergedKeys)
+		if err != nil {
+			return err
+		}
+		updates["menu_keys"] = string(payload)
+	}
+	if existing.DeletedAt.Valid {
+		updates["deleted_at"] = nil
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return DB.Unscoped().Model(&existing).Updates(updates).Error
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func ensureRoleDataPermission(roleID uint, scope string, departmentKeys string) error {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = "department"
+	}
+	departmentKeys = strings.TrimSpace(departmentKeys)
+	if departmentKeys == "" {
+		departmentKeys = "[]"
+	}
+	var existing DataPermission
+	err := DB.Unscoped().
+		Where("role_id = ?", roleID).
+		Order("deleted_at IS NULL DESC, id ASC").
+		First(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		return DB.Create(&DataPermission{RoleID: roleID, Scope: scope, DepartmentKeys: departmentKeys}).Error
+	}
+	if err != nil {
+		return err
+	}
+	updates := map[string]interface{}{}
+	if existing.DeletedAt.Valid {
+		updates["deleted_at"] = nil
+	}
+	if strings.TrimSpace(existing.Scope) == "" {
+		updates["scope"] = scope
+	}
+	if strings.TrimSpace(existing.DepartmentKeys) == "" {
+		updates["department_keys"] = departmentKeys
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return DB.Unscoped().Model(&existing).Updates(updates).Error
+}
+
+func normalizeMenuPermissionKeys(keys []string) []string {
+	keySet := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		normalized := strings.TrimSpace(key)
+		if normalized == "" {
+			continue
+		}
+		if !strings.HasPrefix(normalized, "menu:") {
+			normalized = "menu:" + normalized
+		}
+		keySet[normalized] = struct{}{}
+	}
+	result := make([]string, 0, len(keySet))
+	for key := range keySet {
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result
 }
 
 var legacyMenuKeysByPermission = map[string][]string{

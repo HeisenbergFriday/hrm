@@ -6,15 +6,26 @@ import (
 
 // PerformanceTemplate 绩效模板
 type PerformanceTemplate struct {
-	ID          uint       `gorm:"primaryKey" json:"id"`
-	Name        string     `gorm:"type:varchar(128);not null;index" json:"name"`
-	Description string     `gorm:"type:text" json:"description"`
-	Status      string     `gorm:"type:varchar(32);not null;index;default:draft" json:"status"` // draft, active, archived
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	DeletedAt   *time.Time `gorm:"index" json:"-"`
-	CreatedBy   string     `gorm:"type:varchar(64)" json:"created_by"`
-	UpdatedBy   string     `gorm:"type:varchar(64)" json:"updated_by"`
+	ID                 uint                   `gorm:"primaryKey" json:"id"`
+	Name               string                 `gorm:"type:varchar(128);not null;index" json:"name"`
+	Code               string                 `gorm:"type:varchar(64);index" json:"code"`
+	Description        string                 `gorm:"type:text" json:"description"`
+	FlowType           string                 `gorm:"type:varchar(32);not null;index;default:old" json:"flow_type"` // old, new
+	OrganizationID     string                 `gorm:"type:varchar(64);index" json:"organization_id"`
+	OrganizationScope  []string               `gorm:"type:json;serializer:json" json:"organization_scope"`
+	Status             string                 `gorm:"type:varchar(32);not null;index;default:draft" json:"status"` // draft, active, archived
+	CycleTypes         []string               `gorm:"type:json;serializer:json" json:"cycle_types"`
+	WorkflowConfig     map[string]interface{} `gorm:"type:json;serializer:json" json:"workflow_config"`
+	FormConfig         map[string]interface{} `gorm:"type:json;serializer:json" json:"form_config"`
+	LevelRuleConfig    map[string]interface{} `gorm:"type:json;serializer:json" json:"level_rule_config"`
+	DistributionConfig map[string]interface{} `gorm:"type:json;serializer:json" json:"distribution_config"`
+	PermissionConfig   map[string]interface{} `gorm:"type:json;serializer:json" json:"permission_config"`
+	PublishConfig      map[string]interface{} `gorm:"type:json;serializer:json" json:"publish_config"`
+	CreatedAt          time.Time              `json:"created_at"`
+	UpdatedAt          time.Time              `json:"updated_at"`
+	DeletedAt          *time.Time             `gorm:"index" json:"-"`
+	CreatedBy          string                 `gorm:"type:varchar(64)" json:"created_by"`
+	UpdatedBy          string                 `gorm:"type:varchar(64)" json:"updated_by"`
 }
 
 // PerformanceTemplateSection 绩效模板评分维度
@@ -64,6 +75,9 @@ type PerformanceActivity struct {
 	StartDate          string `gorm:"type:varchar(32);not null" json:"start_date"`
 	EndDate            string `gorm:"type:varchar(32);not null" json:"end_date"`
 	IndicatorLibraryID *uint  `gorm:"index" json:"indicator_library_id"`
+	TemplateID         *uint  `gorm:"index" json:"template_id"`
+	FlowType           string `gorm:"type:varchar(32);not null;index;default:old" json:"flow_type"`
+	OrganizationID     string `gorm:"type:varchar(64);index" json:"organization_id"`
 
 	// 目标设定阶段
 	TargetSetStartAt string `gorm:"type:varchar(32)" json:"target_set_start_at"`
@@ -96,9 +110,23 @@ type PerformanceActivity struct {
 	// 参与人范围筛选
 	TargetDepartmentIDs []string                               `gorm:"type:json;serializer:json" json:"target_department_ids"`
 	TargetEmployeeIDs   []string                               `gorm:"type:json;serializer:json" json:"target_employee_ids"`
+	ApplicableOrgScope  []string                               `gorm:"type:json;serializer:json" json:"applicable_org_scope"`
 	ManagerAssignments  []PerformanceActivityManagerAssignment `gorm:"type:json;serializer:json" json:"manager_assignments"`
 	// DefaultAssessmentManagerSource controls manager assignment only for newly added participants.
-	DefaultAssessmentManagerSource string `gorm:"type:varchar(32);default:'DIRECT_MANAGER'" json:"default_assessment_manager_source"`
+	DefaultAssessmentManagerSource string                 `gorm:"type:varchar(32);default:'DIRECT_MANAGER'" json:"default_assessment_manager_source"`
+	SnapshotAsOfDate               string                 `gorm:"type:varchar(32)" json:"snapshot_as_of_date"`
+	SnapshotSource                 string                 `gorm:"type:varchar(32);default:'current_user'" json:"snapshot_source"`
+	TargetPlanActivityID           *uint                  `gorm:"index" json:"target_plan_activity_id"`
+	PreviousReviewActivityID       *uint                  `gorm:"index" json:"previous_review_activity_id"`
+	PublishMode                    string                 `gorm:"type:varchar(32);default:'manual'" json:"publish_mode"`
+	PublishAt                      string                 `gorm:"type:varchar(32)" json:"publish_at"`
+	ReminderConfig                 map[string]interface{} `gorm:"type:json;serializer:json" json:"reminder_config"`
+	WorkflowConfig                 map[string]interface{} `gorm:"type:json;serializer:json" json:"workflow_config"`
+	FormConfig                     map[string]interface{} `gorm:"type:json;serializer:json" json:"form_config"`
+	LevelRuleConfig                map[string]interface{} `gorm:"type:json;serializer:json" json:"level_rule_config"`
+	DistributionConfig             map[string]interface{} `gorm:"type:json;serializer:json" json:"distribution_config"`
+	PermissionConfig               map[string]interface{} `gorm:"type:json;serializer:json" json:"permission_config"`
+	PublishConfig                  map[string]interface{} `gorm:"type:json;serializer:json" json:"publish_config"`
 
 	// 附加分配置
 	EnableBonusScore bool `gorm:"default:false" json:"enable_bonus_score"` // 启用后附加分计入总分并影响等级
@@ -160,16 +188,35 @@ type PerformanceDistributionException struct {
 	CreatedAt              time.Time              `json:"created_at"`
 }
 
+// PerformanceReminderLog records automatic reminder rounds and prevents duplicate sends.
+type PerformanceReminderLog struct {
+	ID            uint       `gorm:"primaryKey" json:"id"`
+	ActivityID    string     `gorm:"type:varchar(64);not null;index;uniqueIndex:idx_perf_reminder_round"`
+	ParticipantID uint       `gorm:"not null;index;uniqueIndex:idx_perf_reminder_round"`
+	EmployeeID    string     `gorm:"type:varchar(64);not null;index"`
+	Stage         string     `gorm:"type:varchar(32);not null;index;uniqueIndex:idx_perf_reminder_round"`
+	ReminderKey   string     `gorm:"type:varchar(64);not null;index;uniqueIndex:idx_perf_reminder_round"`
+	ReminderDate  string     `gorm:"type:varchar(32);not null;index;uniqueIndex:idx_perf_reminder_round"`
+	Channel       string     `gorm:"type:varchar(32);not null;default:'dingtalk'" json:"channel"`
+	Status        string     `gorm:"type:varchar(32);not null;default:'sent'" json:"status"`
+	ErrorMessage  string     `gorm:"type:text" json:"error_message"`
+	SentAt        *time.Time `json:"sent_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
 type PerformanceParticipant struct {
-	ID             uint   `gorm:"primaryKey" json:"id"`
-	ActivityID     string `gorm:"type:varchar(64);not null;index" json:"activity_id"`
-	EmployeeID     string `gorm:"type:varchar(64);not null;index" json:"employee_id"`
-	EmployeeName   string `gorm:"type:varchar(128);not null" json:"employee_name"`
-	DepartmentID   string `gorm:"type:varchar(64);not null;index" json:"department_id"`
-	DepartmentName string `gorm:"type:varchar(128)" json:"department_name"`
-	Position       string `gorm:"type:varchar(128)" json:"position"`
-	Level          string `gorm:"type:varchar(32)" json:"level"`
-	EmployeeStatus string `gorm:"type:varchar(32)" json:"employee_status"`
+	ID               uint   `gorm:"primaryKey" json:"id"`
+	ActivityID       string `gorm:"type:varchar(64);not null;index" json:"activity_id"`
+	EmployeeID       string `gorm:"type:varchar(64);not null;index" json:"employee_id"`
+	EmployeeName     string `gorm:"type:varchar(128);not null" json:"employee_name"`
+	DepartmentID     string `gorm:"type:varchar(64);not null;index" json:"department_id"`
+	DepartmentName   string `gorm:"type:varchar(128)" json:"department_name"`
+	Position         string `gorm:"type:varchar(128)" json:"position"`
+	Level            string `gorm:"type:varchar(32)" json:"level"`
+	EmployeeStatus   string `gorm:"type:varchar(32)" json:"employee_status"`
+	SnapshotSource   string `gorm:"type:varchar(32);default:'current_user'" json:"snapshot_source"`
+	SnapshotAsOfDate string `gorm:"type:varchar(32)" json:"snapshot_as_of_date"`
 
 	// ManagerID/ManagerName are the assessment manager inside this performance activity.
 	// They are intentionally independent from users.manager_user_id / manager_name.
@@ -344,13 +391,19 @@ type PerformanceGoalRecord struct {
 	ActivityID      string     `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 	ParticipantID   uint       `gorm:"not null;index" json:"participant_id"`
 	IndicatorItemID *uint      `gorm:"index" json:"indicator_item_id"`
-	SectionType     string     `gorm:"type:varchar(32);not null" json:"section_type"` // quantitative, key_action, bonus_penalty
+	SectionType     string     `gorm:"type:varchar(32);not null" json:"section_type"`           // quantitative, key_action, bonus_penalty
+	GoalPhase       string     `gorm:"type:varchar(32);index;default:review" json:"goal_phase"` // review, plan
+	GoalType        string     `gorm:"type:varchar(32);index" json:"goal_type"`                 // okr, kpi, fixed
+	FixedKey        string     `gorm:"type:varchar(64);index" json:"fixed_key"`
+	IsFixed         bool       `gorm:"default:false" json:"is_fixed"`
 	ItemName        string     `gorm:"type:varchar(256);not null" json:"item_name"`
 	ItemDefinition  string     `gorm:"type:text" json:"item_definition"`
 	Weight          float64    `gorm:"default:0" json:"weight"`
 	RedLineValue    string     `gorm:"type:varchar(256)" json:"red_line_value"`
 	TargetValue     string     `gorm:"type:varchar(256)" json:"target_value"`
 	ChallengeValue  string     `gorm:"type:varchar(256)" json:"challenge_value"`
+	MetricUnit      string     `gorm:"type:varchar(64)" json:"metric_unit"`
+	CompletionRate  float64    `gorm:"default:0" json:"completion_rate"`
 	ScoringRule     string     `gorm:"type:text" json:"scoring_rule"`
 	ActualResult    string     `gorm:"type:text" json:"actual_result"`
 	Attachments     []string   `gorm:"type:json;serializer:json" json:"attachments"`
@@ -403,6 +456,7 @@ type PerformanceIndicatorLibrary struct {
 	DepartmentID    string     `gorm:"type:varchar(64);not null;index" json:"department_id"`
 	DepartmentName  string     `gorm:"type:varchar(128);not null" json:"department_name"`
 	ParentLibraryID *uint      `gorm:"index" json:"parent_library_id"`
+	TemplateID      *uint      `gorm:"index" json:"template_id"`
 	Name            string     `gorm:"type:varchar(128);not null" json:"name"`
 	Description     string     `gorm:"type:text" json:"description"`
 	DefaultCycle    string     `gorm:"type:varchar(32)" json:"default_cycle"`

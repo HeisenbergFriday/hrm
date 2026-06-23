@@ -31,6 +31,8 @@ interface PerformanceActivityEditorProps {
   editing: boolean
   form: FormInstance
   saving?: boolean
+  performanceTemplates?: any[]
+  performanceTemplatesLoading?: boolean
   indicatorLibraries: any[]
   indicatorLibrariesLoading: boolean
   departmentOptions: SelectOption[]
@@ -75,8 +77,28 @@ const sectionTitleStyle: React.CSSProperties = {
 const cycleLabels: Record<string, string> = {
   monthly: '月度',
   quarterly: '季度',
+  semiannual: '半年度',
   annual: '年度',
+  probation: '试用期',
 }
+
+const flowTypeLabels: Record<string, string> = {
+  old: '小铁文娱流程模版',
+  new: '沐腾科技流程模版',
+}
+
+const builtInFlowTemplateNames = new Set([
+  '旧绩效流程模板',
+  '新绩效流程模板',
+  '旧绩效流程模版',
+  '新绩效流程模版',
+  '旧流程模板',
+  '新流程模板',
+  '旧流程模版',
+  '新流程模版',
+  '旧流程',
+  '新流程',
+])
 
 function normalizeCycleType(value?: string) {
   return String(value || '').trim()
@@ -85,6 +107,22 @@ function normalizeCycleType(value?: string) {
 function getCycleLabel(value?: string) {
   const normalized = normalizeCycleType(value)
   return cycleLabels[normalized] || normalized || '未知周期'
+}
+
+function getFlowTypeLabel(value?: string) {
+  const normalized = String(value || '').trim()
+  return flowTypeLabels[normalized] || '选择模板后自动带出'
+}
+
+function getTemplateDisplayName(template: any) {
+  const flowType = String(template?.flow_type || '').trim()
+  const templateName = String(template?.name || '').trim()
+  if (templateName && !builtInFlowTemplateNames.has(templateName)) return templateName
+  return flowTypeLabels[flowType] || templateName || '未命名流程模版'
+}
+
+function getFlowTemplateOptionLabel(template: any) {
+  return getTemplateDisplayName(template)
 }
 
 function normalizeEditorIDArray(value: unknown): string[] {
@@ -120,6 +158,8 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
   editing,
   form,
   saving = false,
+  performanceTemplates = [],
+  performanceTemplatesLoading = false,
   indicatorLibraries,
   indicatorLibrariesLoading,
   departmentOptions,
@@ -136,8 +176,27 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
   const cycleType = values.cycle_type as string | undefined
   const targetEmployeeIDs = normalizeEditorIDArray(values.target_employee_ids)
   const selectedIndicatorLibraryId = values.indicator_library_id as number | string | undefined
+  const selectedTemplateId = values.template_id as number | string | undefined
   const normalizedCycleType = normalizeCycleType(cycleType)
   const selectedIndicatorLibraryIdKey = selectedIndicatorLibraryId == null ? '' : String(selectedIndicatorLibraryId)
+  const selectedTemplateIdKey = selectedTemplateId == null ? '' : String(selectedTemplateId)
+  const selectedTemplate = React.useMemo(
+    () => performanceTemplates.find(template => String(template.id) === selectedTemplateIdKey) || null,
+    [performanceTemplates, selectedTemplateIdKey],
+  )
+  const selectedFlowType = String(selectedTemplate?.flow_type || values.flow_type || '').trim()
+  React.useEffect(() => {
+    if (selectedTemplateIdKey || performanceTemplatesLoading || performanceTemplates.length === 0) return
+    const currentFlowType = String(form.getFieldValue('flow_type') || 'old').trim()
+    const defaultTemplate = performanceTemplates.find(template => String(template.flow_type || '').trim() === currentFlowType)
+      || performanceTemplates[0]
+    if (!defaultTemplate) return
+    form.setFieldsValue({
+      template_id: defaultTemplate.id,
+      flow_type: defaultTemplate.flow_type || currentFlowType,
+    })
+    forceFormRerender(version => version + 1)
+  }, [form, performanceTemplates, performanceTemplatesLoading, selectedTemplateIdKey])
   const selectedIndicatorLibrary = React.useMemo(
     () => indicatorLibraries.find(lib => String(lib.id) === selectedIndicatorLibraryIdKey) || null,
     [indicatorLibraries, selectedIndicatorLibraryIdKey],
@@ -147,24 +206,30 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
       && selectedIndicatorLibrary
       && normalizeCycleType(selectedIndicatorLibrary.default_cycle) !== normalizedCycleType,
   )
+  const indicatorLibraryTemplateMismatch = Boolean(
+    selectedTemplateIdKey
+      && selectedIndicatorLibrary
+      && String(selectedIndicatorLibrary.template_id || '') !== selectedTemplateIdKey,
+  )
   const visibleIndicatorLibraries = React.useMemo(() => {
-    const cycleFilteredLibraries = indicatorLibraries.filter(lib => {
+    const filteredLibraries = indicatorLibraries.filter(lib => {
+      if (selectedTemplateIdKey && String(lib.template_id || '') !== selectedTemplateIdKey) return false
       if (!normalizedCycleType) return true
       return normalizeCycleType(lib.default_cycle) === normalizedCycleType
     })
 
-    if (!selectedIndicatorLibrary || !indicatorLibraryCycleMismatch) {
-      return cycleFilteredLibraries
+    if (!selectedIndicatorLibrary || (!indicatorLibraryCycleMismatch && !indicatorLibraryTemplateMismatch)) {
+      return filteredLibraries
     }
 
-    if (cycleFilteredLibraries.some(lib => String(lib.id) === String(selectedIndicatorLibrary.id))) {
-      return cycleFilteredLibraries
+    if (filteredLibraries.some(lib => String(lib.id) === String(selectedIndicatorLibrary.id))) {
+      return filteredLibraries
     }
 
-    return [...cycleFilteredLibraries, selectedIndicatorLibrary]
-  }, [indicatorLibraries, normalizedCycleType, indicatorLibraryCycleMismatch, selectedIndicatorLibrary])
+    return [...filteredLibraries, selectedIndicatorLibrary]
+  }, [indicatorLibraries, normalizedCycleType, selectedTemplateIdKey, indicatorLibraryCycleMismatch, indicatorLibraryTemplateMismatch, selectedIndicatorLibrary])
   const requiredChecks = [
-    { id: 'activity-basic-section', label: '基础信息', done: Boolean(values.name && values.cycle_type) },
+    { id: 'activity-basic-section', label: '基础信息', done: Boolean(values.name && values.cycle_type && values.template_id) },
     { id: 'activity-period-section', label: '周期设置', done: isRangeFilled(values.date_range) },
     {
       id: 'activity-review-section',
@@ -287,10 +352,61 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                       options={[
                         { value: 'monthly', label: '月度' },
                         { value: 'quarterly', label: '季度' },
+                        { value: 'semiannual', label: '半年度' },
                         { value: 'annual', label: '年度' },
+                        { value: 'probation', label: '试用期' },
                       ]}
                     />
                   </Form.Item>
+                </Col>
+                <Col xs={24} md={8}>
+                  <Form.Item
+                    name="template_id"
+                    label="流程模板"
+                    rules={[{ required: true, message: '请选择流程模板' }]}
+                  >
+                    <Select
+                      placeholder="请选择绩效流程模板"
+                      showSearch
+                      loading={performanceTemplatesLoading}
+                      optionFilterProp="label"
+                      filterOption={filterSelectOption}
+                      options={performanceTemplates.map(template => ({
+                        value: template.id,
+                        label: getFlowTemplateOptionLabel(template),
+                      }))}
+                      onChange={(value) => {
+                        const template = performanceTemplates.find(item => String(item.id) === String(value))
+                        if (template?.flow_type) {
+                          form.setFieldValue('flow_type', template.flow_type)
+                        } else {
+                          form.setFieldValue('flow_type', undefined)
+                        }
+                        form.setFieldValue('indicator_library_id', undefined)
+                        forceFormRerender(version => version + 1)
+                      }}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={8}>
+                  <Form.Item name="flow_type" hidden>
+                    <Input />
+                  </Form.Item>
+                  <Form.Item label="流程类型">
+                    <Space size={8} wrap>
+                      <Tag color={selectedFlowType === 'new' ? 'processing' : 'default'} style={{ marginInlineEnd: 0 }}>
+                        {getFlowTypeLabel(selectedFlowType)}
+                      </Tag>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        由流程模板自动决定
+                      </Text>
+                    </Space>
+                  </Form.Item>
+                  {selectedTemplate?.description && (
+                    <Text type="secondary" style={{ display: 'block', marginTop: -12, marginBottom: 12, fontSize: 12 }}>
+                      {selectedTemplate.description}
+                    </Text>
+                  )}
                 </Col>
                 <Col xs={24} md={8}>
                   <Form.Item
@@ -304,6 +420,10 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                           const library = indicatorLibraries.find(lib => String(lib.id) === String(value))
                           if (!library) return Promise.resolve()
 
+                          if (selectedTemplateIdKey && String(library.template_id || '') !== selectedTemplateIdKey) {
+                            return Promise.reject(new Error('请选择当前流程模板下的指标库'))
+                          }
+
                           const libraryCycle = normalizeCycleType(library.default_cycle)
                           if (libraryCycle === normalizedCycleType) return Promise.resolve()
 
@@ -312,8 +432,14 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                       },
                     ]}
                     extra={
-                      normalizedCycleType
-                        ? indicatorLibraryCycleMismatch && selectedIndicatorLibrary
+                      selectedTemplateIdKey && normalizedCycleType
+                        ? indicatorLibraryTemplateMismatch && selectedIndicatorLibrary
+                          ? (
+                            <Text type="warning">
+                              当前已选指标库不属于所选流程模板，请更换。
+                            </Text>
+                          )
+                          : indicatorLibraryCycleMismatch && selectedIndicatorLibrary
                           ? (
                             <Text type="warning">
                               当前已选指标库默认周期为 {getCycleLabel(selectedIndicatorLibrary.default_cycle)}，与活动周期 {getCycleLabel(normalizedCycleType)} 不一致，请更换。
@@ -321,21 +447,21 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                           )
                           : (
                             <Text type="secondary">
-                              仅显示默认周期为 {getCycleLabel(normalizedCycleType)} 的指标库。
+                              仅显示当前流程模板下，且默认周期为 {getCycleLabel(normalizedCycleType)} 的指标库。
                             </Text>
                           )
                         : (
                           <Text type="secondary">
-                            请先选择周期类型，指标库会按周期自动过滤。
+                            请先选择流程模板和周期类型，指标库会自动过滤。
                           </Text>
                         )
                     }
                   >
                     <Select
-                      placeholder={normalizedCycleType ? `请选择${getCycleLabel(normalizedCycleType)}指标库（可选）` : '请先选择周期类型'}
+                      placeholder={selectedTemplateIdKey && normalizedCycleType ? `请选择${getCycleLabel(normalizedCycleType)}指标库（可选）` : '请先选择流程模板和周期类型'}
                       allowClear
                       showSearch
-                      disabled={!normalizedCycleType}
+                      disabled={!selectedTemplateIdKey || !normalizedCycleType}
                       loading={indicatorLibrariesLoading}
                       optionFilterProp="label"
                       filterOption={filterSelectOption}
@@ -365,6 +491,11 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                 <Col xs={24} md={12}>
                   <Form.Item name="target_set_range" label="目标设定时间">
                     <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Form.Item name="snapshot_as_of_date" label="组织快照日期" extra="为空时按创建参与人时的当前组织归属生成快照">
+                    <DatePicker placeholder="选择考核期归属日期" style={{ width: '100%' }} />
                   </Form.Item>
                 </Col>
               </Row>

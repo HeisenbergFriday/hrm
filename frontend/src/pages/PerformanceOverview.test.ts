@@ -151,6 +151,55 @@ function getAssessmentUserOption(user: any) {
   }
 }
 
+function normalizedIdentityValues(values: unknown[]) {
+  return values.map(value => String(value ?? '').trim()).filter(Boolean)
+}
+
+function identitiesIntersect(leftValues: unknown[], rightValues: unknown[]) {
+  const right = new Set(normalizedIdentityValues(rightValues))
+  return normalizedIdentityValues(leftValues).some(value => right.has(value))
+}
+
+function participantIdentityValues(participant?: any) {
+  if (!participant) return []
+  return normalizedIdentityValues([
+    participant.employee_id,
+    participant.user_id,
+    participant.employee_no,
+  ])
+}
+
+function candidateIdentityValues(candidate: any) {
+  return normalizedIdentityValues([
+    candidate.user_id,
+    candidate.employee_no,
+  ])
+}
+
+function userIdentityValues(user: any) {
+  return normalizedIdentityValues([
+    user?.user_id,
+    user?.employee_id,
+    user?.employee_no,
+    user?.id,
+  ])
+}
+
+function candidateMatchesAnyParticipant(candidate: any, participants: any[]) {
+  return participants.some(participant => identitiesIntersect(candidateIdentityValues(candidate), participantIdentityValues(participant)))
+}
+
+function userMatchesAnyParticipant(user: any, participants: any[]) {
+  return participants.some(participant => identitiesIntersect(userIdentityValues(user), participantIdentityValues(participant)))
+}
+
+function getManagerEvaluationBlockedReason(record: any) {
+  if (!String(record.manager_id || '').trim()) return '请先配置考核上级'
+  if (record.manager_config_status === 'PENDING') return '请先配置考核上级'
+  if (record.manager_config_status === 'INVALID') return '考核上级不可用，请先调整'
+  return ''
+}
+
 function formatRangeStart(range?: [any, any]) {
   return range?.[0]?.format?.('YYYY-MM-DD') || ''
 }
@@ -626,6 +675,37 @@ describe('getAssessmentUserOption', () => {
     const user = { user_id: 'U001', name: 'test' }
     const result = getAssessmentUserOption(user)
     expect(result).not.toBeNull()
+  })
+})
+
+// ==================== assessment manager identity helpers 测试 ====================
+
+describe('assessment manager identity helpers', () => {
+  it('should match candidate user_id against participant employee_id', () => {
+    const participant = { employee_id: 'U001', employee_name: '张三' }
+    const candidate = { user_id: 'U001', name: '张三', candidate_source: 'MANUAL' }
+
+    expect(candidateMatchesAnyParticipant(candidate, [participant])).toBe(true)
+  })
+
+  it('should match candidate employee number against participant employee_no', () => {
+    const participant = { employee_id: 'U001', employee_no: 'E001', employee_name: '张三' }
+    const candidate = { user_id: 'OTHER', employee_no: 'E001', name: '张三', candidate_source: 'MANUAL' }
+
+    expect(candidateMatchesAnyParticipant(candidate, [participant])).toBe(true)
+  })
+
+  it('should match local user options against selected participants', () => {
+    const participant = { employee_id: 'U001', employee_name: '张三' }
+    const user = { user_id: 'U001', employee_id: 'E001', name: '张三', status: 'active' }
+
+    expect(userMatchesAnyParticipant(user, [participant])).toBe(true)
+  })
+
+  it('should block manager evaluation when assessment manager is not configured', () => {
+    expect(getManagerEvaluationBlockedReason({ manager_id: '', manager_config_status: 'PENDING' })).toBe('请先配置考核上级')
+    expect(getManagerEvaluationBlockedReason({ manager_id: 'M001', manager_config_status: 'INVALID' })).toBe('考核上级不可用，请先调整')
+    expect(getManagerEvaluationBlockedReason({ manager_id: 'M001', manager_config_status: 'CONFIGURED' })).toBe('')
   })
 })
 

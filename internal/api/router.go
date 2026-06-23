@@ -323,6 +323,7 @@ func SetupRouter() *gin.Engine {
 				performance.POST("/participants/import", middleware.RequirePermission("performance:activity:manage"), ImportPerformanceActivityParticipants)
 				performance.GET("/activities/:activity_id/participants", GetPerformanceParticipants)
 				performance.GET("/activities/:activity_id/assessment-manager-candidates", middleware.RequirePermission("performance:assessment_manager:update"), GetAssessmentManagerCandidates)
+				performance.GET("/participants/my", middleware.RequirePermission("performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:self_eval:submit", "performance:manager_eval:submit", "performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit"), GetMyPerformanceParticipants)
 				performance.GET("/participants/:participant_id", middleware.RequirePermission("performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:self_eval:submit", "performance:manager_eval:submit", "performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit"), GetParticipant)
 				performance.PUT("/participants/:participant_id/assessment-manager", middleware.RequirePermission("performance:assessment_manager:update"), UpdateParticipantAssessmentManager)
 				performance.POST("/activities/:activity_id/assessment-managers/batch", middleware.RequirePermission("performance:assessment_manager:batch_update"), BatchUpdateAssessmentManagers)
@@ -379,6 +380,7 @@ func SetupRouter() *gin.Engine {
 
 				performance.GET("/goal-records/:participant_id", GetGoalRecords)
 				performance.POST("/goal-records/:participant_id", middleware.RequirePermission("performance:goal:manage"), BatchSaveGoalRecords)
+				performance.POST("/goal-records/:participant_id/review-supplement", middleware.RequirePermission("performance:goal:manage"), BatchSaveReviewGoalRecords)
 				performance.POST("/goal-records/:participant_id/submit", middleware.RequirePermission("performance:goal:manage"), SubmitGoalApprovalHandler)
 				performance.POST("/goal-records/:participant_id/approve", middleware.RequirePermission("performance:goal:manage"), ApproveGoalRecords)
 				performance.POST("/goal-records/:participant_id/reject", middleware.RequirePermission("performance:goal:manage"), RejectGoalRecords)

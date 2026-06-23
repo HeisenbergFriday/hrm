@@ -70,6 +70,19 @@ var systemPermissionDefinitions = []SystemPermissionDefinition{
 	{Name: "审计日志只读", Code: "audit_log:read", Description: "查看操作审计日志"},
 }
 
+const DefaultEmployeeRoleName = "普通员工"
+
+var defaultEmployeeRolePermissionCodes = []string{
+	"performance:self_eval:submit",
+	"performance:employee_confirm:submit",
+	"performance:result:view",
+}
+
+var defaultEmployeeRoleMenuKeys = []string{
+	"menu:home",
+	"menu:performance-overview",
+}
+
 func (s *PermissionService) EnsureSystemPermissions() error {
 	for _, def := range systemPermissionDefinitions {
 		var perm database.Permission
@@ -264,7 +277,101 @@ func (s *PermissionService) AssignUserRole(userID string, roleID uint) error {
 	return s.userRoleRepo.Assign(s.normalizeUserID(userID), roleID)
 }
 
-// RemoveUserRole 移除用户角色
+// AssignDefaultEmployeeRoleIfUnassigned assigns the default employee role only when the user has no role.
+func (s *PermissionService) AssignDefaultEmployeeRoleIfUnassigned(userID string) (bool, error) {
+	normalized := s.normalizeUserID(userID)
+	if normalized == "" {
+		return false, nil
+	}
+
+	roles, err := s.userRoleRepo.FindByUserID(normalized)
+	if err != nil {
+		return false, err
+	}
+	if len(roles) > 0 {
+		return false, nil
+	}
+
+	role, err := s.ensureDefaultEmployeeRole()
+	if err != nil {
+		return false, err
+	}
+	if err := s.userRoleRepo.Assign(normalized, role.ID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *PermissionService) ensureDefaultEmployeeRole() (*database.Role, error) {
+	var role database.Role
+	err := s.db.Unscoped().Where("name = ?", DefaultEmployeeRoleName).First(&role).Error
+	if err == nil {
+		if role.DeletedAt.Valid {
+			if err := s.db.Unscoped().Model(&role).Update("deleted_at", nil).Error; err != nil {
+				return nil, err
+			}
+			role.DeletedAt.Valid = false
+		}
+		return &role, nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return nil, err
+	}
+
+	role = database.Role{Name: DefaultEmployeeRoleName, Description: DefaultEmployeeRoleName}
+	if err := s.db.Create(&role).Error; err != nil {
+		return nil, err
+	}
+	if err := s.grantDefaultEmployeeRolePermissions(role.ID); err != nil {
+		return nil, err
+	}
+	if err := s.grantDefaultEmployeeRoleMenuPermissions(role.ID); err != nil {
+		return nil, err
+	}
+	return &role, nil
+}
+
+func (s *PermissionService) grantDefaultEmployeeRolePermissions(roleID uint) error {
+	if err := s.EnsureSystemPermissions(); err != nil {
+		return err
+	}
+
+	var permissions []database.Permission
+	if err := s.db.Where("code IN ? AND deleted_at IS NULL", defaultEmployeeRolePermissionCodes).Find(&permissions).Error; err != nil {
+		return err
+	}
+	for _, permission := range permissions {
+		var existing database.RolePermission
+		err := s.db.Unscoped().
+			Where("role_id = ? AND permission_id = ?", roleID, permission.ID).
+			First(&existing).Error
+		if err == gorm.ErrRecordNotFound {
+			if err := s.db.Create(&database.RolePermission{RoleID: roleID, PermissionID: permission.ID}).Error; err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if existing.DeletedAt.Valid {
+			if err := s.db.Unscoped().Model(&existing).Update("deleted_at", nil).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *PermissionService) grantDefaultEmployeeRoleMenuPermissions(roleID uint) error {
+	payload, err := json.Marshal(NormalizeMenuPermissionKeys(defaultEmployeeRoleMenuKeys))
+	if err != nil {
+		return err
+	}
+	return s.menuPermRepo.Save(roleID, string(payload))
+}
+
+// RemoveUserRole removes a role from a user.
 func (s *PermissionService) RemoveUserRole(userID string, roleID uint) error {
 	return s.userRoleRepo.Remove(s.normalizeUserID(userID), roleID)
 }
@@ -419,7 +526,7 @@ func (s *PermissionService) ResolveUserScope(userID string) (*OrgDataScope, erro
 
 	// 遍历角色，聚合数据权限
 	hasAll := false
-	mergedDeptIDs := make(map[string]struct{})
+	mergedDeptRoots := make(map[string]struct{})
 	hasAnyConfig := false
 
 	for _, role := range roles {
@@ -440,16 +547,12 @@ func (s *PermissionService) ResolveUserScope(userID string) (*OrgDataScope, erro
 			var keys []string
 			if err := json.Unmarshal([]byte(dp.DepartmentKeys), &keys); err == nil {
 				for _, k := range keys {
-					mergedDeptIDs[k] = struct{}{}
+					if strings.TrimSpace(k) != "" {
+						mergedDeptRoots[strings.TrimSpace(k)] = struct{}{}
+					}
 				}
 			}
 		}
-	}
-
-	// 没有任何角色配置了数据权限 → 仅看自己（最小权限）
-	if !hasAnyConfig {
-		logrus.WithField("stringUserID", stringUserID).Debug("ResolveUserScope: 无任何配置，返回self")
-		return &OrgDataScope{Mode: "self", DepartmentIDs: []string{}, UserIDs: []string{stringUserID}}, nil
 	}
 
 	// all 最高优先级
@@ -458,22 +561,126 @@ func (s *PermissionService) ResolveUserScope(userID string) (*OrgDataScope, erro
 		return nil, nil
 	}
 
-	// 有 department 配置
-	if len(mergedDeptIDs) > 0 {
-		deptIDs := make([]string, 0, len(mergedDeptIDs))
-		for id := range mergedDeptIDs {
-			deptIDs = append(deptIDs, id)
-		}
+	deptIDs, rootDeptIDs, err := s.resolveManagedDepartmentScope(stringUserID, mergedDeptRoots)
+	if err != nil {
+		return nil, err
+	}
+	if len(deptIDs) > 0 {
 		logrus.WithField("deptIDs", deptIDs).Debug("ResolveUserScope: 返回department")
 		return &OrgDataScope{
-			Mode:          "department",
-			DepartmentIDs: deptIDs,
+			Mode:              "department",
+			DepartmentIDs:     deptIDs,
+			RootDepartmentIDs: rootDeptIDs,
 		}, nil
+	}
+
+	// 没有任何角色配置了数据权限 → 仅看自己（最小权限）
+	if !hasAnyConfig {
+		logrus.WithField("stringUserID", stringUserID).Debug("ResolveUserScope: 无任何配置，返回self")
+		return &OrgDataScope{Mode: "self", DepartmentIDs: []string{}, UserIDs: []string{stringUserID}}, nil
 	}
 
 	// 全部角色都是 self
 	logrus.WithField("stringUserID", stringUserID).Debug("ResolveUserScope: 全部角色self，返回self")
 	return &OrgDataScope{Mode: "self", DepartmentIDs: []string{}, UserIDs: []string{stringUserID}}, nil
+}
+
+var managedDepartmentUserIDKeys = []string{
+	"department_head_user_ids",
+	"department_head_user_id",
+	"dingtalk_department_head_user_ids",
+	"head_user_ids",
+	"head_user_id",
+	"department_manager_user_ids",
+	"department_manager_user_id",
+	"manager_user_ids",
+	"manager_user_id",
+	"department_hrbp_user_ids",
+	"department_hrbp_user_id",
+	"hrbp_user_ids",
+	"hrbp_user_id",
+	"department_assistant_user_ids",
+	"department_assistant_user_id",
+	"assistant_user_ids",
+	"assistant_user_id",
+}
+
+func (s *PermissionService) resolveManagedDepartmentScope(userID string, rootSet map[string]struct{}) ([]string, []string, error) {
+	departments, err := s.deptRepo.FindAll()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	departmentMap := make(map[string]database.Department, len(departments))
+	childMap := make(map[string][]string, len(departments))
+	for _, department := range departments {
+		departmentID := strings.TrimSpace(department.DepartmentID)
+		if departmentID == "" {
+			continue
+		}
+		department.DepartmentID = departmentID
+		departmentMap[departmentID] = department
+		childMap[department.ParentID] = append(childMap[department.ParentID], departmentID)
+		if departmentScopeContainsUser(department.Extension, userID) {
+			rootSet[departmentID] = struct{}{}
+		}
+	}
+
+	rootIDs := make([]string, 0, len(rootSet))
+	for departmentID := range rootSet {
+		if _, ok := departmentMap[departmentID]; ok {
+			rootIDs = append(rootIDs, departmentID)
+		}
+	}
+	rootIDs = uniqueStrings(rootIDs)
+	sort.Strings(rootIDs)
+
+	departmentIDs := make([]string, 0, len(rootIDs))
+	for _, rootID := range rootIDs {
+		departmentIDs = append(departmentIDs, collectDescendantIDs(rootID, childMap)...)
+	}
+	departmentIDs = uniqueStrings(departmentIDs)
+	sort.Strings(departmentIDs)
+	return departmentIDs, rootIDs, nil
+}
+
+func departmentScopeContainsUser(extension map[string]interface{}, userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return false
+	}
+	for _, candidate := range departmentScopeUserIDs(extension) {
+		if candidate == userID {
+			return true
+		}
+	}
+	return false
+}
+
+func departmentScopeUserIDs(extension map[string]interface{}) []string {
+	if len(extension) == 0 {
+		return []string{}
+	}
+	ids := make([]string, 0)
+	for _, key := range managedDepartmentUserIDKeys {
+		value, ok := extension[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case []string:
+			ids = append(ids, typed...)
+		case []interface{}:
+			for _, item := range typed {
+				if text, ok := item.(string); ok {
+					ids = append(ids, text)
+				}
+			}
+		case string:
+			ids = append(ids, typed)
+		}
+	}
+	return uniqueStrings(ids)
 }
 
 const menuPermissionPrefix = "menu:"
