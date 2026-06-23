@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
+import { authRedirectTargetFromLocation, loginPathWithRedirect, rememberAuthRedirect } from '../utils/authRedirect'
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -44,7 +45,9 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       useAuthStore.getState().logout()
-      window.location.href = '/login'
+      const redirectTarget = authRedirectTargetFromLocation(window.location)
+      rememberAuthRedirect(redirectTarget)
+      window.location.href = loginPathWithRedirect(redirectTarget)
     }
     if (error.response?.status === 403) {
       refreshMenuKeys()
@@ -312,6 +315,10 @@ export interface PerformanceActivity {
   start_date: string
   end_date: string
   indicator_library_id?: number
+  template_id?: number
+  flow_type?: 'old' | 'new' | string
+  organization_id?: string
+  applicable_org_scope?: string[]
   target_set_start_at?: string
   target_set_end_at?: string
   self_eval_start_at: string
@@ -333,16 +340,30 @@ export interface PerformanceActivity {
   target_employee_ids?: string[]
   manager_assignments?: PerformanceActivityManagerAssignment[]
   default_assessment_manager_source?: AssessmentManagerSource
+  snapshot_as_of_date?: string
+  snapshot_source?: string
+  target_plan_activity_id?: number
+  previous_review_activity_id?: number
+  publish_mode?: 'manual' | 'auto' | string
+  publish_at?: string
+  reminder_config?: Record<string, unknown>
+  workflow_config?: Record<string, unknown>
+  form_config?: Record<string, unknown>
+  level_rule_config?: Record<string, unknown>
+  distribution_config?: Record<string, unknown>
+  permission_config?: Record<string, unknown>
+  publish_config?: Record<string, unknown>
   enable_bonus_score?: boolean
   strict_time_mode?: boolean
   created_at: string
   updated_at: string
   created_by: string
   updated_by: string
+  my_participant?: PerformanceParticipant | null
 }
 
 // 绩效参与人状态
-export type PerformanceParticipantStatus = 'pending' | 'target_pending_approval' | 'target_rejected' | 'target_set' | 'self_submitted' | 'manager_submitted' | 'result_confirmed' | 'inactive' | 'removed_from_scope' | 'employee_confirmed' | 'manager_confirmed' | 'hr_confirmed' | 'locked'
+export type PerformanceParticipantStatus = 'pending' | 'target_pending_approval' | 'target_rejected' | 'target_set' | 'self_submitted' | 'manager_submitted' | 'manager_recheck' | 'result_confirmed' | 'inactive' | 'removed_from_scope' | 'employee_confirmed' | 'manager_confirmed' | 'hr_confirmed' | 'locked'
 
 export type AssessmentManagerSource = 'DIRECT_MANAGER' | 'DEPARTMENT_HEAD' | 'CENTER_HEAD' | 'MANUAL' | 'IMPORT' | 'EMPTY' | 'SYSTEM'
 export type AssessmentManagerConfigStatus = 'CONFIGURED' | 'PENDING' | 'INVALID'
@@ -369,6 +390,8 @@ export interface PerformanceParticipant {
   position: string
   level: string
   employee_status: string
+  snapshot_source?: string
+  snapshot_as_of_date?: string
   manager_id?: string
   manager_name?: string
   direct_manager_id_snapshot?: string
@@ -482,6 +505,7 @@ export interface PerformanceIndicatorLibrary {
   department_id: string
   department_name: string
   parent_library_id?: number
+  template_id?: number
   name: string
   description: string
   default_cycle: string
@@ -524,12 +548,18 @@ export interface PerformanceGoalRecord {
   participant_id: number
   indicator_item_id?: number
   section_type: 'quantitative' | 'key_action' | 'bonus_penalty'
+  goal_phase?: 'review' | 'plan' | string
+  goal_type?: 'okr' | 'kpi' | 'fixed' | string
+  fixed_key?: string
+  is_fixed?: boolean
   item_name: string
   item_definition: string
   weight: number
   red_line_value: string
   target_value: string
   challenge_value: string
+  metric_unit?: string
+  completion_rate?: number
   scoring_rule: string
   actual_result: string
   attachments: string[]
@@ -542,6 +572,20 @@ export interface PerformanceGoalRecord {
   sort_order: number
   created_at: string
   updated_at: string
+}
+
+export interface PerformanceGoalApprovalLog {
+  id: number
+  participant_id: number
+  activity_id: string
+  goal_record_id?: number
+  action: 'submit' | 'approve' | 'reject' | string
+  comment: string
+  approver_id?: string
+  approver_name?: string
+  version?: number
+  created_by?: string
+  created_at: string
 }
 
 // 团队配额状态
@@ -664,6 +708,10 @@ export interface CreatePerformanceActivityRequest {
   cycle_type: string
   start_date: string
   end_date: string
+  template_id?: number
+  flow_type?: 'old' | 'new' | string
+  organization_id?: string
+  applicable_org_scope?: string[]
   target_set_start_at?: string
   target_set_end_at?: string
   self_eval_start_at: string
@@ -684,7 +732,15 @@ export interface CreatePerformanceActivityRequest {
   target_employee_ids?: string[]
   indicator_library_id?: number
   description?: string
+  snapshot_as_of_date?: string
+  snapshot_source?: string
+  target_plan_activity_id?: number
+  previous_review_activity_id?: number
+  publish_mode?: 'manual' | 'auto' | string
+  publish_at?: string
+  reminder_config?: Record<string, unknown>
   enable_bonus_score?: boolean
+  strict_time_mode?: boolean
 }
 
 // 关系变更日志
@@ -718,6 +774,7 @@ export interface AssessmentManagerCandidate {
   department_name?: string
   candidate_source: AssessmentManagerSource
   candidate_source_label: string
+  is_self_final_candidate?: boolean
 }
 
 export interface AssessmentManagerCandidateSourceGroup {
@@ -765,8 +822,19 @@ export interface PerformanceHRForceLockResult {
 
 export interface PerformanceTemplatePayload {
   name: string
+  code?: string
   description?: string
+  flow_type?: 'old' | 'new' | string
+  organization_id?: string
+  organization_scope?: string[]
   status?: string
+  cycle_types?: string[]
+  workflow_config?: Record<string, unknown>
+  form_config?: Record<string, unknown>
+  level_rule_config?: Record<string, unknown>
+  distribution_config?: Record<string, unknown>
+  permission_config?: Record<string, unknown>
+  publish_config?: Record<string, unknown>
   sections?: {
     name: string
     section_type: string
@@ -782,6 +850,17 @@ export interface PerformanceTemplatePayload {
       sort_order?: number
     }[]
   }[]
+}
+
+export interface PerformanceTemplate extends PerformanceTemplatePayload {
+  id: number
+  code: string
+  flow_type: 'old' | 'new' | string
+  status: string
+  created_at?: string
+  updated_at?: string
+  created_by?: string
+  updated_by?: string
 }
 
 export const performanceAPI = {
@@ -800,6 +879,10 @@ export const performanceAPI = {
     cycle_type: string
     start_date: string
     end_date: string
+    template_id?: number
+    flow_type?: 'old' | 'new' | string
+    organization_id?: string
+    applicable_org_scope?: string[]
     target_set_start_at?: string
     target_set_end_at?: string
     self_eval_start_at: string
@@ -822,7 +905,15 @@ export const performanceAPI = {
     default_assessment_manager_source?: AssessmentManagerSource
     indicator_library_id?: number
     description?: string
+    snapshot_as_of_date?: string
+    snapshot_source?: string
+    target_plan_activity_id?: number
+    previous_review_activity_id?: number
+    publish_mode?: 'manual' | 'auto' | string
+    publish_at?: string
+    reminder_config?: Record<string, unknown>
     enable_bonus_score?: boolean
+    strict_time_mode?: boolean
   }) => api.post('/performance/activities', data),
 
   getActivity: (activityId: number) =>
@@ -833,6 +924,10 @@ export const performanceAPI = {
     cycle_type: string
     start_date: string
     end_date: string
+    template_id?: number
+    flow_type?: 'old' | 'new' | string
+    organization_id?: string
+    applicable_org_scope?: string[]
     target_set_start_at?: string
     target_set_end_at?: string
     self_eval_start_at: string
@@ -855,7 +950,15 @@ export const performanceAPI = {
     default_assessment_manager_source?: AssessmentManagerSource
     indicator_library_id?: number
     description?: string
+    snapshot_as_of_date?: string
+    snapshot_source?: string
+    target_plan_activity_id?: number
+    previous_review_activity_id?: number
+    publish_mode?: 'manual' | 'auto' | string
+    publish_at?: string
+    reminder_config?: Record<string, unknown>
     enable_bonus_score?: boolean
+    strict_time_mode?: boolean
   }) => api.put(`/performance/activities/${activityId}`, data),
 
   // 活动状态流转
@@ -908,6 +1011,11 @@ export const performanceAPI = {
     status?: string
     employee_keyword?: string
   }) => api.get(`/performance/activities/${activityId}/participants`, { params }),
+
+  getMyParticipants: (activityIds: number[]) =>
+    api.get('/performance/participants/my', {
+      params: { activity_ids: activityIds.join(',') },
+    }),
 
   refreshParticipants: (activityId: number) =>
     api.post(`/performance/activities/${activityId}/refresh-participants`),
@@ -1022,7 +1130,7 @@ export const performanceAPI = {
 
   // ===== 新版评分（基于目标指标） =====
   submitGoalSelfEvaluation: (participantId: number, data: {
-    items: { record_id: number; actual_result: string; self_score: number }[]
+    items: { record_id: number; actual_result: string; attachments?: string[]; self_score: number }[]
     bonus_items?: { record_id: number; self_score: number }[]
     evaluation_good: string
     evaluation_improvement: string
@@ -1105,6 +1213,7 @@ export const performanceAPI = {
     page?: number
     page_size?: number
     department_id?: string
+    template_id?: number
     keyword?: string
     status?: string
   }) => api.get('/performance/indicator-libraries', { params }),
@@ -1112,6 +1221,7 @@ export const performanceAPI = {
   createIndicatorLibrary: (data: {
     department_id: string
     department_name: string
+    template_id: number
     name: string
     description?: string
     default_cycle?: string
@@ -1136,6 +1246,7 @@ export const performanceAPI = {
     name?: string
     description?: string
     department_name?: string
+    template_id?: number
     default_cycle?: string
   }) => api.put(`/performance/indicator-libraries/${libraryId}`, data),
 
@@ -1203,6 +1314,10 @@ export const performanceAPI = {
     items: {
       id?: number
       section_type: string
+      goal_phase?: string
+      goal_type?: string
+      fixed_key?: string
+      is_fixed?: boolean
       item_name: string
       item_definition?: string
       weight: number
@@ -1217,6 +1332,29 @@ export const performanceAPI = {
       sort_order?: number
     }[]
   }) => api.post(`/performance/goal-records/${participantId}`, data),
+
+  batchSaveReviewGoalRecords: (participantId: number, data: {
+    items: {
+      id?: number
+      section_type: string
+      goal_phase?: string
+      goal_type?: string
+      fixed_key?: string
+      is_fixed?: boolean
+      item_name: string
+      item_definition?: string
+      weight: number
+      red_line_value?: string
+      target_value?: string
+      challenge_value?: string
+      scoring_rule?: string
+      actual_result?: string
+      self_score?: number
+      manager_score?: number
+      attachments?: string[]
+      sort_order?: number
+    }[]
+  }) => api.post(`/performance/goal-records/${participantId}/review-supplement`, data),
 
   submitGoalApproval: (participantId: number, data?: { comment?: string }) =>
     api.post(`/performance/goal-records/${participantId}/submit`, data || {}),

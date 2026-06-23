@@ -257,6 +257,28 @@ code {
   min-width: 0;
 }
 
+.performance-goal-plan-table {
+  overflow-x: auto;
+}
+
+.performance-goal-plan-table .ant-table {
+  margin-top: 0;
+}
+
+.performance-goal-plan-table .ant-table-thead > tr > th {
+  background: #f8fafc;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.performance-goal-fixed-row > td {
+  background: #fbfcfe !important;
+}
+
+.performance-goal-fixed-row .ant-typography {
+  line-height: var(--line-height-relaxed);
+}
+
 .leave-overtime-card {
   margin-bottom: 0;
 }

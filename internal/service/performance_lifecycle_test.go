@@ -16,6 +16,9 @@ func TestPerformanceFullLifecycle_HappyPath(t *testing.T) {
 	svc := newStubPerformanceService(t,
 		// CreateActivity 需要的 users 表查询（验证 manager 存在）
 		activeUserResponse("manager-1", "Manager A"),
+		performanceActivityResponse("draft", ""),
+		performanceDepartmentsResponse([]driver.Value{int64(1), "dept-1", "Engineering"}),
+		performanceParticipantsResponse(nil),
 	)
 
 	activity, err := svc.CreateActivity(CreateActivityRequest{
@@ -563,6 +566,7 @@ func TestPerformanceLifecycle_ForcedLock(t *testing.T) {
 func TestPerformanceLifecycle_DistributionCheck(t *testing.T) {
 	t.Run("分布检查通过", func(t *testing.T) {
 		svc := newStubPerformanceService(t,
+			performanceActivityResponse("manager_evaluation", ""),
 			stubQueryResponse{
 				match:   stubTableMatcher("performance_participants"),
 				columns: []string{"id", "activity_id", "status", "final_level"},
@@ -598,6 +602,7 @@ func TestPerformanceLifecycle_DistributionCheck(t *testing.T) {
 
 	t.Run("分布检查失败 - 超出配额", func(t *testing.T) {
 		svc := newStubPerformanceService(t,
+			performanceActivityResponse("manager_evaluation", ""),
 			stubQueryResponse{
 				match:   stubTableMatcher("performance_participants"),
 				columns: []string{"id", "activity_id", "status", "final_level"},

@@ -193,6 +193,15 @@ func stubSelectMatcher(table string) func(string, []driver.NamedValue) bool {
 	}
 }
 
+func stubIndicatorArgsContain(args []driver.NamedValue, value string) bool {
+	for _, arg := range args {
+		if fmt.Sprint(arg.Value) == value {
+			return true
+		}
+	}
+	return false
+}
+
 // libraryColumns returns the column names for PerformanceIndicatorLibrary
 func libraryColumns() []string {
 	return []string{"id", "department_id", "department_name", "name", "description", "status", "default_cycle", "created_at", "updated_at", "created_by", "updated_by"}
@@ -678,7 +687,7 @@ func TestItemRepo_Search_WithLibraryIDs(t *testing.T) {
 	})
 	repo := NewPerformanceIndicatorItemRepository(db)
 
-	items, err := repo.Search([]uint{1}, "客户", "")
+	items, err := repo.Search([]uint{1}, "客户", "", nil)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -698,7 +707,7 @@ func TestItemRepo_Search_EmptyLibraryIDs(t *testing.T) {
 	})
 	repo := NewPerformanceIndicatorItemRepository(db)
 
-	items, err := repo.Search(nil, "", "")
+	items, err := repo.Search(nil, "", "", nil)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -717,7 +726,7 @@ func TestItemRepo_Search_WithSectionType(t *testing.T) {
 	})
 	repo := NewPerformanceIndicatorItemRepository(db)
 
-	items, err := repo.Search([]uint{1}, "", "quantitative")
+	items, err := repo.Search([]uint{1}, "", "quantitative", nil)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -736,11 +745,35 @@ func TestItemRepo_Search_WithKeyword(t *testing.T) {
 	})
 	repo := NewPerformanceIndicatorItemRepository(db)
 
-	items, err := repo.Search([]uint{1}, "Revenue", "")
+	items, err := repo.Search([]uint{1}, "Revenue", "", nil)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
 	if len(items) != 1 || !strings.Contains(items[0].Name, "Revenue") {
+		t.Fatalf("Search() = %#v", items)
+	}
+}
+
+func TestItemRepo_Search_WithVisibleDepartments(t *testing.T) {
+	db := newTestDB(t, stubIndicatorQueryResponse{
+		match: func(query string, args []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			return strings.Contains(lower, "join performance_indicator_libraries") &&
+				strings.Contains(lower, "performance_indicator_libraries.department_id") &&
+				stubIndicatorArgsContain(args, "dept-1")
+		},
+		columns: itemColumns(),
+		rows: [][]driver.Value{
+			itemRow(1, 1, "quantitative", "Revenue Target", 0.6, 1),
+		},
+	})
+	repo := NewPerformanceIndicatorItemRepository(db)
+
+	items, err := repo.Search(nil, "", "", []string{"dept-1"})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(items) != 1 || items[0].Name != "Revenue Target" {
 		t.Fatalf("Search() = %#v", items)
 	}
 }
@@ -829,7 +862,7 @@ func TestItemRepo_Search_AllFiltersCombined(t *testing.T) {
 	})
 	repo := NewPerformanceIndicatorItemRepository(db)
 
-	items, err := repo.Search([]uint{1}, "客户", "quantitative")
+	items, err := repo.Search([]uint{1}, "客户", "quantitative", nil)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}

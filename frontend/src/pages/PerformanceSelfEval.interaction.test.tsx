@@ -5,6 +5,7 @@
  * - 页面渲染与 loading 状态
  * - 指标列表展示
  * - 自评总分计算
+ * - 自评附件上传入口
  * - 提交自评
  * - 接口失败
  */
@@ -158,6 +159,23 @@ describe('PerformanceSelfEval 交互测试', () => {
       expect(screen.getByText('客户拜访')).toBeInTheDocument()
       expect(screen.getByText('培训完成')).toBeInTheDocument()
     })
+
+    it('未提交且存在自评截止时间时应显示倒计时提示', async () => {
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant(),
+          activity: { id: 1, flow_type: 'old', self_eval_end_at: '2099-12-31' },
+        },
+      })
+
+      render(React.createElement(PerformanceSelfEval))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('performance-self-deadline-countdown')).toBeInTheDocument()
+      })
+      expect(screen.getByText(/自评倒计时/)).toBeInTheDocument()
+      expect(screen.getByText(/截止时间：2099-12-31/)).toBeInTheDocument()
+    })
   })
 
   // ==================== 场景 2: 指标列表 ====================
@@ -194,6 +212,16 @@ describe('PerformanceSelfEval 交互测试', () => {
       expect(actualInputs.length).toBeGreaterThanOrEqual(4)
     })
 
+    it('应在自评阶段显示附件上传入口', async () => {
+      render(React.createElement(PerformanceSelfEval))
+
+      await waitFor(() => {
+        expect(screen.getByText('销售额')).toBeInTheDocument()
+      })
+
+      expect(screen.getAllByText('上传附件').length).toBeGreaterThanOrEqual(4)
+    })
+
     it('应显示"自评得分"输入框', async () => {
       render(React.createElement(PerformanceSelfEval))
 
@@ -213,7 +241,7 @@ describe('PerformanceSelfEval 交互测试', () => {
       render(React.createElement(PerformanceSelfEval))
 
       await waitFor(() => {
-        expect(screen.getByText('自评总分：')).toBeInTheDocument()
+        expect(screen.getAllByText('自评总分：').length).toBeGreaterThanOrEqual(1)
       })
     })
 
@@ -221,10 +249,27 @@ describe('PerformanceSelfEval 交互测试', () => {
       render(React.createElement(PerformanceSelfEval))
 
       await waitFor(() => {
-        expect(screen.getByText('自评总分：')).toBeInTheDocument()
+        expect(screen.getAllByText('自评总分：').length).toBeGreaterThanOrEqual(1)
       })
       // 初始 self_score 为 null，加权后为 0
-      expect(screen.getByText('0')).toBeInTheDocument()
+      expect(screen.getByTestId('performance-self-total-score')).toHaveTextContent('0')
+    })
+
+    it('输入自评得分后应实时计算加权总分', async () => {
+      render(React.createElement(PerformanceSelfEval))
+
+      await waitFor(() => {
+        expect(screen.getByText('销售额')).toBeInTheDocument()
+      })
+
+      const scoreInputs = screen.getAllByRole('spinbutton')
+      for (const input of scoreInputs.slice(0, 4)) {
+        fireEvent.change(input, { target: { value: '80' } })
+      }
+
+      await waitFor(() => {
+        expect(screen.getByTestId('performance-self-total-score')).toHaveTextContent('80')
+      })
     })
   })
 
@@ -249,6 +294,41 @@ describe('PerformanceSelfEval 交互测试', () => {
     })
   })
 
+  describe('新流程上一季度考核指标', () => {
+    it('缺少上一季度考核指标时应提示并禁用提交', async () => {
+      mockGetGoalRecords.mockResolvedValue({
+        data: {
+          items: [
+            {
+              id: 11,
+              section_type: 'key_action',
+              goal_phase: 'plan',
+              item_name: '下季度目标',
+              weight: 0.15,
+              target_value: '完成下季度目标计划',
+              self_score: null,
+              attachments: [],
+              sort_order: 0,
+            },
+          ],
+        },
+      })
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant(),
+          activity: { id: 1, flow_type: 'new' },
+        },
+      })
+
+      render(React.createElement(PerformanceSelfEval))
+
+      await waitFor(() => {
+        expect(screen.getAllByText('缺少上一季度绩效考核指标').length).toBeGreaterThanOrEqual(1)
+      })
+      expect(screen.getByTestId('performance-self-submit')).toBeDisabled()
+    })
+  })
+
   // ==================== 场景 5: 提交自评 ====================
   describe('提交自评', () => {
     it('应渲染"提交自评"按钮', async () => {
@@ -256,6 +336,46 @@ describe('PerformanceSelfEval 交互测试', () => {
 
       await waitFor(() => {
         expect(screen.getByTestId('performance-self-submit')).toBeInTheDocument()
+      })
+    })
+
+    it('提交自评时应携带每条指标附件', async () => {
+      const user = userEvent.setup()
+      const records = makeGoalRecords().data.items.map((item, index) => (
+        index === 0 ? { ...item, attachments: ['/uploads/sales-proof.pdf'] } : item
+      ))
+      mockGetGoalRecords.mockResolvedValue({ data: { items: records } })
+
+      render(React.createElement(PerformanceSelfEval))
+
+      await waitFor(() => {
+        expect(screen.getByText('sales-proof.pdf')).toBeInTheDocument()
+      })
+
+      const actualInputs = screen.getAllByPlaceholderText('描述实际完成情况')
+      for (const input of actualInputs) {
+        fireEvent.change(input, { target: { value: '已完成' } })
+      }
+
+      const scoreInputs = screen.getAllByRole('spinbutton')
+      for (const input of scoreInputs) {
+        fireEvent.change(input, { target: { value: '80' } })
+      }
+
+      await user.click(screen.getByTestId('performance-self-submit'))
+
+      await waitFor(() => {
+        expect(mockSubmitGoalSelfEvaluation).toHaveBeenCalledWith(
+          101,
+          expect.objectContaining({
+            items: expect.arrayContaining([
+              expect.objectContaining({
+                record_id: 1,
+                attachments: ['/uploads/sales-proof.pdf'],
+              }),
+            ]),
+          })
+        )
       })
     })
 

@@ -59,7 +59,7 @@ func (r *PerformanceGoalRecordRepository) BatchUpsert(records []database.Perform
 	}
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"item_name", "item_definition", "weight", "red_line_value", "target_value", "challenge_value", "scoring_rule", "actual_result", "attachments", "self_score", "manager_score", "bonus_score", "is_from_superior", "approval_status", "visibility_scope", "sort_order", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"section_type", "goal_phase", "goal_type", "fixed_key", "is_fixed", "item_name", "item_definition", "weight", "red_line_value", "target_value", "challenge_value", "metric_unit", "completion_rate", "scoring_rule", "actual_result", "attachments", "self_score", "manager_score", "bonus_score", "is_from_superior", "approval_status", "visibility_scope", "sort_order", "updated_at"}),
 	}).Create(&records).Error
 }
 

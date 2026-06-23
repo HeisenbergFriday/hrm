@@ -24,6 +24,7 @@ func performanceHandlerTestDB(t *testing.T) {
 			{int64(1), "admin", "Admin", "dept-1", "active"},
 			{int64(2), "user-1", "Alice", "dept-1", "active"},
 		}),
+		apiPerformanceActivitySelectResponse("self_evaluation"),
 		// 绩效参与人表 - 用于 participant lookup
 		apiImportTableResponse("performance_participants", []string{"id", "activity_id", "employee_id", "employee_name", "department_id", "department_name", "manager_id", "manager_name", "status", "self_score", "manager_score", "final_level"}, [][]driver.Value{
 			{int64(1), "1", "user-1", "Alice", "dept-1", "Product", ptrString("manager-1"), ptrString("Manager Bob"), "pending", float64(0), float64(0), ""},
@@ -774,6 +775,7 @@ func TestPerformanceParticipantAndDistributionHandlersHappyPath(t *testing.T) {
 			params:  gin.Params{{Key: "activity_id", Value: "1"}},
 			handler: GetRealtimeDistributionCheck,
 			queries: []apiImportQueryResponse{
+				apiPerformanceActivitySelectResponse("manager_evaluation"),
 				apiPerformanceParticipantCountResponse(1),
 				apiPerformanceParticipantSelectResponse("manager_submitted"),
 				apiPerformanceDistributionRulesResponse(),
@@ -794,6 +796,7 @@ func TestPerformanceParticipantAndDistributionHandlersHappyPath(t *testing.T) {
 			params:  gin.Params{{Key: "activity_id", Value: "1"}},
 			handler: GetPerformanceDistributionCheck,
 			queries: []apiImportQueryResponse{
+				apiPerformanceActivitySelectResponse("manager_evaluation"),
 				apiPerformanceParticipantSelectResponse("manager_submitted"),
 				apiPerformanceDistributionRulesResponse(),
 			},
@@ -891,11 +894,79 @@ func TestSendSelfEvalReminderHandlerNoRecipients(t *testing.T) {
 	}
 }
 
+func TestGetMyPerformanceParticipantsBatch(t *testing.T) {
+	performanceHandlerUserTestDBWith(t,
+		apiPerformanceEmployeeProfilesResponse([][]driver.Value{
+			{int64(10), "user-1", "E001", "active"},
+		}),
+		apiPerformanceParticipantRowsResponse([][]driver.Value{
+			apiPerformanceParticipantRowWithDetails(1, "1", "user-1", ptrString("manager-1"), "target_set", "active", false, 0, ""),
+		}),
+	)
+	c, recorder := performanceHandlerAdminContext(t)
+	c.Set("userID", "user-1")
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/performance/participants/my?activity_ids=1,2", nil)
+
+	GetMyPerformanceParticipants(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"items_by_activity"`) || !strings.Contains(recorder.Body.String(), `"1"`) {
+		t.Fatalf("body = %s, want items_by_activity with activity 1", recorder.Body.String())
+	}
+}
+
+func TestAttachMyParticipantToActivities(t *testing.T) {
+	performanceHandlerUserTestDBWith(t,
+		apiPerformanceEmployeeProfilesResponse([][]driver.Value{
+			{int64(10), "user-1", "E001", "active"},
+		}),
+		apiPerformanceParticipantRowsResponse([][]driver.Value{
+			apiPerformanceParticipantRowWithDetails(1, "1", "E001", ptrString("manager-1"), "target_set", "active", false, 0, ""),
+		}),
+	)
+	c, _ := performanceHandlerAdminContext(t)
+	c.Set("userID", "user-1")
+
+	items, err := attachMyParticipantToActivities(c, []database.PerformanceActivity{
+		{ID: 1, Name: "Q2 绩效"},
+		{ID: 2, Name: "Q3 绩效"},
+	})
+	if err != nil {
+		t.Fatalf("attachMyParticipantToActivities() error = %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	if items[0].MyParticipant == nil || items[0].MyParticipant.EmployeeID != "E001" {
+		t.Fatalf("items[0].MyParticipant = %#v, want employee E001", items[0].MyParticipant)
+	}
+	if items[1].MyParticipant != nil {
+		t.Fatalf("items[1].MyParticipant = %#v, want nil", items[1].MyParticipant)
+	}
+}
+
+func performanceHandlerUserTestDBWith(t *testing.T, queries ...apiImportQueryResponse) {
+	t.Helper()
+	originalDB := database.DB
+	baseQueries := []apiImportQueryResponse{apiPerformanceUsersWithUserFirstResponse()}
+	baseQueries = append(baseQueries, queries...)
+	database.DB = newAPIPerformanceImportStubDB(t, baseQueries...)
+	t.Cleanup(func() {
+		database.DB = originalDB
+	})
+}
+
 func performanceHandlerTestDBWith(t *testing.T, queries ...apiImportQueryResponse) {
 	t.Helper()
 	originalDB := database.DB
 	baseQueries := []apiImportQueryResponse{apiPerformanceUsersResponse()}
 	baseQueries = append(baseQueries, queries...)
+	baseQueries = append(baseQueries,
+		apiPerformanceActivitySelectResponse("self_evaluation"),
+		apiPerformanceParticipantSelectResponse("manager_submitted"),
+	)
 	database.DB = newAPIPerformanceImportStubDB(t, baseQueries...)
 	t.Cleanup(func() {
 		database.DB = originalDB
@@ -918,6 +989,14 @@ func apiPerformanceUsersResponse() apiImportQueryResponse {
 	return apiImportTableResponse("users", []string{"id", "user_id", "name", "department_id", "status"}, [][]driver.Value{
 		{int64(1), "admin", "Admin", "dept-1", "active"},
 		{int64(2), "user-1", "Alice", "dept-1", "active"},
+		{int64(3), "manager-1", "Manager Bob", "dept-1", "active"},
+	})
+}
+
+func apiPerformanceUsersWithUserFirstResponse() apiImportQueryResponse {
+	return apiImportTableResponse("users", []string{"id", "user_id", "name", "department_id", "status"}, [][]driver.Value{
+		{int64(2), "user-1", "Alice", "dept-1", "active"},
+		{int64(1), "admin", "Admin", "dept-1", "active"},
 		{int64(3), "manager-1", "Manager Bob", "dept-1", "active"},
 	})
 }

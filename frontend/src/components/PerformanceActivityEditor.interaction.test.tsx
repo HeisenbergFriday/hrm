@@ -17,6 +17,11 @@ import { Form } from 'antd'
 import dayjs from 'dayjs'
 import PerformanceActivityEditor from './PerformanceActivityEditor'
 
+const defaultPerformanceTemplates = [
+  { id: 1, name: '旧绩效流程模板', flow_type: 'old', description: '旧流程默认模板' },
+  { id: 2, name: '新绩效流程模板', flow_type: 'new', description: '新流程默认模板' },
+]
+
 // ==================== 测试包装组件 ====================
 // PerformanceActivityEditor 的 form 由外部注入，onSave 需自行触发 form.validateFields()
 // 用一个 Harness 包装，把 onSave 实现为校验+不抛异常（让 antd 渲染错误文案）
@@ -28,6 +33,7 @@ function Harness({
   saving = false,
   visible = true,
   indicatorLibraries = [],
+  performanceTemplates = defaultPerformanceTemplates,
 }: {
   editing?: boolean
   onSave?: () => void
@@ -35,6 +41,7 @@ function Harness({
   saving?: boolean
   visible?: boolean
   indicatorLibraries?: any[]
+  performanceTemplates?: any[]
 } = {}) {
   const [form] = Form.useForm()
   const handleSave = onSave ?? (async () => {
@@ -48,6 +55,7 @@ function Harness({
       editing={editing}
       form={form}
       saving={saving}
+      performanceTemplates={performanceTemplates}
       indicatorLibraries={indicatorLibraries}
       indicatorLibrariesLoading={false}
       departmentOptions={[]}
@@ -84,6 +92,16 @@ describe('PerformanceActivityEditor 交互测试', () => {
     it('应渲染活动名称输入框', () => {
       render(<Harness />)
       expect(screen.getByTestId('performance-editor-activity-name')).toBeInTheDocument()
+    })
+
+    it('流程类型应由流程模板只读带出', async () => {
+      render(<Harness />)
+
+      await waitFor(() => {
+        expect(screen.getByText('由流程模板自动决定')).toBeInTheDocument()
+        expect(screen.getAllByText('小铁文娱流程模版').length).toBeGreaterThanOrEqual(1)
+      })
+      expect(screen.queryByText('选择流程类型')).not.toBeInTheDocument()
     })
 
     it('应渲染容器 testid', () => {
@@ -226,6 +244,7 @@ describe('PerformanceActivityEditor 交互测试', () => {
             visible
             editing={false}
             form={form}
+            performanceTemplates={defaultPerformanceTemplates}
             indicatorLibraries={[]}
             indicatorLibrariesLoading={false}
             departmentOptions={[]}
@@ -250,6 +269,58 @@ describe('PerformanceActivityEditor 交互测试', () => {
         expect(screen.queryByText('请选择自评时间')).not.toBeInTheDocument()
         expect(screen.queryByText('请选择主管评分时间')).not.toBeInTheDocument()
         expect(screen.queryByText('请选择结果确认时间')).not.toBeInTheDocument()
+      })
+    })
+
+    it('关联指标库必须属于当前流程模板', async () => {
+      const user = userEvent.setup()
+
+      function TemplateMismatchHarness() {
+        const [form] = Form.useForm()
+        const onSave = vi.fn(async () => {
+          try { await form.validateFields() } catch { /* 让 antd 渲染错误 */ }
+        })
+
+        React.useEffect(() => {
+          form.setFieldsValue({
+            name: '测试活动',
+            cycle_type: 'monthly',
+            template_id: 1,
+            flow_type: 'old',
+            indicator_library_id: 22,
+            date_range: [dayjs('2026-06-01'), dayjs('2026-06-30')],
+            self_eval_range: [dayjs('2026-06-01'), dayjs('2026-06-10')],
+            manager_eval_range: [dayjs('2026-06-11'), dayjs('2026-06-20')],
+            result_confirm_range: [dayjs('2026-06-21'), dayjs('2026-06-30')],
+          })
+        }, [form])
+
+        return (
+          <PerformanceActivityEditor
+            visible
+            editing={false}
+            form={form}
+            performanceTemplates={defaultPerformanceTemplates}
+            indicatorLibraries={[
+              { id: 11, name: '小铁文娱指标库', template_id: 1, default_cycle: 'monthly' },
+              { id: 22, name: '沐腾指标库', template_id: 2, default_cycle: 'monthly' },
+            ]}
+            indicatorLibrariesLoading={false}
+            departmentOptions={[]}
+            userOptions={[]}
+            scopeOptionsLoading={false}
+            onImportParticipants={vi.fn().mockResolvedValue(undefined)}
+            onSave={onSave}
+            onCancel={vi.fn()}
+          />
+        )
+      }
+
+      render(<TemplateMismatchHarness />)
+      await user.click(screen.getByTestId('performance-editor-save'))
+
+      await waitFor(() => {
+        expect(screen.getByText('请选择当前流程模板下的指标库')).toBeInTheDocument()
       })
     })
   })

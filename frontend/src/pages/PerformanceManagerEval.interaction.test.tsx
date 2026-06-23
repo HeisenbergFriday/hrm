@@ -223,6 +223,47 @@ describe('PerformanceManagerEval 交互测试', () => {
       })
     })
 
+    it('新流程一键评分应将旧口径自动分转换为 0-10 分制', async () => {
+      const user = userEvent.setup()
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant(),
+          activity: { id: 1, flow_type: 'new', status: 'manager_evaluation' },
+        },
+      })
+      mockAutoScoreGoalRecords.mockResolvedValue({
+        data: {
+          items: [
+            { record_id: 1, score: 46.25, breakdown: '低于红线', auto_scored: true },
+            { record_id: 2, score: 120, breakdown: '超越挑战', auto_scored: true },
+          ],
+        },
+      })
+
+      render(React.createElement(PerformanceManagerEval))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('performance-manager-auto-score')).toBeInTheDocument()
+      })
+
+      await user.click(screen.getByTestId('performance-manager-auto-score'))
+
+      const firstScoreControl = await screen.findByTestId('performance-manager-score-0')
+      const secondScoreControl = await screen.findByTestId('performance-manager-score-1')
+      const firstScoreInput = firstScoreControl instanceof HTMLInputElement
+        ? firstScoreControl
+        : firstScoreControl.querySelector('input')
+      const secondScoreInput = secondScoreControl instanceof HTMLInputElement
+        ? secondScoreControl
+        : secondScoreControl.querySelector('input')
+
+      await waitFor(() => {
+        expect(Number.parseFloat(firstScoreInput?.value || '')).toBe(4.6)
+        expect(Number.parseFloat(secondScoreInput?.value || '')).toBe(10)
+      })
+      expect(firstScoreInput?.value || '').not.toBe('46.25')
+    })
+
     it('一键评分失败应显示错误消息', async () => {
       const user = userEvent.setup()
       mockAutoScoreGoalRecords.mockRejectedValue(new Error('score error'))
@@ -351,6 +392,28 @@ describe('PerformanceManagerEval 交互测试', () => {
       })
 
       expect(screen.getByText(/每月 10 家/)).toBeInTheDocument()
+    })
+  })
+
+  // ==================== 场景 8: 自评附件预览 ====================
+  describe('自评附件预览', () => {
+    it('点击附件查看应打开预览弹窗并保留长文件名', async () => {
+      const user = userEvent.setup()
+      const longFileName = '023e2b6f1e66f673583170392d4ec17c.pdf'
+      const records = makeGoalRecords().data.items.map((item, index) => (
+        index === 0 ? { ...item, attachments: [`/api/v1/files/${longFileName}`] } : item
+      ))
+      mockGetGoalRecords.mockResolvedValue({ data: { items: records } })
+
+      render(React.createElement(PerformanceManagerEval))
+
+      const viewButton = await screen.findByRole('button', { name: /查看/ })
+      await user.click(viewButton)
+
+      expect(await screen.findByText('附件预览')).toBeInTheDocument()
+      expect(screen.getByTestId('performance-manager-attachment-item-0')).toHaveAttribute('title', longFileName)
+      expect(screen.getByTestId('performance-manager-attachment-current-name')).toHaveAttribute('title', longFileName)
+      expect(screen.getByTestId('performance-manager-attachment-preview-frame')).toBeInTheDocument()
     })
   })
 })

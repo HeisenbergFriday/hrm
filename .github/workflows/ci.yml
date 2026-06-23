@@ -38,6 +38,9 @@ jobs:
       - name: Run backend tests
         run: go test ./internal/service/... ./internal/api/... -v
 
+      - name: Run Go vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   frontend:
     name: Frontend build and tests
     runs-on: ubuntu-latest

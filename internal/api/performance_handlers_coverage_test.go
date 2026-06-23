@@ -1152,8 +1152,8 @@ func TestTemplateHandlersAdditionalBranches(t *testing.T) {
 
 func TestIndicatorHandlersAdditionalBranches(t *testing.T) {
 	t.Run("create library succeeds", func(t *testing.T) {
-		performanceHandlerTestDBWith(t)
-		body := `{"department_id":"dept-1","department_name":"Product","name":"Product KPI","items":[{"section_type":"quantitative","name":"Revenue","weight":100}]}`
+		performanceHandlerTestDBWith(t, apiPerformanceTemplateSelectResponse())
+		body := `{"department_id":"dept-1","department_name":"Product","template_id":1,"name":"Product KPI","items":[{"section_type":"quantitative","name":"Revenue","weight":100}]}`
 		recorder := performPerformanceHandlerRequest(t, http.MethodPost, "/api/v1/performance/indicator-libraries", body, nil, CreateIndicatorLibrary)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
@@ -1191,7 +1191,7 @@ func TestIndicatorHandlersAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("archive library succeeds", func(t *testing.T) {
-		performanceHandlerTestDBWith(t)
+		performanceHandlerTestDBWith(t, apiPerformanceIndicatorLibrarySelectResponse())
 		recorder := performPerformanceHandlerRequest(
 			t,
 			http.MethodPost,
@@ -1239,7 +1239,7 @@ func TestIndicatorHandlersAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("get indicator items succeeds", func(t *testing.T) {
-		performanceHandlerTestDBWith(t, apiPerformanceIndicatorItemsResponse())
+		performanceHandlerTestDBWith(t, apiPerformanceIndicatorLibrarySelectResponse(), apiPerformanceIndicatorItemsResponse())
 		recorder := performPerformanceHandlerRequest(t, http.MethodGet, "/api/v1/performance/indicator-items?library_id=1", "", nil, GetIndicatorItems)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
@@ -1256,7 +1256,7 @@ func TestIndicatorHandlersAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("update indicator item succeeds", func(t *testing.T) {
-		performanceHandlerTestDBWith(t, apiPerformanceIndicatorItemsResponse())
+		performanceHandlerTestDBWith(t, apiPerformanceIndicatorItemsResponse(), apiPerformanceIndicatorLibrarySelectResponse())
 		recorder := performPerformanceHandlerRequest(
 			t,
 			http.MethodPut,
@@ -1271,7 +1271,7 @@ func TestIndicatorHandlersAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("delete indicator item succeeds", func(t *testing.T) {
-		performanceHandlerTestDBWith(t)
+		performanceHandlerTestDBWith(t, apiPerformanceIndicatorItemsResponse(), apiPerformanceIndicatorLibrarySelectResponse())
 		recorder := performPerformanceHandlerRequest(
 			t,
 			http.MethodDelete,
@@ -1291,6 +1291,7 @@ func TestGoalRecordHandlersAdditionalBranches(t *testing.T) {
 		performanceHandlerTestDBWith(t,
 			apiPerformanceParticipantRowsResponse([][]driver.Value{apiPerformanceParticipantRow(1, "1", "user-1", nil, "target_setting", false)}),
 			apiPerformanceGoalRecordsResponse([][]driver.Value{apiPerformanceGoalRecordRow(1, 1, "1", "quantitative", "Revenue", false)}),
+			apiPerformanceGoalApprovalLogsResponse(nil),
 		)
 		recorder := performPerformanceHandlerRequest(
 			t,

@@ -33,6 +33,15 @@ func stubSelectMatcher(table string) func(string, []driver.NamedValue) bool {
 	}
 }
 
+func stubArgsContain(args []driver.NamedValue, value string) bool {
+	for _, arg := range args {
+		if fmt.Sprint(arg.Value) == value {
+			return true
+		}
+	}
+	return false
+}
+
 func newStubIndicatorService(t *testing.T, queries ...stubQueryResponse) *PerformanceIndicatorService {
 	t.Helper()
 	stubPerformanceDriverOnce.Do(func() {
@@ -203,6 +212,40 @@ func TestListLibraries_ScopeAll(t *testing.T) {
 	}
 	if len(libs) != 2 {
 		t.Fatalf("ListLibraries() len = %d, want 2", len(libs))
+	}
+}
+
+func TestListLibraries_SelfScopeUsesEmptyDepartmentMarker(t *testing.T) {
+	svc := newStubIndicatorService(t,
+		stubQueryResponse{
+			match: func(query string, args []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "performance_indicator_libraries") &&
+					strings.Contains(lower, "count(*)") &&
+					stubArgsContain(args, scopeEmptyDepartmentMarker)
+			},
+			columns: []string{"count(*)"},
+			rows:    [][]driver.Value{{int64(0)}},
+		},
+		stubQueryResponse{
+			match: func(query string, args []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "performance_indicator_libraries") &&
+					!strings.Contains(lower, "count(*)") &&
+					stubArgsContain(args, scopeEmptyDepartmentMarker)
+			},
+			columns: []string{"id", "department_id", "department_name", "name", "description", "status", "default_cycle", "created_at", "updated_at", "created_by", "updated_by"},
+			rows:    [][]driver.Value{},
+		},
+	)
+
+	scope := &OrgDataScope{Mode: "self", UserIDs: []string{"user-1"}}
+	libs, total, err := svc.ListLibraries(1, 10, "", "", "", scope)
+	if err != nil {
+		t.Fatalf("ListLibraries() error = %v", err)
+	}
+	if total != 0 || len(libs) != 0 {
+		t.Fatalf("ListLibraries() = (%d, %#v), want empty scoped result", total, libs)
 	}
 }
 
@@ -457,7 +500,7 @@ func TestSearchItems(t *testing.T) {
 		},
 	})
 
-	items, err := svc.SearchItems([]uint{1}, "客户", "")
+	items, err := svc.SearchItems([]uint{1}, "客户", "", nil)
 	if err != nil {
 		t.Fatalf("SearchItems() error = %v", err)
 	}
@@ -477,11 +520,36 @@ func TestSearchItems_EmptyLibIDs(t *testing.T) {
 		},
 	})
 
-	items, err := svc.SearchItems(nil, "", "")
+	items, err := svc.SearchItems(nil, "", "", nil)
 	if err != nil {
 		t.Fatalf("SearchItems() error = %v", err)
 	}
 	if len(items) != 2 {
 		t.Fatalf("SearchItems() len = %d, want 2", len(items))
+	}
+}
+
+func TestSearchItems_WithDepartmentScope(t *testing.T) {
+	now := time.Now()
+	svc := newStubIndicatorService(t, stubQueryResponse{
+		match: func(query string, args []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			return strings.Contains(lower, "join performance_indicator_libraries") &&
+				strings.Contains(lower, "performance_indicator_libraries.department_id") &&
+				stubArgsContain(args, "dept-1")
+		},
+		columns: []string{"id", "library_id", "section_type", "name", "description", "indicator_type", "calculation_method", "data_source", "cycle", "default_weight", "red_line_value", "target_value", "challenge_value", "scoring_rule", "weight", "is_default", "is_inherited", "sort_order", "created_at", "updated_at", "created_by", "updated_by"},
+		rows: [][]driver.Value{
+			{1, 1, "quantitative", "KPI1", "", "number", "", "", "", 0.5, "", "", "", "", 0.5, true, false, 1, now, now, "", ""},
+		},
+	})
+
+	scope := &OrgDataScope{Mode: "department", DepartmentIDs: []string{"dept-1"}}
+	items, err := svc.SearchItems(nil, "", "", scope)
+	if err != nil {
+		t.Fatalf("SearchItems() error = %v", err)
+	}
+	if len(items) != 1 || items[0].Name != "KPI1" {
+		t.Fatalf("SearchItems() = %#v", items)
 	}
 }

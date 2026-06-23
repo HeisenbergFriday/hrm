@@ -2,6 +2,7 @@ package service
 
 import (
 	"database/sql/driver"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,7 +10,12 @@ import (
 )
 
 func TestCreateActivityTrimsDefaultsAndValidatesInput(t *testing.T) {
-	svc := newStubPerformanceService(t, activeUserResponse("manager-1", "Boss"))
+	svc := newStubPerformanceService(t,
+		activeUserResponse("manager-1", "Boss"),
+		performanceActivityResponse("draft", ""),
+		performanceDepartmentsResponse(),
+		performanceParticipantsResponse(nil),
+	)
 
 	activity, err := svc.CreateActivity(CreateActivityRequest{
 		Name:        " Q2 Review ",
@@ -48,6 +54,51 @@ func TestCreateActivityTrimsDefaultsAndValidatesInput(t *testing.T) {
 	}
 	if _, err := svc.CreateActivity(CreateActivityRequest{Name: "Q2", CycleType: "quarterly", DefaultAssessmentManagerSource: "manual"}, "creator-1"); err == nil {
 		t.Fatalf("CreateActivity() expected invalid default manager source error")
+	}
+}
+
+func TestCreateActivitySyncsDraftParticipants(t *testing.T) {
+	activeUsersQueried := false
+	participantsQueried := false
+	svc := newStubPerformanceService(t,
+		performanceActivityResponse("draft", ""),
+		stubQueryResponse{
+			match: func(query string, args []driver.NamedValue) bool {
+				if strings.Contains(strings.ToLower(query), "users") && len(args) == 1 && args[0].Value == "active" {
+					activeUsersQueried = true
+					return true
+				}
+				return false
+			},
+			columns: []string{"id", "user_id", "name", "department_id", "status"},
+			rows: [][]driver.Value{
+				{int64(1), "employee-1", "Alice", "dept-1", "active"},
+			},
+		},
+		performanceDepartmentsResponse([]driver.Value{int64(1), "dept-1", "Engineering"}),
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				if strings.Contains(strings.ToLower(query), "performance_participants") {
+					participantsQueried = true
+					return true
+				}
+				return false
+			},
+			columns: performanceParticipantStubColumns(),
+			rows:    nil,
+		},
+	)
+
+	if _, err := svc.CreateActivity(CreateActivityRequest{
+		Name:              "Q2",
+		CycleType:         "quarterly",
+		Status:            "draft",
+		TargetEmployeeIDs: []string{"employee-1"},
+	}, "creator-1"); err != nil {
+		t.Fatalf("CreateActivity() error = %v", err)
+	}
+	if !activeUsersQueried || !participantsQueried {
+		t.Fatalf("CreateActivity() did not sync draft participants: activeUsersQueried=%v participantsQueried=%v", activeUsersQueried, participantsQueried)
 	}
 }
 
@@ -223,6 +274,46 @@ func TestPublishCloseArchiveAndLockActivityFlows(t *testing.T) {
 	)
 	if err := lockSvc.LockActivity("activity-1", "operator-1"); err != nil {
 		t.Fatalf("LockActivity() error = %v", err)
+	}
+}
+
+func TestOpenSelfEvaluationRejectsNewFlowWithoutReviewRecords(t *testing.T) {
+	svc := newStubPerformanceService(t,
+		newFlowPerformanceActivityResponse("target_setting", ""),
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "target_set", "", 0, 0, "", false, nil, nil, nil),
+			},
+		},
+		performanceGoalRecordResponse(),
+	)
+
+	err := svc.OpenSelfEvaluation("activity-1", "operator-1")
+	if err == nil || !strings.Contains(err.Error(), "缺少上一季度绩效考核指标") {
+		t.Fatalf("OpenSelfEvaluation(new flow without review records) expected missing review records error, got = %v", err)
+	}
+}
+
+func TestBatchSaveReviewGoalRecordsAllowsNewFlowTargetSetParticipant(t *testing.T) {
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "target_set", "", 0, 0, "", false, nil, nil, nil),
+			},
+		},
+		newFlowPerformanceActivityResponse("target_setting", ""),
+		performanceGoalRecordResponse(),
+	)
+
+	if _, err := svc.BatchSaveReviewGoalRecords(1, []GoalRecordRequest{
+		{SectionType: "quantitative", GoalPhase: PerformanceGoalPhaseReview, GoalType: "kpi", ItemName: "Revenue", ItemDefinition: "Revenue target", Weight: 0.5, TargetValue: "100"},
+		{SectionType: "key_action", GoalPhase: PerformanceGoalPhaseReview, GoalType: "okr", ItemName: "Launch", ItemDefinition: "Launch plan", Weight: 0.2, TargetValue: "Delivered"},
+	}, "operator-1"); err != nil {
+		t.Fatalf("BatchSaveReviewGoalRecords(new flow target_set) error = %v", err)
 	}
 }
 
@@ -441,6 +532,16 @@ func performanceActivityResponse(status, deadline string) stubQueryResponse {
 	}
 }
 
+func newFlowPerformanceActivityResponse(status, deadline string) stubQueryResponse {
+	return stubQueryResponse{
+		match:   stubTableMatcher("performance_activities"),
+		columns: []string{"id", "name", "cycle_type", "status", "flow_type", "hr_confirm_deadline", "created_by"},
+		rows: [][]driver.Value{
+			{int64(1), "Q2", "quarterly", status, PerformanceFlowNew, deadline, "creator-1"},
+		},
+	}
+}
+
 func performanceGoalRecordResponse(rows ...[]driver.Value) stubQueryResponse {
 	return stubQueryResponse{
 		match:   stubTableMatcher("performance_goal_records"),
@@ -472,5 +573,21 @@ func activeUserResponse(userID, name string) stubQueryResponse {
 		rows: [][]driver.Value{
 			{int64(1), userID, name, "dept-1", "active"},
 		},
+	}
+}
+
+func performanceDepartmentsResponse(rows ...[]driver.Value) stubQueryResponse {
+	return stubQueryResponse{
+		match:   stubTableMatcher("departments"),
+		columns: []string{"id", "department_id", "name"},
+		rows:    rows,
+	}
+}
+
+func performanceParticipantsResponse(rows [][]driver.Value) stubQueryResponse {
+	return stubQueryResponse{
+		match:   stubTableMatcher("performance_participants"),
+		columns: performanceParticipantStubColumns(),
+		rows:    rows,
 	}
 }

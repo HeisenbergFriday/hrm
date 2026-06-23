@@ -70,6 +70,7 @@ func TestPerformanceRouterRegistersCriticalRoutes(t *testing.T) {
 		"GET /api/v1/performance/templates/:id",
 		"PUT /api/v1/performance/templates/:id",
 		"GET /api/v1/performance/goal-records/:participant_id",
+		"POST /api/v1/performance/goal-records/:participant_id/review-supplement",
 		"POST /api/v1/performance/activities/:activity_id/batch-assign-goals",
 	} {
 		if _, ok := routes[route]; !ok {

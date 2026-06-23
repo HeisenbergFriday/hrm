@@ -42,6 +42,121 @@ func TestPerformanceLevelByScoreBoundaries(t *testing.T) {
 	}
 }
 
+func TestPerformanceLevelByRuleConfigNewFlowBoundaries(t *testing.T) {
+	tests := []struct {
+		score float64
+		want  string
+	}{
+		{5.99, "D"},
+		{6, "C"},
+		{7.49, "C"},
+		{7.5, "B"},
+		{8.99, "B"},
+		{9, "A"},
+		{10, "A"},
+		{10.01, "S"},
+	}
+
+	for _, tt := range tests {
+		if got := PerformanceLevelByRuleConfig(tt.score, nil, PerformanceFlowNew); got != tt.want {
+			t.Fatalf("PerformanceLevelByRuleConfig(%v, new) = %q, want %q", tt.score, got, tt.want)
+		}
+	}
+}
+
+func TestNormalizeNewPerformanceGoalRecordsAddsLockedFixedItems(t *testing.T) {
+	records := []GoalRecordRequest{
+		{
+			ID:           12,
+			SectionType:  "key_action",
+			GoalType:     "fixed",
+			FixedKey:     "manager_arrangement",
+			ItemName:     "tampered",
+			Weight:       0.5,
+			ActualResult: "done",
+			SelfScore:    8,
+			ManagerScore: 9,
+			Attachments:  []string{"file-1"},
+			SortOrder:    7,
+		},
+		{
+			SectionType: "quantitative",
+			GoalPhase:   "plan",
+			GoalType:    "kpi",
+			ItemName:    "销售额",
+			Weight:      0.7,
+		},
+	}
+
+	got := normalizeNewPerformanceGoalRecords(records, "plan")
+	if len(got) != 3 {
+		t.Fatalf("normalizeNewPerformanceGoalRecords() length = %d, want 3", len(got))
+	}
+	if got[0].FixedKey != "manager_arrangement" || !got[0].IsFixed || got[0].ItemName != "上级安排事项完成情况" || got[0].Weight != 0.15 {
+		t.Fatalf("first fixed item not locked to default: %#v", got[0])
+	}
+	if got[0].ID != 12 || got[0].ActualResult != "done" || got[0].SelfScore != 8 || got[0].ManagerScore != 9 || !reflect.DeepEqual(got[0].Attachments, []string{"file-1"}) || got[0].SortOrder != 7 {
+		t.Fatalf("first fixed item did not preserve editable fields: %#v", got[0])
+	}
+	if got[1].FixedKey != "values_discipline" || !got[1].IsFixed || got[1].Weight != 0.15 {
+		t.Fatalf("second fixed item missing or malformed: %#v", got[1])
+	}
+	if got[2].ItemName != "销售额" || got[2].GoalType != "kpi" || got[2].Weight != 0.7 {
+		t.Fatalf("variable item order/content changed: %#v", got[2])
+	}
+}
+
+func TestPerformanceDistributionPercentagesNewFlowDefault(t *testing.T) {
+	activity := &database.PerformanceActivity{FlowType: PerformanceFlowNew}
+	got := performanceDistributionPercentages(activity)
+	want := map[string]int{"S": 5, "A": 15, "B": 60, "C": 15, "D": 5}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("performanceDistributionPercentages(new) = %#v, want %#v", got, want)
+	}
+}
+
+func TestGetDistributionCheckUsesNewFlowActivityDefaults(t *testing.T) {
+	rows := make([][]driver.Value, 0, 20)
+	for i := 1; i <= 20; i++ {
+		level := "B"
+		if i <= 2 {
+			level = "S"
+		}
+		rows = append(rows, []driver.Value{int64(i), "activity-1", "manager_submitted", level})
+	}
+
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_activities"),
+			columns: []string{"id", "name", "cycle_type", "status", "flow_type"},
+			rows: [][]driver.Value{
+				{int64(1), "Q2", "quarterly", "manager_evaluation", PerformanceFlowNew},
+			},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: []string{"id", "activity_id", "status", "final_level"},
+			rows:    rows,
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_distribution_rules"),
+			columns: []string{"id", "activity_id", "level", "distribution_percent", "description"},
+			rows:    nil,
+		},
+	)
+
+	check, err := svc.GetDistributionCheck("activity-1")
+	if err != nil {
+		t.Fatalf("GetDistributionCheck() error = %v", err)
+	}
+	if check.Passed {
+		t.Fatalf("new flow S quota should fail at 2/20 with 5%% default: %#v", check)
+	}
+	if got := check.Distribution["S"]; got.ExpectedPercent != 5 || got.ExpectedCount != 1 || got.ActualCount != 2 {
+		t.Fatalf("S distribution = %#v, want 5%% expectedCount=1 actualCount=2", got)
+	}
+}
+
 func TestPerformanceSelfEvalURL(t *testing.T) {
 	t.Setenv("DINGTALK_APP_HOME_URL", "https://peopleops.example/app")
 
@@ -55,6 +170,175 @@ func TestPerformanceSelfEvalURL(t *testing.T) {
 	want := "https://peopleops.example/app/performance-self-eval/activity%20%2Fx/7"
 	if got := PerformanceSelfEvalURL("activity /x", 7); got != want {
 		t.Fatalf("PerformanceSelfEvalURL() = %q, want %q", got, want)
+	}
+}
+
+func TestDueSelfEvalReminderRound(t *testing.T) {
+	loc := time.Local
+	now := time.Date(2026, 6, 2, 10, 0, 0, 0, loc)
+	activity := &database.PerformanceActivity{SelfEvalEndAt: "2026-06-05"}
+
+	key, days, ok := dueSelfEvalReminderRound(activity, now)
+	if !ok || key != "self_eval_due_in_3d" || days != 3 {
+		t.Fatalf("round = (%q, %d, %v), want 3-day reminder", key, days, ok)
+	}
+
+	activity.ReminderConfig = map[string]interface{}{"self_eval_reminder_days": []interface{}{float64(2), float64(0)}}
+	key, days, ok = dueSelfEvalReminderRound(activity, now)
+	if ok || days != 3 || key != "" {
+		t.Fatalf("custom offsets should skip 3-day reminder, got (%q, %d, %v)", key, days, ok)
+	}
+
+	activity.SelfEvalEndAt = "2026-06-02"
+	key, days, ok = dueSelfEvalReminderRound(activity, now)
+	if !ok || key != "self_eval_due_today" || days != 0 {
+		t.Fatalf("round = (%q, %d, %v), want due today", key, days, ok)
+	}
+
+	activity.ReminderConfig = map[string]interface{}{"self_eval_auto_reminder_enabled": false}
+	if _, _, ok = dueSelfEvalReminderRound(activity, now); ok {
+		t.Fatalf("disabled auto reminder should not match")
+	}
+}
+
+func TestSendDueSelfEvalAutoRemindersSendsPendingOnly(t *testing.T) {
+	originalSender := sendPerformanceActionCardToUser
+	t.Cleanup(func() { sendPerformanceActionCardToUser = originalSender })
+	sentTo := make([]string, 0)
+	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+		sentTo = append(sentTo, userID)
+		if !strings.Contains(content, "距离截止还有 3 天") {
+			t.Fatalf("content = %q, want deadline reminder text", content)
+		}
+		if !strings.Contains(actionURL, "/performance-self-eval/1/1") {
+			t.Fatalf("actionURL = %q, want self eval link", actionURL)
+		}
+		return nil
+	}
+
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_activities"),
+			columns: []string{"id", "name", "status", "self_eval_end_at"},
+			rows: [][]driver.Value{
+				{int64(1), "Q2", "self_evaluation", "2026-06-05"},
+			},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "target_set", "", 0, 0, "", false, nil, nil, nil),
+				performanceParticipantStubRow(2, "self_submitted", "done", 90, 0, "", false, nil, nil, nil),
+			},
+		},
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "performance_reminder_logs") && strings.Contains(lower, "count(")
+			},
+			columns: []string{"count"},
+			rows:    [][]driver.Value{{int64(0)}},
+		},
+	)
+
+	result, err := svc.SendDueSelfEvalAutoReminders(time.Date(2026, 6, 2, 9, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatalf("SendDueSelfEvalAutoReminders() error = %v", err)
+	}
+	if result.ActivitiesScanned != 1 || result.ActivitiesMatched != 1 || result.Candidates != 1 || result.Sent != 1 || result.Failed != 0 {
+		t.Fatalf("result = %#v, want one sent pending participant", result)
+	}
+	if !reflect.DeepEqual(sentTo, []string{"user-1"}) {
+		t.Fatalf("sentTo = %#v, want user-1 only", sentTo)
+	}
+}
+
+func TestSendDueSelfEvalAutoRemindersSkipsAlreadySentRound(t *testing.T) {
+	originalSender := sendPerformanceActionCardToUser
+	t.Cleanup(func() { sendPerformanceActionCardToUser = originalSender })
+	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+		t.Fatalf("sender should not be called for already sent reminder")
+		return nil
+	}
+
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_activities"),
+			columns: []string{"id", "name", "status", "self_eval_end_at"},
+			rows: [][]driver.Value{
+				{int64(1), "Q2", "self_evaluation", "2026-06-05"},
+			},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "target_set", "", 0, 0, "", false, nil, nil, nil),
+			},
+		},
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "performance_reminder_logs") && strings.Contains(lower, "count(")
+			},
+			columns: []string{"count"},
+			rows:    [][]driver.Value{{int64(1)}},
+		},
+	)
+
+	result, err := svc.SendDueSelfEvalAutoReminders(time.Date(2026, 6, 2, 9, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatalf("SendDueSelfEvalAutoReminders() error = %v", err)
+	}
+	if result.Sent != 0 || result.AlreadySent != 1 {
+		t.Fatalf("result = %#v, want already sent skip", result)
+	}
+}
+
+func TestPerformanceNoticeURLs(t *testing.T) {
+	t.Setenv("DINGTALK_APP_HOME_URL", "https://peopleops.example/app")
+
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{
+			name: "manager eval",
+			got:  PerformanceManagerEvalURL("activity /x", 7),
+			want: "https://peopleops.example/app/performance-manager-eval/activity%20%2Fx/7",
+		},
+		{
+			name: "result",
+			got:  PerformanceResultURL("activity /x", 7),
+			want: "https://peopleops.example/app/performance-result/activity%20%2Fx/7",
+		},
+		{
+			name: "overview with activity",
+			got:  PerformanceOverviewURL("activity /x"),
+			want: "https://peopleops.example/app/performance-overview?activity_id=activity+%2Fx",
+		},
+		{
+			name: "overview without activity",
+			got:  PerformanceOverviewURL(""),
+			want: "https://peopleops.example/app/performance-overview",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Fatalf("URL = %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+
+	if got := PerformanceManagerEvalURL("", 7); got != "" {
+		t.Fatalf("empty manager activity URL = %q, want empty", got)
+	}
+	if got := PerformanceResultURL("activity", 0); got != "" {
+		t.Fatalf("zero result participant URL = %q, want empty", got)
 	}
 }
 
@@ -359,6 +643,17 @@ func TestNewPerformanceParticipantForActivityDefaultSources(t *testing.T) {
 	}
 	if ptrStringValue(participant.ManagerID) != "manager-1" || participant.ManagerSource != ManagerSourceDirectManager {
 		t.Fatalf("direct manager assignment not applied: %#v", participant)
+	}
+
+	selfManaged := user
+	selfManaged.ManagerUserID = selfManaged.UserID
+	selfManaged.ManagerName = selfManaged.Name
+	participant = svc.newPerformanceParticipantForActivity(activity, "operator-1", selfManaged, "Product")
+	if participant.ManagerID != nil || participant.ManagerName != nil {
+		t.Fatalf("self manager should stay pending instead of assigning self: %#v", participant)
+	}
+	if participant.ManagerSource != ManagerSourceEmpty || participant.ManagerConfigStatus != ManagerConfigPending {
+		t.Fatalf("self manager source/config = (%q, %q)", participant.ManagerSource, participant.ManagerConfigStatus)
 	}
 
 	activity.DefaultAssessmentManagerSource = ManagerSourceEmpty
@@ -696,6 +991,7 @@ func TestGetResultSummaryCountsStagesAndIgnoresInactive(t *testing.T) {
 
 func TestGetDistributionCheckUsesRulesAndIgnoresInactive(t *testing.T) {
 	svc := newStubPerformanceService(t,
+		performanceActivityResponse("manager_evaluation", ""),
 		stubQueryResponse{
 			match:   stubTableMatcher("performance_participants"),
 			columns: []string{"id", "activity_id", "status", "final_level"},
@@ -901,6 +1197,46 @@ func TestValidateTemplateSections(t *testing.T) {
 				t.Fatalf("validateTemplateSections(%s) expected error", tt.name)
 			}
 		})
+	}
+}
+
+func TestLoadTemplateForActivityRejectsMismatchedFlowType(t *testing.T) {
+	templateID := uint(7)
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_templates"),
+			columns: []string{"id", "name", "code", "flow_type", "status"},
+			rows: [][]driver.Value{
+				{int64(templateID), "Legacy Template", PerformanceTemplateCodeOld, PerformanceFlowOld, "active"},
+			},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_template_sections"),
+			columns: []string{"id", "template_id", "name"},
+			rows:    nil,
+		},
+	)
+
+	_, _, err := svc.loadTemplateForActivity(&templateID, PerformanceFlowNew)
+	if err == nil || !strings.Contains(err.Error(), "流程模板与流程类型不一致") {
+		t.Fatalf("loadTemplateForActivity mismatch error = %v", err)
+	}
+}
+
+func TestValidateActivityIndicatorLibraryRequiresSameTemplate(t *testing.T) {
+	libraryID := uint(10)
+	activityTemplateID := uint(1)
+	svc := newStubPerformanceService(t, stubQueryResponse{
+		match:   stubTableMatcher("performance_indicator_libraries"),
+		columns: []string{"id", "department_id", "department_name", "template_id", "name", "default_cycle", "status"},
+		rows: [][]driver.Value{
+			{int64(libraryID), "dept-1", "Product", int64(2), "沐腾指标库", "monthly", "active"},
+		},
+	})
+
+	err := svc.validateActivityIndicatorLibrary(&libraryID, "monthly", &activityTemplateID)
+	if err == nil || !strings.Contains(err.Error(), "指标库所属流程模板与活动流程模板不一致") {
+		t.Fatalf("validateActivityIndicatorLibrary() error = %v, want template mismatch", err)
 	}
 }
 
