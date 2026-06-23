@@ -48,6 +48,10 @@ func main() {
 	}
 	leaveJobs.Start()
 
+	// 启动绩效定时任务
+	performanceJobs := service.NewPerformanceJobScheduler(database.DB)
+	performanceJobs.Start()
+
 	// 启动服务器
 	port := os.Getenv("PORT")
 	if port == "" {

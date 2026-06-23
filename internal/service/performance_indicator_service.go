@@ -46,20 +46,22 @@ func (s *PerformanceIndicatorService) UpdateLibrary(lib *database.PerformanceInd
 	existing.Description = lib.Description
 	existing.DepartmentName = lib.DepartmentName
 	existing.DefaultCycle = lib.DefaultCycle
+	existing.TemplateID = lib.TemplateID
 	existing.UpdatedBy = lib.UpdatedBy
 	return s.libRepo.Update(existing)
 }
 
-func (s *PerformanceIndicatorService) ListLibraries(page, pageSize int, departmentID, keyword, status string, scope *OrgDataScope) ([]database.PerformanceIndicatorLibrary, int64, error) {
-	var visibleDepartmentIDs []string
-	if scope != nil && !scope.IsAll() {
-		visibleDepartmentIDs = scope.DepartmentIDs
+func (s *PerformanceIndicatorService) ListLibraries(page, pageSize int, departmentID, keyword, status string, scope *OrgDataScope, templateIDs ...*uint) ([]database.PerformanceIndicatorLibrary, int64, error) {
+	visibleDepartmentIDs := indicatorScopeDepartmentIDs(scope)
+	var templateID *uint
+	if len(templateIDs) > 0 {
+		templateID = templateIDs[0]
 	}
-	return s.libRepo.FindAll(page, pageSize, departmentID, keyword, status, visibleDepartmentIDs)
+	return s.libRepo.FindAll(page, pageSize, departmentID, keyword, status, visibleDepartmentIDs, templateID)
 }
 
-func (s *PerformanceIndicatorService) GetLibrariesByDepartment(departmentID string) ([]database.PerformanceIndicatorLibrary, error) {
-	return s.libRepo.FindByDepartment(departmentID)
+func (s *PerformanceIndicatorService) GetLibrariesByDepartment(departmentID string, templateIDs ...*uint) ([]database.PerformanceIndicatorLibrary, error) {
+	return s.libRepo.FindByDepartment(departmentID, templateIDs...)
 }
 
 func (s *PerformanceIndicatorService) ArchiveLibrary(id uint, updatedBy string) error {
@@ -85,6 +87,7 @@ func (s *PerformanceIndicatorService) InheritLibrary(parentID uint, targetDepart
 		DepartmentID:    targetDepartmentID,
 		DepartmentName:  targetDepartmentName,
 		ParentLibraryID: &parent.ID,
+		TemplateID:      parent.TemplateID,
 		Name:            libName,
 		Description:     libDesc,
 		DefaultCycle:    parent.DefaultCycle,
@@ -191,6 +194,16 @@ func (s *PerformanceIndicatorService) ListItemsByLibrary(libraryID uint, section
 	return s.itemRepo.FindByLibrary(libraryID, sectionType)
 }
 
-func (s *PerformanceIndicatorService) SearchItems(libraryIDs []uint, keyword string, sectionType string) ([]database.PerformanceIndicatorItem, error) {
-	return s.itemRepo.Search(libraryIDs, keyword, sectionType)
+func (s *PerformanceIndicatorService) SearchItems(libraryIDs []uint, keyword string, sectionType string, scope *OrgDataScope) ([]database.PerformanceIndicatorItem, error) {
+	return s.itemRepo.Search(libraryIDs, keyword, sectionType, indicatorScopeDepartmentIDs(scope))
+}
+
+func indicatorScopeDepartmentIDs(scope *OrgDataScope) []string {
+	if scope == nil || scope.IsAll() {
+		return nil
+	}
+	if len(scope.DepartmentIDs) == 0 {
+		return []string{scopeEmptyDepartmentMarker}
+	}
+	return uniqueStrings(scope.DepartmentIDs)
 }

@@ -2,17 +2,22 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Typography, Form, Input, InputNumber, Button, Space,
-  message, Spin, Row, Col, Table, Select, Progress, Tag, Modal, Badge, Image
+  message, Spin, Row, Col, Table, Select, Progress, Tag, Modal, Badge, Image, Alert
 } from 'antd'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { ArrowLeftOutlined, CheckCircleOutlined, PaperClipOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { performanceAPI, PerformanceGoalRecord, PerformanceParticipant, TeamQuotaStatus } from '../services/api'
+import { performanceAPI, PerformanceActivity, PerformanceGoalRecord, PerformanceParticipant, TeamQuotaStatus } from '../services/api'
 import { withFileAccessToken } from '../utils/authFileUrl'
 
 const { Title, Text } = Typography
 const { TextArea } = Input
+
+function isReviewGoalRecord(activity: PerformanceActivity | null, record: PerformanceGoalRecord) {
+  if (activity?.flow_type !== 'new') return true
+  return String(record.goal_phase || 'review').trim() !== 'plan'
+}
 
 const LEVEL_OPTIONS = [
   { value: 'S', label: 'S - 杰出', color: '#f50' },
@@ -22,13 +27,78 @@ const LEVEL_OPTIONS = [
   { value: 'D', label: 'D - 不合格', color: '#ff4d4f' },
 ]
 
-const calcPerformanceLevel = (score: number) => {
-  if (score >= 100) return 'S'
-  if (score >= 90) return 'A'
-  if (score >= 80) return 'B'
-  if (score >= 60) return 'C'
+type LevelRule = {
+  level: string
+  min_score?: number
+  max_score?: number
+  min_inclusive?: boolean
+  max_inclusive?: boolean
+  sort_order?: number
+}
+
+const defaultLevelRules = (flowType?: string): LevelRule[] => {
+  if (flowType === 'new') {
+    return [
+      { level: 'S', min_score: 10, min_inclusive: false, sort_order: 1 },
+      { level: 'A', min_score: 9, max_score: 10, min_inclusive: true, max_inclusive: true, sort_order: 2 },
+      { level: 'B', min_score: 7.5, max_score: 9, min_inclusive: true, max_inclusive: false, sort_order: 3 },
+      { level: 'C', min_score: 6, max_score: 7.5, min_inclusive: true, max_inclusive: false, sort_order: 4 },
+      { level: 'D', max_score: 6, max_inclusive: false, sort_order: 5 },
+    ]
+  }
+  return [
+    { level: 'S', min_score: 100, min_inclusive: true, sort_order: 1 },
+    { level: 'A', min_score: 90, max_score: 100, min_inclusive: true, max_inclusive: false, sort_order: 2 },
+    { level: 'B', min_score: 80, max_score: 90, min_inclusive: true, max_inclusive: false, sort_order: 3 },
+    { level: 'C', min_score: 60, max_score: 80, min_inclusive: true, max_inclusive: false, sort_order: 4 },
+    { level: 'D', max_score: 60, max_inclusive: false, sort_order: 5 },
+  ]
+}
+
+const scoreMatchesRule = (score: number, rule: LevelRule) => {
+  if (typeof rule.min_score === 'number') {
+    if (rule.min_inclusive === false ? score <= rule.min_score : score < rule.min_score) return false
+  }
+  if (typeof rule.max_score === 'number') {
+    if (rule.max_inclusive ? score > rule.max_score : score >= rule.max_score) return false
+  }
+  return true
+}
+
+const calcPerformanceLevel = (score: number, activity?: PerformanceActivity | null) => {
+  const configuredRules = (activity?.level_rule_config?.rules as LevelRule[] | undefined) || []
+  const rules = (configuredRules.length ? configuredRules : defaultLevelRules(activity?.flow_type))
+    .slice()
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+  const matched = rules.find(rule => scoreMatchesRule(score, rule))
+  if (matched?.level) return matched.level
   return 'D'
 }
+
+const normalizeAutoManagerScore = (score: number, isNewFlow: boolean) => {
+  if (!Number.isFinite(score)) return 0
+  const scaledScore = isNewFlow ? score / 10 : score
+  const maxScore = isNewFlow ? 10 : 120
+  const clampedScore = Math.max(0, Math.min(maxScore, scaledScore))
+  return isNewFlow
+    ? Math.round(clampedScore * 10) / 10
+    : Math.round(clampedScore * 100) / 100
+}
+
+const attachmentExt = (url: string) => {
+  const cleanUrl = url.split('?')[0].split('#')[0]
+  const filename = cleanUrl.split('/').pop() || ''
+  const dotIndex = filename.lastIndexOf('.')
+  return dotIndex >= 0 ? filename.slice(dotIndex).toLowerCase() : ''
+}
+
+const attachmentName = (url: string, index: number) => {
+  const cleanUrl = url.split('?')[0].split('#')[0]
+  return decodeURIComponent(cleanUrl.split('/').pop() || `附件 ${index + 1}`)
+}
+
+const isImageAttachment = (url: string) => ['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(attachmentExt(url))
+const isFramePreviewAttachment = (url: string) => ['.pdf', '.txt', '.csv', '.md'].includes(attachmentExt(url))
 
 const PerformanceManagerEval: React.FC = () => {
   const { activityId, participantId } = useParams<{ activityId: string; participantId: string }>()
@@ -39,9 +109,14 @@ const PerformanceManagerEval: React.FC = () => {
   const [totalManagerScore, setTotalManagerScore] = useState(0)
   const [quotaData, setQuotaData] = useState<TeamQuotaStatus[]>([])
   const [participant, setParticipant] = useState<PerformanceParticipant | null>(null)
+  const [activity, setActivity] = useState<PerformanceActivity | null>(null)
   const [bonusItems, setBonusItems] = useState<PerformanceGoalRecord[]>([])
-  const [previewAttachments, setPreviewAttachments] = useState<{ visible: boolean; attachments: string[] }>({ visible: false, attachments: [] })
+  const [previewAttachments, setPreviewAttachments] = useState<{ visible: boolean; attachments: string[]; currentIndex: number }>({ visible: false, attachments: [], currentIndex: 0 })
   const [autoScoring, setAutoScoring] = useState(false)
+  const isNewFlow = activity?.flow_type === 'new'
+  const scoreMax = isNewFlow ? 10 : 120
+  const scoreStep = isNewFlow ? 0.1 : 1
+  const isManagerRecheck = participant?.status === 'manager_recheck'
 
   const loadData = useCallback(async () => {
     if (!participantId || !activityId) return
@@ -53,16 +128,18 @@ const PerformanceManagerEval: React.FC = () => {
         performanceAPI.getParticipant(Number(participantId))
       ])
 
+      const currentParticipant = participantRes.data?.participant || participantRes.data
+      const currentActivity = participantRes.data?.activity || null
       const allItems: PerformanceGoalRecord[] = recordsRes.data?.items || []
       const items: PerformanceGoalRecord[] = allItems.filter(
-        (item: PerformanceGoalRecord) => item.section_type !== 'bonus_penalty'
+        (item: PerformanceGoalRecord) => item.section_type !== 'bonus_penalty' && isReviewGoalRecord(currentActivity, item)
       )
       const bonus: PerformanceGoalRecord[] = allItems.filter(
         (item: PerformanceGoalRecord) => item.section_type === 'bonus_penalty'
       )
-      const currentParticipant = participantRes.data?.participant || participantRes.data
       setQuotaData(quotaRes.data?.teams || [])
       setParticipant(currentParticipant)
+      setActivity(currentActivity)
       setBonusItems(bonus)
 
       const formItems = items.map(i => ({
@@ -89,7 +166,7 @@ const PerformanceManagerEval: React.FC = () => {
       if (currentParticipant?.suggested_level || currentParticipant?.final_level) {
         levelManuallySetRef.current = true
       }
-      calcTotal(formItems)
+      calcTotal(formItems, currentActivity)
     } catch {
       message.error('加载数据失败')
     } finally {
@@ -99,12 +176,12 @@ const PerformanceManagerEval: React.FC = () => {
 
   useEffect(() => { loadData() }, [loadData])
 
-  const calcTotal = (items: any[]) => {
+  const calcTotal = (items: any[], currentActivity: PerformanceActivity | null = activity) => {
     const total = items.reduce((sum, i) => sum + (i.manager_score || 0) * (i.weight || 0), 0)
     const roundedTotal = Math.round(total * 100) / 100
     setTotalManagerScore(roundedTotal)
     if (!levelManuallySetRef.current) {
-      const level = calcPerformanceLevel(roundedTotal)
+      const level = calcPerformanceLevel(roundedTotal, currentActivity)
       form.setFieldsValue({ suggested_level: level })
     }
   }
@@ -139,7 +216,7 @@ const PerformanceManagerEval: React.FC = () => {
       const updatedItems = allItems.map((i: any) => {
         const result = scoreMap.get(i.record_id)
         if (result && result.auto_scored) {
-          return { ...i, manager_score: result.score }
+          return { ...i, manager_score: normalizeAutoManagerScore(result.score, isNewFlow) }
         }
         return i
       })
@@ -240,7 +317,7 @@ const PerformanceManagerEval: React.FC = () => {
         evaluation_good: values.evaluation_good || '',
         evaluation_improvement: values.evaluation_improvement || ''
       })
-      message.success('评分提交成功')
+      message.success(isManagerRecheck ? '复核意见已提交' : '评分提交成功')
       navigate(-1)
     } catch (err: any) {
       if (err.errorFields) return
@@ -248,6 +325,90 @@ const PerformanceManagerEval: React.FC = () => {
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleConfirmRecheck = async () => {
+    if (!participantId) return
+    setSaving(true)
+    try {
+      await performanceAPI.confirmManagerResult(Number(participantId))
+      message.success('已确认查看')
+      navigate(-1)
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '确认失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const openAttachmentPreview = (attachments: string[]) => {
+    setPreviewAttachments({ visible: true, attachments, currentIndex: 0 })
+  }
+
+  const closeAttachmentPreview = () => {
+    setPreviewAttachments({ visible: false, attachments: [], currentIndex: 0 })
+  }
+
+  const renderAttachmentPreview = () => {
+    const currentUrl = previewAttachments.attachments[previewAttachments.currentIndex]
+    if (!currentUrl) {
+      return <Text type="secondary">暂无附件</Text>
+    }
+    const fileName = attachmentName(currentUrl, previewAttachments.currentIndex)
+    const src = withFileAccessToken(currentUrl)
+    if (isImageAttachment(currentUrl)) {
+      return (
+        <Image
+          data-testid="performance-manager-attachment-preview-image"
+          src={src}
+          alt={fileName}
+          wrapperStyle={{ width: '100%', display: 'flex', justifyContent: 'center' }}
+          style={{ maxWidth: '100%', maxHeight: 560, objectFit: 'contain' }}
+        />
+      )
+    }
+    if (isFramePreviewAttachment(currentUrl)) {
+      return (
+        <iframe
+          data-testid="performance-manager-attachment-preview-frame"
+          title={fileName}
+          src={src}
+          style={{
+            width: '100%',
+            height: 560,
+            border: '1px solid var(--color-border-light)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--color-bg-card)',
+          }}
+        />
+      )
+    }
+    return (
+      <div style={{
+        minHeight: 240,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 12,
+        border: '1px dashed var(--color-border)',
+        borderRadius: 'var(--radius-md)',
+        background: 'var(--color-bg-page)',
+      }}>
+        <PaperClipOutlined style={{ fontSize: 28, color: 'var(--color-text-secondary)' }} />
+        <Text
+          strong
+          title={fileName}
+          style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        >
+          {fileName}
+        </Text>
+        <Text type="secondary">该文件类型暂不支持在线预览，请下载后查看。</Text>
+        <Button href={src} target="_blank" rel="noopener noreferrer">
+          下载附件
+        </Button>
+      </div>
+    )
   }
 
   const renderQuotaPanel = () => {
@@ -358,7 +519,7 @@ const PerformanceManagerEval: React.FC = () => {
               type="link"
               size="small"
               icon={<PaperClipOutlined />}
-              onClick={() => setPreviewAttachments({ visible: true, attachments })}
+              onClick={() => openAttachmentPreview(attachments)}
             >
               查看
             </Button>
@@ -380,7 +541,7 @@ const PerformanceManagerEval: React.FC = () => {
       render: (_: any, __: any, idx: number) => (
         <Form.Item name={['items', idx, 'manager_score']} style={{ margin: 0 }}
           rules={[{ required: true, message: '请评分' }]}>
-          <InputNumber data-testid={`performance-manager-score-${idx}`} min={0} max={120} style={{ width: '100%' }} />
+          <InputNumber data-testid={`performance-manager-score-${idx}`} min={0} max={scoreMax} step={scoreStep} style={{ width: '100%' }} />
         </Form.Item>
       )
     }
@@ -395,6 +556,9 @@ const PerformanceManagerEval: React.FC = () => {
     )
   }
 
+  const currentPreviewUrl = previewAttachments.attachments[previewAttachments.currentIndex] || ''
+  const currentPreviewName = attachmentName(currentPreviewUrl, previewAttachments.currentIndex)
+
   return (
     <PageContainer data-testid="performance-manager-eval-page" title="上级绩效评分">
       <Row gutter={24}>
@@ -403,6 +567,22 @@ const PerformanceManagerEval: React.FC = () => {
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
             <Title level={4} style={{ margin: 0 }}>上级绩效评分</Title>
           </Space>
+
+          {isManagerRecheck && (
+            <Alert
+              data-testid="performance-manager-recheck-notice"
+              type="warning"
+              showIcon
+              message="员工已修改自评，待领导复核"
+              description="可直接确认查看，也可以调整上级评价后提交复核意见。"
+              action={
+                <Button size="small" type="primary" loading={saving} onClick={handleConfirmRecheck}>
+                  确认查看
+                </Button>
+              }
+              style={{ marginBottom: 16 }}
+            />
+          )}
 
           <Form form={form} onValuesChange={handleValuesChange} layout="vertical">
             <PageCard title="指标评分" extra={
@@ -418,6 +598,9 @@ const PerformanceManagerEval: React.FC = () => {
                 </Button>
               ) : null
             }>
+              <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+                {isNewFlow ? '新流程采用 0-10 分制，允许小数；自评分仅作参考，最终分按上级评分 × 权重求和。' : '旧流程沿用历史评分规则。'}
+              </Text>
               <Table
                 dataSource={form.getFieldValue('items') || []}
                 columns={columns}
@@ -474,7 +657,8 @@ const PerformanceManagerEval: React.FC = () => {
                       render: (_: any, record: any) => (
                         <InputNumber
                           min={0}
-                          max={100}
+                          max={scoreMax}
+                          step={scoreStep}
                           style={{ width: '100%' }}
                           value={record.manager_score || 0}
                           onChange={(val) => {
@@ -559,7 +743,7 @@ const PerformanceManagerEval: React.FC = () => {
 
             <div style={{ textAlign: 'center', marginTop: 24 }}>
               <Button data-testid="performance-manager-submit" type="primary" icon={<CheckCircleOutlined />} loading={saving} onClick={handleSubmit} size="large">
-                提交评分
+                {isManagerRecheck ? '提交复核意见' : '提交评分'}
               </Button>
             </div>
           </Form>
@@ -571,19 +755,61 @@ const PerformanceManagerEval: React.FC = () => {
       </Row>
 
       <Modal
-        title="附件列表"
+        title="附件预览"
         open={previewAttachments.visible}
-        onCancel={() => setPreviewAttachments({ visible: false, attachments: [] })}
+        onCancel={closeAttachmentPreview}
         footer={null}
+        width={960}
       >
-        <div style={{ maxHeight: 400, overflow: 'auto' }}>
-          {previewAttachments.attachments.map((url, idx) => (
-            <div key={idx} style={{ marginBottom: 8 }}>
-              <a href={withFileAccessToken(url)} target="_blank" rel="noopener noreferrer">
-                <PaperClipOutlined /> 附件 {idx + 1}
-              </a>
+        <div style={{ display: 'grid', gridTemplateColumns: '220px minmax(0, 1fr)', gap: 16, minWidth: 0 }}>
+          <div style={{ borderRight: '1px solid var(--color-border-light)', paddingRight: 12, minWidth: 0, overflow: 'hidden' }}>
+            <Space direction="vertical" size={8} style={{ width: '100%', minWidth: 0 }}>
+              {previewAttachments.attachments.map((url, idx) => {
+                const active = idx === previewAttachments.currentIndex
+                const fileName = attachmentName(url, idx)
+                return (
+                  <Button
+                    key={`${url}-${idx}`}
+                    data-testid={`performance-manager-attachment-item-${idx}`}
+                    type={active ? 'primary' : 'default'}
+                    block
+                    icon={<PaperClipOutlined />}
+                    title={fileName}
+                    onClick={() => setPreviewAttachments(prev => ({ ...prev, currentIndex: idx }))}
+                    style={{ justifyContent: 'flex-start', overflow: 'hidden' }}
+                  >
+                    <span style={{ display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {fileName}
+                    </span>
+                  </Button>
+                )
+              })}
+            </Space>
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, minWidth: 0 }}>
+              <Text
+                strong
+                data-testid="performance-manager-attachment-current-name"
+                title={currentPreviewName}
+                style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              >
+                {currentPreviewName}
+              </Text>
+              {currentPreviewUrl && (
+                <Button
+                  size="small"
+                  href={withFileAccessToken(currentPreviewUrl)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ flex: 'none' }}
+                >
+                  下载
+                </Button>
+              )}
             </div>
-          ))}
+            {renderAttachmentPreview()}
+          </div>
         </div>
       </Modal>
     </PageContainer>

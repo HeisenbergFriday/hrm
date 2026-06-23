@@ -8,7 +8,7 @@ import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { PlusOutlined, ArrowLeftOutlined, DeleteOutlined, DatabaseOutlined, EditOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { performanceAPI, departmentAPI, type PerformanceIndicatorLibrary as ILibrary, type PerformanceIndicatorItem } from '../services/api'
+import { performanceAPI, departmentAPI, type PerformanceIndicatorLibrary as ILibrary, type PerformanceIndicatorItem, type PerformanceTemplate } from '../services/api'
 import { hasPermission } from '../utils/permission'
 
 const { TextArea } = Input
@@ -31,6 +31,31 @@ type DepartmentOption = {
 const isValidWeight = (weight: number) => Number.isFinite(weight) && weight >= 10 && weight % 5 === 0
 const INDICATOR_MANAGE_PERMISSION = 'performance:indicator:manage'
 const INDICATOR_MANAGE_PERMISSION_NAME = '绩效指标库管理'
+const flowTemplateLabels: Record<string, string> = {
+  old: '小铁文娱流程模版',
+  new: '沐腾科技流程模版',
+}
+
+const builtInTemplateNames = new Set([
+  '旧绩效流程模板',
+  '新绩效流程模板',
+  '旧绩效流程模版',
+  '新绩效流程模版',
+  '旧流程模板',
+  '新流程模板',
+  '旧流程模版',
+  '新流程模版',
+  '旧流程',
+  '新流程',
+])
+
+function getTemplateDisplayName(template?: PerformanceTemplate | null) {
+  if (!template) return '未绑定流程模板'
+  const name = String(template.name || '').trim()
+  const flowType = String(template.flow_type || '').trim()
+  if (name && !builtInTemplateNames.has(name)) return name
+  return flowTemplateLabels[flowType] || name || '未命名流程模版'
+}
 
 const newQuantItem = (): DraftIndicatorItem => ({
   name: '',
@@ -65,6 +90,8 @@ export default function PerformanceIndicatorLibrary() {
   const [itemsLoading, setItemsLoading] = useState(false)
   const [departments, setDepartments] = useState<DepartmentOption[]>([])
   const [departmentsLoading, setDepartmentsLoading] = useState(false)
+  const [templates, setTemplates] = useState<PerformanceTemplate[]>([])
+  const [templatesLoading, setTemplatesLoading] = useState(false)
   const [form] = Form.useForm()
   const [inheritOpen, setInheritOpen] = useState(false)
   const [inheritForm] = Form.useForm()
@@ -109,6 +136,21 @@ export default function PerformanceIndicatorLibrary() {
   }, [])
 
   useEffect(() => { fetchDepartments() }, [fetchDepartments])
+
+  const fetchTemplates = useCallback(async () => {
+    setTemplatesLoading(true)
+    try {
+      const res: any = await performanceAPI.getTemplates({ page: 1, page_size: 1000, status: 'active' })
+      const data = res.data || res
+      setTemplates(data?.items || data?.templates || [])
+    } catch {
+      message.error('获取流程模板失败')
+    } finally {
+      setTemplatesLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { fetchTemplates() }, [fetchTemplates])
 
   const resetCreateState = () => {
     form.resetFields()
@@ -192,6 +234,7 @@ export default function PerformanceIndicatorLibrary() {
 
     const payload = {
       ...values,
+      template_id: Number(values.template_id),
       items: [
         ...quantItems.map((item, idx) => ({
           section_type: 'quantitative',
@@ -405,6 +448,20 @@ export default function PerformanceIndicatorLibrary() {
     },
     { title: '所属部门', dataIndex: 'department_name', key: 'department_name', width: 140 },
     {
+      title: '流程模板',
+      dataIndex: 'template_id',
+      key: 'template_id',
+      width: 150,
+      render: (templateId?: number) => {
+        const template = templates.find(item => String(item.id) === String(templateId))
+        return (
+          <Tag color={template?.flow_type === 'new' ? 'purple' : template?.flow_type === 'old' ? 'blue' : 'default'}>
+            {getTemplateDisplayName(template)}
+          </Tag>
+        )
+      },
+    },
+    {
       title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (status: string) => (
         <StatusTag
@@ -588,6 +645,9 @@ export default function PerformanceIndicatorLibrary() {
                 gap: 10,
               }}>
                 <strong style={{ color: 'var(--color-text-heading)', fontSize: 'var(--font-size-base)' }}>{selectedLib.name}</strong>
+                <StatusTag color="purple" style={{ fontWeight: 'var(--font-weight-medium)', margin: 0 }}>
+                  {getTemplateDisplayName(templates.find(template => String(template.id) === String(selectedLib.template_id)))}
+                </StatusTag>
                 <StatusTag color="blue" style={{ fontWeight: 'var(--font-weight-medium)', margin: 0 }}>{selectedLib.department_name}</StatusTag>
               </div>
               <Table
@@ -679,9 +739,21 @@ export default function PerformanceIndicatorLibrary() {
                   />
                 </Form.Item>
               </Col>
+              <Form.Item name="department_name" hidden>
+                <Input />
+              </Form.Item>
               <Col span={8}>
-                <Form.Item name="department_name" hidden>
-                  <Input />
+                <Form.Item name="template_id" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>流程模板</span>} rules={[{ required: true, message: '请选择流程模板' }]}>
+                  <Select
+                    showSearch
+                    placeholder="请选择流程模板"
+                    loading={templatesLoading}
+                    optionFilterProp="label"
+                    options={templates.map(template => ({
+                      label: getTemplateDisplayName(template),
+                      value: template.id,
+                    }))}
+                  />
                 </Form.Item>
               </Col>
               <Col span={8}>
@@ -943,7 +1015,7 @@ export default function PerformanceIndicatorLibrary() {
               placeholder="请选择要继承的指标库"
               optionFilterProp="label"
               options={libraries.filter(l => l.status === 'active').map(l => ({
-                label: `${l.name}（${l.department_name}）`,
+                label: `${l.name}（${getTemplateDisplayName(templates.find(template => String(template.id) === String(l.template_id)))} / ${l.department_name}）`,
                 value: l.id,
               }))}
             />

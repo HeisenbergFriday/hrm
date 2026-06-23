@@ -83,13 +83,34 @@ type Response struct {
 	Data    interface{} `json:"data"`
 }
 
-func isAllowedUploadExtension(ext string) bool {
-	switch strings.ToLower(ext) {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv":
-		return true
-	default:
-		return false
+var allowedUploadExtensions = []string{
+	".jpg", ".jpeg", ".png", ".gif", ".webp",
+	".pdf",
+	".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+	".wps", ".et", ".dps",
+	".txt", ".csv", ".md",
+	".zip", ".rar", ".7z",
+}
+
+var allowedUploadExtensionSet = func() map[string]struct{} {
+	values := make(map[string]struct{}, len(allowedUploadExtensions))
+	for _, ext := range allowedUploadExtensions {
+		values[ext] = struct{}{}
 	}
+	return values
+}()
+
+func allowedUploadExtensionText() string {
+	labels := make([]string, 0, len(allowedUploadExtensions))
+	for _, ext := range allowedUploadExtensions {
+		labels = append(labels, strings.TrimPrefix(ext, "."))
+	}
+	return strings.Join(labels, "/")
+}
+
+func isAllowedUploadExtension(ext string) bool {
+	_, ok := allowedUploadExtensionSet[strings.ToLower(ext)]
+	return ok
 }
 
 func isSafeUploadFilename(filename string) bool {
@@ -384,6 +405,18 @@ func applyDingTalkOrgDiagnostics(user *database.User, u dingtalk.UserInfo) {
 		"direct_manager_missing_note": "When DingTalk has no direct manager value, local users.manager_user_id/users.manager_name are preserved unless full overwrite is requested.",
 		"synced_at":                   time.Now().Format(time.RFC3339),
 	}
+}
+
+func assignDefaultEmployeeRoleForSyncedUser(permissionService *service.PermissionService, userID, source string) (bool, error) {
+	assigned, err := permissionService.AssignDefaultEmployeeRoleIfUnassigned(userID)
+	if err != nil {
+		log.Printf("[%s] 为新增用户 %s 分配普通员工角色失败: %v", source, userID, err)
+		return false, err
+	}
+	if assigned {
+		log.Printf("[%s] 已为新增用户 %s 分配普通员工角色", source, userID)
+	}
+	return assigned, nil
 }
 
 func createOperationAuditLog(c *gin.Context, operation, resource string, details map[string]interface{}) {
@@ -795,8 +828,10 @@ func SyncUsers(c *gin.Context) {
 	// 写入数据库
 	userService := service.NewUserService(database.DB)
 	employeeService := service.NewEmployeeService(database.DB)
+	permissionService := service.NewPermissionService(database.DB)
 	count := 0
 	positionMissingCount := 0
+	defaultRoleAssignedCount := 0
 	overwriteEmpty := shouldOverwriteEmptyDingTalkOrgFields(c)
 	for _, u := range users {
 		deptID := ""
@@ -815,6 +850,9 @@ func SyncUsers(c *gin.Context) {
 			if err := userService.CreateUser(newUser); err != nil {
 				log.Printf("[SyncUsers] 创建用户 %s 失败: %v", u.UserID, err)
 				continue
+			}
+			if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, u.UserID, "SyncUsers"); err == nil && assigned {
+				defaultRoleAssignedCount++
 			}
 		} else {
 			// 更新
@@ -854,7 +892,7 @@ func SyncUsers(c *gin.Context) {
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
 		Message: "success",
-		Data:    gin.H{"count": count, "position_missing_count": positionMissingCount, "overwrite_empty": overwriteEmpty},
+		Data:    gin.H{"count": count, "position_missing_count": positionMissingCount, "overwrite_empty": overwriteEmpty, "default_role_assigned_count": defaultRoleAssignedCount},
 	})
 }
 
@@ -1915,6 +1953,7 @@ func SyncOrgData(c *gin.Context) {
 	positionMissingCount := 0
 	userStatus := "success"
 	userErrMsg := ""
+	defaultRoleAssignedCount := 0
 	overwriteEmpty := shouldOverwriteEmptyDingTalkOrgFields(c)
 	if userErr != nil {
 		userStatus = "failed"
@@ -1923,6 +1962,7 @@ func SyncOrgData(c *gin.Context) {
 	} else {
 		userService := service.NewUserService(database.DB)
 		employeeService := service.NewEmployeeService(database.DB)
+		permissionService := service.NewPermissionService(database.DB)
 		for _, u := range users {
 			deptID := ""
 			if len(u.DeptIDList) > 0 {
@@ -1939,6 +1979,11 @@ func SyncOrgData(c *gin.Context) {
 					userErrMsg = err.Error()
 					log.Printf("[SyncOrgData] 创建用户 %s 失败: %v", u.UserID, err)
 					continue
+				} else if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, u.UserID, "SyncOrgData"); err != nil {
+					userStatus = "failed"
+					userErrMsg = err.Error()
+				} else if assigned {
+					defaultRoleAssignedCount++
 				}
 				// 同时创建员工档案
 				profile := &database.EmployeeProfile{
@@ -2004,7 +2049,7 @@ func SyncOrgData(c *gin.Context) {
 		Data: gin.H{
 			"sync_status": gin.H{
 				"departments": gin.H{"count": deptCount, "status": deptStatus, "error": deptErrMsg},
-				"employees":   gin.H{"count": userCount, "status": userStatus, "error": userErrMsg, "position_missing_count": positionMissingCount, "overwrite_empty": overwriteEmpty},
+				"employees":   gin.H{"count": userCount, "status": userStatus, "error": userErrMsg, "position_missing_count": positionMissingCount, "overwrite_empty": overwriteEmpty, "default_role_assigned_count": defaultRoleAssignedCount},
 				"sync_time":   time.Now(),
 			},
 		},
@@ -4328,7 +4373,7 @@ func UploadFile(c *gin.Context) {
 	if !isAllowedUploadExtension(ext) {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
-			Message: "不支持的文件类型，允许: jpg/png/gif/webp/pdf/doc/xls/ppt/txt/csv",
+			Message: fmt.Sprintf("不支持的文件类型，允许: %s", allowedUploadExtensionText()),
 		})
 		return
 	}
@@ -4400,7 +4445,8 @@ func ServeFile(c *gin.Context) {
 
 	ext := strings.ToLower(filepath.Ext(filename))
 	disposition := "attachment"
-	if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".webp" || ext == ".pdf" {
+	if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".webp" ||
+		ext == ".pdf" || ext == ".txt" || ext == ".csv" || ext == ".md" {
 		disposition = "inline"
 	}
 	c.Header("X-Content-Type-Options", "nosniff")
