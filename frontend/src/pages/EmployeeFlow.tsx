@@ -23,6 +23,7 @@ import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { departmentAPI, employeeAPI } from '../services/api'
+import { formatDateTime } from '../utils/format'
 
 const { Title, Paragraph, Text } = Typography
 const { TextArea } = Input
@@ -592,7 +593,7 @@ const EmployeeFlow: React.FC = () => {
           <Descriptions.Item label="调岗日期">{record.transfer_date || '-'}</Descriptions.Item>
           <Descriptions.Item label="审批人">{record.approver_name || '-'}</Descriptions.Item>
           <Descriptions.Item label="审批时间" span={2}>
-            {record.approval_time || '-'}
+            {formatDateTime(record.approval_time)}
           </Descriptions.Item>
           <Descriptions.Item label="原因" span={2}>
             {record.reason || '-'}
@@ -617,7 +618,7 @@ const EmployeeFlow: React.FC = () => {
           <Descriptions.Item label="离职日期">{record.resign_date || '-'}</Descriptions.Item>
           <Descriptions.Item label="最后工作日">{record.last_working_day || '-'}</Descriptions.Item>
           <Descriptions.Item label="审批人">{record.approver_name || '-'}</Descriptions.Item>
-          <Descriptions.Item label="审批时间">{record.approval_time || '-'}</Descriptions.Item>
+          <Descriptions.Item label="审批时间">{formatDateTime(record.approval_time)}</Descriptions.Item>
           <Descriptions.Item label="离职原因" span={2}>
             {record.resign_reason || '-'}
           </Descriptions.Item>

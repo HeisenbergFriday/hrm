@@ -36,7 +36,7 @@ func (r *PerformanceIndicatorLibraryRepository) Delete(id uint, deletedBy string
 	}).Error
 }
 
-func (r *PerformanceIndicatorLibraryRepository) FindAll(page, pageSize int, departmentID, keyword, status string, visibleDepartmentIDs []string) ([]database.PerformanceIndicatorLibrary, int64, error) {
+func (r *PerformanceIndicatorLibraryRepository) FindAll(page, pageSize int, departmentID, keyword, status string, visibleDepartmentIDs []string, templateIDs ...*uint) ([]database.PerformanceIndicatorLibrary, int64, error) {
 	var items []database.PerformanceIndicatorLibrary
 	var total int64
 
@@ -51,6 +51,9 @@ func (r *PerformanceIndicatorLibraryRepository) FindAll(page, pageSize int, depa
 	}
 	if status != "" {
 		query = query.Where("status = ?", status)
+	}
+	if len(templateIDs) > 0 && templateIDs[0] != nil && *templateIDs[0] > 0 {
+		query = query.Where("template_id = ?", *templateIDs[0])
 	}
 	// 部门隔离：只显示可见部门的指标库
 	if len(visibleDepartmentIDs) > 0 {
@@ -73,10 +76,13 @@ func (r *PerformanceIndicatorLibraryRepository) FindAll(page, pageSize int, depa
 	return items, total, nil
 }
 
-func (r *PerformanceIndicatorLibraryRepository) FindByDepartment(departmentID string) ([]database.PerformanceIndicatorLibrary, error) {
+func (r *PerformanceIndicatorLibraryRepository) FindByDepartment(departmentID string, templateIDs ...*uint) ([]database.PerformanceIndicatorLibrary, error) {
 	var items []database.PerformanceIndicatorLibrary
-	if err := r.db.Where("department_id = ? AND deleted_at IS NULL AND status = ?", departmentID, "active").
-		Order("created_at DESC").Find(&items).Error; err != nil {
+	query := r.db.Where("department_id = ? AND deleted_at IS NULL AND status = ?", departmentID, "active")
+	if len(templateIDs) > 0 && templateIDs[0] != nil && *templateIDs[0] > 0 {
+		query = query.Where("template_id = ?", *templateIDs[0])
+	}
+	if err := query.Order("created_at DESC").Find(&items).Error; err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -131,20 +137,25 @@ func (r *PerformanceIndicatorItemRepository) FindByLibrary(libraryID uint, secti
 	return items, nil
 }
 
-func (r *PerformanceIndicatorItemRepository) Search(libraryIDs []uint, keyword string, sectionType string) ([]database.PerformanceIndicatorItem, error) {
+func (r *PerformanceIndicatorItemRepository) Search(libraryIDs []uint, keyword string, sectionType string, visibleDepartmentIDs []string) ([]database.PerformanceIndicatorItem, error) {
 	var items []database.PerformanceIndicatorItem
-	query := r.db.Where("deleted_at IS NULL")
+	query := r.db.Model(&database.PerformanceIndicatorItem{}).
+		Where("performance_indicator_items.deleted_at IS NULL")
+	if len(visibleDepartmentIDs) > 0 {
+		query = query.Joins("JOIN performance_indicator_libraries ON performance_indicator_libraries.id = performance_indicator_items.library_id AND performance_indicator_libraries.deleted_at IS NULL").
+			Where("performance_indicator_libraries.department_id IN ?", visibleDepartmentIDs)
+	}
 	if len(libraryIDs) > 0 {
-		query = query.Where("library_id IN ?", libraryIDs)
+		query = query.Where("performance_indicator_items.library_id IN ?", libraryIDs)
 	}
 	if sectionType != "" {
-		query = query.Where("(section_type = ? OR indicator_type = ?)", sectionType, sectionType)
+		query = query.Where("(performance_indicator_items.section_type = ? OR performance_indicator_items.indicator_type = ?)", sectionType, sectionType)
 	}
 	if keyword != "" {
 		like := "%" + strings.TrimSpace(keyword) + "%"
-		query = query.Where("name LIKE ? OR description LIKE ?", like, like)
+		query = query.Where("performance_indicator_items.name LIKE ? OR performance_indicator_items.description LIKE ?", like, like)
 	}
-	if err := query.Order("library_id ASC, sort_order ASC").Find(&items).Error; err != nil {
+	if err := query.Order("performance_indicator_items.library_id ASC, performance_indicator_items.sort_order ASC").Find(&items).Error; err != nil {
 		return nil, err
 	}
 	return items, nil

@@ -22,13 +22,16 @@ const mockNavigate = vi.fn()
 const mockGetGoalRecords = vi.fn()
 const mockGetParticipant = vi.fn()
 const mockBatchSaveGoalRecords = vi.fn()
+const mockBatchSaveReviewGoalRecords = vi.fn()
 const mockSubmitGoalApproval = vi.fn()
 const mockGetGoalSuggestions = vi.fn()
 const mockSearchIndicatorItems = vi.fn()
+let mockSearchParams = new URLSearchParams()
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
   useParams: () => ({ activityId: '1', participantId: '101' }),
+  useSearchParams: () => [mockSearchParams],
 }))
 
 vi.mock('../services/api', () => ({
@@ -36,6 +39,7 @@ vi.mock('../services/api', () => ({
     getGoalRecords: (...args: any[]) => mockGetGoalRecords(...args),
     getParticipant: (...args: any[]) => mockGetParticipant(...args),
     batchSaveGoalRecords: (...args: any[]) => mockBatchSaveGoalRecords(...args),
+    batchSaveReviewGoalRecords: (...args: any[]) => mockBatchSaveReviewGoalRecords(...args),
     submitGoalApproval: (...args: any[]) => mockSubmitGoalApproval(...args),
     getGoalSuggestions: (...args: any[]) => mockGetGoalSuggestions(...args),
     searchIndicatorItems: (...args: any[]) => mockSearchIndicatorItems(...args),
@@ -123,9 +127,16 @@ function makeGoalRecords(overrides: Record<string, any>[] = []) {
 }
 
 function setupDefaultMocks() {
+  mockSearchParams = new URLSearchParams()
   mockGetGoalRecords.mockResolvedValue(makeGoalRecords())
-  mockGetParticipant.mockResolvedValue({ data: { participant: makeParticipant() } })
+  mockGetParticipant.mockResolvedValue({
+    data: {
+      participant: makeParticipant(),
+      activity: { id: 1, status: 'target_setting', flow_type: 'old', indicator_library_id: 77 },
+    },
+  })
   mockBatchSaveGoalRecords.mockResolvedValue({})
+  mockBatchSaveReviewGoalRecords.mockResolvedValue({})
   mockSubmitGoalApproval.mockResolvedValue({})
   mockGetGoalSuggestions.mockResolvedValue({ data: { suggestions: [] } })
   mockSearchIndicatorItems.mockResolvedValue({ data: { items: [] } })
@@ -160,6 +171,16 @@ describe('PerformanceGoalSetting 交互测试', () => {
       })
       expect(screen.getByText('关键行动')).toBeInTheDocument()
       expect(screen.getAllByText('目标设定').length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('目标设定阶段不显示附件上传入口', async () => {
+      render(React.createElement(PerformanceGoalSetting))
+
+      await waitFor(() => {
+        expect(screen.getByText('量化指标')).toBeInTheDocument()
+      })
+      expect(screen.queryByText('上传附件')).not.toBeInTheDocument()
+      expect(screen.queryByText('附件')).not.toBeInTheDocument()
     })
 
     it('加载完成后应显示参与者姓名', async () => {
@@ -198,6 +219,208 @@ describe('PerformanceGoalSetting 交互测试', () => {
         // 权重合计 100% 应显示
         expect(screen.getAllByText('100%').length).toBeGreaterThanOrEqual(1)
       })
+    })
+
+    it('新流程目标计划页有补录记录时应同步展示上一季度补录区', async () => {
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant({ status: 'target_set' }),
+          activity: { id: 1, flow_type: 'new', status: 'target_setting' },
+        },
+      })
+      mockGetGoalRecords.mockResolvedValue(makeGoalRecords([
+        {
+          id: 10,
+          section_type: 'quantitative',
+          goal_phase: 'review',
+          goal_type: 'kpi',
+          item_name: '上一季度营收',
+          item_definition: '上一季度营收目标',
+          weight: 0.4,
+          target_value: '100',
+          attachments: [],
+          approval_status: 'approved',
+          sort_order: 0,
+        },
+        {
+          id: 11,
+          section_type: 'key_action',
+          goal_phase: 'review',
+          goal_type: 'okr',
+          item_name: '上一季度重点计划',
+          item_definition: '上一季度重点计划说明',
+          weight: 0.6,
+          target_value: '完成',
+          attachments: [],
+          approval_status: 'approved',
+          sort_order: 1,
+        },
+        {
+          id: 20,
+          section_type: 'quantitative',
+          goal_phase: 'plan',
+          goal_type: 'kpi',
+          item_name: '下季度增长目标',
+          item_definition: '下季度增长口径',
+          weight: 0.4,
+          target_value: '120',
+          attachments: [],
+          approval_status: 'pending',
+          sort_order: 0,
+        },
+        {
+          id: 21,
+          section_type: 'key_action',
+          goal_phase: 'plan',
+          goal_type: 'okr',
+          item_name: '下季度重点计划',
+          item_definition: '下季度重点计划说明',
+          weight: 0.3,
+          target_value: '按期完成',
+          attachments: [],
+          approval_status: 'pending',
+          sort_order: 1,
+        },
+      ]))
+
+      render(React.createElement(PerformanceGoalSetting))
+
+      await waitFor(() => {
+        expect(screen.getByText('上一季度考核指标补录')).toBeInTheDocument()
+      })
+      expect(screen.getAllByText('下季度目标计划').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getByText('上一季度营收')).toBeInTheDocument()
+      expect(screen.getByText('上一季度重点计划')).toBeInTheDocument()
+      expect(screen.getByDisplayValue('下季度增长目标')).toBeInTheDocument()
+      expect(screen.getByDisplayValue('下季度重点计划')).toBeInTheDocument()
+    })
+
+    it('量化指标详情字段应默认展开，可直接继续填写', async () => {
+      render(React.createElement(PerformanceGoalSetting))
+
+      expect(await screen.findByTestId('performance-goal-quant-definition-0')).toBeInTheDocument()
+      expect(screen.getByTestId('performance-goal-quant-red-line-0')).toBeInTheDocument()
+      expect(screen.getByTestId('performance-goal-quant-challenge-0')).toBeInTheDocument()
+      expect(screen.getByTestId('performance-goal-quant-scoring-rule-0')).toBeInTheDocument()
+    })
+
+    it('点击补齐权重应自动调整当前行到合计 100%', async () => {
+      const user = userEvent.setup()
+      mockGetGoalRecords.mockResolvedValue(makeGoalRecords([
+        {
+          id: 1,
+          section_type: 'quantitative',
+          item_name: '销售额',
+          item_definition: '季度销售额',
+          weight: 0.6,
+          red_line_value: '60',
+          target_value: '80',
+          challenge_value: '100',
+          scoring_rule: '按完成率',
+          actual_result: '',
+          attachments: [],
+          approval_status: 'pending',
+          sort_order: 0,
+        },
+        {
+          id: 2,
+          section_type: 'key_action',
+          item_name: '客户拜访',
+          item_definition: '每月拜访重点客户',
+          weight: 0.3,
+          target_value: '每月 10 家',
+          actual_result: '',
+          attachments: [],
+          approval_status: 'pending',
+          sort_order: 1,
+        },
+      ]))
+
+      render(React.createElement(PerformanceGoalSetting))
+
+      const balanceButton = await screen.findByTestId('performance-goal-balance-weight-quant-0')
+      await user.click(balanceButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('已将该行权重调整为 70%')).toBeInTheDocument()
+      })
+    })
+
+    it('点击补齐权重后不应显示浮点小数尾巴', async () => {
+      const user = userEvent.setup()
+      mockGetGoalRecords.mockResolvedValue(makeGoalRecords([
+        {
+          id: 1,
+          section_type: 'quantitative',
+          item_name: '销售额',
+          item_definition: '季度销售额',
+          weight: 0.1,
+          red_line_value: '60',
+          target_value: '80',
+          challenge_value: '100',
+          scoring_rule: '按完成率',
+          actual_result: '',
+          attachments: [],
+          approval_status: 'pending',
+          sort_order: 0,
+        },
+        {
+          id: 2,
+          section_type: 'quantitative',
+          item_name: '客户满意度',
+          item_definition: 'NPS 评分',
+          weight: 0.4,
+          red_line_value: '60',
+          target_value: '80',
+          challenge_value: '95',
+          scoring_rule: '按评分区间',
+          actual_result: '',
+          attachments: [],
+          approval_status: 'pending',
+          sort_order: 1,
+        },
+        {
+          id: 3,
+          section_type: 'key_action',
+          item_name: '客户拜访',
+          item_definition: '每月拜访重点客户',
+          weight: 0.2,
+          target_value: '每月 10 家',
+          actual_result: '',
+          attachments: [],
+          approval_status: 'pending',
+          sort_order: 2,
+        },
+        {
+          id: 4,
+          section_type: 'key_action',
+          item_name: '培训完成',
+          item_definition: '完成产品培训课程',
+          weight: 0.1,
+          target_value: '完成全部课程',
+          actual_result: '',
+          attachments: [],
+          approval_status: 'pending',
+          sort_order: 3,
+        },
+      ]))
+
+      render(React.createElement(PerformanceGoalSetting))
+
+      const balanceButton = await screen.findByTestId('performance-goal-balance-weight-quant-0')
+      await user.click(balanceButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('已将该行权重调整为 30%')).toBeInTheDocument()
+      })
+      const weightControl = screen.getByTestId('performance-goal-quant-weight-0')
+      const weightInput = weightControl instanceof HTMLInputElement
+        ? weightControl
+        : weightControl.querySelector('input')
+      await waitFor(() => {
+        expect(weightInput).toHaveValue('30')
+      })
+      expect(weightInput?.value || '').not.toMatch(/30\.0{4,}/)
     })
   })
 
@@ -288,6 +511,99 @@ describe('PerformanceGoalSetting 交互测试', () => {
       })
     })
 
+    it('新流程补录模式保存时应调用 batchSaveReviewGoalRecords', async () => {
+      const user = userEvent.setup()
+      mockSearchParams = new URLSearchParams('phase=review')
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant({ status: 'target_set' }),
+          activity: { id: 1, flow_type: 'new', status: 'target_setting' },
+        },
+      })
+      mockGetGoalRecords.mockResolvedValue(makeGoalRecords([
+        {
+          id: 10,
+          section_type: 'quantitative',
+          goal_phase: 'review',
+          goal_type: 'kpi',
+          item_name: '上一季度营收',
+          item_definition: '上一季度营收目标',
+          weight: 0.5,
+          target_value: '100',
+          attachments: [],
+          approval_status: 'approved',
+          sort_order: 0,
+        },
+        {
+          id: 11,
+          section_type: 'key_action',
+          goal_phase: 'review',
+          goal_type: 'okr',
+          item_name: '上一季度重点计划',
+          item_definition: '上一季度重点计划说明',
+          weight: 0.2,
+          target_value: '完成',
+          attachments: [],
+          approval_status: 'approved',
+          sort_order: 1,
+        },
+      ]))
+
+      render(React.createElement(PerformanceGoalSetting))
+
+      await waitFor(() => {
+        expect(screen.getAllByText('上一季度考核指标补录').length).toBeGreaterThan(0)
+      })
+
+      await user.click(screen.getByTestId('performance-goal-save-draft'))
+
+      await waitFor(() => {
+        expect(mockBatchSaveReviewGoalRecords).toHaveBeenCalledWith(
+          101,
+          expect.objectContaining({ items: expect.any(Array) })
+        )
+      })
+      expect(mockBatchSaveGoalRecords).not.toHaveBeenCalled()
+    })
+
+    it('新流程补录页状态应按当前可填写的 4 项计算', async () => {
+      mockSearchParams = new URLSearchParams('phase=review')
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant({ status: 'target_set' }),
+          activity: { id: 1, flow_type: 'new', status: 'target_setting' },
+        },
+      })
+      mockGetGoalRecords.mockResolvedValue(makeGoalRecords([
+        {
+          id: 10,
+          section_type: 'quantitative',
+          goal_phase: 'review',
+          goal_type: 'kpi',
+          item_name: '上一季度营收',
+          item_definition: '上一季度营收目标',
+          weight: 0.1,
+          red_line_value: '',
+          target_value: '100',
+          challenge_value: '',
+          scoring_rule: '',
+          attachments: [],
+          approval_status: 'pending',
+          sort_order: 0,
+        },
+      ]))
+
+      render(React.createElement(PerformanceGoalSetting))
+
+      await waitFor(() => {
+        expect(screen.getAllByText('上一季度考核指标补录').length).toBeGreaterThan(0)
+      })
+
+      expect(screen.getByDisplayValue('上一季度营收')).toBeInTheDocument()
+      expect(screen.getByText('已完整')).toBeInTheDocument()
+      expect(screen.queryByText('4/7')).not.toBeInTheDocument()
+    })
+
     it('保存成功后应显示成功消息', async () => {
       const user = userEvent.setup()
       render(React.createElement(PerformanceGoalSetting))
@@ -352,6 +668,41 @@ describe('PerformanceGoalSetting 交互测试', () => {
       await waitFor(() => {
         expect(screen.getByText('目标已审批通过，不可修改')).toBeInTheDocument()
       })
+    })
+
+    it('目标被驳回时应显示驳回理由', async () => {
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant({ status: 'target_rejected' }),
+          activity: { id: 1, status: 'target_setting', flow_type: 'old', indicator_library_id: 77 },
+        },
+      })
+      mockGetGoalRecords.mockResolvedValue({
+        data: {
+          items: [
+            { id: 1, section_type: 'quantitative', item_name: '指标A', item_definition: '', weight: 0.7, red_line_value: '', target_value: '', challenge_value: '', scoring_rule: '', actual_result: '', attachments: [], approval_status: 'rejected', sort_order: 0 },
+            { id: 2, section_type: 'key_action', item_name: '行动B', item_definition: '', weight: 0.3, target_value: '', actual_result: '', attachments: [], approval_status: 'rejected', sort_order: 1 },
+          ],
+          latest_rejection: {
+            id: 9,
+            participant_id: 101,
+            activity_id: '1',
+            action: 'reject',
+            comment: '量化指标目标值需要补充计算口径',
+            approver_name: '李经理',
+            created_at: '2026-06-18T18:40:17.416+08:00',
+          },
+        },
+      })
+
+      render(React.createElement(PerformanceGoalSetting))
+
+      const alert = await screen.findByTestId('performance-goal-rejection-reason')
+      expect(alert).toHaveTextContent('目标已被驳回')
+      expect(alert).toHaveTextContent('量化指标目标值需要补充计算口径')
+      expect(alert).toHaveTextContent('驳回人：李经理')
+      expect(alert).toHaveTextContent(/驳回时间：\d{4}年\d{1,2}月\d{1,2}日 \d{2}:\d{2}:\d{2}/)
+      expect(alert).not.toHaveTextContent('2026-06-18T18:40:17.416+08:00')
     })
 
     it('target_set 状态时保存草稿应提示不可修改', async () => {
@@ -422,6 +773,29 @@ describe('PerformanceGoalSetting 交互测试', () => {
       await waitFor(() => {
         expect(mockGetGoalSuggestions).toHaveBeenCalledWith(101)
       })
+    })
+
+    it('搜索指标时只传当前活动关联的指标库 ID', async () => {
+      const user = userEvent.setup()
+      render(React.createElement(PerformanceGoalSetting))
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId(/performance-goal-quant-name-/).length).toBeGreaterThan(0)
+      })
+
+      const firstQuantInput = screen.getAllByTestId(/performance-goal-quant-name-/)[0].querySelector('input')
+      expect(firstQuantInput).toBeTruthy()
+
+      await user.clear(firstQuantInput as HTMLInputElement)
+      await user.type(firstQuantInput as HTMLInputElement, 'Revenue')
+
+      await waitFor(() => {
+        expect(mockSearchIndicatorItems).toHaveBeenCalledWith({
+          keyword: 'Revenue',
+          library_ids: [77],
+          section_type: 'quantitative',
+        })
+      }, { timeout: 1200 })
     })
   })
 })

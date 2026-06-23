@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { syncAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
+import { formatDateTime } from '../utils/format'
 
 const { Text } = Typography
 
@@ -87,7 +88,7 @@ const Setting: React.FC = () => {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>上次同步时间</span>
-                    <span>{new Date(syncStatus.departments.last_sync_time).toLocaleString()}</span>
+                    <span>{formatDateTime(syncStatus.departments.last_sync_time)}</span>
                   </div>
                 </div>
                 <div style={{ marginBottom: 'var(--space-4)' }}>
@@ -97,7 +98,7 @@ const Setting: React.FC = () => {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>上次同步时间</span>
-                    <span>{new Date(syncStatus.users.last_sync_time).toLocaleString()}</span>
+                    <span>{formatDateTime(syncStatus.users.last_sync_time)}</span>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 'var(--space-4)' }}>

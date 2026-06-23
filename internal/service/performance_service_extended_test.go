@@ -1130,13 +1130,29 @@ func TestUpdateParticipantAssessmentManagerParticipantNotFound(t *testing.T) {
 func TestUpdateParticipantAssessmentManagerRejectsSelfLockedAndSourceMismatch(t *testing.T) {
 	t.Run("self manager", func(t *testing.T) {
 		svc := newStubPerformanceService(t,
+			activeUserByIDResponse("direct-1", "Direct Boss"),
 			activeUserResponse("employee-1", "Alice"),
 			assessmentManagerParticipantForUpdate("activity-1", "employee-1", "target_set", false, "old-manager", "Old Boss", "direct-1", ManagerSourceImport),
 		)
 
 		_, err := svc.UpdateParticipantAssessmentManager(1, "employee-1", "manual", "", "operator-1")
-		if err == nil || !strings.Contains(err.Error(), "考核上级不能设置为员工本人") {
+		if err == nil || !strings.Contains(err.Error(), "只有最高级或无可用组织上级人员") {
 			t.Fatalf("UpdateParticipantAssessmentManager(self) error = %v", err)
+		}
+	})
+
+	t.Run("self final allowed without org manager", func(t *testing.T) {
+		svc := newStubPerformanceService(t,
+			activeUserResponse("employee-1", "Alice"),
+			assessmentManagerParticipantForUpdate("activity-1", "employee-1", "target_set", false, "old-manager", "Old Boss", "", ManagerSourceImport),
+		)
+
+		updated, err := svc.UpdateParticipantAssessmentManager(1, "employee-1", "manual", "top-level self final", "operator-1")
+		if err != nil {
+			t.Fatalf("UpdateParticipantAssessmentManager(self final) error = %v", err)
+		}
+		if ptrStringValue(updated.ManagerID) != "employee-1" || updated.ManagerSource != ManagerSourceManual {
+			t.Fatalf("updated self final manager = %#v", updated)
 		}
 	})
 
@@ -1767,6 +1783,7 @@ func TestGetResultSummaryLevelDistribution(t *testing.T) {
 
 func TestGetDistributionCheckZeroParticipants(t *testing.T) {
 	svc := newStubPerformanceService(t,
+		performanceActivityResponse("manager_evaluation", ""),
 		stubQueryResponse{
 			match:   stubTableMatcher("performance_participants"),
 			columns: []string{"id", "activity_id", "status", "final_level"},
@@ -1792,6 +1809,7 @@ func TestGetDistributionCheckZeroParticipants(t *testing.T) {
 
 func TestGetDistributionCheckAllWithinQuota(t *testing.T) {
 	svc := newStubPerformanceService(t,
+		performanceActivityResponse("manager_evaluation", ""),
 		stubQueryResponse{
 			match:   stubTableMatcher("performance_participants"),
 			columns: []string{"id", "activity_id", "status", "final_level"},
@@ -1828,6 +1846,7 @@ func TestGetDistributionCheckAllWithinQuota(t *testing.T) {
 
 func TestGetDistributionCheckIgnoresInactive(t *testing.T) {
 	svc := newStubPerformanceService(t,
+		performanceActivityResponse("manager_evaluation", ""),
 		stubQueryResponse{
 			match:   stubTableMatcher("performance_participants"),
 			columns: []string{"id", "activity_id", "status", "final_level"},
@@ -1855,6 +1874,7 @@ func TestGetDistributionCheckIgnoresInactive(t *testing.T) {
 
 func TestGetRealtimeDistributionCheck(t *testing.T) {
 	svc := newStubPerformanceService(t,
+		performanceActivityResponse("manager_evaluation", ""),
 		stubQueryResponse{
 			match: func(query string, _ []driver.NamedValue) bool {
 				return strings.Contains(strings.ToLower(query), "performance_participants") && strings.Contains(strings.ToLower(query), "count(")
@@ -1889,6 +1909,7 @@ func TestGetRealtimeDistributionCheckIgnoresInactive(t *testing.T) {
 	// Stub driver returns all rows regardless of SQL WHERE clauses,
 	// so we test with empty results to verify the method handles no-data case.
 	svc := newStubPerformanceService(t,
+		performanceActivityResponse("manager_evaluation", ""),
 		stubQueryResponse{
 			match: func(query string, _ []driver.NamedValue) bool {
 				return strings.Contains(strings.ToLower(query), "performance_participants") && strings.Contains(strings.ToLower(query), "count(")
@@ -2525,6 +2546,29 @@ func TestHydrateManagerConfigStatusSetsConfiguredWhenManagerActive(t *testing.T)
 	}
 }
 
+func TestHydrateManagerConfigStatusKeepsAllowedSelfFinalConfigured(t *testing.T) {
+	svc := newStubPerformanceService(t, stubQueryResponse{
+		match:   stubTableMatcher("users"),
+		columns: []string{"id", "user_id", "name", "status"},
+		rows: [][]driver.Value{
+			{int64(1), "user-1", "User One", "active"},
+		},
+	})
+	selfID := "user-1"
+	items := []database.PerformanceParticipant{
+		{
+			EmployeeID:     selfID,
+			ManagerID:      &selfID,
+			ManagerSource:  ManagerSourceManual,
+			EmployeeStatus: "active",
+		},
+	}
+	svc.hydrateManagerConfigStatus(items)
+	if items[0].ManagerConfigStatus != ManagerConfigConfigured {
+		t.Fatalf("expected configured self final status, got %q", items[0].ManagerConfigStatus)
+	}
+}
+
 func TestHydrateManagerConfigStatusSetsPendingWhenNoManager(t *testing.T) {
 	svc := newStubPerformanceService(t, stubQueryResponse{
 		match:   stubTableMatcher("users"),
@@ -2537,6 +2581,60 @@ func TestHydrateManagerConfigStatusSetsPendingWhenNoManager(t *testing.T) {
 	svc.hydrateManagerConfigStatus(items)
 	if items[0].ManagerConfigStatus != ManagerConfigPending {
 		t.Fatalf("expected pending config status, got %q", items[0].ManagerConfigStatus)
+	}
+}
+
+func TestApplySelfFinalAssessmentPromotesSubmittedSelfEval(t *testing.T) {
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("users"),
+			columns: []string{"id", "user_id", "name", "status"},
+			rows: [][]driver.Value{
+				{int64(1), "user-1", "User One", "active"},
+			},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_goal_records"),
+			columns: []string{"id", "activity_id", "participant_id", "section_type", "weight", "self_score", "manager_score", "bonus_score"},
+			rows: [][]driver.Value{
+				{int64(10), "activity-1", int64(1), "quantitative", 1.0, 8.8, 0.0, 0.0},
+			},
+		},
+	)
+	selfID := "user-1"
+	participant := database.PerformanceParticipant{
+		ID:                        1,
+		ActivityID:                "activity-1",
+		EmployeeID:                selfID,
+		EmployeeName:              "User One",
+		Status:                    "self_submitted",
+		SelfScore:                 8.8,
+		TotalSelfScore:            8.8,
+		SelfSummary:               "self summary",
+		SelfEvaluationGood:        "good",
+		SelfEvaluationImprovement: "improve",
+		ManagerID:                 &selfID,
+		ManagerSource:             ManagerSourceManual,
+		ManagerConfigStatus:       ManagerConfigConfigured,
+		DirectManagerIDSnapshot:   nil,
+		DirectManagerNameSnapshot: nil,
+	}
+	activity := database.PerformanceActivity{ID: 1, FlowType: PerformanceFlowNew}
+
+	if err := svc.applySelfFinalAssessmentWithDB(svc.db, &participant, &activity, "operator-1"); err != nil {
+		t.Fatalf("applySelfFinalAssessmentWithDB() error = %v", err)
+	}
+	if participant.Status != "manager_submitted" {
+		t.Fatalf("status = %q, want manager_submitted", participant.Status)
+	}
+	if participant.ManagerScore != 8.8 || participant.TotalManagerScore != 8.8 {
+		t.Fatalf("manager score = (%v, %v), want 8.8", participant.ManagerScore, participant.TotalManagerScore)
+	}
+	if participant.FinalLevel != PerformanceLevelByActivity(8.8, &activity) {
+		t.Fatalf("final level = %q", participant.FinalLevel)
+	}
+	if participant.ManagerComment != participant.SelfSummary {
+		t.Fatalf("manager comment = %q, want self summary", participant.ManagerComment)
 	}
 }
 
@@ -2580,7 +2678,17 @@ func TestValidateActivityIndicatorLibraryCycleBranches(t *testing.T) {
 func TestCreateAndUpdateActivityValidateIndicatorLibraryCycle(t *testing.T) {
 	libraryID := uint(10)
 
-	createSvc := newStubPerformanceService(t, performanceIndicatorLibraryResponse("quarterly"))
+	createSvc := newStubPerformanceService(t,
+		performanceIndicatorLibraryResponse("quarterly"),
+		performanceActivityResponse("draft", ""),
+		stubQueryResponse{
+			match:   stubTableMatcher("users"),
+			columns: []string{"id", "user_id", "name", "department_id", "status"},
+			rows:    nil,
+		},
+		performanceDepartmentsResponse(),
+		performanceParticipantsResponse(nil),
+	)
 	activity, err := createSvc.CreateActivity(CreateActivityRequest{
 		Name:               "Q2",
 		CycleType:          "quarterly",
@@ -2893,8 +3001,52 @@ func TestEnsureParticipantStageCompleteSomeIncomplete(t *testing.T) {
 		},
 	})
 	err := svc.ensureParticipantStageComplete("activity-1", "self_evaluation")
-	if err == nil || !strings.Contains(err.Error(), "未完成当前阶段") {
+	if err == nil || !strings.Contains(err.Error(), "无法开启主管评分") || !strings.Contains(err.Error(), "目标尚未完成") {
 		t.Fatalf("ensureParticipantStageComplete() incomplete expected error, got = %v", err)
+	}
+}
+
+func TestEnsureParticipantStageCompleteReportsAssessmentManagerIssue(t *testing.T) {
+	svc := newStubPerformanceService(t, stubQueryResponse{
+		match: stubTableMatcher("performance_participants"),
+		columns: []string{
+			"id", "activity_id", "employee_id", "employee_name", "status",
+			"manager_id", "manager_config_status",
+		},
+		rows: [][]driver.Value{
+			{int64(1), "activity-1", "employee-1", "列德", "pending", nil, ManagerConfigPending},
+		},
+	})
+	err := svc.ensureParticipantStageComplete("activity-1", "target_setting")
+	if err == nil ||
+		!strings.Contains(err.Error(), "无法开启自评") ||
+		!strings.Contains(err.Error(), "列德：考核上级未配置") ||
+		!strings.Contains(err.Error(), "请先配置考核上级") {
+		t.Fatalf("ensureParticipantStageComplete() manager issue expected detailed error, got = %v", err)
+	}
+}
+
+func TestEnsureParticipantStageCompleteReportsTargetApprovalBeforeManagerIssue(t *testing.T) {
+	svc := newStubPerformanceService(t, stubQueryResponse{
+		match: stubTableMatcher("performance_participants"),
+		columns: []string{
+			"id", "activity_id", "employee_id", "employee_name", "status",
+			"manager_id", "manager_config_status",
+		},
+		rows: [][]driver.Value{
+			{int64(1), "activity-1", "employee-1", "列德", "target_pending_approval", nil, ManagerConfigPending},
+		},
+	})
+	err := svc.ensureParticipantStageComplete("activity-1", "target_setting")
+	if err == nil ||
+		!strings.Contains(err.Error(), "无法开启自评") ||
+		!strings.Contains(err.Error(), "未完成目标设定/审批") ||
+		!strings.Contains(err.Error(), "列德：目标已提交，待审批通过或驳回") ||
+		!strings.Contains(err.Error(), "请先在参与人列表处理目标审批") {
+		t.Fatalf("ensureParticipantStageComplete() approval issue expected detailed error, got = %v", err)
+	}
+	if strings.Contains(err.Error(), "列德：考核上级未配置") {
+		t.Fatalf("approval issue should not be hidden by manager config issue, got = %v", err)
 	}
 }
 
@@ -3264,6 +3416,46 @@ func TestListAssessmentManagerCandidatesBuildsSourceGroups(t *testing.T) {
 	}
 }
 
+func TestListAssessmentManagerCandidatesAllowsSelfFinalForTopLevel(t *testing.T) {
+	svc := newStubPerformanceService(t,
+		performanceActivityResponse("draft", ""),
+		assessmentManagerParticipantForUpdate("activity-1", "employee-1", "target_set", false, "", "", "", ManagerSourceEmpty),
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "employee_profiles") && strings.Contains(lower, "select `user_id`")
+			},
+			columns: []string{"user_id"},
+			rows:    nil,
+		},
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "employee_profiles") && !strings.Contains(lower, "select `user_id`")
+			},
+			columns: []string{"user_id", "employee_id"},
+			rows: [][]driver.Value{
+				{"employee-1", "E001"},
+			},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("users"),
+			columns: []string{"id", "user_id", "name", "department_id", "status", "mobile"},
+			rows: [][]driver.Value{
+				{int64(1), "employee-1", "Alice", "", "active", "13800000005"},
+			},
+		},
+	)
+
+	candidates, err := svc.ListAssessmentManagerCandidates("activity-1", 1, ManagerSourceManual, "Alice", 10)
+	if err != nil {
+		t.Fatalf("ListAssessmentManagerCandidates(self final) error = %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].UserID != "employee-1" || !candidates[0].IsSelfFinalCandidate {
+		t.Fatalf("self final candidates = %#v", candidates)
+	}
+}
+
 func TestAssessmentManagerCandidateMissingReasonAndFindActiveUser(t *testing.T) {
 	svc := newStubPerformanceService(t, assessmentManagerUsersResponse())
 
@@ -3279,6 +3471,58 @@ func TestAssessmentManagerCandidateMissingReasonAndFindActiveUser(t *testing.T) 
 	}
 	if user.UserID != "direct-1" {
 		t.Fatalf("stubbed first active user = %q, want direct-1", user.UserID)
+	}
+}
+
+func TestAssessmentManagerCandidateMissingReasonManualOnlySelf(t *testing.T) {
+	svc := newStubPerformanceService(t,
+		assessmentManagerParticipantResponse(),
+		activeUserByIDResponse("direct-1", "Direct Boss"),
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "employee_profiles") && !strings.Contains(lower, "select `user_id`")
+			},
+			columns: []string{"id", "user_id", "employee_id"},
+			rows: [][]driver.Value{
+				{int64(1), "employee-1", "E001"},
+			},
+		},
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "employee_profiles") && strings.Contains(lower, "select `user_id`")
+			},
+			columns: []string{"user_id"},
+			rows:    nil,
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("users"),
+			columns: []string{"id", "user_id", "name", "department_id", "status", "mobile"},
+			rows: [][]driver.Value{
+				{int64(1), "employee-1", "Alice", "dept-1", "active", "13800000005"},
+			},
+		},
+	)
+
+	reason := svc.assessmentManagerCandidateMissingReason("activity-1", 1, ManagerSourceManual, "Alice")
+	if !strings.Contains(reason, "只有最高级") || !strings.Contains(reason, "普通员工") {
+		t.Fatalf("reason = %q, want non-top-level self guidance", reason)
+	}
+}
+
+func TestParticipantSelfUserIDsIncludesEmployeeProfileID(t *testing.T) {
+	svc := newStubPerformanceService(t, stubQueryResponse{
+		match:   stubTableMatcher("employee_profiles"),
+		columns: []string{"id", "user_id", "employee_id"},
+		rows: [][]driver.Value{
+			{int64(1), "user-1", "E001"},
+		},
+	})
+
+	values := svc.participantSelfUserIDs(&database.PerformanceParticipant{EmployeeID: "user-1"})
+	if !stringSetContains(values, "user-1") || !stringSetContains(values, "E001") {
+		t.Fatalf("participantSelfUserIDs() = %#v, want user_id and employee_id", values)
 	}
 }
 
@@ -3305,7 +3549,10 @@ func TestHydrateParticipantTargetConfirmersFromApprovalLogs(t *testing.T) {
 }
 
 func TestLegacyReviewSubmissionWrappersDelegateToVersionRepository(t *testing.T) {
-	selfSvc := newStubPerformanceService(t, legacyReviewParticipantResponse("self_evaluation", ""))
+	selfSvc := newStubPerformanceService(t,
+		legacyReviewParticipantResponse("self_evaluation", ""),
+		performanceActivityResponse("self_evaluation", ""),
+	)
 	selfVersion, err := selfSvc.SubmitSelfEvaluation("1", struct {
 		SelfScore       float64
 		SelfLevel       string
@@ -3319,7 +3566,10 @@ func TestLegacyReviewSubmissionWrappersDelegateToVersionRepository(t *testing.T)
 		t.Fatalf("SubmitSelfEvaluation() version = %#v", selfVersion)
 	}
 
-	managerSvc := newStubPerformanceService(t, legacyReviewParticipantResponse("self_submitted", ""))
+	managerSvc := newStubPerformanceService(t,
+		legacyReviewParticipantResponse("self_submitted", ""),
+		performanceActivityResponse("manager_evaluation", ""),
+	)
 	managerVersion, err := managerSvc.SubmitManagerEvaluation("1", struct {
 		ManagerScore    float64
 		SuggestedLevel  string
@@ -3337,7 +3587,10 @@ func TestLegacyReviewSubmissionWrappersDelegateToVersionRepository(t *testing.T)
 		t.Fatalf("SubmitManagerEvaluation() version = %#v", managerVersion)
 	}
 
-	batchSvc := newStubPerformanceService(t, legacyReviewParticipantResponse("self_submitted", ""))
+	batchSvc := newStubPerformanceService(t,
+		performanceActivityResponse("manager_evaluation", ""),
+		legacyReviewParticipantResponse("self_submitted", ""),
+	)
 	versions, err := batchSvc.BatchSubmitManagerEvaluations("activity-1", []struct {
 		ParticipantID   uint
 		ManagerScore    float64
@@ -3883,6 +4136,18 @@ func assessmentManagerParticipantForUpdate(activityID, employeeID, status string
 			managerSource, false, "", ManagerConfigConfigured,
 			status, locked,
 		}},
+	}
+}
+
+func activeUserByIDResponse(userID, name string) stubQueryResponse {
+	return stubQueryResponse{
+		match: func(query string, args []driver.NamedValue) bool {
+			return strings.Contains(strings.ToLower(query), "users") && coverageHasStringArg(args, userID)
+		},
+		columns: []string{"id", "user_id", "name", "department_id", "status"},
+		rows: [][]driver.Value{
+			{int64(1), userID, name, "dept-1", "active"},
+		},
 	}
 }
 

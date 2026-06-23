@@ -2,8 +2,13 @@ import React, { useEffect, useState } from 'react'
 import axios from 'axios'
 import { Alert, Button, Card, Space, Spin, Typography, message } from 'antd'
 import { LoadingOutlined, MobileOutlined, QrcodeOutlined } from '@ant-design/icons'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
+import {
+  authRedirectTargetFromLocation,
+  normalizeAuthRedirectTarget,
+  rememberAuthRedirect,
+} from '../utils/authRedirect'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -27,9 +32,11 @@ const Login: React.FC = () => {
   const [autoLogging, setAutoLogging] = useState(false)
   const [redirectUri, setRedirectUri] = useState('')
   const [inAppStatus, setInAppStatus] = useState('')
+  const location = useLocation()
   const [searchParams] = useSearchParams()
   const { login } = useAuthStore()
   const forceScanMode = searchParams.get('mode') === 'scan'
+  const redirectTarget = normalizeAuthRedirectTarget(searchParams.get('redirect')) || authRedirectTargetFromLocation(location)
 
   useEffect(() => {
     const error = searchParams.get('error')
@@ -40,6 +47,7 @@ const Login: React.FC = () => {
 
   const handleDingTalkQRLogin = async () => {
     setLoading(true)
+    rememberAuthRedirect(redirectTarget)
     try {
       const response = await axios.get('/api/v1/auth/dingtalk/qr/start')
       const nextRedirectUri = response.data.data.redirect_uri || ''
@@ -105,7 +113,7 @@ const Login: React.FC = () => {
             const { token, user } = response.data.data
             login(user, token)
             message.success('登录成功', 0.6)
-            window.location.replace('/')
+            window.location.replace(redirectTarget || '/')
           } catch (err) {
             const text = getAxiosErrorMessage(err, '钉钉内免登失败')
             console.error('[DingTalk InApp] login failed', err)

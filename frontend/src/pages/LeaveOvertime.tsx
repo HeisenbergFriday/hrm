@@ -684,10 +684,10 @@ const OvertimeTab: React.FC = () => {
         )}
         <Form form={suppForm} layout="vertical">
           <Form.Item name="clock_in" label="补卡上班时间" rules={[{ required: true, message: '请选择补卡上班时间' }]}>
-            <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="选择上班打卡时间" />
+            <DatePicker showTime format="YYYY年M月D日 HH:mm:ss" style={{ width: '100%' }} placeholder="选择上班打卡时间" />
           </Form.Item>
           <Form.Item name="clock_out" label="补卡下班时间" rules={[{ required: true, message: '请选择补卡下班时间' }]}>
-            <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="选择下班打卡时间" />
+            <DatePicker showTime format="YYYY年M月D日 HH:mm:ss" style={{ width: '100%' }} placeholder="选择下班打卡时间" />
           </Form.Item>
           <Form.Item name="reason" label="补卡原因">
             <Input.TextArea rows={3} placeholder="请输入补卡原因（选填）" />
@@ -777,7 +777,7 @@ const ConsumeTab: React.FC = () => {
     { title: '消费天数', dataIndex: 'days', key: 'days', render: (v: number) => formatDays(v) },
     { title: '审批单号', dataIndex: 'approval_ref', key: 'approval_ref', render: (v: string) => v || '-' },
     { title: '备注', dataIndex: 'remark', key: 'remark' },
-    { title: '时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm') },
+    { title: '时间', dataIndex: 'created_at', key: 'created_at', render: formatDateTime },
   ]
 
   return (

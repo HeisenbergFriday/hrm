@@ -14,6 +14,7 @@ import { menuConfig, logoutMenuItem, filterMenuByKeys, menuPermissionKey } from 
 import { refreshMenuKeys } from './services/api'
 import RouteGuard from './components/RouteGuard'
 import ErrorBoundary from './components/ErrorBoundary'
+import { authRedirectTargetFromLocation, loginPathWithRedirect, rememberAuthRedirect } from './utils/authRedirect'
 
 const Login = lazy(() => import('./pages/Login'))
 const Callback = lazy(() => import('./pages/Callback'))
@@ -230,6 +231,11 @@ function App() {
     }
 
     setAutoLogging(true)
+    const redirectTarget = authRedirectTargetFromLocation(location)
+    const navigateToLogin = () => {
+      rememberAuthRedirect(redirectTarget)
+      navigate(loginPathWithRedirect(redirectTarget), { replace: true })
+    }
 
     const doAutoLogin = async () => {
       try {
@@ -240,14 +246,14 @@ function App() {
         if (!corpId || (Array.isArray(missing) && missing.includes('DINGTALK_CORP_ID'))) {
           message.error('缺少 DINGTALK_CORP_ID，暂时无法使用钉钉内免登')
           setAutoLogging(false)
-          navigate('/login', { replace: true })
+          navigateToLogin()
           return
         }
 
         if (!dd?.runtime?.permission?.requestAuthCode) {
           message.error('钉钉 JS-SDK 未加载或未授权')
           setAutoLogging(false)
-          navigate('/login', { replace: true })
+          navigateToLogin()
           return
         }
 
@@ -266,27 +272,27 @@ function App() {
               console.error('[DingTalk InApp] login failed', err)
               message.error(getAxiosErrorMessage(err, '钉钉内免登失败'))
               setAutoLogging(false)
-              navigate('/login', { replace: true })
+              navigateToLogin()
             }
           },
           onFail: (err: unknown) => {
             console.error('[DingTalk InApp] requestAuthCode failed', err)
             message.error('获取钉钉授权码失败')
             setAutoLogging(false)
-            navigate('/login', { replace: true })
+            navigateToLogin()
           },
         })
       } catch (err) {
         console.error('[DingTalk InApp] init failed', err)
         message.error(getAxiosErrorMessage(err, '钉钉内免登初始化失败'))
         setAutoLogging(false)
-        navigate('/login', { replace: true })
+        navigateToLogin()
       }
     }
 
     const timer = setTimeout(doAutoLogin, 300)
     return () => clearTimeout(timer)
-  }, [isLoggedIn, location.pathname, login, navigate])
+  }, [isLoggedIn, location, login, navigate])
 
   if (authPaths.includes(location.pathname)) {
     return (

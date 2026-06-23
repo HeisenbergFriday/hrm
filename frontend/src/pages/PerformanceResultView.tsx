@@ -84,6 +84,20 @@ function getDownloadFileName(activity: PerformanceActivity | null, participant: 
   return base.replace(/[\\/:*?"<>|]/g, '_')
 }
 
+function isNewPerformanceFlow(activity: PerformanceActivity | null) {
+  return activity?.flow_type === 'new'
+}
+
+function isPlanGoalRecord(record: PerformanceGoalRecord) {
+  return String(record.goal_phase || '').trim() === 'plan'
+}
+
+function isReviewGoalRecord(activity: PerformanceActivity | null, record: PerformanceGoalRecord) {
+  if (record.section_type === 'bonus_penalty') return false
+  if (!isNewPerformanceFlow(activity)) return true
+  return !isPlanGoalRecord(record)
+}
+
 interface ArchiveSheetProps {
   activity: PerformanceActivity | null
   participant: PerformanceParticipant | null
@@ -205,7 +219,7 @@ const ArchivePerformanceSheet: React.FC<ArchiveSheetProps> = ({ activity, partic
   }
 
   return (
-    <div id="performance-archive-sheet" className="performance-archive-sheet">
+    <div className="performance-archive-sheet">
       <table className="archive-table archive-excel-table">
         <colgroup>
           <col style={{ width: '5.5%' }} />
@@ -358,6 +372,169 @@ const ArchivePerformanceSheet: React.FC<ArchiveSheetProps> = ({ activity, partic
             <td colSpan={3} className="archive-sign-confirm">
               绩效等级确认：{levelConfirmSignature}
             </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+const NewFlowPlanArchiveSheet: React.FC<ArchiveSheetProps> = ({ activity, participant, records }) => {
+  const mainRecords = records
+    .filter(record => isReviewGoalRecord(activity, record))
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id)
+  const planRecords = records
+    .filter(record => record.section_type !== 'bonus_penalty' && isPlanGoalRecord(record))
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id)
+  const totalWeight = mainRecords.reduce((sum, record) => sum + (record.weight || 0), 0)
+  const totalSelfScore = participant?.total_self_score ?? participant?.self_score ?? mainRecords.reduce((sum, record) => sum + getWeightedScore(record, 'self'), 0)
+  const totalManagerScore = participant?.total_manager_score ?? participant?.manager_score ?? mainRecords.reduce((sum, record) => sum + getWeightedScore(record, 'manager'), 0)
+  const period = formatPeriod(activity?.start_date, activity?.end_date)
+  const participantExtra = participant as any
+  const employeeSignature = formatSignature(
+    firstRealSignatureName(participant?.employee_confirmed_by, participant?.employee_name),
+    participant?.employee_confirmed_at || participant?.confirmed_at
+  )
+  const managerSignature = formatSignature(
+    firstRealSignatureName(participant?.manager_confirmed_by, participant?.manager_name, participantExtra?.updated_by),
+    participant?.manager_confirmed_at
+  )
+
+  const renderReviewRows = () => {
+    const rows = mainRecords.length ? mainRecords : Array.from({ length: 5 }, (_, index) => ({
+      id: -index - 1,
+      item_name: '',
+      item_definition: '',
+      weight: 0,
+      actual_result: '',
+      self_score: undefined,
+      manager_score: undefined,
+    } as unknown as PerformanceGoalRecord))
+
+    return rows.map((record, index) => (
+      <tr key={record.id || `review-${index}`} className={record.goal_type === 'okr' || record.goal_type === 'kpi' ? 'old-flow-example-row' : undefined}>
+        <td>{index + 1}</td>
+        <td colSpan={2}>{record.item_name || '-'}</td>
+        <td>{formatWeight(record.weight)}</td>
+        <td colSpan={2} className="archive-text-cell">{record.item_definition || record.scoring_rule || '-'}</td>
+        <td colSpan={2} className="archive-text-cell">{record.actual_result || '-'}</td>
+        <td>{formatScore(record.self_score)}</td>
+        <td>{formatScore(record.manager_score)}</td>
+        <td />
+      </tr>
+    ))
+  }
+
+  const renderPlanRows = () => {
+    const rows = planRecords.length ? planRecords : Array.from({ length: 5 }, (_, index) => ({
+      id: -index - 101,
+      item_name: '',
+      item_definition: '',
+      weight: 0,
+    } as PerformanceGoalRecord))
+
+    return rows.map((record, index) => (
+      <tr key={record.id || `plan-${index}`}>
+        <td>{index + 1}</td>
+        <td colSpan={2}>{record.item_name || '-'}</td>
+        <td>{formatWeight(record.weight)}</td>
+        <td colSpan={7} className="archive-text-cell">{record.item_definition || record.target_value || record.scoring_rule || '-'}</td>
+      </tr>
+    ))
+  }
+
+  return (
+    <div className="performance-archive-sheet old-flow-archive-sheet">
+      <table className="archive-table old-flow-table">
+        <colgroup>
+          <col style={{ width: '7%' }} />
+          <col style={{ width: '8%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '6%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '18%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '18%' }} />
+          <col style={{ width: '7%' }} />
+          <col style={{ width: '7%' }} />
+          <col style={{ width: '8%' }} />
+        </colgroup>
+        <tbody>
+          <tr className="old-flow-title-row">
+            <td colSpan={11}>员工绩效考核表</td>
+          </tr>
+          <tr className="old-flow-info-row">
+            <th>部门</th>
+            <td colSpan={2}>{participant?.department_name || '-'}</td>
+            <th>工号</th>
+            <td>{participant?.employee_id || '-'}</td>
+            <th>姓名</th>
+            <td>{participant?.employee_name || '-'}</td>
+            <th>岗位</th>
+            <td>{participant?.position || '-'}</td>
+            <th>入职日期</th>
+            <td>{formatDate(participantExtra?.hire_date || participantExtra?.entry_date)}</td>
+          </tr>
+          <tr className="old-flow-section-title">
+            <td colSpan={11}>上季度指标完成情况</td>
+          </tr>
+          <tr className="old-flow-note-row">
+            <td colSpan={11}>
+              说明：十分制，单项得分最高为10分，最低为0分，最终得分按权重汇总；指标数据可根据实际进行删减。
+            </td>
+          </tr>
+          <tr className="old-flow-head-row">
+            <th>序号</th>
+            <th colSpan={2}>目标/关键职责事项</th>
+            <th>权重</th>
+            <th colSpan={2}>目标/关键职责事项说明</th>
+            <th colSpan={2}>目标/关键职责事项的完成情况</th>
+            <th>自评</th>
+            <th>上级评分</th>
+            <th>备注</th>
+          </tr>
+          {renderReviewRows()}
+          <tr className="old-flow-total-row">
+            <td />
+            <td colSpan={2}>合计</td>
+            <td>{formatWeight(totalWeight)}</td>
+            <td colSpan={4}>-</td>
+            <td>{formatDecimal(totalSelfScore)}</td>
+            <td>{formatDecimal(totalManagerScore)}</td>
+            <td />
+          </tr>
+          <tr className="old-flow-level-row">
+            <td colSpan={8}>绩效等级(依据分数自动带出)</td>
+            <td>-</td>
+            <td className="archive-level-cell">{participant?.final_level || participant?.suggested_level || '-'}</td>
+            <td />
+          </tr>
+          <tr className="old-flow-section-title">
+            <td colSpan={11}>下季度目标计划</td>
+          </tr>
+          <tr className="old-flow-note-row">
+            <td colSpan={11}>说明：权重总计100%，固定两项考核占比30%，还可填写70%权重。</td>
+          </tr>
+          <tr className="old-flow-head-row">
+            <th>序号</th>
+            <th colSpan={2}>目标/关键职责事项</th>
+            <th>权重</th>
+            <th colSpan={7}>目标/关键职责事项说明</th>
+          </tr>
+          {renderPlanRows()}
+          <tr className="old-flow-total-row">
+            <td />
+            <td colSpan={2}>合计</td>
+            <td>{formatWeight(planRecords.reduce((sum, record) => sum + (record.weight || 0), 0))}</td>
+            <td colSpan={7}>-</td>
+          </tr>
+          <tr className="old-flow-sign-row">
+            <td colSpan={5}>员工签名：{employeeSignature}</td>
+            <td colSpan={6}>上级签名：{managerSignature}</td>
+          </tr>
+          <tr className="old-flow-sign-row">
+            <td colSpan={5}>日期：{period}</td>
+            <td colSpan={6}>日期：{formatDate(participant?.manager_confirmed_at || participant?.employee_confirmed_at || participant?.confirmed_at)}</td>
           </tr>
         </tbody>
       </table>
@@ -524,13 +701,87 @@ const archiveStyles = `
 .archive-sign-confirm {
   padding-left: 4px !important;
 }
+.old-flow-archive-sheet {
+  min-width: 1180px;
+}
+.old-flow-table {
+  border: 2px solid #333;
+}
+.old-flow-title-row td {
+  height: 34px;
+  font-family: SimHei, "Microsoft YaHei", Arial, sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+}
+.old-flow-info-row th,
+.old-flow-info-row td {
+  height: 32px;
+  background: #fff;
+  font-weight: 700;
+}
+.old-flow-section-title td {
+  height: 28px;
+  background: #e6e6e6;
+  font-weight: 700;
+}
+.old-flow-note-row td {
+  height: 34px;
+  background: #fff;
+  text-align: left !important;
+  font-size: 11px;
+  font-weight: 700;
+}
+.old-flow-head-row th {
+  height: 32px;
+  background: #f4f4f4;
+}
+.old-flow-table tbody tr:not(.old-flow-title-row):not(.old-flow-info-row):not(.old-flow-section-title):not(.old-flow-note-row):not(.old-flow-head-row):not(.old-flow-total-row):not(.old-flow-level-row):not(.old-flow-sign-row) td {
+  height: 38px;
+}
+.old-flow-example-row td {
+  background: #f2dcdb;
+}
+.old-flow-total-row td,
+.old-flow-level-row td {
+  height: 26px;
+  background: #dce6f1;
+  font-weight: 700;
+}
+.old-flow-sign-row td {
+  height: 34px;
+  background: #fff;
+  text-align: left !important;
+  font-weight: 700;
+}
 @media print {
   @page {
     size: A4 landscape;
     margin: 6mm;
   }
+  html,
+  body {
+    background: #fff !important;
+  }
   body * {
     visibility: hidden !important;
+  }
+  #performance-print-root,
+  #performance-print-root * {
+    visibility: visible !important;
+  }
+  #performance-print-root {
+    display: block !important;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    background: #fff;
+  }
+  #performance-print-root .performance-archive-sheet {
+    width: 100%;
+    min-width: 0;
+    overflow: visible;
+    font-size: 9px;
   }
   #performance-archive-sheet,
   #performance-archive-sheet * {
@@ -564,6 +815,337 @@ const archiveStyles = `
 }
 `
 
+const EXCEL_NEW_FLOW_COLUMN_WIDTHS = [86, 172, 351, 78, 112, 112, 112, 273, 125, 70, 69]
+const EXCEL_OLD_FLOW_COLUMN_WIDTHS = [83, 94, 142, 71, 142, 212, 142, 212, 83, 83, 94]
+
+const EXCEL_BASE_CELL_STYLE = [
+  'border: 0.5pt solid #000',
+  'padding: 3px 4px',
+  'text-align: center',
+  'vertical-align: middle',
+  'white-space: normal',
+  'word-break: break-word',
+  'font-family: SimSun, "Microsoft YaHei", Arial, sans-serif',
+  'font-size: 9pt',
+  'line-height: 1.2',
+  'mso-number-format:"\\@"'
+].join('; ')
+
+const appendInlineStyle = (element: HTMLElement, style: string) => {
+  const current = element.getAttribute('style')
+  element.setAttribute('style', current ? `${current}; ${style}` : style)
+}
+
+const waitForBrowserPaint = async () => {
+  await new Promise<void>(resolve => {
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => resolve())
+      return
+    }
+    window.setTimeout(resolve, 0)
+  })
+}
+
+const hasAnyClass = (element: Element, classNames: string[]) => (
+  classNames.some(className => element.classList.contains(className))
+)
+
+const getExcelRowHeight = (row: HTMLTableRowElement) => {
+  if (hasAnyClass(row, ['archive-main-head'])) return 58
+  if (hasAnyClass(row, ['archive-data-row', 'archive-sign-row'])) return 44
+  if (hasAnyClass(row, ['archive-level-label-row', 'archive-level-value-row'])) return 40
+  if (hasAnyClass(row, ['old-flow-title-row', 'old-flow-note-row', 'old-flow-sign-row'])) return 34
+  if (hasAnyClass(row, ['archive-info-head', 'archive-info-value', 'old-flow-info-row', 'old-flow-head-row'])) return 32
+  if (hasAnyClass(row, ['archive-total-row', 'archive-review-head', 'archive-review-row'])) return 30
+  if (hasAnyClass(row, ['archive-top-row', 'archive-section-row', 'archive-main-subhead', 'old-flow-section-title'])) return 28
+  if (hasAnyClass(row, ['old-flow-total-row', 'old-flow-level-row'])) return 26
+  return 38
+}
+
+const getExcelHeadNoteLines = (text: string) => {
+  const normalizedText = text.trim()
+  if (normalizedText.includes('单项不低于10%')) {
+    return ['（5%的倍数且', '单项不低于10%）']
+  }
+  if (normalizedText.includes('定量分段设置')) {
+    return ['（定量分段设置，上限120分；定性按达成度/质量分级，上限100分）']
+  }
+  return [normalizedText]
+}
+
+const setSameCellBreak = (breakElement: HTMLBRElement) => {
+  appendInlineStyle(breakElement, 'mso-data-placement: same-cell')
+}
+
+const normalizeExcelHeadCells = (root: HTMLElement) => {
+  root.querySelectorAll('.archive-main-head th').forEach(cell => {
+    const headCell = cell as HTMLTableCellElement
+    const note = headCell.querySelector('.archive-head-note') as HTMLElement | null
+    if (!note) return
+
+    const titleText = Array.from(headCell.childNodes)
+      .filter(node => node !== note && node.nodeName.toLowerCase() !== 'br')
+      .map(node => node.textContent?.trim() || '')
+      .filter(Boolean)
+      .join('')
+    const noteLines = getExcelHeadNoteLines(note.textContent || '')
+    const titleSpan = document.createElement('span')
+    titleSpan.className = 'excel-head-title'
+    titleSpan.textContent = titleText
+
+    const noteSpan = document.createElement('span')
+    noteSpan.className = 'archive-head-note excel-head-note'
+    noteLines.forEach((line, index) => {
+      if (index > 0) {
+        const breakElement = document.createElement('br')
+        setSameCellBreak(breakElement)
+        noteSpan.appendChild(breakElement)
+      }
+      noteSpan.appendChild(document.createTextNode(line))
+    })
+
+    headCell.textContent = ''
+    headCell.appendChild(titleSpan)
+    const breakElement = document.createElement('br')
+    setSameCellBreak(breakElement)
+    headCell.appendChild(breakElement)
+    headCell.appendChild(noteSpan)
+    appendInlineStyle(headCell, [
+      'text-align: center',
+      'vertical-align: middle',
+      'line-height: 1.2',
+      'white-space: normal'
+    ].join('; '))
+  })
+}
+
+const getExcelCellStyle = (cell: HTMLTableCellElement, row: HTMLTableRowElement) => {
+  const styles: string[] = [EXCEL_BASE_CELL_STYLE]
+
+  if (cell.tagName.toLowerCase() === 'th') {
+    styles.push('font-weight: 700')
+  }
+
+  if (hasAnyClass(row, [
+    'archive-info-head',
+    'archive-info-value',
+    'archive-main-head',
+    'archive-main-subhead',
+    'archive-total-row',
+    'archive-review-head',
+    'archive-level-label-row',
+    'archive-level-value-row'
+  ])) {
+    styles.push('background: #fff2cc')
+  }
+
+  if (hasAnyClass(row, ['archive-section-row'])) {
+    styles.push('background: #ffc000', 'font-weight: 700')
+  }
+
+  if (hasAnyClass(row, ['archive-main-head'])) {
+    styles.push('line-height: 1.25')
+  }
+
+  if (hasAnyClass(row, ['archive-top-row'])) {
+    styles.push('border-top: 2pt solid #2b64ff')
+  }
+
+  if (hasAnyClass(row, ['old-flow-section-title'])) {
+    styles.push('background: #e6e6e6', 'font-weight: 700')
+  }
+
+  if (hasAnyClass(row, ['old-flow-head-row'])) {
+    styles.push('background: #f4f4f4', 'font-weight: 700')
+  }
+
+  if (hasAnyClass(row, ['old-flow-total-row', 'old-flow-level-row'])) {
+    styles.push('background: #dce6f1', 'font-weight: 700')
+  }
+
+  if (hasAnyClass(row, ['old-flow-example-row'])) {
+    styles.push('background: #f2dcdb')
+  }
+
+  if (hasAnyClass(row, ['archive-sign-final-row'])) {
+    styles.push('color: #f00', 'text-align: center', 'font-weight: 700')
+  }
+
+  if (hasAnyClass(row, ['archive-total-row', 'archive-level-label-row', 'archive-level-value-row', 'archive-sign-row', 'old-flow-info-row', 'old-flow-sign-row'])) {
+    styles.push('font-weight: 700')
+  }
+
+  if (hasAnyClass(cell, ['archive-text-cell', 'archive-evaluation-cell'])) {
+    styles.push('text-align: left', 'vertical-align: top')
+  }
+
+  if (hasAnyClass(cell, ['archive-logo-cell'])) {
+    styles.push('text-align: left', 'font-weight: 700', 'font-family: "Microsoft YaHei", SimHei, Arial, sans-serif', 'white-space: nowrap')
+  }
+
+  if (hasAnyClass(cell, ['archive-title-cell'])) {
+    styles.push('font-family: SimHei, "Microsoft YaHei", Arial, sans-serif', 'font-size: 12pt', 'font-weight: 700')
+  }
+
+  if (hasAnyClass(cell, ['archive-category-cell', 'archive-evaluation-title'])) {
+    styles.push('font-weight: 700')
+  }
+
+  if (hasAnyClass(cell, ['archive-evaluation-cell', 'archive-level-cell'])) {
+    styles.push('color: #d00', 'font-weight: 700')
+  }
+
+  if (hasAnyClass(cell, ['archive-sign-cell', 'archive-sign-confirm'])) {
+    styles.push('text-align: left', 'padding-left: 4px', 'font-weight: 700')
+  }
+
+  return styles.join('; ')
+}
+
+const prepareArchiveSheetForExcel = (sheet: HTMLElement) => {
+  const clone = sheet.cloneNode(true) as HTMLElement
+  const table = clone.querySelector('table') as HTMLTableElement | null
+  if (!table) return clone
+
+  const isOldFlow = table.classList.contains('old-flow-table')
+  const columnWidths = isOldFlow ? EXCEL_OLD_FLOW_COLUMN_WIDTHS : EXCEL_NEW_FLOW_COLUMN_WIDTHS
+
+  clone.removeAttribute('id')
+  appendInlineStyle(clone, [
+    'background: #fff',
+    'color: #000',
+    'font-family: SimSun, "Microsoft YaHei", Arial, sans-serif',
+    'font-size: 9pt',
+    `width: ${isOldFlow ? 1180 : 1560}px`
+  ].join('; '))
+
+  table.setAttribute('border', '1')
+  table.setAttribute('cellspacing', '0')
+  table.setAttribute('cellpadding', '0')
+  appendInlineStyle(table, [
+    'border-collapse: collapse',
+    'table-layout: fixed',
+    'border: 1.5pt solid #000',
+    `width: ${isOldFlow ? 1180 : 1560}px`,
+    'mso-table-lspace: 0pt',
+    'mso-table-rspace: 0pt'
+  ].join('; '))
+
+  table.querySelectorAll('col').forEach((col, index) => {
+    const width = columnWidths[index]
+    if (!width) return
+    col.setAttribute('width', String(width))
+    appendInlineStyle(col as HTMLElement, `width: ${width}px; mso-width-source: userset`)
+  })
+
+  table.querySelectorAll('tr').forEach(row => {
+    const tableRow = row as HTMLTableRowElement
+    const height = getExcelRowHeight(tableRow)
+    tableRow.setAttribute('height', String(height))
+    appendInlineStyle(tableRow, `height: ${height}px`)
+    Array.from(tableRow.cells).forEach(cell => {
+      appendInlineStyle(cell, getExcelCellStyle(cell, tableRow))
+    })
+  })
+
+  normalizeExcelHeadCells(clone)
+
+  clone.querySelectorAll('.archive-logo-mark').forEach(mark => {
+    mark.textContent = '○'
+    appendInlineStyle(mark as HTMLElement, 'color: #2b64ff; font-size: 16pt; font-weight: 700; vertical-align: middle')
+  })
+  clone.querySelectorAll('.archive-logo-main').forEach(text => {
+    appendInlineStyle(text as HTMLElement, 'font-size: 16pt; font-style: italic; font-weight: 700; vertical-align: middle')
+  })
+  clone.querySelectorAll('.archive-logo-sub').forEach(text => {
+    appendInlineStyle(text as HTMLElement, 'font-size: 10pt; font-weight: 700; vertical-align: middle')
+  })
+  clone.querySelectorAll('.excel-head-title').forEach(title => {
+    appendInlineStyle(title as HTMLElement, [
+      'font-size: 9pt',
+      'font-weight: 700',
+      'line-height: 1.25',
+      'white-space: nowrap'
+    ].join('; '))
+  })
+  clone.querySelectorAll('.archive-head-note').forEach(note => {
+    const headNote = note as HTMLElement
+    appendInlineStyle(headNote, [
+      'display: inline',
+      'font-size: 7pt',
+      'font-weight: 400',
+      'line-height: 1.15',
+      'white-space: nowrap'
+    ].join('; '))
+  })
+  clone.querySelectorAll('br').forEach(breakElement => setSameCellBreak(breakElement))
+  clone.querySelectorAll('.archive-category-note').forEach(note => {
+    appendInlineStyle(note as HTMLElement, 'font-size: 9pt; font-weight: 400; line-height: 1.25')
+  })
+
+  return clone
+}
+
+const buildStyledExcelHtml = (sheet: HTMLElement) => {
+  const excelSheet = prepareArchiveSheetForExcel(sheet)
+
+  return `<!doctype html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!--[if gte mso 9]><xml>
+<x:ExcelWorkbook>
+<x:ExcelWorksheets>
+<x:ExcelWorksheet>
+<x:Name>个人绩效考核表</x:Name>
+<x:WorksheetOptions>
+<x:Print>
+<x:ValidPrinterInfo/>
+<x:PaperSizeIndex>9</x:PaperSizeIndex>
+<x:HorizontalResolution>600</x:HorizontalResolution>
+<x:VerticalResolution>600</x:VerticalResolution>
+</x:Print>
+<x:PageSetup>
+<x:Layout x:Orientation="Landscape"/>
+<x:PageMargins x:Bottom="0.25" x:Left="0.2" x:Right="0.2" x:Top="0.25"/>
+</x:PageSetup>
+</x:WorksheetOptions>
+</x:ExcelWorksheet>
+</x:ExcelWorksheets>
+</x:ExcelWorkbook>
+</xml><![endif]-->
+<style>
+${archiveStyles}
+@page {
+  mso-page-orientation: landscape;
+  margin: 0.25in 0.2in 0.25in 0.2in;
+}
+</style>
+</head>
+<body>${excelSheet.outerHTML}</body>
+</html>`
+}
+
+const removePrintRoot = () => {
+  document.getElementById('performance-print-root')?.remove()
+}
+
+const createPrintRoot = (sheet: HTMLElement) => {
+  removePrintRoot()
+  const printRoot = document.createElement('div')
+  printRoot.id = 'performance-print-root'
+  printRoot.setAttribute('aria-hidden', 'true')
+  appendInlineStyle(printRoot, 'display: none')
+
+  const sheetClone = sheet.cloneNode(true) as HTMLElement
+  sheetClone.removeAttribute('id')
+  printRoot.appendChild(sheetClone)
+  document.body.appendChild(printRoot)
+
+  return printRoot
+}
+
 const PerformanceResultView: React.FC = () => {
   const { activityId, participantId } = useParams<{ activityId: string; participantId: string }>()
   const navigate = useNavigate()
@@ -576,6 +1158,7 @@ const PerformanceResultView: React.FC = () => {
   const [bonusPenaltyModalVisible, setBonusPenaltyModalVisible] = useState(false)
   const [bonusPenaltyForm] = Form.useForm()
   const [savingBonusPenalty, setSavingBonusPenalty] = useState(false)
+  const [archiveActiveKeys, setArchiveActiveKeys] = useState<string[]>([])
 
   const loadData = useCallback(async () => {
     if (!participantId) return
@@ -650,10 +1233,13 @@ const PerformanceResultView: React.FC = () => {
 
   const handleConfirm = async (type: 'employee' | 'manager' | 'hr') => {
     if (type === 'manager') {
+      const isRecheck = participant?.status === 'manager_recheck'
       Modal.confirm({
-        title: '主管确认并冻结绩效结果',
-        content: '确认后该员工绩效结果将立即冻结，评分、等级和附加项将无法再修改。',
-        okText: '确认并冻结',
+        title: isRecheck ? '确认已查看员工自评修改' : '主管确认并冻结绩效结果',
+        content: isRecheck
+          ? '确认后该员工绩效结果将重新冻结，并允许HR继续确认。'
+          : '确认后该员工绩效结果将立即冻结，评分、等级和附加项将无法再修改。',
+        okText: isRecheck ? '确认查看' : '确认并冻结',
         cancelText: '取消',
         onOk: () => doConfirm(type)
       })
@@ -663,18 +1249,44 @@ const PerformanceResultView: React.FC = () => {
     await doConfirm(type)
   }
 
-  const handlePrint = () => {
+  const waitForArchiveSheet = async () => {
+    let sheet = document.getElementById('performance-archive-sheet')
+    if (sheet) {
+      return sheet
+    }
+
+    setArchiveActiveKeys(prev => prev.includes('archive') ? prev : [...prev, 'archive'])
+    await waitForBrowserPaint()
+
+    sheet = document.getElementById('performance-archive-sheet')
+    if (sheet) {
+      return sheet
+    }
+
+    await new Promise<void>(resolve => window.setTimeout(resolve, 0))
+    return document.getElementById('performance-archive-sheet')
+  }
+
+  const handlePrint = async () => {
+    const sheet = await waitForArchiveSheet()
+    if (!sheet) {
+      message.error('未找到可导出的绩效考核表')
+      return
+    }
+    createPrintRoot(sheet)
+    await waitForBrowserPaint()
+    window.addEventListener('afterprint', removePrintRoot, { once: true })
     window.print()
   }
 
-  const handleExportExcel = () => {
-    const sheet = document.getElementById('performance-archive-sheet')
+  const handleExportExcel = async () => {
+    const sheet = await waitForArchiveSheet()
     if (!sheet) {
       message.error('未找到可导出的绩效考核表')
       return
     }
 
-    const html = `<!doctype html><html><head><meta charset="UTF-8"><style>${archiveStyles}</style></head><body>${sheet.outerHTML}</body></html>`
+    const html = buildStyledExcelHtml(sheet)
     const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -722,12 +1334,19 @@ const PerformanceResultView: React.FC = () => {
 
   const isLocked = participant?.is_locked
   const status = participant?.status
+  const isNewFlow = isNewPerformanceFlow(activity)
+  const displayRecords = isNewFlow
+    ? records.filter(record => isReviewGoalRecord(activity, record))
+    : records
+  const bonusRecords = records.filter(r => r.section_type === 'bonus_penalty')
 
   let confirmAction: { type: 'employee' | 'manager' | 'hr'; label: string } | null = null
   if (status === 'manager_submitted' && !isLocked) {
     confirmAction = { type: 'employee', label: '员工确认结果' }
   } else if (status === 'employee_confirmed' && !isLocked) {
     confirmAction = { type: 'manager', label: '主管确认并冻结' }
+  } else if (status === 'manager_recheck' && ['manager_confirmation', 'hr_confirmation'].includes(activity?.status || '') && !isLocked) {
+    confirmAction = { type: 'manager', label: '确认已查看' }
   } else if (activity?.status === 'hr_confirmation' && status === 'manager_confirmed') {
     confirmAction = { type: 'hr', label: 'HR确认' }
   }
@@ -752,7 +1371,7 @@ const PerformanceResultView: React.FC = () => {
           <Space direction="vertical" size={20} style={{ width: '100%' }}>
             <PageCard title="评分明细">
               <Table
-                dataSource={records}
+                dataSource={displayRecords}
                 columns={columns}
                 rowKey="id"
                 pagination={false}
@@ -775,13 +1394,13 @@ const PerformanceResultView: React.FC = () => {
               />
             </PageCard>
 
-            {records.filter(r => r.section_type === 'bonus_penalty').length > 0 && (
+            {bonusRecords.length > 0 && (
               <PageCard title="附加考核项">
                 <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
                   附加分仅作为参考或激励依据，不计入总分
                 </Text>
                 <Table
-                  dataSource={records.filter(r => r.section_type === 'bonus_penalty')}
+                  dataSource={bonusRecords}
                   rowKey="id"
                   pagination={false}
                   size="small"
@@ -904,8 +1523,10 @@ const PerformanceResultView: React.FC = () => {
                       : '待员工确认'
                   },
                   {
-                    color: participant?.manager_confirmed_at ? 'green' : 'gray',
-                    children: participant?.manager_confirmed_at
+                    color: participant?.status === 'manager_recheck' ? 'orange' : participant?.manager_confirmed_at ? 'green' : 'gray',
+                    children: participant?.status === 'manager_recheck'
+                      ? '员工已修改自评，待主管复核'
+                      : participant?.manager_confirmed_at
                       ? `主管已确认并冻结 (${participant.manager_confirmed_at?.substring(0, 10)})`
                       : '待主管确认并冻结'
                   },
@@ -944,7 +1565,8 @@ const PerformanceResultView: React.FC = () => {
       <Divider style={{ margin: '40px 0 24px' }} />
 
       <Collapse
-        defaultActiveKey={[]}
+        activeKey={archiveActiveKeys}
+        onChange={(keys) => setArchiveActiveKeys(Array.isArray(keys) ? keys.map(String) : (keys ? [String(keys)] : []))}
         expandIconPosition="start"
         style={{ marginBottom: 24 }}
         items={[
@@ -958,7 +1580,11 @@ const PerformanceResultView: React.FC = () => {
             ),
             children: (
               <div id="performance-archive-sheet" className="performance-archive-sheet">
-                <ArchivePerformanceSheet activity={activity} participant={participant} records={records} />
+                {isNewFlow ? (
+                  <NewFlowPlanArchiveSheet activity={activity} participant={participant} records={records} />
+                ) : (
+                  <ArchivePerformanceSheet activity={activity} participant={participant} records={records} />
+                )}
               </div>
             )
           }

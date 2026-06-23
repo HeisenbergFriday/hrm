@@ -14,6 +14,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import PerformanceOverview from './PerformanceOverview'
+import { useAuthStore } from '../store/authStore'
 
 // ==================== jsdom Polyfills for Antd ====================
 
@@ -68,6 +69,7 @@ vi.mock('../utils/permission', () => ({
 // Mock performanceAPI
 const mockGetActivities = vi.fn()
 const mockGetParticipants = vi.fn()
+const mockGetMyParticipants = vi.fn()
 const mockGetResultSummary = vi.fn()
 const mockGetDistributionCheck = vi.fn()
 const mockGetDistributionRules = vi.fn()
@@ -75,6 +77,7 @@ const mockGetHRConfirmDeadlineStatus = vi.fn()
 const mockGetDepartments = vi.fn()
 const mockGetUsers = vi.fn()
 const mockGetIndicatorLibraries = vi.fn()
+const mockGetTemplates = vi.fn()
 const mockStartActivity = vi.fn()
 const mockOpenSelfEvaluation = vi.fn()
 const mockOpenManagerEvaluation = vi.fn()
@@ -85,7 +88,6 @@ const mockOpenHRConfirmation = vi.fn()
 const mockLockActivity = vi.fn()
 const mockArchiveActivity = vi.fn()
 const mockPublishActivity = vi.fn()
-const mockRefreshParticipants = vi.fn()
 const mockSendSelfEvalReminder = vi.fn()
 const mockSendManagerEvalReminder = vi.fn()
 const mockSendHRConfirmReminder = vi.fn()
@@ -108,11 +110,13 @@ vi.mock('../services/api', () => ({
   performanceAPI: {
     getActivities: (...args: any[]) => mockGetActivities(...args),
     getParticipants: (...args: any[]) => mockGetParticipants(...args),
+    getMyParticipants: (...args: any[]) => mockGetMyParticipants(...args),
     getResultSummary: (...args: any[]) => mockGetResultSummary(...args),
     getDistributionCheck: (...args: any[]) => mockGetDistributionCheck(...args),
     getDistributionRules: (...args: any[]) => mockGetDistributionRules(...args),
     getHRConfirmDeadlineStatus: (...args: any[]) => mockGetHRConfirmDeadlineStatus(...args),
     getIndicatorLibraries: (...args: any[]) => mockGetIndicatorLibraries(...args),
+    getTemplates: (...args: any[]) => mockGetTemplates(...args),
     startActivity: (...args: any[]) => mockStartActivity(...args),
     openSelfEvaluation: (...args: any[]) => mockOpenSelfEvaluation(...args),
     openManagerEvaluation: (...args: any[]) => mockOpenManagerEvaluation(...args),
@@ -123,7 +127,6 @@ vi.mock('../services/api', () => ({
     lockActivity: (...args: any[]) => mockLockActivity(...args),
     archiveActivity: (...args: any[]) => mockArchiveActivity(...args),
     publishActivity: (...args: any[]) => mockPublishActivity(...args),
-    refreshParticipants: (...args: any[]) => mockRefreshParticipants(...args),
     sendSelfEvalReminder: (...args: any[]) => mockSendSelfEvalReminder(...args),
     sendManagerEvalReminder: (...args: any[]) => mockSendManagerEvalReminder(...args),
     sendHRConfirmReminder: (...args: any[]) => mockSendHRConfirmReminder(...args),
@@ -260,9 +263,18 @@ function setupDefaultMocks() {
   mockGetActivities.mockResolvedValue({
     data: { items: MOCK_ACTIVITIES, total: 4 },
   })
+  mockGetMyParticipants.mockResolvedValue({ data: { items_by_activity: {} } })
   mockGetDepartments.mockResolvedValue({ data: { departments: [] } })
   mockGetUsers.mockResolvedValue({ data: { items: [] } })
   mockGetIndicatorLibraries.mockResolvedValue({ data: { items: [] } })
+  mockGetTemplates.mockResolvedValue({
+    data: {
+      items: [
+        { id: 1, name: '旧绩效流程模板', flow_type: 'old', status: 'active' },
+        { id: 2, name: '新绩效流程模板', flow_type: 'new', status: 'active' },
+      ],
+    },
+  })
 }
 
 function renderOverview() {
@@ -274,6 +286,13 @@ function renderOverview() {
 describe('PerformanceOverview 组件交互测试', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useAuthStore.setState({
+      user: null,
+      token: '',
+      isLoggedIn: false,
+      menuKeys: [],
+      permissions: [],
+    })
     setupDefaultMocks()
   })
 
@@ -320,6 +339,28 @@ describe('PerformanceOverview 组件交互测试', () => {
       })
       expect(screen.getByText('2026年月度考核-5月')).toBeInTheDocument()
       expect(screen.getByText('2026年Q1绩效')).toBeInTheDocument()
+    })
+
+    it('活动列表应按创建时选择的绩效模板展示', async () => {
+      mockGetActivities.mockResolvedValue({
+        data: {
+          items: [{
+            ...MOCK_ACTIVITIES[0],
+            id: 19,
+            name: '模板化绩效活动',
+            template_id: 2,
+            flow_type: 'new',
+          }],
+          total: 1,
+        },
+      })
+
+      renderOverview()
+
+      await waitFor(() => {
+        expect(screen.getByText('模板化绩效活动')).toBeInTheDocument()
+      })
+      expect(screen.getByText('沐腾科技流程模版')).toBeInTheDocument()
     })
 
     it('不同状态应显示不同标签文本', async () => {
@@ -471,7 +512,7 @@ describe('PerformanceOverview 组件交互测试', () => {
 
   // ==================== 场景 5: 活动操作按钮 ====================
   describe('活动操作按钮', () => {
-    it('draft 状态活动应显示 "编辑参与人"、"刷新"、"开启目标" 按钮', async () => {
+    it('draft 状态活动应显示 "编辑参与人"、"开启目标" 按钮且不再显示手动刷新', async () => {
       renderOverview()
       await waitFor(() => {
         expect(screen.getByText('2026年月度考核-5月')).toBeInTheDocument()
@@ -479,7 +520,7 @@ describe('PerformanceOverview 组件交互测试', () => {
 
       // draft 活动 id=2
       expect(screen.getByTestId('performance-activity-edit-2')).toBeInTheDocument()
-      expect(screen.getByTestId('performance-activity-refresh-2')).toBeInTheDocument()
+      expect(screen.queryByTestId('performance-activity-refresh-2')).not.toBeInTheDocument()
       expect(screen.getByTestId('performance-activity-open-target-2')).toBeInTheDocument()
     })
 
@@ -492,6 +533,61 @@ describe('PerformanceOverview 组件交互测试', () => {
       // self_evaluation 活动 id=1
       expect(screen.getByTestId('performance-activity-notify-self-1')).toBeInTheDocument()
       expect(screen.getByTestId('performance-activity-open-manager-1')).toBeInTheDocument()
+    })
+
+    it('当前用户是活动参与人时应在列表直接显示自评入口并跳转', async () => {
+      const user = userEvent.setup()
+      useAuthStore.setState({
+        user: { user_id: 'U001', employee_id: 'U001', name: '张三' },
+        token: 'test-token',
+        isLoggedIn: true,
+        menuKeys: [],
+        permissions: [],
+      })
+      mockGetActivities.mockResolvedValue({
+        data: {
+          items: [
+            {
+              ...MOCK_ACTIVITIES[0],
+              my_participant: {
+                id: 101,
+                activity_id: 1,
+                employee_id: 'U001',
+                employee_name: '张三',
+                department_id: 'D001',
+                department_name: '技术部',
+                position: '工程师',
+                level: '',
+                employee_status: 'active',
+                status: 'target_set',
+                self_score: 0,
+                self_level: '',
+                self_summary: '',
+                manager_score: 0,
+                manager_comment: '',
+                suggested_level: '',
+                final_level: '',
+                adjust_reason: '',
+                confirmed_by: '',
+                created_at: '',
+                updated_at: '',
+              },
+            },
+          ],
+          total: 1,
+        },
+      })
+
+      renderOverview()
+
+      await waitFor(() => {
+        expect(screen.getByTestId('performance-activity-my-self-1')).toBeInTheDocument()
+      })
+      expect(mockGetMyParticipants).not.toHaveBeenCalled()
+      expect(mockGetParticipants).not.toHaveBeenCalled()
+
+      await user.click(screen.getByTestId('performance-activity-my-self-1'))
+      expect(mockNavigate).toHaveBeenCalledWith('/performance-self-eval/1/101')
     })
 
     it('locked 状态活动应显示 "归档" 按钮', async () => {
@@ -745,6 +841,54 @@ describe('PerformanceOverview 组件交互测试', () => {
       expect(screen.getAllByText('已确认').length).toBeGreaterThanOrEqual(1)
     })
 
+    it('新流程目标设定阶段应显示上一季度指标补录入口', async () => {
+      const user = userEvent.setup()
+      mockGetActivities.mockResolvedValue({
+        data: {
+          items: [{
+            ...MOCK_ACTIVITIES[0],
+            id: 9,
+            name: '新流程',
+            status: 'target_setting',
+            flow_type: 'new',
+          }],
+          total: 1,
+        },
+      })
+      mockGetParticipants.mockResolvedValue({
+        data: {
+          items: [{
+            id: 201,
+            employee_id: 'E201',
+            employee_name: '列德',
+            department_name: '机器人集合',
+            position: '人事专员',
+            status: 'target_set',
+            manager_config_status: 'CONFIGURED',
+            manager_id: 'M001',
+          }],
+          total: 1,
+        },
+      })
+      mockGetResultSummary.mockResolvedValue({ data: { total_participants: 1, self_submitted_count: 0, manager_submitted_count: 0, result_confirmed_count: 0 } })
+      mockGetDistributionCheck.mockResolvedValue({ data: null })
+      mockGetDistributionRules.mockResolvedValue({ data: { rules: [] } })
+      mockGetHRConfirmDeadlineStatus.mockRejectedValue(new Error('not found'))
+
+      renderOverview()
+
+      await waitFor(() => {
+        expect(screen.getAllByText('新流程').length).toBeGreaterThanOrEqual(1)
+      })
+      await user.click(screen.getByTestId('performance-activity-view-9'))
+
+      const supplementButton = await screen.findByTestId('performance-participant-review-supplement-201')
+      expect(supplementButton).toBeInTheDocument()
+      await user.click(supplementButton)
+
+      expect(mockNavigate).toHaveBeenCalledWith('/performance-goal-setting/9/201?phase=review')
+    })
+
     it('未配置考核上级的参与人应显示 "待配置考核上级" 标签', async () => {
       const user = userEvent.setup()
       renderOverview()
@@ -759,6 +903,50 @@ describe('PerformanceOverview 组件交互测试', () => {
         // "待配置考核上级" 出现在考核上级列和配置状态列，至少 2 次
         expect(screen.getAllByText('待配置考核上级').length).toBeGreaterThanOrEqual(2)
       })
+    })
+
+    it('主管评分阶段未配置考核上级时评分按钮应禁用', async () => {
+      const user = userEvent.setup()
+      mockGetActivities.mockResolvedValue({
+        data: { items: [{ ...MOCK_ACTIVITIES[0], status: 'manager_evaluation' }], total: 1 },
+      })
+      mockGetParticipants.mockResolvedValue({
+        data: {
+          items: [
+            {
+              id: 102,
+              employee_name: '赵四',
+              department_name: '产品部',
+              position: '产品经理',
+              manager_name: '',
+              direct_manager_name_snapshot: '陈总监',
+              manager_source: 'EMPTY',
+              manager_config_status: 'PENDING',
+              status: 'self_submitted',
+              self_score: 80,
+              manager_score: null,
+              final_level: null,
+              manager_id: null,
+              manager_overridden: false,
+            },
+          ],
+          total: 1,
+        },
+      })
+
+      renderOverview()
+
+      await waitFor(() => {
+        expect(screen.getByText('2026年Q2绩效')).toBeInTheDocument()
+      })
+
+      await user.click(screen.getByTestId('performance-activity-view-1'))
+
+      const managerButton = await screen.findByTestId('performance-participant-manager-102')
+      expect(managerButton).toBeDisabled()
+
+      await user.click(managerButton)
+      expect(mockNavigate).not.toHaveBeenCalledWith('/performance-manager-eval/1/102')
     })
 
     it('详情抽屉应显示流程步骤', async () => {
@@ -781,9 +969,9 @@ describe('PerformanceOverview 组件交互测试', () => {
     })
   })
 
-  // ==================== 场景 9: 刷新活动列表 ====================
-  describe('刷新活动列表', () => {
-    it('点击详情抽屉中的刷新按钮应刷新参与人', async () => {
+  // ==================== 场景 9: 详情参与人加载 ====================
+  describe('详情参与人加载', () => {
+    it('打开详情抽屉时应自动加载参与人', async () => {
       const user = userEvent.setup()
       mockGetParticipants.mockResolvedValue({ data: { items: [], total: 0 } })
       mockGetResultSummary.mockResolvedValue({ data: null })

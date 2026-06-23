@@ -29,6 +29,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { departmentAPI, shiftConfigAPI, userAPI, weekScheduleAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import { useAuthStore } from '../store/authStore'
+import { formatDateTime } from '../utils/format'
 
 const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -737,7 +738,7 @@ export default function WeekSchedule() {
       title: '更新时间',
       dataIndex: 'updated_at',
       width: 180,
-      render: (value) => dayjs(value).format('YYYY年M月D日 HH:mm:ss'),
+      render: formatDateTime,
     },
     ...(canManageAttendance ? [{
       title: '操作',
@@ -796,7 +797,7 @@ export default function WeekSchedule() {
       title: '时间',
       dataIndex: 'created_at',
       width: 110,
-      render: (value) => dayjs(value).format('YYYY年M月D日 HH:mm:ss'),
+      render: formatDateTime,
     },
     {
       title: '同步方向',

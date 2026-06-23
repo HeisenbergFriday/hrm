@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql/driver"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,6 +60,79 @@ func TestPerformanceManagerParticipantVerification(t *testing.T) {
 	}
 	if noManagerRecorder.Code != http.StatusForbidden {
 		t.Fatalf("no manager status = %d, want %d", noManagerRecorder.Code, http.StatusForbidden)
+	}
+}
+
+func TestPerformanceParticipantVerificationUsesIdentityAliases(t *testing.T) {
+	originalDB := database.DB
+	database.DB = newAPIPerformanceImportStubDB(t,
+		apiImportTableResponse("users", []string{"id", "user_id", "name", "department_id", "status"}, [][]driver.Value{
+			{int64(1), "user-1", "Alice", "dept-1", "active"},
+			{int64(2), "manager-1", "Manager", "dept-1", "active"},
+		}),
+		apiImportTableResponse("employee_profiles", []string{"id", "user_id", "employee_id"}, [][]driver.Value{
+			{int64(10), "user-1", "E001"},
+			{int64(11), "manager-1", "M001"},
+		}),
+	)
+	t.Cleanup(func() {
+		database.DB = originalDB
+	})
+
+	selfContext, _ := newPerformanceAccessContext("user-1")
+	if !verifySelfParticipant(selfContext, &database.PerformanceParticipant{EmployeeID: "E001"}) {
+		t.Fatalf("employee profile number should match current user")
+	}
+
+	managerID := "manager-1"
+	managerContext, _ := newPerformanceAccessContext("2")
+	if !verifyManagerOfParticipant(managerContext, &database.PerformanceParticipant{EmployeeID: "user-1", ManagerID: &managerID}) {
+		t.Fatalf("numeric auth id should match assigned manager user id")
+	}
+}
+
+func TestIndicatorLibraryAccessRespectsDepartmentScope(t *testing.T) {
+	tests := []struct {
+		name           string
+		libraryDeptID  string
+		wantStatusCode int
+	}{
+		{name: "allowed department", libraryDeptID: "dept-1", wantStatusCode: http.StatusOK},
+		{name: "outside department", libraryDeptID: "dept-2", wantStatusCode: http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			originalDB := database.DB
+			database.DB = newAPIPerformanceImportStubDB(t,
+				apiImportTableResponse("users", []string{"id", "user_id", "name", "department_id", "status"}, [][]driver.Value{
+					{int64(1), "manager-1", "Manager", "dept-1", "active"},
+				}),
+				apiPerformanceIndicatorLibraryRowsResponse([][]driver.Value{
+					{int64(1), tt.libraryDeptID, "Scoped Dept", "Scoped KPI", "", "quarterly", "active", "admin", "admin"},
+				}),
+				apiPerformanceRouterRolesResponse([]string{"performance:indicator:manage"}),
+				apiPerformanceRouterTableResponse("data_permissions", []string{"id", "role_id", "scope", "department_keys"}, [][]driver.Value{
+					{int64(1), int64(1), "department", `["dept-1"]`},
+				}),
+				apiImportTableResponse("departments", []string{"id", "department_id", "name", "parent_id", "extension"}, [][]driver.Value{
+					{int64(1), "dept-1", "Product", "", nil},
+				}),
+			)
+			t.Cleanup(func() {
+				database.DB = originalDB
+			})
+
+			c, recorder := newPerformanceAccessContext("manager-1")
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/performance/indicator-libraries/1", nil)
+			c.Params = gin.Params{{Key: "id", Value: "1"}}
+
+			GetIndicatorLibrary(c)
+
+			if recorder.Code != tt.wantStatusCode {
+				t.Fatalf("status = %d, want %d; body = %s", recorder.Code, tt.wantStatusCode, recorder.Body.String())
+			}
+		})
 	}
 }
 
