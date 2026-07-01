@@ -2,14 +2,14 @@ import React from 'react'
 import { Upload, Button, message } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
 import type { UploadFile, UploadProps } from 'antd'
-import { useAuthStore } from '../store/authStore'
-import { withFileAccessToken } from '../utils/authFileUrl'
+import { openAuthorizedFile } from '../utils/authFileUrl'
+import { csrfHeadersForMethod } from '../utils/csrf'
 
 const maxUploadSize = 10 * 1024 * 1024
 const allowedAttachmentExtensions = [
   '.jpg', '.jpeg', '.png', '.gif', '.webp',
   '.pdf',
-  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.docx', '.xlsx', '.pptx',
   '.wps', '.et', '.dps',
   '.txt', '.csv', '.md',
   '.zip', '.rar', '.7z',
@@ -47,7 +47,7 @@ const AttachmentUpload: React.FC<AttachmentUploadProps> = ({
     uid: `-${index}`,
     name: url.split('/').pop() || `附件${index + 1}`,
     status: 'done',
-    url: withFileAccessToken(url),
+    url,
     response: { data: { url } },
   }))
 
@@ -58,12 +58,10 @@ const AttachmentUpload: React.FC<AttachmentUploadProps> = ({
       const formData = new FormData()
       formData.append('file', file as File)
 
-      const token = useAuthStore.getState().token
       const response = await fetch('/api/v1/upload', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: csrfHeadersForMethod('POST'),
+        credentials: 'include',
         body: formData,
       })
       const result = await response.json().catch(() => ({}))
@@ -89,12 +87,22 @@ const AttachmentUpload: React.FC<AttachmentUploadProps> = ({
   }
 
   const handleRemove = (file: UploadFile) => {
-    const url = file.response?.data?.url || value.find((item) => withFileAccessToken(item) === file.url) || file.url
+    const url = file.response?.data?.url || file.url
     if (url) {
       const newUrls = value.filter((u) => u !== url)
       onChange?.(newUrls)
     }
     return true
+  }
+
+  const handlePreview: UploadProps['onPreview'] = async (file) => {
+    const url = file.response?.data?.url || file.url
+    if (!url) return
+    try {
+      await openAuthorizedFile(url)
+    } catch {
+      message.error('附件预览失败')
+    }
   }
 
   if (disabled && value.length === 0) {
@@ -108,6 +116,7 @@ const AttachmentUpload: React.FC<AttachmentUploadProps> = ({
         accept={attachmentAccept}
         beforeUpload={(file) => validateFile(file) || Upload.LIST_IGNORE}
         customRequest={handleUpload}
+        onPreview={handlePreview}
         onRemove={handleRemove}
         maxCount={maxCount}
         disabled={disabled}

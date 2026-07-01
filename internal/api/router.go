@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path"
@@ -13,27 +14,29 @@ import (
 )
 
 func SetupRouter() *gin.Engine {
-	router := gin.Default()
+	router := gin.New()
+	router.Use(querySafeGinLogger(), gin.Recovery())
 
 	allowOrigins, allowOriginFunc := resolveCORSConfig()
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     allowOrigins,
 		AllowOriginFunc:  allowOriginFunc,
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", middleware.HeaderCSRFToken, middleware.HeaderIdempotencyKey, "X-Request-ID"},
+		ExposeHeaders:    []string{"Content-Length", middleware.HeaderIdempotencyStatus},
 		AllowCredentials: true,
 	}))
 	router.Use(middleware.RequestMetrics())
 
 	router.GET("/health", HealthCheck)
-	router.GET("/api/v1/files/:filename", middleware.JWTAuthWithQuery(), ServeFile)
+	router.GET("/api/v1/files/:filename", middleware.JWTAuth(), ServeFile)
 
 	v1 := router.Group("/api/v1")
 	{
 		auth := v1.Group("/auth")
 		{
-			auth.POST("/logout", Logout)
+			auth.POST("/login", Login)
+			auth.POST("/logout", middleware.JWTAuth(), Logout)
 			auth.GET("/me", middleware.JWTAuth(), GetCurrentUser)
 
 			dingtalk := auth.Group("/dingtalk")
@@ -46,7 +49,7 @@ func SetupRouter() *gin.Engine {
 		}
 
 		authRequired := v1.Group("/")
-		authRequired.Use(middleware.JWTAuth())
+		authRequired.Use(middleware.JWTAuth(), middleware.Idempotency())
 		{
 			orgReadMenus := []string{
 				"menu:organization-dashboard",
@@ -304,6 +307,12 @@ func SetupRouter() *gin.Engine {
 				performance.POST("/activities/:activity_id/archive", middleware.RequirePermission("performance:activity:manage"), ArchivePerformanceActivity)
 
 				performance.POST("/activities/:activity_id/open-target-setting", middleware.RequirePermission("performance:activity:manage"), OpenTargetSettingHandler)
+				performance.POST("/activities/:activity_id/open-target-approval", middleware.RequirePermission("performance:activity:manage"), OpenTargetApprovalHandler)
+				performance.POST("/activities/:activity_id/open-department-evaluation", middleware.RequirePermission("performance:activity:manage"), OpenDepartmentEvaluationHandler)
+				performance.POST("/activities/:activity_id/open-hr-review", middleware.RequirePermission("performance:activity:manage", "performance:department_eval:submit", "performance:hr_review:submit"), OpenHRReviewHandler)
+				performance.POST("/activities/:activity_id/open-result-publish", middleware.RequirePermission("performance:activity:manage", "performance:result_publish:manage"), OpenResultPublishHandler)
+				performance.POST("/activities/:activity_id/open-performance-interview", middleware.RequirePermission("performance:activity:manage", "performance:department_eval:submit"), OpenPerformanceInterviewStageHandler)
+				performance.POST("/activities/:activity_id/open-performance-appeal", middleware.RequirePermission("performance:activity:manage", "performance:appeal:manage"), OpenPerformanceAppealHandler)
 				performance.POST("/activities/:activity_id/open-employee-confirmation", middleware.RequirePermission("performance:activity:manage"), OpenEmployeeConfirmationHandler)
 				performance.POST("/activities/:activity_id/open-manager-confirmation", middleware.RequirePermission("performance:activity:manage"), OpenManagerConfirmationHandler)
 				performance.POST("/activities/:activity_id/open-hr-confirmation", middleware.RequirePermission("performance:activity:manage"), OpenHRConfirmationHandler)
@@ -318,13 +327,15 @@ func SetupRouter() *gin.Engine {
 				performance.GET("/activities/:activity_id/result-summary", GetPerformanceResultSummary)
 				performance.GET("/activities/:activity_id/distribution-check", GetPerformanceDistributionCheck)
 				performance.GET("/activities/:activity_id/realtime-distribution-check", GetRealtimeDistributionCheck)
+				performance.GET("/activities/:activity_id/report", GetPerformanceReport)
+				performance.GET("/activities/:activity_id/report/export", ExportPerformanceReport)
 
 				performance.POST("/activities/:activity_id/refresh-participants", middleware.RequirePermission("performance:activity:manage"), RefreshPerformanceParticipants)
 				performance.POST("/participants/import", middleware.RequirePermission("performance:activity:manage"), ImportPerformanceActivityParticipants)
 				performance.GET("/activities/:activity_id/participants", GetPerformanceParticipants)
 				performance.GET("/activities/:activity_id/assessment-manager-candidates", middleware.RequirePermission("performance:assessment_manager:update"), GetAssessmentManagerCandidates)
-				performance.GET("/participants/my", middleware.RequirePermission("performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:self_eval:submit", "performance:manager_eval:submit", "performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit"), GetMyPerformanceParticipants)
-				performance.GET("/participants/:participant_id", middleware.RequirePermission("performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:self_eval:submit", "performance:manager_eval:submit", "performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit"), GetParticipant)
+				performance.GET("/participants/my", middleware.RequirePermission("performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:self_eval:submit", "performance:manager_eval:submit", "performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit", "performance:hr_review:submit", "performance:result_publish:manage", "performance:appeal:manage", "performance:department_eval:submit"), GetMyPerformanceParticipants)
+				performance.GET("/participants/:participant_id", middleware.RequirePermission("performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:self_eval:submit", "performance:manager_eval:submit", "performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit", "performance:hr_review:submit", "performance:result_publish:manage", "performance:appeal:manage", "performance:department_eval:submit"), GetParticipant)
 				performance.PUT("/participants/:participant_id/assessment-manager", middleware.RequirePermission("performance:assessment_manager:update"), UpdateParticipantAssessmentManager)
 				performance.POST("/activities/:activity_id/assessment-managers/batch", middleware.RequirePermission("performance:assessment_manager:batch_update"), BatchUpdateAssessmentManagers)
 
@@ -338,12 +349,17 @@ func SetupRouter() *gin.Engine {
 				performance.POST("/auto-score", middleware.RequirePermission("performance:activity:manage"), AutoScoreGoalRecordsHandler)
 				performance.POST("/activities/:activity_id/batch-manager-evaluations", middleware.RequirePermission("performance:manager_eval:submit"), BatchSubmitManagerEvaluation)
 
+				performance.POST("/participants/:participant_id/admin-progress", middleware.RequirePermission("performance:activity:manage"), AdminAdjustParticipantProgress)
+				performance.POST("/participants/:participant_id/remove", middleware.RequirePermission("performance:activity:manage"), RemovePerformanceParticipant)
+				performance.POST("/participants/:participant_id/department-evaluation", middleware.RequirePermission("performance:department_eval:submit", "performance:level_adjust:manage", "performance:activity:manage"), DepartmentEvaluateParticipantResult)
+				performance.PUT("/participants/:participant_id/result-visibility", middleware.RequirePermission("performance:result_visibility:manage"), SetParticipantResultVisibility)
+				performance.GET("/participants/:participant_id/previous-result", middleware.RequirePermission("performance:result:view", "performance:activity:manage", "performance:hr_review:submit", "performance:result_publish:manage", "performance:appeal:manage", "performance:department_eval:submit", "performance:level_adjust:manage", "performance:manager_eval:submit", "performance:manager_confirm:submit"), GetPreviousParticipantResult)
 				performance.POST("/participants/:participant_id/adjust-final-level", middleware.RequirePermission("performance:level_adjust:manage"), AdjustFinalLevel)
 				performance.POST("/participants/:participant_id/confirm-result", middleware.RequirePermission("performance:manager_confirm:submit"), ConfirmResult)
 				performance.POST("/participants/:participant_id/confirm-employee", middleware.RequirePermission("performance:employee_confirm:submit"), ConfirmEmployeeResultHandler)
 				performance.POST("/participants/:participant_id/confirm-manager", middleware.RequirePermission("performance:manager_confirm:submit"), ConfirmManagerResultHandler)
-				performance.POST("/participants/:participant_id/confirm-hr", middleware.RequirePermission("performance:hr_confirm:submit"), ConfirmHRResultHandler)
-				performance.POST("/participants/:participant_id/trigger-interview", middleware.RequirePermission("performance:activity:manage"), TriggerPerformanceInterview)
+				performance.POST("/participants/:participant_id/confirm-hr", middleware.RequirePermission("performance:hr_confirm:submit", "performance:hr_review:submit"), ConfirmHRResultHandler)
+				performance.POST("/participants/:participant_id/trigger-interview", middleware.RequirePermission("performance:activity:manage", "performance:department_eval:submit", "performance:level_adjust:manage"), TriggerPerformanceInterview)
 
 				performance.GET("/participants/:participant_id/versions", middleware.RequirePermission("performance:result:view"), GetParticipantVersions)
 				performance.GET("/participants/:participant_id/relationship-change-logs", middleware.RequirePermission("performance:result:view"), GetParticipantRelationshipChangeLogs)
@@ -358,6 +374,14 @@ func SetupRouter() *gin.Engine {
 				performance.GET("/activities/:activity_id/pending-hr-confirm", GetPendingHRConfirmHandler)
 				performance.PUT("/activities/:activity_id/hr-confirm-deadline", middleware.RequirePermission("performance:activity:manage"), SetHRConfirmDeadlineHandler)
 				performance.GET("/activities/:activity_id/hr-confirm-deadline-status", GetHRConfirmDeadlineStatusHandler)
+
+				performance.GET("/interviews", middleware.RequirePermission("performance:result:view", "performance:interview:manage", "performance:activity:manage", "performance:department_eval:submit"), GetPerformanceInterviews)
+				performance.POST("/interviews", middleware.RequirePermission("performance:interview:manage"), CreatePerformanceInterview)
+				performance.PUT("/interviews/:id", middleware.RequirePermission("performance:interview:manage"), UpdatePerformanceInterview)
+				performance.GET("/appeals", middleware.RequirePermission("performance:result:view", "performance:appeal:manage", "performance:activity:manage", "performance:hr_review:submit", "performance:result_publish:manage"), GetPerformanceAppeals)
+				performance.POST("/appeals", middleware.RequirePermission("performance:result:view", "performance:appeal:manage", "performance:activity:manage"), CreatePerformanceAppeal)
+				performance.PUT("/appeals/:id", middleware.RequirePermission("performance:appeal:manage", "performance:activity:manage"), UpdatePerformanceAppeal)
+				performance.POST("/appeals/:id/withdraw", middleware.RequirePermission("performance:result:view", "performance:appeal:manage", "performance:activity:manage"), WithdrawPerformanceAppeal)
 
 				performance.GET("/indicator-libraries", GetIndicatorLibraries)
 				performance.POST("/indicator-libraries", middleware.RequirePermission("performance:indicator:manage"), CreateIndicatorLibrary)
@@ -381,9 +405,9 @@ func SetupRouter() *gin.Engine {
 				performance.GET("/goal-records/:participant_id", GetGoalRecords)
 				performance.POST("/goal-records/:participant_id", middleware.RequirePermission("performance:goal:manage"), BatchSaveGoalRecords)
 				performance.POST("/goal-records/:participant_id/review-supplement", middleware.RequirePermission("performance:goal:manage"), BatchSaveReviewGoalRecords)
-				performance.POST("/goal-records/:participant_id/submit", middleware.RequirePermission("performance:goal:manage"), SubmitGoalApprovalHandler)
-				performance.POST("/goal-records/:participant_id/approve", middleware.RequirePermission("performance:goal:manage"), ApproveGoalRecords)
-				performance.POST("/goal-records/:participant_id/reject", middleware.RequirePermission("performance:goal:manage"), RejectGoalRecords)
+				performance.POST("/goal-records/:participant_id/submit", middleware.RequirePermission("performance:goal:manage", "performance:activity:manage", "performance:hr_review:submit", "performance:hr_confirm:submit"), SubmitGoalApprovalHandler)
+				performance.POST("/goal-records/:participant_id/approve", middleware.RequirePermission("performance:goal:manage", "performance:activity:manage", "performance:hr_review:submit", "performance:hr_confirm:submit"), ApproveGoalRecords)
+				performance.POST("/goal-records/:participant_id/reject", middleware.RequirePermission("performance:goal:manage", "performance:activity:manage", "performance:hr_review:submit", "performance:hr_confirm:submit"), RejectGoalRecords)
 				performance.GET("/goal-records/:participant_id/manager-goals", middleware.RequirePermission("performance:goal:manage"), GetManagerGoals)
 				performance.GET("/goal-records/:participant_id/suggestions", middleware.RequirePermission("performance:goal:manage"), GetGoalSuggestions)
 				performance.POST("/activities/:activity_id/batch-assign-goals", middleware.RequirePermission("performance:goal:manage"), BatchAssignGoals)
@@ -418,7 +442,29 @@ func resolveCORSConfig() ([]string, func(string) bool) {
 	}
 
 	// 开发环境：允许 localhost 常见端口 + 任意 origin（局域网访问等）
-	return []string{"http://localhost:5173", "http://localhost:3000"}, func(origin string) bool { return true }
+	return []string{
+		"http://localhost:5173",
+		"http://localhost:3000",
+		"http://127.0.0.1:5173",
+		"http://127.0.0.1:3000",
+	}, nil
+}
+
+func querySafeGinLogger() gin.HandlerFunc {
+	return gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+		requestPath := param.Path
+		if param.Request != nil && param.Request.URL != nil {
+			requestPath = param.Request.URL.EscapedPath()
+		}
+		return fmt.Sprintf("[GIN] %v | %3d | %13v | %15s | %-7s %s\n",
+			param.TimeStamp.Format("2006/01/02 - 15:04:05"),
+			param.StatusCode,
+			param.Latency,
+			param.ClientIP,
+			param.Method,
+			requestPath,
+		)
+	})
 }
 
 func registerFrontendRoutes(router *gin.Engine) {

@@ -16,6 +16,7 @@ vendor/
 .env
 .env.local
 .env.*.local
+deploy/peopleops.env
 
 # Logs
 logs
@@ -26,6 +27,7 @@ logs
 .gocache/
 frontend/dist/
 *.msi
+uploads/
 
 # Test reports
 frontend/playwright-report/

@@ -1,21 +1,35 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"peopleops/internal/database"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"gorm.io/gorm"
 )
 
 const minJWTSecretLength = 32
 
+const (
+	AuthCookieName        = "peopleops_auth"
+	CSRFCookieName        = "peopleops_csrf"
+	HeaderCSRFToken       = "X-CSRF-Token"
+	defaultSessionVersion = "cookie-v1"
+)
+
 type Claims struct {
-	UserID   string `json:"user_id"`
-	UserDBID string `json:"user_db_id,omitempty"`
-	UserName string `json:"user_name"`
+	UserID         string `json:"user_id"`
+	UserDBID       string `json:"user_db_id,omitempty"`
+	UserName       string `json:"user_name"`
+	SessionID      string `json:"session_id,omitempty"`
+	SessionVersion string `json:"session_version,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -32,20 +46,25 @@ func ValidateJWTSecret() error {
 	return err
 }
 
+func SessionVersion() string {
+	version := strings.TrimSpace(os.Getenv("AUTH_SESSION_VERSION"))
+	if version == "" {
+		return defaultSessionVersion
+	}
+	return version
+}
+
 func JWTAuth() gin.HandlerFunc {
-	return jwtAuth(false)
+	return jwtAuth()
 }
 
 func JWTAuthWithQuery() gin.HandlerFunc {
-	return jwtAuth(true)
+	return jwtAuth()
 }
 
-func jwtAuth(allowQueryToken bool) gin.HandlerFunc {
+func jwtAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tokenString := bearerToken(c.GetHeader("Authorization"))
-		if tokenString == "" && allowQueryToken {
-			tokenString = strings.TrimSpace(c.Query("access_token"))
-		}
+		tokenString, fromCookie := requestToken(c)
 		if tokenString == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing auth token"})
 			c.Abort()
@@ -65,12 +84,73 @@ func jwtAuth(allowQueryToken bool) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if strings.TrimSpace(claims.SessionID) == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
+			c.Abort()
+			return
+		}
+		if strings.TrimSpace(claims.SessionVersion) != SessionVersion() {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
+			c.Abort()
+			return
+		}
+		if fromCookie && requiresCSRFCheck(c.Request.Method) && !validCSRFToken(c) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "invalid csrf token"})
+			c.Abort()
+			return
+		}
 
-		c.Set("userID", claims.UserID)
-		c.Set("userDBID", claims.UserDBID)
-		c.Set("userName", claims.UserName)
+		user, err := activeUserForClaims(c, claims)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "inactive or invalid user"})
+			c.Abort()
+			return
+		}
+		if err := validateActiveSession(c, user.UserID, claims.SessionID); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
+			c.Abort()
+			return
+		}
+
+		c.Set("userID", user.UserID)
+		c.Set("userDBID", fmt.Sprintf("%d", user.ID))
+		c.Set("userName", user.Name)
+		c.Set("sessionID", claims.SessionID)
 		c.Next()
 	}
+}
+
+func requestToken(c *gin.Context) (string, bool) {
+	if token := bearerToken(c.GetHeader("Authorization")); token != "" {
+		return token, false
+	}
+	token, err := c.Cookie(AuthCookieName)
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(token), true
+}
+
+func requiresCSRFCheck(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return false
+	default:
+		return true
+	}
+}
+
+func validCSRFToken(c *gin.Context) bool {
+	headerToken := strings.TrimSpace(c.GetHeader(HeaderCSRFToken))
+	cookieToken, err := c.Cookie(CSRFCookieName)
+	cookieToken = strings.TrimSpace(cookieToken)
+	if err != nil || headerToken == "" || cookieToken == "" {
+		return false
+	}
+	if len(headerToken) != len(cookieToken) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(headerToken), []byte(cookieToken)) == 1
 }
 
 func bearerToken(authHeader string) string {
@@ -79,4 +159,55 @@ func bearerToken(authHeader string) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[1])
+}
+
+func activeUserForClaims(c *gin.Context, claims *Claims) (*database.User, error) {
+	if claims == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+
+	db := RequestDB(c)
+	userID := strings.TrimSpace(claims.UserID)
+	userDBID := strings.TrimSpace(claims.UserDBID)
+
+	if userID != "" {
+		var user database.User
+		err := db.Where("user_id = ? AND status = ? AND deleted_at IS NULL", userID, "active").First(&user).Error
+		if err == nil {
+			return &user, nil
+		}
+		if !errorsIsRecordNotFound(err) {
+			return nil, err
+		}
+	}
+
+	if userDBID != "" {
+		var user database.User
+		err := db.Where("id = ? AND status = ? AND deleted_at IS NULL", userDBID, "active").First(&user).Error
+		if err == nil {
+			return &user, nil
+		}
+		if !errorsIsRecordNotFound(err) {
+			return nil, err
+		}
+	}
+
+	return nil, gorm.ErrRecordNotFound
+}
+
+func validateActiveSession(c *gin.Context, userID, sessionID string) error {
+	userID = strings.TrimSpace(userID)
+	sessionID = strings.TrimSpace(sessionID)
+	if userID == "" || sessionID == "" {
+		return gorm.ErrRecordNotFound
+	}
+
+	var session database.UserSession
+	return RequestDB(c).
+		Where("user_id = ? AND session_id = ? AND revoked_at IS NULL AND expires_at > ?", userID, sessionID, time.Now()).
+		First(&session).Error
+}
+
+func errorsIsRecordNotFound(err error) bool {
+	return err == nil || err == gorm.ErrRecordNotFound
 }

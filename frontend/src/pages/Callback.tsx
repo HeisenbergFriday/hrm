@@ -46,11 +46,12 @@ const Callback: React.FC = () => {
       try {
         const response = await axios.get('/api/v1/auth/dingtalk/callback', {
           params: { code, state },
+          withCredentials: true,
         })
 
         if (response.data.code === 200) {
-          const { token, user } = response.data.data
-          login(user, token)
+          const { user } = response.data.data
+          login(user)
           message.success('登录成功', 0.6)
           navigate(consumeAuthRedirect() || '/', { replace: true })
           return

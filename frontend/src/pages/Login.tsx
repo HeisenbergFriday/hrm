@@ -49,13 +49,11 @@ const Login: React.FC = () => {
     setLoading(true)
     rememberAuthRedirect(redirectTarget)
     try {
-      const response = await axios.get('/api/v1/auth/dingtalk/qr/start')
+      const response = await axios.get('/api/v1/auth/dingtalk/qr/start', { withCredentials: true })
       const nextRedirectUri = response.data.data.redirect_uri || ''
       const loginUrl = response.data.data.qr_code_url
 
       setRedirectUri(nextRedirectUri)
-      console.info('[DingTalk QR] redirect_uri =', nextRedirectUri)
-      console.info('[DingTalk QR] qr_code_url =', loginUrl)
 
       if (!loginUrl) {
         message.error('未获取到钉钉登录地址')
@@ -80,7 +78,7 @@ const Login: React.FC = () => {
     setInAppStatus('正在获取钉钉配置...')
 
     try {
-      const configRes = await axios.get('/api/v1/auth/dingtalk/config')
+      const configRes = await axios.get('/api/v1/auth/dingtalk/config', { withCredentials: true })
       const { corp_id: corpId, missing } = configRes.data.data
       const dd = (window as any).dd
 
@@ -109,9 +107,9 @@ const Login: React.FC = () => {
             setInAppStatus('已拿到授权码，正在请求后端登录...')
             const response = await axios.post('/api/v1/auth/dingtalk/in-app', {
               code: result.code,
-            })
-            const { token, user } = response.data.data
-            login(user, token)
+            }, { withCredentials: true })
+            const { user } = response.data.data
+            login(user)
             message.success('登录成功', 0.6)
             window.location.replace(redirectTarget || '/')
           } catch (err) {
@@ -147,12 +145,12 @@ const Login: React.FC = () => {
 
   if (autoLogging) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#f0f2f5' }}>
-        <Card style={{ width: 460, textAlign: 'center' }}>
+      <div className="login-page">
+        <Card className="login-loading-card">
           <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
-          <p style={{ marginTop: 16 }}>正在通过钉钉自动登录，请稍候...</p>
+          <p>正在通过钉钉自动登录，请稍候...</p>
           {inAppStatus ? (
-            <Paragraph style={{ marginTop: 12, marginBottom: 0 }}>
+            <Paragraph className="login-status">
               <Text type="secondary">{inAppStatus}</Text>
             </Paragraph>
           ) : null}
@@ -164,9 +162,9 @@ const Login: React.FC = () => {
   const inDingTalk = isDingTalkEnv()
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#f0f2f5' }}>
-      <Card title={<Title level={4} style={{ margin: 0 }}>钉钉一体化人事后台</Title>} style={{ width: 440 }}>
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <div className="login-page">
+      <Card title={<Title level={4} className="login-title">钉钉一体化人事后台</Title>} className="login-card">
+        <Space direction="vertical" size="middle" className="login-space">
           <Alert
             type="info"
             showIcon
@@ -178,9 +176,9 @@ const Login: React.FC = () => {
             }
           />
 
-          <Paragraph style={{ marginBottom: 0 }}>
+          <Paragraph className="login-helper">
             {inDingTalk && !forceScanMode
-              ? '钉钉微应用首页应配置为应用根地址，例如 http://your-host:8080/ 。'
+              ? '钉钉微应用首页应配置为应用根地址，手机端打开后会自动发起免登。'
               : '电脑扫码登录的回调地址需要配置到钉钉开放平台，并与当前访问地址一致。'}
           </Paragraph>
 
@@ -195,7 +193,7 @@ const Login: React.FC = () => {
           )}
 
           {redirectUri ? (
-            <Paragraph copyable style={{ marginBottom: 0 }}>
+            <Paragraph copyable className="login-helper">
               当前回调地址: {redirectUri}
             </Paragraph>
           ) : null}

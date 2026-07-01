@@ -2,16 +2,18 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Typography, Form, Input, InputNumber, Button, Space,
-  message, Spin, Row, Col, Table, Select, Progress, Tag, Modal, Badge, Image, Alert
+  message, Spin, Row, Col, Table, Select, Progress, Modal, Badge, Image, Alert, Tooltip
 } from 'antd'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
+import AuthorizedFileFrame from '../components/AuthorizedFileFrame'
+import AuthorizedImage from '../components/AuthorizedImage'
 import { ArrowLeftOutlined, CheckCircleOutlined, PaperClipOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { performanceAPI, PerformanceActivity, PerformanceGoalRecord, PerformanceParticipant, TeamQuotaStatus } from '../services/api'
-import { withFileAccessToken } from '../utils/authFileUrl'
+import { downloadAuthorizedFile } from '../utils/authFileUrl'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { TextArea } = Input
 
 function isReviewGoalRecord(activity: PerformanceActivity | null, record: PerformanceGoalRecord) {
@@ -117,6 +119,7 @@ const PerformanceManagerEval: React.FC = () => {
   const scoreMax = isNewFlow ? 10 : 120
   const scoreStep = isNewFlow ? 0.1 : 1
   const isManagerRecheck = participant?.status === 'manager_recheck'
+  const selectedLevel = Form.useWatch('suggested_level', form) as string | undefined
 
   const loadData = useCallback(async () => {
     if (!participantId || !activityId) return
@@ -244,6 +247,8 @@ const PerformanceManagerEval: React.FC = () => {
     return level || ''
   }
 
+  const currentParticipantQuotaKey = () => levelQuotaKey(participant?.final_level || participant?.suggested_level)
+
   const getQuotaForLevel = (level: string) => {
     const team = currentTeamQuota()
     if (!team) return null
@@ -251,11 +256,26 @@ const PerformanceManagerEval: React.FC = () => {
     const quota = team.levels[key]
     if (!quota) return null
 
-    const currentLevelKey = levelQuotaKey(participant?.final_level || participant?.suggested_level)
+    const currentLevelKey = currentParticipantQuotaKey()
     return {
       ...quota,
       current: currentLevelKey === key ? Math.max(0, quota.current - 1) : quota.current
     }
+  }
+
+  const previewQuotaForLevel = (level: string) => {
+    const team = currentTeamQuota()
+    if (!team) return null
+    const key = levelQuotaKey(level)
+    const quota = team.levels[key]
+    if (!quota) return null
+
+    const currentLevelKey = currentParticipantQuotaKey()
+    const selectedLevelKey = levelQuotaKey(selectedLevel)
+    let current = quota.current
+    if (currentLevelKey === key) current = Math.max(0, current - 1)
+    if (selectedLevelKey === key) current += 1
+    return { ...quota, current }
   }
 
   const prevLevelRef = React.useRef<string | undefined>(undefined)
@@ -272,7 +292,7 @@ const PerformanceManagerEval: React.FC = () => {
   }
 
   React.useEffect(() => {
-    const level = form.getFieldValue('suggested_level')
+    const level = selectedLevel
     if (level && prevLevelRef.current !== undefined && prevLevelRef.current !== level) {
       const quota = getQuotaForLevel(level)
       if (quota && quota.current >= quota.max) {
@@ -283,7 +303,7 @@ const PerformanceManagerEval: React.FC = () => {
       }
     }
     prevLevelRef.current = level
-  }, [totalManagerScore])
+  }, [selectedLevel, totalManagerScore])
 
   const handleSubmit = async () => {
     try {
@@ -355,12 +375,11 @@ const PerformanceManagerEval: React.FC = () => {
       return <Text type="secondary">暂无附件</Text>
     }
     const fileName = attachmentName(currentUrl, previewAttachments.currentIndex)
-    const src = withFileAccessToken(currentUrl)
     if (isImageAttachment(currentUrl)) {
       return (
-        <Image
+        <AuthorizedImage
           data-testid="performance-manager-attachment-preview-image"
-          src={src}
+          src={currentUrl}
           alt={fileName}
           wrapperStyle={{ width: '100%', display: 'flex', justifyContent: 'center' }}
           style={{ maxWidth: '100%', maxHeight: 560, objectFit: 'contain' }}
@@ -369,10 +388,10 @@ const PerformanceManagerEval: React.FC = () => {
     }
     if (isFramePreviewAttachment(currentUrl)) {
       return (
-        <iframe
+        <AuthorizedFileFrame
           data-testid="performance-manager-attachment-preview-frame"
           title={fileName}
-          src={src}
+          src={currentUrl}
           style={{
             width: '100%',
             height: 560,
@@ -404,7 +423,11 @@ const PerformanceManagerEval: React.FC = () => {
           {fileName}
         </Text>
         <Text type="secondary">该文件类型暂不支持在线预览，请下载后查看。</Text>
-        <Button href={src} target="_blank" rel="noopener noreferrer">
+        <Button
+          onClick={() => {
+            void downloadAuthorizedFile(currentUrl, fileName).catch(() => message.error('附件下载失败'))
+          }}
+        >
           下载附件
         </Button>
       </div>
@@ -415,22 +438,26 @@ const PerformanceManagerEval: React.FC = () => {
     const team = currentTeamQuota()
     if (!team) return null
     return (
-      <PageCard title="配额进度" size="small" style={{ marginBottom: 16 }}>
-        <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+      <PageCard
+        title="配额进度"
+        size="small"
+        styles={{ body: { padding: 12 } }}
+      >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>
           考核上级团队：{team.manager_name || '未分组'}（共 {team.total} 人）
         </Text>
         {['S', 'A', 'B', 'CD'].map(level => {
-          const q = team.levels[level]
+          const q = previewQuotaForLevel(level)
           if (!q) return null
           const percent = q.max > 0 ? Math.round((q.current / q.max) * 100) : 0
           const isFull = q.current >= q.max
           return (
-            <div key={level} style={{ marginBottom: 8 }}>
+            <div key={level} data-testid={`performance-quota-${level}`} style={{ marginBottom: 6 }}>
               <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                 <StatusTag color={isFull ? 'red' : 'blue'}>{level}</StatusTag>
                 <Text>{q.current} / {q.max}（{q.percent}%）</Text>
               </Space>
-              <Progress percent={percent} size="small" status={isFull ? 'exception' : 'active'}
+              <Progress percent={percent} size="small" showInfo={false} status={isFull ? 'exception' : 'active'}
                 strokeColor={isFull ? '#ff4d4f' : undefined} />
             </div>
           )
@@ -439,12 +466,55 @@ const PerformanceManagerEval: React.FC = () => {
     )
   }
 
+  const renderClampedText = (value?: string, lines = 2) => {
+    const text = String(value || '').trim()
+    if (!text) return <Text type="secondary">-</Text>
+    return (
+      <Tooltip title={text}>
+        <Text
+          style={{
+            display: '-webkit-box',
+            WebkitLineClamp: lines,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+            whiteSpace: 'normal',
+            fontSize: 'var(--font-size-xs)',
+            lineHeight: '20px',
+          }}
+        >
+          {text}
+        </Text>
+      </Tooltip>
+    )
+  }
+
+  const renderRuleText = (label: string, value: string | undefined, color?: string) => {
+    if (!value) return null
+    return (
+      <Tooltip title={`${label}: ${value}`}>
+        <Text
+          style={{
+            display: 'block',
+            color,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontSize: 'var(--font-size-xs)',
+            lineHeight: '20px',
+          }}
+        >
+          {label}: {value}
+        </Text>
+      </Tooltip>
+    )
+  }
+
   const columns = [
     {
       title: '指标名称',
       dataIndex: 'item_name',
       key: 'item_name',
-      width: 150,
+      width: 220,
       render: (val: string, _: any, idx: number) => {
         const items = form.getFieldValue('items') || []
         const item = items[idx]
@@ -452,12 +522,25 @@ const PerformanceManagerEval: React.FC = () => {
         return (
           <>
             <Form.Item name={['items', idx, 'record_id']} hidden><Input /></Form.Item>
-            <div>
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
               <StatusTag color={isQuant ? 'blue' : 'green'} style={{ marginBottom: 4 }}>
                 {isQuant ? '量化指标' : '关键行动'}
               </StatusTag>
-              <Text strong>{val}</Text>
-            </div>
+              <Tooltip title={val}>
+                <Text
+                  strong
+                  style={{
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                    whiteSpace: 'normal',
+                  }}
+                >
+                  {val}
+                </Text>
+              </Tooltip>
+            </Space>
           </>
         )
       }
@@ -465,30 +548,22 @@ const PerformanceManagerEval: React.FC = () => {
     {
       title: '目标/评分规则',
       key: 'target_rule',
-      width: 180,
+      width: 260,
       render: (_: any, __: any, idx: number) => {
         const items = form.getFieldValue('items') || []
         const item = items[idx]
         if (item?.section_type === 'quantitative') {
           return (
-            <div style={{ fontSize: 'var(--font-size-xs)' }}>
-              {item.red_line_value && <div style={{ color: 'var(--color-error)' }}>红线: {item.red_line_value}</div>}
-              {item.target_value && <div style={{ color: 'var(--color-info)' }}>目标: {item.target_value}</div>}
-              {item.challenge_value && <div style={{ color: 'var(--color-success)' }}>挑战: {item.challenge_value}</div>}
-              {item.scoring_rule && <div style={{ color: 'var(--color-text-tertiary)' }}>考核: {item.scoring_rule}</div>}
-              {!item.red_line_value && !item.target_value && !item.challenge_value && <Text type="secondary">-</Text>}
+            <div>
+              {renderRuleText('红线', item.red_line_value, 'var(--color-error)')}
+              {renderRuleText('目标', item.target_value, 'var(--color-info)')}
+              {renderRuleText('挑战', item.challenge_value, 'var(--color-success)')}
+              {item.scoring_rule && renderClampedText(`考核：${item.scoring_rule}`, 2)}
+              {!item.red_line_value && !item.target_value && !item.challenge_value && !item.scoring_rule && <Text type="secondary">-</Text>}
             </div>
           )
         }
-        return (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {(item?.target_value || item?.scoring_rule)
-              ? ((item.target_value || item.scoring_rule).length > 50
-                ? (item.target_value || item.scoring_rule).substring(0, 50) + '...'
-                : (item.target_value || item.scoring_rule))
-              : '-'}
-          </Text>
-        )
+        return renderClampedText(item?.target_value || item?.scoring_rule, 2)
       }
     },
     {
@@ -501,13 +576,13 @@ const PerformanceManagerEval: React.FC = () => {
       title: '实际达成',
       dataIndex: 'actual_result',
       key: 'actual_result',
-      width: 150,
-      render: (val: string) => <Text style={{ fontSize: 'var(--font-size-xs)' }}>{val || '-'}</Text>
+      width: 220,
+      render: (val: string) => renderClampedText(val, 2)
     },
     {
       title: '附件',
       key: 'attachments',
-      width: 100,
+      width: 86,
       render: (_: any, __: any, idx: number) => {
         const items = form.getFieldValue('items') || []
         const item = items[idx]
@@ -531,7 +606,7 @@ const PerformanceManagerEval: React.FC = () => {
       title: '自评得分',
       dataIndex: 'self_score',
       key: 'self_score',
-      width: 80,
+      width: 88,
       render: (val: number) => <Text>{val}</Text>
     },
     {
@@ -558,33 +633,77 @@ const PerformanceManagerEval: React.FC = () => {
 
   const currentPreviewUrl = previewAttachments.attachments[previewAttachments.currentIndex] || ''
   const currentPreviewName = attachmentName(currentPreviewUrl, previewAttachments.currentIndex)
+  const quotaPanel = renderQuotaPanel()
 
   return (
-    <PageContainer data-testid="performance-manager-eval-page" title="上级绩效评分">
-      <Row gutter={24}>
-        <Col span={18}>
-          <Space style={{ marginBottom: 16 }}>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
-            <Title level={4} style={{ margin: 0 }}>上级绩效评分</Title>
-          </Space>
+    <PageContainer
+      data-testid="performance-manager-eval-page"
+      title="上级绩效评分"
+      extra={<Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>}
+    >
+      {isManagerRecheck && (
+        <Alert
+          data-testid="performance-manager-recheck-notice"
+          type="warning"
+          showIcon
+          message="员工已修改自评，待领导复核"
+          description="可直接确认查看，也可以调整上级评价后提交复核意见。"
+          action={
+            <Button size="small" type="primary" loading={saving} onClick={handleConfirmRecheck}>
+              确认查看
+            </Button>
+          }
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
-          {isManagerRecheck && (
-            <Alert
-              data-testid="performance-manager-recheck-notice"
-              type="warning"
-              showIcon
-              message="员工已修改自评，待领导复核"
-              description="可直接确认查看，也可以调整上级评价后提交复核意见。"
-              action={
-                <Button size="small" type="primary" loading={saving} onClick={handleConfirmRecheck}>
-                  确认查看
-                </Button>
-              }
-              style={{ marginBottom: 16 }}
-            />
+      <Form form={form} onValuesChange={handleValuesChange} layout="vertical">
+        <Row gutter={[16, 16]} align="stretch" style={{ marginBottom: 16 }}>
+          <Col xs={24} lg={quotaPanel ? 14 : 24} xl={quotaPanel ? 16 : 24}>
+            <PageCard title="评分概览" size="small" styles={{ body: { padding: 16 } }}>
+              <Row gutter={[16, 12]} align="middle">
+                <Col xs={24} sm={8} md={6}>
+                  <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>上级评分总分：</Text>
+                  <Text strong style={{ fontSize: 28, lineHeight: '34px', color: 'var(--color-info)' }}>
+                    {totalManagerScore}
+                  </Text>
+                </Col>
+                <Col xs={24} sm={16} md={10}>
+                  <Form.Item
+                    name="suggested_level"
+                    label="绩效等级"
+                    rules={[{ required: true, message: '请填写等级' }]}
+                    style={{ marginBottom: 4 }}
+                  >
+                    <Select placeholder="根据上级评分总分自动生成">
+                      {LEVEL_OPTIONS.map(l => (
+                        <Select.Option key={l.value} value={l.value}>
+                          <StatusTag color={l.color}>{l.label}</StatusTag>
+                        </Select.Option>
+                      ))}
+                    </Select>
+                  </Form.Item>
+                  <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
+                    {levelManuallySetRef.current ? '已手动调整等级' : '根据上级评分总分自动生成，可手动调整'}
+                  </Text>
+                </Col>
+                <Col xs={24} md={8}>
+                  <Text type="secondary" style={{ display: 'block', lineHeight: '22px' }}>
+                    {isNewFlow
+                      ? '沐腾科技流程模版采用 0-10 分制，最终分按上级评分 × 权重求和。'
+                      : '小铁文娱流程模版沿用历史评分规则。'}
+                  </Text>
+                </Col>
+              </Row>
+            </PageCard>
+          </Col>
+          {quotaPanel && (
+            <Col xs={24} lg={10} xl={8}>
+              {quotaPanel}
+            </Col>
           )}
+        </Row>
 
-          <Form form={form} onValuesChange={handleValuesChange} layout="vertical">
             <PageCard title="指标评分" extra={
               !['locked', 'hr_confirmed', 'manager_confirmed'].includes(participant?.status || '') ? (
                 <Button
@@ -598,9 +717,6 @@ const PerformanceManagerEval: React.FC = () => {
                 </Button>
               ) : null
             }>
-              <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-                {isNewFlow ? '新流程采用 0-10 分制，允许小数；自评分仅作参考，最终分按上级评分 × 权重求和。' : '旧流程沿用历史评分规则。'}
-              </Text>
               <Table
                 dataSource={form.getFieldValue('items') || []}
                 columns={columns}
@@ -608,6 +724,8 @@ const PerformanceManagerEval: React.FC = () => {
                 pagination={false}
                 size="small"
                 bordered
+                tableLayout="fixed"
+                scroll={{ x: 1064 }}
               />
             </PageCard>
 
@@ -682,9 +800,9 @@ const PerformanceManagerEval: React.FC = () => {
                           <Image.PreviewGroup>
                             <Space wrap size={4}>
                               {attachments.map((url: string, idx: number) => (
-                                <Image
+                                <AuthorizedImage
                                   key={idx}
-                                  src={withFileAccessToken(url)}
+                                  src={url}
                                   width={48}
                                   height={48}
                                   style={{ objectFit: 'cover', borderRadius: 4 }}
@@ -700,31 +818,6 @@ const PerformanceManagerEval: React.FC = () => {
                 />
               </PageCard>
             )}
-
-            <PageCard title="总分与等级" style={{ marginTop: 16 }}>
-              <Row gutter={24}>
-                <Col span={6}>
-                  <Text>上级评分总分：</Text>
-                  <Text strong style={{ fontSize: 24, color: 'var(--color-info)' }}>{totalManagerScore}</Text>
-                </Col>
-                <Col span={8}>
-                  <Form.Item name="suggested_level" label="绩效等级" rules={[{ required: true, message: '请填写等级' }]}>
-                    <Select placeholder="根据上级评分总分自动生成">
-                      {LEVEL_OPTIONS.map(l => (
-                        <Select.Option key={l.value} value={l.value}>
-                          <StatusTag color={l.color}>{l.label}</StatusTag>
-                        </Select.Option>
-                      ))}
-                    </Select>
-                  </Form.Item>
-                  <Text type="secondary">
-                    {levelManuallySetRef.current
-                      ? '已手动调整等级'
-                      : '根据上级评分总分自动生成，可手动调整'}
-                  </Text>
-                </Col>
-              </Row>
-            </PageCard>
 
             <PageCard title="上级总体评价" style={{ marginTop: 16 }}>
               <Row gutter={16}>
@@ -746,13 +839,7 @@ const PerformanceManagerEval: React.FC = () => {
                 {isManagerRecheck ? '提交复核意见' : '提交评分'}
               </Button>
             </div>
-          </Form>
-        </Col>
-
-        <Col span={6}>
-          {renderQuotaPanel()}
-        </Col>
-      </Row>
+      </Form>
 
       <Modal
         title="附件预览"
@@ -799,9 +886,9 @@ const PerformanceManagerEval: React.FC = () => {
               {currentPreviewUrl && (
                 <Button
                   size="small"
-                  href={withFileAccessToken(currentPreviewUrl)}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  onClick={() => {
+                    void downloadAuthorizedFile(currentPreviewUrl, currentPreviewName).catch(() => message.error('附件下载失败'))
+                  }}
                   style={{ flex: 'none' }}
                 >
                   下载

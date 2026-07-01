@@ -126,7 +126,7 @@ func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 
 func loadCurrentUser(db *gorm.DB, rawUserID string) (*database.User, string, error) {
 	var user database.User
-	err := db.Where("user_id = ? AND deleted_at IS NULL", rawUserID).First(&user).Error
+	err := db.Where("user_id = ? AND status = ? AND deleted_at IS NULL", rawUserID, "active").First(&user).Error
 	if err == nil {
 		return &user, user.UserID, nil
 	}
@@ -134,7 +134,7 @@ func loadCurrentUser(db *gorm.DB, rawUserID string) (*database.User, string, err
 		return nil, rawUserID, err
 	}
 	if looksNumericID(rawUserID) {
-		err = db.Where("id = ? AND deleted_at IS NULL", rawUserID).First(&user).Error
+		err = db.Where("id = ? AND status = ? AND deleted_at IS NULL", rawUserID, "active").First(&user).Error
 		if err == nil {
 			return &user, user.UserID, nil
 		}

@@ -1,27 +1,110 @@
-import axios from 'axios'
+import axios, { AxiosHeaders } from 'axios'
 import { useAuthStore } from '../store/authStore'
 import { authRedirectTargetFromLocation, loginPathWithRedirect, rememberAuthRedirect } from '../utils/authRedirect'
+import { csrfHeadersForMethod } from '../utils/csrf'
 
 const api = axios.create({
   baseURL: '/api/v1',
   timeout: 10000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 })
 
+const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key'
+const IDEMPOTENCY_KEY_TTL_MS = 30 * 1000
+const IDEMPOTENCY_METHODS = new Set(['post', 'put', 'patch', 'delete'])
+const idempotencyKeys = new Map<string, { key: string; expiresAt: number }>()
+
+function attachIdempotencyKey(config: any) {
+  const method = String(config.method || 'get').toLowerCase()
+  if (!IDEMPOTENCY_METHODS.has(method) || !isIdempotencyDataSupported(config.data)) {
+    return
+  }
+
+  config.headers = config.headers || {}
+  const headers = config.headers as Record<string, string>
+  if (headers[IDEMPOTENCY_KEY_HEADER]) {
+    return
+  }
+
+  const fingerprint = [
+    method,
+    config.url || '',
+    stableSerialize(config.params),
+    stableSerialize(config.data),
+  ].join('|')
+  headers[IDEMPOTENCY_KEY_HEADER] = getIdempotencyKey(fingerprint)
+}
+
+function getIdempotencyKey(fingerprint: string) {
+  const now = Date.now()
+  for (const [key, value] of idempotencyKeys) {
+    if (value.expiresAt <= now) {
+      idempotencyKeys.delete(key)
+    }
+  }
+
+  const existing = idempotencyKeys.get(fingerprint)
+  if (existing) {
+    return existing.key
+  }
+
+  const key = `web-${now}-${randomID()}`
+  idempotencyKeys.set(fingerprint, { key, expiresAt: now + IDEMPOTENCY_KEY_TTL_MS })
+  return key
+}
+
+function randomID() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return Math.random().toString(36).slice(2)
+}
+
+function isIdempotencyDataSupported(data: unknown) {
+  if (data == null) return true
+  if (typeof FormData !== 'undefined' && data instanceof FormData) return false
+  if (typeof Blob !== 'undefined' && data instanceof Blob) return false
+  if (typeof ArrayBuffer !== 'undefined' && data instanceof ArrayBuffer) return false
+  return true
+}
+
+function stableSerialize(value: unknown): string {
+  if (value === undefined) return ''
+  if (value === null) return 'null'
+  if (value instanceof Date) return value.toISOString()
+  if (typeof URLSearchParams !== 'undefined' && value instanceof URLSearchParams) {
+    return value.toString()
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item)).join(',')}]`
+  }
+  if (typeof value === 'object') {
+    const objectValue = value as Record<string, unknown>
+    return `{${Object.keys(objectValue)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSerialize(objectValue[key])}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
 api.interceptors.request.use(
   (config) => {
-    const token = useAuthStore.getState().token
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
+    const headers = AxiosHeaders.from(config.headers)
+    for (const [key, value] of Object.entries(csrfHeadersForMethod(config.method))) {
+      headers.set(key, value)
     }
+    config.headers = headers
+    attachIdempotencyKey(config)
     return config
   },
   (error) => Promise.reject(error),
 )
 
-// 刷新菜单权限（通过 api 实例自动带 token，并用锁避免重复刷新）
+// 刷新菜单权限（通过 api 实例自动带认证 Cookie，并用锁避免重复刷新）
 let isRefreshingMenuKeys = false
 export function refreshMenuKeys() {
   if (isRefreshingMenuKeys) return
@@ -305,7 +388,7 @@ export const overtimeAPI = {
 // ============= 绩效模块 API =============
 // 注意：后端已提供模板 CRUD；以下接口直接对接后端绩效模板与指标库能力
 
-export type PerformanceActivityStatus = 'draft' | 'target_setting' | 'self_evaluation' | 'manager_evaluation' | 'employee_confirmation' | 'manager_confirmation' | 'hr_confirmation' | 'locked' | 'result_confirmed' | 'archived'
+export type PerformanceActivityStatus = 'draft' | 'target_setting' | 'target_approval' | 'self_evaluation' | 'manager_evaluation' | 'department_evaluation' | 'hr_review' | 'result_publish' | 'interview' | 'appeal' | 'employee_confirmation' | 'manager_confirmation' | 'hr_confirmation' | 'locked' | 'result_confirmed' | 'archived'
 
 // 绩效活动
 export interface PerformanceActivity {
@@ -317,16 +400,17 @@ export interface PerformanceActivity {
   indicator_library_id?: number
   template_id?: number
   flow_type?: 'old' | 'new' | string
+  activity_kind?: 'goal_setting' | 'review_scoring' | string
   organization_id?: string
   applicable_org_scope?: string[]
   target_set_start_at?: string
   target_set_end_at?: string
-  self_eval_start_at: string
-  self_eval_end_at: string
-  manager_eval_start_at: string
-  manager_eval_end_at: string
-  result_confirm_start_at: string
-  result_confirm_end_at: string
+  self_eval_start_at?: string
+  self_eval_end_at?: string
+  manager_eval_start_at?: string
+  manager_eval_end_at?: string
+  result_confirm_start_at?: string
+  result_confirm_end_at?: string
   employee_confirm_start_at?: string
   employee_confirm_end_at?: string
   manager_confirm_start_at?: string
@@ -424,6 +508,22 @@ export interface PerformanceParticipant {
   bonus_score?: number
   penalty_score?: number
   adjusted_score?: number
+  // 部门/中心评估调整
+  department_adjusted?: boolean
+  department_final_score?: number | null
+  department_final_level?: string
+  department_adjust_reason?: string
+  department_adjusted_at?: string
+  department_adjusted_by?: string
+  // 结果公布屏蔽
+  result_hidden?: boolean
+  result_hidden_reason?: string
+  result_hidden_at?: string
+  result_hidden_by?: string
+  // 管理员移除
+  removed_reason?: string
+  removed_at?: string
+  removed_by?: string
   // 收支系数
   revenue_coefficient?: number
   // 三级确认
@@ -453,6 +553,78 @@ export interface PerformanceParticipant {
   updated_by?: string
 }
 
+export type PerformanceInterviewStatus = 'pending' | 'scheduled' | 'completed' | 'cancelled'
+export type PerformanceInterviewType = 'required' | 'optional'
+
+export interface PerformanceInterviewRecord {
+  id: number
+  activity_id: string
+  activity_name: string
+  participant_id: number
+  employee_id: string
+  employee_name: string
+  department_id: string
+  department_name: string
+  position: string
+  final_level: string
+  interview_type: PerformanceInterviewType
+  status: PerformanceInterviewStatus
+  interviewer_id?: string
+  interviewer_name?: string
+  scheduled_at?: string
+  completed_at?: string
+  location?: string
+  summary?: string
+  result?: string
+  cancel_reason?: string
+  created_at: string
+  updated_at: string
+  created_by?: string
+  updated_by?: string
+}
+
+export type PerformanceAppealStatus = 'submitted' | 'processing' | 'resolved' | 'rejected' | 'withdrawn'
+
+export interface PerformanceAppealRecord {
+  id: number
+  activity_id: string
+  activity_name: string
+  participant_id: number
+  employee_id: string
+  employee_name: string
+  department_id: string
+  department_name: string
+  position: string
+  final_level: string
+  status: PerformanceAppealStatus
+  appeal_reason: string
+  desired_result?: string
+  handler_id?: string
+  handler_name?: string
+  handle_comment?: string
+  handled_at?: string
+  withdraw_reason?: string
+  created_at: string
+  updated_at: string
+  created_by?: string
+  updated_by?: string
+}
+
+export interface PerformanceFollowupSummary {
+  total: number
+  status_map: Record<string, number>
+  pending: number
+  processing: number
+  completed: number
+  closed: number
+}
+
+export interface PerformanceFollowupListResponse<T> {
+  items: T[]
+  total: number
+  summary: PerformanceFollowupSummary
+}
+
 // 绩效活动列表响应
 export interface PerformanceActivityListResponse {
   items: PerformanceActivity[]
@@ -477,10 +649,153 @@ export interface PerformanceDistributionRule {
 // 绩效统计摘要
 export interface PerformanceResultSummary {
   total_participants: number
+  target_set_count?: number
   self_submitted_count: number
   manager_submitted_count: number
+  employee_confirmed_count?: number
+  manager_confirmed_count?: number
+  hr_confirmed_count?: number
+  locked_count?: number
   result_confirmed_count: number
   level_distribution: Record<string, number>
+}
+
+export interface PerformanceReportFilters {
+  company_id?: string
+  department_id?: string
+  status?: string
+  level?: string
+  employee_keyword?: string
+}
+
+export interface PerformanceChartItem {
+  name: string
+  value: number
+  rate: number
+}
+
+export interface PerformanceProgressReportRow {
+  participant_id: number
+  employee_id: string
+  employee_name: string
+  department_id: string
+  department_name: string
+  position: string
+  manager_id: string
+  manager_name: string
+  status: string
+  target_submitted: boolean
+  self_submitted: boolean
+  manager_submitted: boolean
+  department_reviewed: boolean
+  hr_confirmed: boolean
+  locked: boolean
+  progress_rate: number
+  result_hidden: boolean
+}
+
+export interface PerformanceProgressReport {
+  summary: {
+    total_participants: number
+    target_submitted_count: number
+    self_submitted_count: number
+    manager_submitted_count: number
+    department_reviewed_count: number
+    hr_confirmed_count: number
+    locked_count: number
+    completion_rate: number
+  }
+  rows: PerformanceProgressReportRow[]
+  status_distribution: PerformanceChartItem[]
+}
+
+export interface PerformanceContentReportRow {
+  id: number
+  participant_id: number
+  employee_id: string
+  employee_name: string
+  department_id: string
+  department_name: string
+  position: string
+  manager_name: string
+  goal_phase: string
+  goal_phase_label: string
+  section_type: string
+  goal_type: string
+  item_name: string
+  item_definition: string
+  weight: number
+  target_value: string
+  challenge_value: string
+  metric_unit: string
+  completion_rate: number
+  actual_result: string
+  self_score: number
+  manager_score: number
+  bonus_score: number
+  attachments_count: number
+  approval_status: string
+}
+
+export interface PerformanceContentReport {
+  summary: {
+    review_item_count: number
+    plan_item_count: number
+    participants_with_review: number
+    participants_with_plan: number
+    average_completion_rate: number
+  }
+  rows: PerformanceContentReportRow[]
+  phases: PerformanceChartItem[]
+}
+
+export interface PerformanceResultReportRow {
+  participant_id: number
+  employee_id: string
+  employee_name: string
+  department_id: string
+  department_name: string
+  position: string
+  manager_name: string
+  status: string
+  self_score: number
+  manager_score: number
+  total_self_score: number
+  total_manager_score: number
+  bonus_score: number
+  penalty_score: number
+  adjusted_score: number
+  suggested_level: string
+  final_level: string
+  effective_final_level: string
+  adjust_reason: string
+  department_final_score?: number | null
+  department_final_level: string
+  department_adjust_reason: string
+  hr_confirmed: boolean
+  locked: boolean
+  result_hidden: boolean
+  result_visible: boolean
+}
+
+export interface PerformanceResultReport {
+  summary: {
+    total_participants: number
+    locked_count: number
+    hidden_count: number
+    average_score: number
+  }
+  rows: PerformanceResultReportRow[]
+  level_distribution: PerformanceChartItem[]
+  department_distribution: PerformanceChartItem[]
+}
+
+export interface PerformanceReport {
+  activity: PerformanceActivity
+  is_new_flow: boolean
+  progress: PerformanceProgressReport
+  content: PerformanceContentReport
+  result: PerformanceResultReport
 }
 
 // 强制分布检查结果
@@ -605,6 +920,9 @@ export interface RefreshParticipantsResult {
   added_count: number
   updated_count: number
   inactive_count: number
+  missing_previous_plan_employee_ids?: string[]
+  missing_previous_plan_employee_names?: string[]
+  warnings?: string[]
 }
 
 export interface PerformanceParticipantImportResult {
@@ -684,7 +1002,7 @@ export interface PerformanceReviewVersion {
   id: number
   participant_id: number
   activity_id: string
-  review_type: 'self' | 'manager' | 'adjust' | 'confirm'
+  review_type: string
   created_by: string
   self_score: number
   self_level: string
@@ -698,8 +1016,16 @@ export interface PerformanceReviewVersion {
   adjust_reason: string
   confirm_comment: string
   confirmed_at: string
+  operation_meta?: Record<string, unknown>
   created_at: string
   updated_at: string
+}
+
+export interface PreviousPerformanceResult {
+  activity?: PerformanceActivity | null
+  participant?: PerformanceParticipant | null
+  goal_records?: PerformanceGoalRecord[]
+  versions?: PerformanceReviewVersion[]
 }
 
 // 创建绩效活动请求
@@ -710,16 +1036,17 @@ export interface CreatePerformanceActivityRequest {
   end_date: string
   template_id?: number
   flow_type?: 'old' | 'new' | string
+  activity_kind?: 'goal_setting' | 'review_scoring' | string
   organization_id?: string
   applicable_org_scope?: string[]
   target_set_start_at?: string
   target_set_end_at?: string
-  self_eval_start_at: string
-  self_eval_end_at: string
-  manager_eval_start_at: string
-  manager_eval_end_at: string
-  result_confirm_start_at: string
-  result_confirm_end_at: string
+  self_eval_start_at?: string
+  self_eval_end_at?: string
+  manager_eval_start_at?: string
+  manager_eval_end_at?: string
+  result_confirm_start_at?: string
+  result_confirm_end_at?: string
   employee_confirm_start_at?: string
   employee_confirm_end_at?: string
   manager_confirm_start_at?: string
@@ -813,6 +1140,49 @@ export interface PerformanceHRDeadlineStatus {
   can_force_lock?: boolean
 }
 
+export interface PerformanceReminderRecipient {
+  user_id: string
+  name?: string
+}
+
+export type PerformanceReminderRecipientDetail = string | PerformanceReminderRecipient
+
+export interface PerformanceSelfEvalReminderResult {
+  pending: number
+  candidates: number
+  sent: number
+  skipped: number
+  already_sent?: number
+  failed: number
+  sent_recipients?: PerformanceReminderRecipientDetail[]
+  skipped_recipients?: PerformanceReminderRecipientDetail[]
+  already_sent_recipients?: PerformanceReminderRecipientDetail[]
+  failed_recipients?: PerformanceReminderRecipientDetail[]
+  missing_id_participant_ids?: number[]
+}
+
+export interface PerformanceHRConfirmReminderResult {
+  pending: number
+  candidates: number
+  sent: number
+  skipped: number
+  failed: number
+  sent_recipients?: PerformanceReminderRecipientDetail[]
+  skipped_recipients?: PerformanceReminderRecipientDetail[]
+  failed_recipients?: PerformanceReminderRecipientDetail[]
+}
+
+export interface PerformanceManagerEvalReminderResult {
+  pending: number
+  candidates: number
+  sent: number
+  skipped: number
+  failed: number
+  sent_recipients?: PerformanceReminderRecipientDetail[]
+  skipped_recipients?: PerformanceReminderRecipientDetail[]
+  failed_recipients?: PerformanceReminderRecipientDetail[]
+}
+
 export interface PerformanceHRForceLockResult {
   force_locked_count: number
   locked_count: number
@@ -881,16 +1251,17 @@ export const performanceAPI = {
     end_date: string
     template_id?: number
     flow_type?: 'old' | 'new' | string
+    activity_kind?: 'goal_setting' | 'review_scoring' | string
     organization_id?: string
     applicable_org_scope?: string[]
     target_set_start_at?: string
     target_set_end_at?: string
-    self_eval_start_at: string
-    self_eval_end_at: string
-    manager_eval_start_at: string
-    manager_eval_end_at: string
-    result_confirm_start_at: string
-    result_confirm_end_at: string
+    self_eval_start_at?: string
+    self_eval_end_at?: string
+    manager_eval_start_at?: string
+    manager_eval_end_at?: string
+    result_confirm_start_at?: string
+    result_confirm_end_at?: string
     employee_confirm_start_at?: string
     employee_confirm_end_at?: string
     manager_confirm_start_at?: string
@@ -926,16 +1297,17 @@ export const performanceAPI = {
     end_date: string
     template_id?: number
     flow_type?: 'old' | 'new' | string
+    activity_kind?: 'goal_setting' | 'review_scoring' | string
     organization_id?: string
     applicable_org_scope?: string[]
     target_set_start_at?: string
     target_set_end_at?: string
-    self_eval_start_at: string
-    self_eval_end_at: string
-    manager_eval_start_at: string
-    manager_eval_end_at: string
-    result_confirm_start_at: string
-    result_confirm_end_at: string
+    self_eval_start_at?: string
+    self_eval_end_at?: string
+    manager_eval_start_at?: string
+    manager_eval_end_at?: string
+    result_confirm_start_at?: string
+    result_confirm_end_at?: string
     employee_confirm_start_at?: string
     employee_confirm_end_at?: string
     manager_confirm_start_at?: string
@@ -980,6 +1352,24 @@ export const performanceAPI = {
   // 新增状态流转（9状态流）
   openTargetSetting: (activityId: number) =>
     api.post(`/performance/activities/${activityId}/open-target-setting`),
+
+  openTargetApproval: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-target-approval`),
+
+  openDepartmentEvaluation: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-department-evaluation`),
+
+  openHRReview: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-hr-review`),
+
+  openResultPublish: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-result-publish`),
+
+  openPerformanceInterviewStage: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-performance-interview`),
+
+  openPerformanceAppeal: (activityId: number) =>
+    api.post(`/performance/activities/${activityId}/open-performance-appeal`),
 
   openEmployeeConfirmation: (activityId: number) =>
     api.post(`/performance/activities/${activityId}/open-employee-confirmation`),
@@ -1109,8 +1499,81 @@ export const performanceAPI = {
     api.get(`/performance/activities/${activityId}/hr-confirm-deadline-status`),
 
   // ===== 绩效面谈 =====
+  getPerformanceInterviews: (params?: {
+    page?: number
+    page_size?: number
+    activity_id?: number | string
+    status?: PerformanceInterviewStatus | string
+    employee_keyword?: string
+  }) => api.get('/performance/interviews', { params }),
+
+  createPerformanceInterview: (data: {
+    participant_id: number
+    interview_type?: PerformanceInterviewType
+    status?: PerformanceInterviewStatus
+    interviewer_id?: string
+    interviewer_name?: string
+    scheduled_at?: string
+    location?: string
+    summary?: string
+    result?: string
+    cancel_reason?: string
+  }) => api.post('/performance/interviews', data),
+
+  updatePerformanceInterview: (id: number, data: {
+    interview_type?: PerformanceInterviewType
+    status?: PerformanceInterviewStatus
+    interviewer_id?: string
+    interviewer_name?: string
+    scheduled_at?: string
+    location?: string
+    summary?: string
+    result?: string
+    cancel_reason?: string
+  }) => api.put(`/performance/interviews/${id}`, data),
+
   triggerPerformanceInterview: (participantId: number, interviewType: 'required' | 'optional') =>
     api.post(`/performance/participants/${participantId}/trigger-interview`, { interview_type: interviewType }),
+
+  getPerformanceAppeals: (params?: {
+    page?: number
+    page_size?: number
+    activity_id?: number | string
+    status?: PerformanceAppealStatus | string
+    employee_keyword?: string
+  }) => api.get('/performance/appeals', { params }),
+
+  createPerformanceAppeal: (data: {
+    participant_id: number
+    appeal_reason: string
+    desired_result?: string
+  }) => api.post('/performance/appeals', data),
+
+  updatePerformanceAppeal: (id: number, data: {
+    status: Exclude<PerformanceAppealStatus, 'submitted' | 'withdrawn'>
+    handler_id?: string
+    handler_name?: string
+    handle_comment?: string
+  }) => api.put(`/performance/appeals/${id}`, data),
+
+  withdrawPerformanceAppeal: (id: number, reason?: string) =>
+    api.post(`/performance/appeals/${id}/withdraw`, { reason }),
+
+  // ===== 沐腾流程管理员/部门操作 =====
+  adminAdjustParticipantProgress: (participantId: number, status: PerformanceParticipantStatus, reason: string) =>
+    api.post(`/performance/participants/${participantId}/admin-progress`, { status, reason }),
+
+  removePerformanceParticipant: (participantId: number, reason: string) =>
+    api.post(`/performance/participants/${participantId}/remove`, { reason }),
+
+  departmentEvaluateParticipantResult: (participantId: number, data: {
+    final_level: string
+    final_score?: number
+    reason: string
+  }) => api.post(`/performance/participants/${participantId}/department-evaluation`, data),
+
+  setParticipantResultVisibility: (participantId: number, hidden: boolean, reason: string) =>
+    api.put(`/performance/participants/${participantId}/result-visibility`, { hidden, reason }),
 
   // ===== 调整最终等级 =====
   adjustFinalLevel: (participantId: number, finalLevel: string, reason: string) =>
@@ -1123,6 +1586,9 @@ export const performanceAPI = {
   // ===== 版本记录 =====
   getParticipantVersions: (participantId: number) =>
     api.get(`/performance/participants/${participantId}/versions`),
+
+  getPreviousParticipantResult: (participantId: number) =>
+    api.get(`/performance/participants/${participantId}/previous-result`),
 
   // ===== 目标记录 =====
   getGoalRecords: (participantId: number) =>
@@ -1191,6 +1657,10 @@ export const performanceAPI = {
   // ===== 统计和强制分布 =====
   getResultSummary: (activityId: number) =>
     api.get(`/performance/activities/${activityId}/result-summary`),
+  getReport: (activityId: number, params?: PerformanceReportFilters) =>
+    api.get(`/performance/activities/${activityId}/report`, { params }),
+  exportReport: (activityId: number, params?: PerformanceReportFilters & { report_type?: 'all' | 'progress' | 'content' | 'result' }) =>
+    api.get(`/performance/activities/${activityId}/report/export`, { params, responseType: 'blob', timeout: 60000 }),
 
   getDistributionCheck: (activityId: number) =>
     api.get(`/performance/activities/${activityId}/distribution-check`),
@@ -1229,6 +1699,7 @@ export const performanceAPI = {
       section_type: string
       name: string
       description?: string
+      indicator_type?: string
       weight?: number
       red_line_value?: string
       target_value?: string
@@ -1291,6 +1762,7 @@ export const performanceAPI = {
   updateIndicatorItem: (itemId: number, data: {
     name?: string
     description?: string
+    indicator_type?: string
     weight?: number
     red_line_value?: string
     target_value?: string

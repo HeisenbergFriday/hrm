@@ -1,5 +1,5 @@
 import { useEffect, useState, lazy, Suspense } from 'react'
-import { Layout, Menu, ConfigProvider, Spin, message, Button } from 'antd'
+import { Layout, Menu, ConfigProvider, Spin, message, Button, Drawer, Grid } from 'antd'
 import type { MenuProps } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
@@ -11,10 +11,12 @@ import {
 } from '@ant-design/icons'
 import axios from 'axios'
 import { menuConfig, logoutMenuItem, filterMenuByKeys, menuPermissionKey } from './config/menu'
-import { refreshMenuKeys } from './services/api'
+import { authAPI, refreshMenuKeys } from './services/api'
 import RouteGuard from './components/RouteGuard'
 import ErrorBoundary from './components/ErrorBoundary'
+import MobileTableEnhancer from './components/MobileTableEnhancer'
 import { authRedirectTargetFromLocation, loginPathWithRedirect, rememberAuthRedirect } from './utils/authRedirect'
+import { resolveMobileLayout, useMobileRuntime } from './utils/responsive'
 
 const Login = lazy(() => import('./pages/Login'))
 const Callback = lazy(() => import('./pages/Callback'))
@@ -44,6 +46,9 @@ const SyncJobs = lazy(() => import('./pages/SyncJobs'))
 const AuditLogs = lazy(() => import('./pages/AuditLogs'))
 const PerformanceOverview = lazy(() => import('./pages/PerformanceOverview'))
 const PerformanceIndicatorLibrary = lazy(() => import('./pages/PerformanceIndicatorLibrary'))
+const PerformanceReports = lazy(() => import('./pages/PerformanceReports'))
+const PerformanceInterviews = lazy(() => import('./pages/PerformanceInterviews'))
+const PerformanceAppeals = lazy(() => import('./pages/PerformanceAppeals'))
 const PerformanceResultView = lazy(() => import('./pages/PerformanceResultView'))
 const PerformanceSelfEval = lazy(() => import('./pages/PerformanceSelfEval'))
 const PerformanceManagerEval = lazy(() => import('./pages/PerformanceManagerEval'))
@@ -101,6 +106,9 @@ const routeMenuKeys: Record<string, string> = {
   '/talent-analysis': menuPermissionKey('talent-analysis'),
   '/leave-overtime': menuPermissionKey('leave-overtime'),
   '/performance-overview': menuPermissionKey('performance-overview'),
+  '/performance-reports': menuPermissionKey('performance-reports'),
+  '/performance-interviews': menuPermissionKey('performance-interviews'),
+  '/performance-appeals': menuPermissionKey('performance-appeals'),
   '/performance-indicator-library': menuPermissionKey('performance-indicator-library'),
   '/permission': menuPermissionKey('permission'),
   '/setting': menuPermissionKey('setting'),
@@ -114,6 +122,29 @@ function selectedMenuKeyForPath(pathname: string) {
   if (pathname.startsWith('/performance-manager-eval/')) return menuPermissionKey('performance-manager-eval')
   if (pathname.startsWith('/performance-goal-setting/')) return menuPermissionKey('performance-goal-setting')
   return routeMenuKeys[pathname] || ''
+}
+
+function defaultOpenKeysForPath(pathname: string) {
+  if (pathname.startsWith('/performance')) return [menuPermissionKey('performance-group')]
+  if (pathname.startsWith('/attendance') || pathname.startsWith('/week-schedule') || pathname.startsWith('/employee-shift-config')) {
+    return [menuPermissionKey('attendance-group')]
+  }
+  if (pathname.startsWith('/approval')) return [menuPermissionKey('approval-group')]
+  if (pathname.startsWith('/sync-jobs')) return [menuPermissionKey('jobs-group')]
+  if (pathname.startsWith('/audit')) return [menuPermissionKey('audit-group')]
+  return [menuPermissionKey('organization-group')]
+}
+
+function findMenuTitle(items: ReturnType<typeof filterMenuByKeys>, key: string): string {
+  for (const item of items) {
+    if (item.key === key) return item.title
+    if (item.children) {
+      const childTitle = findMenuTitle(item.children, key)
+      if (childTitle) return childTitle
+    }
+  }
+
+  return ''
 }
 
 function buildSiderMenuItems(
@@ -194,14 +225,19 @@ function AuthRoutes() {
 function App() {
   const [collapsed, setCollapsed] = useState(false)
   const [autoLogging, setAutoLogging] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [sessionChecking, setSessionChecking] = useState(true)
+  const screens = Grid.useBreakpoint()
+  const mobileRuntime = useMobileRuntime()
   const location = useLocation()
   const navigate = useNavigate()
   const { isLoggedIn, user, login, logout, menuKeys } = useAuthStore()
   const selectedMenuKey = selectedMenuKeyForPath(location.pathname)
+  const isMobile = resolveMobileLayout(screens.md, mobileRuntime)
 
   const handleLogout = async () => {
     try {
-      await axios.post('/api/v1/auth/logout')
+      await authAPI.logout()
     } catch (err) {
       console.warn('[logout] request failed', err)
     } finally {
@@ -211,6 +247,51 @@ function App() {
   }
   const filteredMenuItems = filterMenuByKeys(menuConfig, menuKeys)
   const siderMenuItems = buildSiderMenuItems(filteredMenuItems, handleLogout)
+  const defaultOpenKeys = defaultOpenKeysForPath(location.pathname)
+  const currentTitle = findMenuTitle(filteredMenuItems, selectedMenuKey) || '人事管理系统'
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (authPaths.includes(location.pathname)) {
+      setSessionChecking(false)
+      return () => {
+        cancelled = true
+      }
+    }
+
+    if (isLoggedIn) {
+      setSessionChecking(false)
+      return () => {
+        cancelled = true
+      }
+    }
+
+    setSessionChecking(true)
+    authAPI.getCurrentUser()
+      .then((response: any) => {
+        const currentUser = response?.data?.user
+        if (!cancelled && currentUser) {
+          login(currentUser)
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setSessionChecking(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [isLoggedIn, location.pathname, login])
+
+  useEffect(() => {
+    setMobileMenuOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    if (!isMobile) setMobileMenuOpen(false)
+  }, [isMobile])
 
   // 刷新菜单权限（启动时 + 页面获焦时）
   useEffect(() => {
@@ -226,7 +307,7 @@ function App() {
   }, [isLoggedIn])
 
   useEffect(() => {
-    if (!isDingTalkEnv() || isLoggedIn || authPaths.includes(location.pathname)) {
+    if (sessionChecking || !isDingTalkEnv() || isLoggedIn || authPaths.includes(location.pathname)) {
       return
     }
 
@@ -239,7 +320,7 @@ function App() {
 
     const doAutoLogin = async () => {
       try {
-        const configRes = await axios.get('/api/v1/auth/dingtalk/config')
+        const configRes = await axios.get('/api/v1/auth/dingtalk/config', { withCredentials: true })
         const { corp_id: corpId, missing } = configRes.data.data
         const dd = (window as any).dd
 
@@ -263,9 +344,9 @@ function App() {
             try {
               const response = await axios.post('/api/v1/auth/dingtalk/in-app', {
                 code: result.code,
-              })
-              const { token, user } = response.data.data
-              login(user, token)
+              }, { withCredentials: true })
+              const { user } = response.data.data
+              login(user)
               message.success('登录成功', 0.6)
               setAutoLogging(false)
             } catch (err) {
@@ -292,7 +373,7 @@ function App() {
 
     const timer = setTimeout(doAutoLogin, 300)
     return () => clearTimeout(timer)
-  }, [isLoggedIn, location, login, navigate])
+  }, [isLoggedIn, location, login, navigate, sessionChecking])
 
   if (authPaths.includes(location.pathname)) {
     return (
@@ -302,13 +383,21 @@ function App() {
     )
   }
 
+  if (sessionChecking) {
+    return (
+      <ConfigProvider locale={zhCN}>
+        <PageLoading />
+      </ConfigProvider>
+    )
+  }
+
   if (!isLoggedIn) {
     if (autoLogging) {
       return (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f0f2f5' }}>
-          <div style={{ textAlign: 'center' }}>
+        <div className="app-auth-loading">
+          <div className="app-auth-loading-card">
             <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
-            <p style={{ marginTop: 16 }}>正在通过钉钉自动登录，请稍候...</p>
+            <p>正在通过钉钉自动登录，请稍候...</p>
           </div>
         </div>
       )
@@ -327,53 +416,78 @@ function App() {
 
   return (
     <ConfigProvider locale={zhCN}>
-      <Layout>
-        <Sider
-          className={collapsed ? 'app-sider app-sider-collapsed' : 'app-sider'}
-          collapsible
-          collapsed={collapsed}
-          collapsedWidth={80}
-          onCollapse={setCollapsed}
-          trigger={null}
-          style={{ position: 'fixed', height: '100vh', overflow: 'hidden', zIndex: 100, left: 0, top: 0, transition: 'all 0.3s ease' }}
+      <MobileTableEnhancer />
+      <Layout className={isMobile ? 'app-layout app-layout-mobile' : 'app-layout'}>
+        {!isMobile ? (
+          <Sider
+            className={collapsed ? 'app-sider app-sider-collapsed' : 'app-sider'}
+            collapsible
+            collapsed={collapsed}
+            collapsedWidth={80}
+            onCollapse={setCollapsed}
+            trigger={null}
+          >
+            <div className="logo">人事管理系统</div>
+            <div className="app-sider-menu-scroll">
+              <Menu
+                theme="dark"
+                mode="inline"
+                selectedKeys={[selectedMenuKey]}
+                defaultOpenKeys={defaultOpenKeys}
+                items={siderMenuItems}
+              />
+            </div>
+            <button
+              type="button"
+              className="app-sider-trigger"
+              aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+              onClick={() => setCollapsed(!collapsed)}
+            >
+              {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            </button>
+          </Sider>
+        ) : null}
+        <Drawer
+          className="app-mobile-drawer"
+          title="人事管理系统"
+          placement="left"
+          open={mobileMenuOpen}
+          onClose={() => setMobileMenuOpen(false)}
+          width={288}
         >
-          <div
-            className="logo"
-            style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 16, fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden' }}
-          >
-            人事管理系统
-          </div>
-          <div className="app-sider-menu-scroll">
-            <Menu
-              theme="dark"
-              mode="inline"
-              selectedKeys={[selectedMenuKey]}
-              defaultOpenKeys={location.pathname.startsWith('/performance') ? [menuPermissionKey('performance-group')] : [menuPermissionKey('organization-group')]}
-              items={siderMenuItems}
-            />
-          </div>
-          <div
-            className="app-sider-trigger"
-            onClick={() => setCollapsed(!collapsed)}
-            onMouseEnter={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.background = 'rgba(0,0,0,0.3)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; e.currentTarget.style.background = 'rgba(0,0,0,0.15)' }}
-          >
-            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-          </div>
-        </Sider>
-        <Layout style={{ marginLeft: collapsed ? 80 : 200, transition: 'margin-left 0.3s ease' }}>
-          <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 24px', gap: 16 }}>
-            <span style={{ color: '#fff' }}>{user?.name || '管理员'}</span>
+          <Menu
+            mode="inline"
+            selectedKeys={[selectedMenuKey]}
+            defaultOpenKeys={defaultOpenKeys}
+            items={siderMenuItems}
+            onClick={() => setMobileMenuOpen(false)}
+          />
+        </Drawer>
+        <Layout
+          className="app-main-layout"
+          style={{ marginLeft: isMobile ? 0 : collapsed ? 80 : 200 }}
+        >
+          <Header className="app-header">
             <Button
               type="text"
+              className="app-mobile-menu-button"
+              icon={<MenuUnfoldOutlined />}
+              aria-label="打开菜单"
+              onClick={() => setMobileMenuOpen(true)}
+            />
+            <span className="app-header-title">{isMobile ? currentTitle : ''}</span>
+            <span className="app-header-spacer" />
+            <span className="app-header-user">{user?.name || '管理员'}</span>
+            <Button
+              type="text"
+              className="app-header-logout"
               icon={<LogoutOutlined />}
               onClick={handleLogout}
-              style={{ color: '#fff' }}
             >
               退出
             </Button>
           </Header>
-          <Content style={{ margin: 0, padding: 0, minHeight: 'calc(100vh - 64px)', background: 'var(--color-bg-page)' }}>
+          <Content className="app-content">
             <ErrorBoundary resetKey={location.pathname}>
               <Suspense fallback={<PageLoading />}>
                 <Routes>
@@ -401,8 +515,26 @@ function App() {
                 <Route path="/talent-analysis" element={<RouteGuard menuKey="menu:talent-analysis"><TalentAnalysis /></RouteGuard>} />
                 <Route path="/leave-overtime" element={<RouteGuard menuKey="menu:leave-overtime"><LeaveOvertime /></RouteGuard>} />
                 <Route path="/performance-overview" element={<RouteGuard menuKey="menu:performance-overview"><PerformanceOverview /></RouteGuard>} />
+                <Route path="/performance-reports" element={<RouteGuard menuKey="menu:performance-reports"><PerformanceReports /></RouteGuard>} />
+                <Route path="/performance-interviews" element={<RouteGuard menuKey="menu:performance-interviews" permissionCode={['performance:result:view', 'performance:interview:manage', 'performance:activity:manage', 'performance:department_eval:submit']}><PerformanceInterviews /></RouteGuard>} />
+                <Route path="/performance-appeals" element={<RouteGuard menuKey="menu:performance-appeals" permissionCode={['performance:result:view', 'performance:appeal:manage', 'performance:activity:manage', 'performance:hr_review:submit', 'performance:result_publish:manage']}><PerformanceAppeals /></RouteGuard>} />
                 <Route path="/performance-indicator-library" element={<RouteGuard menuKey="menu:performance-indicator-library"><PerformanceIndicatorLibrary /></RouteGuard>} />
-                <Route path="/performance-result/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:result:view"><PerformanceResultView /></RouteGuard>} />
+                <Route path="/performance-result/:activityId/:participantId" element={(
+                  <RouteGuard
+                    menuKey="menu:performance-overview"
+                    permissionCode={[
+                      'performance:result:view',
+                      'performance:activity:manage',
+                      'performance:department_eval:submit',
+                      'performance:hr_review:submit',
+                      'performance:result_publish:manage',
+                      'performance:appeal:manage',
+                      'performance:level_adjust:manage',
+                    ]}
+                  >
+                    <PerformanceResultView />
+                  </RouteGuard>
+                )} />
                 <Route path="/performance-self-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:self_eval:submit"><PerformanceSelfEval /></RouteGuard>} />
                 <Route path="/performance-manager-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:manager_eval:submit"><PerformanceManagerEval /></RouteGuard>} />
                 <Route path="/performance-goal-setting/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:goal:manage"><PerformanceGoalSetting /></RouteGuard>} />

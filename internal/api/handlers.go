@@ -1,12 +1,23 @@
 package api
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
 	"log"
+	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -86,7 +98,7 @@ type Response struct {
 var allowedUploadExtensions = []string{
 	".jpg", ".jpeg", ".png", ".gif", ".webp",
 	".pdf",
-	".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+	".docx", ".xlsx", ".pptx",
 	".wps", ".et", ".dps",
 	".txt", ".csv", ".md",
 	".zip", ".rar", ".7z",
@@ -99,6 +111,15 @@ var allowedUploadExtensionSet = func() map[string]struct{} {
 	}
 	return values
 }()
+
+const (
+	maxUploadImagePixels       = 40_000_000
+	maxUploadImageDimension    = 10_000
+	maxUploadArchiveFiles      = 1000
+	maxUploadArchiveTotalBytes = 100 * 1024 * 1024
+	maxUploadArchiveEntryBytes = 50 * 1024 * 1024
+	maxUploadArchiveRatio      = 100
+)
 
 func allowedUploadExtensionText() string {
 	labels := make([]string, 0, len(allowedUploadExtensions))
@@ -128,6 +149,272 @@ func isSafeUploadFilename(filename string) bool {
 		return false
 	}
 	return isAllowedUploadExtension(filepath.Ext(filename))
+}
+
+func validateUploadContent(file *multipart.FileHeader, ext string) error {
+	src, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	header := make([]byte, 512)
+	n, err := src.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	header = header[:n]
+	if len(header) == 0 {
+		return errors.New("empty file")
+	}
+
+	contentType := http.DetectContentType(header)
+	ext = strings.ToLower(ext)
+	switch ext {
+	case ".jpg", ".jpeg":
+		if contentType == "image/jpeg" && bytes.HasPrefix(header, []byte{0xff, 0xd8, 0xff}) {
+			return validateImageUpload(file)
+		}
+	case ".png":
+		if contentType == "image/png" && bytes.HasPrefix(header, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+			return validateImageUpload(file)
+		}
+	case ".gif":
+		if contentType == "image/gif" && (bytes.HasPrefix(header, []byte("GIF87a")) || bytes.HasPrefix(header, []byte("GIF89a"))) {
+			return validateImageUpload(file)
+		}
+	case ".webp":
+		if len(header) >= 12 && bytes.HasPrefix(header, []byte("RIFF")) && string(header[8:12]) == "WEBP" {
+			return nil
+		}
+	case ".pdf":
+		if contentType == "application/pdf" && bytes.HasPrefix(header, []byte("%PDF-")) {
+			return nil
+		}
+	case ".txt", ".csv", ".md":
+		if isTextUploadContent(header) {
+			return nil
+		}
+	case ".zip", ".docx", ".xlsx", ".pptx", ".wps", ".et", ".dps":
+		if isZipUploadContent(header) {
+			return validateZipUpload(file)
+		}
+	case ".rar":
+		if bytes.HasPrefix(header, []byte("Rar!\x1a\x07\x00")) || bytes.HasPrefix(header, []byte("Rar!\x1a\x07\x01\x00")) {
+			return nil
+		}
+	case ".7z":
+		if bytes.HasPrefix(header, []byte("7z\xbc\xaf\x27\x1c")) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("file content does not match extension %s", ext)
+}
+
+func validateImageUpload(file *multipart.FileHeader) error {
+	src, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	config, _, err := image.DecodeConfig(src)
+	if err != nil {
+		return fmt.Errorf("invalid image: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 {
+		return errors.New("invalid image dimensions")
+	}
+	if config.Width > maxUploadImageDimension || config.Height > maxUploadImageDimension {
+		return fmt.Errorf("image dimension exceeds %d", maxUploadImageDimension)
+	}
+	if config.Width*config.Height > maxUploadImagePixels {
+		return fmt.Errorf("image pixels exceeds %d", maxUploadImagePixels)
+	}
+	return nil
+}
+
+func validateZipUpload(file *multipart.FileHeader) error {
+	src, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	reader, err := zip.NewReader(src, file.Size)
+	if err != nil {
+		return fmt.Errorf("invalid zip archive: %w", err)
+	}
+	if len(reader.File) > maxUploadArchiveFiles {
+		return fmt.Errorf("archive contains too many files: %d", len(reader.File))
+	}
+
+	var totalUncompressed uint64
+	for _, entry := range reader.File {
+		if entry.FileInfo().IsDir() {
+			continue
+		}
+		if isMacroUploadEntry(entry.Name) {
+			return fmt.Errorf("archive contains macro or active content: %s", entry.Name)
+		}
+		if entry.UncompressedSize64 > maxUploadArchiveEntryBytes {
+			return fmt.Errorf("archive entry too large: %s", entry.Name)
+		}
+		totalUncompressed += entry.UncompressedSize64
+		if totalUncompressed > maxUploadArchiveTotalBytes {
+			return errors.New("archive uncompressed size exceeds limit")
+		}
+		if entry.CompressedSize64 > 0 && entry.UncompressedSize64/entry.CompressedSize64 > maxUploadArchiveRatio {
+			return fmt.Errorf("archive compression ratio too high: %s", entry.Name)
+		}
+		if strings.Contains(entry.Name, "..") || strings.HasPrefix(entry.Name, "/") || strings.HasPrefix(entry.Name, "\\") {
+			return fmt.Errorf("archive entry has unsafe path: %s", entry.Name)
+		}
+	}
+	return nil
+}
+
+func isMacroUploadEntry(name string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "\\", "/"))
+	base := pathBase(normalized)
+	if base == "vbaproject.bin" || base == "vbadata.xml" {
+		return true
+	}
+	return strings.Contains(normalized, "/activex/") ||
+		strings.Contains(normalized, "/macrosheets/") ||
+		strings.Contains(normalized, "/vba/")
+}
+
+func pathBase(value string) string {
+	if value == "" {
+		return ""
+	}
+	index := strings.LastIndex(value, "/")
+	if index < 0 {
+		return value
+	}
+	return value[index+1:]
+}
+
+func scanUploadForThreats(file *multipart.FileHeader) error {
+	addr := strings.TrimSpace(os.Getenv("CLAMAV_ADDR"))
+	if addr == "" {
+		if envIsTrue("UPLOAD_REQUIRE_ANTIVIRUS") {
+			return errors.New("antivirus scanner is required but CLAMAV_ADDR is empty")
+		}
+		return nil
+	}
+	return scanUploadWithClamAV(file, addr, uploadAntivirusTimeout())
+}
+
+func scanUploadWithClamAV(file *multipart.FileHeader, addr string, timeout time.Duration) error {
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return fmt.Errorf("connect antivirus scanner: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("set antivirus scanner deadline: %w", err)
+	}
+	if _, err := conn.Write([]byte("zINSTREAM\x00")); err != nil {
+		return fmt.Errorf("start antivirus scan: %w", err)
+	}
+
+	src, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	buffer := make([]byte, 32*1024)
+	for {
+		n, readErr := src.Read(buffer)
+		if n > 0 {
+			var size [4]byte
+			binary.BigEndian.PutUint32(size[:], uint32(n))
+			if _, err := conn.Write(size[:]); err != nil {
+				return fmt.Errorf("send antivirus scan chunk size: %w", err)
+			}
+			if _, err := conn.Write(buffer[:n]); err != nil {
+				return fmt.Errorf("send antivirus scan chunk: %w", err)
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("read upload for antivirus scan: %w", readErr)
+		}
+	}
+
+	var zero [4]byte
+	if _, err := conn.Write(zero[:]); err != nil {
+		return fmt.Errorf("finish antivirus scan: %w", err)
+	}
+
+	responseBytes, err := readClamAVResponse(conn)
+	if err != nil {
+		return fmt.Errorf("read antivirus scan response: %w", err)
+	}
+	response := strings.TrimSpace(strings.TrimRight(string(responseBytes), "\x00"))
+	if strings.Contains(response, "FOUND") {
+		return fmt.Errorf("malware detected: %s", response)
+	}
+	if !strings.Contains(response, "OK") {
+		return fmt.Errorf("unexpected antivirus scan response: %s", response)
+	}
+	return nil
+}
+
+func readClamAVResponse(conn net.Conn) ([]byte, error) {
+	response := make([]byte, 0, 128)
+	buffer := make([]byte, 1)
+	for len(response) < 4096 {
+		n, err := conn.Read(buffer)
+		if n > 0 {
+			if buffer[0] == 0 || buffer[0] == '\n' {
+				break
+			}
+			response = append(response, buffer[0])
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return response, nil
+}
+
+func uploadAntivirusTimeout() time.Duration {
+	seconds := 10
+	if raw := strings.TrimSpace(os.Getenv("CLAMAV_TIMEOUT_SECONDS")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 120 {
+			seconds = parsed
+		}
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func envIsTrue(name string) bool {
+	raw := strings.TrimSpace(os.Getenv(name))
+	return raw == "1" || strings.EqualFold(raw, "true") || strings.EqualFold(raw, "yes")
+}
+
+func isZipUploadContent(header []byte) bool {
+	return bytes.HasPrefix(header, []byte("PK\x03\x04")) ||
+		bytes.HasPrefix(header, []byte("PK\x05\x06")) ||
+		bytes.HasPrefix(header, []byte("PK\x07\x08"))
+}
+
+func isTextUploadContent(header []byte) bool {
+	if bytes.Contains(header, []byte{0}) {
+		return false
+	}
+	trimmed := bytes.TrimPrefix(header, []byte{0xef, 0xbb, 0xbf})
+	return utf8.Valid(trimmed)
 }
 
 // 分页响应结构
@@ -465,8 +752,37 @@ func HealthCheck(c *gin.Context) {
 	})
 }
 
-// generateToken issues new tokens with the business user_id as the primary identity.
-func generateToken(user *database.User) (string, time.Time, error) {
+const (
+	defaultAuthTokenTTLMinutes = 8 * 60
+	minAuthTokenTTLMinutes     = 5
+	maxAuthTokenTTLMinutes     = 24 * 60
+	authCookiePath             = "/"
+)
+
+func generateSessionToken(c *gin.Context, user *database.User) (string, time.Time, error) {
+	sessionID, err := generateRandomHex(16)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	tokenString, expiresAt, err := signAuthToken(user, sessionID)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	session := database.UserSession{
+		UserID:    user.UserID,
+		SessionID: sessionID,
+		Token:     hashToken(tokenString),
+		ExpiresAt: expiresAt,
+		IP:        c.ClientIP(),
+		UserAgent: c.GetHeader("User-Agent"),
+	}
+	if err := database.DB.Create(&session).Error; err != nil {
+		return "", time.Time{}, err
+	}
+	return tokenString, expiresAt, nil
+}
+
+func signAuthToken(user *database.User, sessionID string) (string, time.Time, error) {
 	if user == nil {
 		return "", time.Time{}, errors.New("missing user")
 	}
@@ -474,14 +790,17 @@ func generateToken(user *database.User) (string, time.Time, error) {
 	if userID == "" {
 		userID = strconv.FormatUint(uint64(user.ID), 10)
 	}
-	expiresAt := time.Now().Add(24 * time.Hour)
+	now := time.Now()
+	expiresAt := now.Add(authTokenTTL())
 	claims := &middleware.Claims{
-		UserID:   userID,
-		UserDBID: strconv.FormatUint(uint64(user.ID), 10),
-		UserName: user.Name,
+		UserID:         userID,
+		UserDBID:       strconv.FormatUint(uint64(user.ID), 10),
+		UserName:       user.Name,
+		SessionID:      sessionID,
+		SessionVersion: middleware.SessionVersion(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -491,6 +810,172 @@ func generateToken(user *database.User) (string, time.Time, error) {
 	}
 	tokenString, err := token.SignedString(secret)
 	return tokenString, expiresAt, err
+}
+
+func authTokenTTL() time.Duration {
+	minutes := defaultAuthTokenTTLMinutes
+	if raw := strings.TrimSpace(os.Getenv("JWT_TTL_MINUTES")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			minutes = parsed
+		}
+	}
+	if minutes < minAuthTokenTTLMinutes {
+		minutes = minAuthTokenTTLMinutes
+	}
+	if minutes > maxAuthTokenTTLMinutes {
+		minutes = maxAuthTokenTTLMinutes
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
+func generateRandomHex(size int) (string, error) {
+	b := make([]byte, size)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("crypto random unavailable: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func respondAuthSuccess(c *gin.Context, user *database.User, token string, expiresAt time.Time) {
+	if _, err := setAuthCookies(c, token, expiresAt); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "设置登录状态失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data: gin.H{
+			"user":       buildAuthUserPayload(user),
+			"expires_at": expiresAt,
+			"auth_mode":  "cookie",
+		},
+	})
+}
+
+func setAuthCookies(c *gin.Context, token string, expiresAt time.Time) (string, error) {
+	csrfToken, err := generateRandomHex(16)
+	if err != nil {
+		return "", err
+	}
+
+	maxAge := int(time.Until(expiresAt).Seconds())
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	secure := authCookieSecure(c)
+	sameSite := authCookieSameSite()
+
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     middleware.AuthCookieName,
+		Value:    token,
+		Path:     authCookiePath,
+		MaxAge:   maxAge,
+		Expires:  expiresAt,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: sameSite,
+	})
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     middleware.CSRFCookieName,
+		Value:    csrfToken,
+		Path:     authCookiePath,
+		MaxAge:   maxAge,
+		Expires:  expiresAt,
+		HttpOnly: false,
+		Secure:   secure,
+		SameSite: sameSite,
+	})
+
+	return csrfToken, nil
+}
+
+func clearAuthCookies(c *gin.Context) {
+	expiredAt := time.Unix(0, 0)
+	secure := authCookieSecure(c)
+	sameSite := authCookieSameSite()
+	for _, name := range []string{middleware.AuthCookieName, middleware.CSRFCookieName} {
+		http.SetCookie(c.Writer, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     authCookiePath,
+			MaxAge:   -1,
+			Expires:  expiredAt,
+			HttpOnly: name == middleware.AuthCookieName,
+			Secure:   secure,
+			SameSite: sameSite,
+		})
+	}
+}
+
+func authCookieSecure(c *gin.Context) bool {
+	if raw := strings.TrimSpace(os.Getenv("AUTH_COOKIE_SECURE")); raw != "" {
+		return raw == "1" || strings.EqualFold(raw, "true") || strings.EqualFold(raw, "yes")
+	}
+	if c != nil && c.Request != nil {
+		if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
+			return true
+		}
+	}
+	return false
+}
+
+func authCookieSameSite() http.SameSite {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AUTH_COOKIE_SAMESITE"))) {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteLaxMode
+	}
+}
+
+func isActiveUser(user *database.User) bool {
+	return user != nil && strings.EqualFold(strings.TrimSpace(user.Status), "active")
+}
+
+func rejectInactiveLogin(c *gin.Context, user *database.User, loginType string) {
+	userID, userName := "", ""
+	if user != nil {
+		userID = user.UserID
+		userName = user.Name
+	}
+	database.DB.Create(&database.LoginLog{
+		UserID:      userID,
+		UserName:    userName,
+		LoginType:   loginType,
+		LoginStatus: "failed",
+		IP:          c.ClientIP(),
+		UserAgent:   c.GetHeader("User-Agent"),
+		ErrorMsg:    "inactive user",
+	})
+	c.JSON(http.StatusForbidden, Response{
+		Code:    http.StatusForbidden,
+		Message: "账号已停用，请联系管理员",
+	})
+}
+
+func revokeActiveSessionsForUser(userID, reason string) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return
+	}
+	now := time.Now()
+	tx := database.DB.Model(&database.UserSession{}).
+		Where("user_id = ? AND revoked_at IS NULL", userID).
+		Update("revoked_at", &now)
+	if tx.Error != nil {
+		log.Printf("[security] revoke sessions for user_id=%s reason=%s failed: %v", userID, reason, tx.Error)
+	}
 }
 
 // buildUserMenuKeys 聚合用户的菜单权限 key 列表
@@ -564,7 +1049,12 @@ func Login(c *gin.Context) {
 	}
 
 	// 生成 JWT token
-	tokenString, expiresAt, err := generateToken(user)
+	if !isActiveUser(user) {
+		rejectInactiveLogin(c, user, "local")
+		return
+	}
+
+	tokenString, expiresAt, err := generateSessionToken(c, user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -583,15 +1073,7 @@ func Login(c *gin.Context) {
 		UserAgent:   c.GetHeader("User-Agent"),
 	})
 
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data: gin.H{
-			"token":      tokenString,
-			"user":       buildAuthUserPayload(user),
-			"expires_at": expiresAt,
-		},
-	})
+	respondAuthSuccess(c, user, tokenString, expiresAt)
 }
 
 // GetUsers 获取用户列表
@@ -861,6 +1343,9 @@ func SyncUsers(c *gin.Context) {
 				log.Printf("[SyncUsers] 更新用户 %s 失败: %v", u.UserID, err)
 				continue
 			}
+			if !isActiveUser(existing) {
+				revokeActiveSessionsForUser(existing.UserID, "sync_users_inactive")
+			}
 		}
 		if strings.TrimSpace(u.Position) == "" {
 			positionMissingCount++
@@ -1053,11 +1538,15 @@ func DingTalkInAppLogin(c *gin.Context) {
 		}
 	}
 
+	if !isActiveUser(user) {
+		rejectInactiveLogin(c, user, "dingtalk_in_app")
+		return
+	}
+
 	user.Name = name
 	user.Avatar = avatar
 	user.Position = position
 	user.DepartmentID = deptID
-	user.Status = "active"
 	if err := assignUserEmailSafely(userService, user, email); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -1080,7 +1569,7 @@ func DingTalkInAppLogin(c *gin.Context) {
 		return
 	}
 
-	tokenString, expiresAt, err := generateToken(user)
+	tokenString, expiresAt, err := generateSessionToken(c, user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -1098,15 +1587,7 @@ func DingTalkInAppLogin(c *gin.Context) {
 		UserAgent:   c.GetHeader("User-Agent"),
 	})
 
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data: gin.H{
-			"token":      tokenString,
-			"user":       buildAuthUserPayload(user),
-			"expires_at": expiresAt,
-		},
-	})
+	respondAuthSuccess(c, user, tokenString, expiresAt)
 }
 
 // DingTalkCallback 閽夐拤鍥炶皟
@@ -1232,11 +1713,15 @@ func DingTalkCallback(c *gin.Context) {
 		}
 	}
 
+	if !isActiveUser(user) {
+		rejectInactiveLogin(c, user, "dingtalk_qr")
+		return
+	}
+
 	user.Name = name
 	user.Avatar = avatar
 	user.Position = position
 	user.DepartmentID = deptID
-	user.Status = "active"
 	if err := assignUserEmailSafely(userService, user, email); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -1259,7 +1744,7 @@ func DingTalkCallback(c *gin.Context) {
 		return
 	}
 
-	tokenString, expiresAt, err := generateToken(user)
+	tokenString, expiresAt, err := generateSessionToken(c, user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -1277,15 +1762,7 @@ func DingTalkCallback(c *gin.Context) {
 		UserAgent:   c.GetHeader("User-Agent"),
 	})
 
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data: gin.H{
-			"token":      tokenString,
-			"user":       buildAuthUserPayload(user),
-			"expires_at": expiresAt,
-		},
-	})
+	respondAuthSuccess(c, user, tokenString, expiresAt)
 }
 
 func respondDingTalkUserNotSynced(c *gin.Context, loginType, userID, userName string) {
@@ -1432,6 +1909,16 @@ func resolveDingTalkRedirectURI(c *gin.Context) string {
 
 // Logout 登出
 func Logout(c *gin.Context) {
+	clearAuthCookies(c)
+
+	if sessionID := strings.TrimSpace(c.GetString("sessionID")); sessionID != "" {
+		now := time.Now()
+		userID := strings.TrimSpace(c.GetString("userID"))
+		database.DB.Model(&database.UserSession{}).
+			Where("session_id = ? AND user_id = ? AND revoked_at IS NULL", sessionID, userID).
+			Update("revoked_at", &now)
+	}
+
 	// 记录登出日志
 	userID, _ := c.Get("userID")
 	userName, _ := c.Get("userName")
@@ -2004,6 +2491,9 @@ func SyncOrgData(c *gin.Context) {
 					userErrMsg = err.Error()
 					log.Printf("[SyncOrgData] 更新用户 %s 失败: %v", u.UserID, err)
 					continue
+				}
+				if !isActiveUser(existing) {
+					revokeActiveSessionsForUser(existing.UserID, "sync_org_inactive")
 				}
 				// 检查是否存在员工档案
 				profile, profileErr := employeeService.GetProfileByUserID(u.UserID)
@@ -4379,6 +4869,22 @@ func UploadFile(c *gin.Context) {
 	}
 
 	// 检查上传目录
+	if err := validateUploadContent(file, ext); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "文件内容与扩展名不匹配或不受支持",
+		})
+		return
+	}
+	if err := scanUploadForThreats(file); err != nil {
+		log.Printf("[upload-security] scan failed filename=%s size=%d: %v", file.Filename, file.Size, err)
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "文件安全扫描未通过",
+		})
+		return
+	}
+
 	uploadDir := "uploads"
 	if err := os.MkdirAll(uploadDir, 0755); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
