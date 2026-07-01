@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-13T04:58:27.423Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-14T01:16:27.211Z
 > Files: 124 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ./
@@ -88,7 +88,7 @@
 
 ## frontend/src/
 
-- `App.tsx` — Login (~5612 tok)
+- `App.tsx` — Login (~5869 tok)
 - `main.tsx` — queryClient (~180 tok)
 
 ## frontend/src/components/
@@ -104,9 +104,9 @@
 ## frontend/src/pages/
 
 - `AttendanceProcessing.tsx` — processingTabs (~2383 tok)
-- `Callback.tsx` — isDingTalkEnv (~778 tok)
+- `Callback.tsx` — isDingTalkEnv (~783 tok)
 - `Home.tsx` — isForbiddenError (~3306 tok)
-- `Login.tsx` — isDingTalkEnv — renders form (~3646 tok)
+- `Login.tsx` — isDingTalkEnv — renders form (~3881 tok)
 - `MenuPermission.tsx` — MenuPermission (~1791 tok)
 - `PerformanceGoalSetting.interaction.test.tsx` — PerformanceGoalSetting 组件交互测试 (~3720 tok)
 - `PerformanceGoalSetting.test.ts` — 测试辅助函数 (~1986 tok)
@@ -133,7 +133,7 @@
 
 ## frontend/src/store/
 
-- `authStore.ts` — Exports useAuthStore (~338 tok)
+- `authStore.ts` — Exports useAuthStore (~301 tok)
 
 ## frontend/src/test/
 
@@ -158,14 +158,14 @@
 
 - `attendance_processing_handlers.go` — Struct: pythonResult (~3159 tok)
 - `attendance_processing_smoke_test.go` — Struct: uploadFile (~1031 tok)
-- `handlers.go` — Struct: Response (~36287 tok)
+- `handlers.go` — Struct: Response (~40186 tok)
 - `leave_handlers.go` — GetLeaveEligibility, RecalculateLeaveEligibility, GetLeaveGrants, RunQuarterGrant, GetCompensatoryLe (~5065 tok)
 - `multi_org_security_test.go` — TestLogin_RequiresOrgID, TestLogin_UnknownOrgRejected, TestLogin_WrongPasswordDoesNotFallbackAcrossO (~1879 tok)
 - `performance_handlers_coverage_test.go` — TestRefreshPerformanceParticipants_InvalidActivityID, TestRefreshPerformanceParticipants_Success, Te (~19426 tok)
 - `performance_handlers_test.go` — TestCreatePerformanceActivityHandlerMissingRequired, TestUpdatePerformanceActivityHandlerMissingRequ (~9419 tok)
 - `performance_handlers.go` (~35755 tok)
-- `performance_router_test.go` — TestPerformanceRouterCoversFrontendAPIPaths, TestPerformanceRouterRegistersCriticalRoutes, TestPerfo (~2400 tok)
-- `router.go` — SetupRouter (~7939 tok)
+- `performance_router_test.go` — TestPerformanceRouterCoversFrontendAPIPaths, TestPerformanceRouterRegistersCriticalRoutes, TestPerfo (~2922 tok)
+- `router.go` — SetupRouter (~8142 tok)
 
 ## internal/cache/
 
@@ -176,7 +176,7 @@
 ## internal/database/
 
 - `database.go` — Struct: col (~15007 tok)
-- `models.go` — Struct: User (~11124 tok)
+- `models.go` — Struct: User (~12035 tok)
 - `organization_models.go` — Struct: Organization (~556 tok)
 - `organization_service.go` — GetOrgIDByCorpID, GetOrganizationByOrgID, GetOrganizationByCorpID, IsUserInOrganization, EnsureOrgan (~530 tok)
 
@@ -187,8 +187,8 @@
 
 ## internal/middleware/
 
-- `auth_context.go` — Struct: AuthContext (~1987 tok)
-- `jwt.go` — Struct: Claims (~625 tok)
+- `auth_context.go` — Struct: AuthContext (~2011 tok)
+- `jwt.go` — Struct: Claims (~1560 tok)
 - `tenant_db_test.go` — Struct: tenantFixtureDriver (~851 tok)
 - `tenant_db.go` — CurrentOrgID, TenantDB (~295 tok)
 

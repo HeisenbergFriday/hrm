@@ -30,7 +30,13 @@ DINGTALK_APP_SECRET=your_app_secret
 DINGTALK_CORP_ID=dingxxxxxxxx
 DINGTALK_AGENT_ID=123456
 
-JWT_SECRET=change_me
+JWT_SECRET=replace_with_32+_chars_random_secret
+JWT_TTL_MINUTES=480
+AUTH_SESSION_VERSION=cookie-v1
+AUTH_COOKIE_SECURE=true
+AUTH_COOKIE_SAMESITE=lax
+CLAMAV_ADDR=127.0.0.1:3310
+UPLOAD_REQUIRE_ANTIVIRUS=true
 ```
 
 注意：
@@ -95,7 +101,7 @@ http://localhost:8080/
 
 | 模块 | 接口示例 |
 |---|---|
-| 认证 | `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me` |
+| 认证 | `POST /api/v1/auth/logout`、`GET /api/v1/auth/me` |
 | 钉钉登录 | `GET /api/v1/auth/dingtalk/qr/start`、`POST /api/v1/auth/dingtalk/in-app`、`GET /api/v1/auth/dingtalk/callback`、`GET /api/v1/auth/dingtalk/config` |
 | 用户/部门 | `GET /api/v1/users`、`GET /api/v1/departments` |
 | 同步 | `POST /api/v1/sync/departments`、`POST /api/v1/sync/users`、`GET /api/v1/sync/status` |
@@ -107,12 +113,18 @@ http://localhost:8080/
 
 完整路由以 `internal/api/router.go` 为准。
 
-## 默认账号
+## 默认管理员账号
 
 数据库初始化成功后，如果不存在管理员，会创建：
 
 - 用户名：`admin`
-- 密码：`admin123`
+- 密码：通过 `ADMIN_PASSWORD` 环境变量提供；如果未设置，系统会生成随机密码且不会打印到日志。
+
+生产部署必须设置强随机 `JWT_SECRET` 与 `ADMIN_PASSWORD`，不要复制 `change_me`、`admin123` 等示例弱值。
+
+认证使用 HttpOnly Cookie + CSRF 双提交 Cookie。生产环境建议走 HTTPS，并设置 `AUTH_COOKIE_SECURE=true`；本次安全修复后旧版不带 `session_id` 的 JWT 会被拒绝，所有在线用户需要重新扫码登录。
+
+上传安全分两层处理：应用内会校验扩展名、文件魔数、图片尺寸、zip bomb、路径穿越和 Office 宏/ActiveX 结构，并默认拒绝旧版 `.doc/.xls/.ppt`；真正病毒扫描需要部署 ClamAV 或企业杀毒网关。设置 `CLAMAV_ADDR` 后后端会在文件落盘前调用 ClamAV `INSTREAM` 扫描；生产建议同时设置 `UPLOAD_REQUIRE_ANTIVIRUS=true`，扫描器不可用时拒绝上传。
 
 ## 钉钉部署补充
 
