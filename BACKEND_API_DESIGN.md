@@ -102,7 +102,7 @@ type Response struct {
 ```json
 {
   "username": "admin",
-  "password": "admin123"
+  "password": "<由 ADMIN_PASSWORD 环境变量设置>",
 }
 ```
 

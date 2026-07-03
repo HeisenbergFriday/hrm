@@ -70,7 +70,7 @@ peopleops/
 
 ```env
 PORT=8080
-DATABASE_URL=root:password@tcp(localhost:3306)/peopleops?charset=utf8mb4&parseTime=True&loc=Local
+DATABASE_URL=peopleops_app:<strong_mysql_password>@tcp(localhost:3306)/peopleops?charset=utf8mb4&parseTime=True&loc=Local
 REDIS_URL=localhost:6379
 REDIS_PASSWORD=
 
@@ -79,7 +79,7 @@ DINGTALK_APP_SECRET=your_app_secret
 DINGTALK_CORP_ID=dingxxxxxxxx
 DINGTALK_AGENT_ID=123456
 
-JWT_SECRET=replace_with_32+_chars_random_secret
+JWT_SECRET=<openssl_rand_base64_48>
 JWT_TTL_MINUTES=480
 AUTH_SESSION_VERSION=cookie-v1
 AUTH_COOKIE_SECURE=true
@@ -87,6 +87,8 @@ AUTH_COOKIE_SAMESITE=lax
 CLAMAV_ADDR=127.0.0.1:3310
 UPLOAD_REQUIRE_ANTIVIRUS=true
 ```
+
+可用 `openssl rand -base64 48` 生成 `JWT_SECRET`、`ADMIN_PASSWORD` 等强随机值；MySQL 应创建专用低权限账号，不要复用 `root` 或示例密码。
 
 ### 3. 启动后端
 
@@ -130,6 +132,12 @@ go run ./cmd/main.go
 - 密码：通过 `ADMIN_PASSWORD` 环境变量提供；如果未设置，系统会生成随机密码且不会打印到日志。
 
 部署时不要使用 `admin123`、`change_me` 等示例弱口令。生产环境应在启动前设置强随机 `ADMIN_PASSWORD`，或通过受控运维流程重置管理员密码。
+
+## 认证与文件访问
+
+- 登录态通过 `peopleops_auth` HttpOnly Cookie + `peopleops_csrf` 双提交 Cookie 维持，不再通过 URL query 传递 token。
+- 附件下载（`/api/v1/files/:filename`）仅校验 Cookie 会话，不会在 URL 或访问日志中暴露主令牌。
+- 上传白名单仅保留 `.jpg/.jpeg/.png/.gif/.webp/.pdf/.docx/.xlsx/.pptx/.txt/.csv/.md`，并校验文件魔数、图片尺寸、zip bomb、路径穿越与 Office VBA/ActiveX 结构；生产建议同时配置 `CLAMAV_ADDR` 与 `UPLOAD_REQUIRE_ANTIVIRUS=true`。
 
 ## API 入口
 

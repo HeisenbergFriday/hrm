@@ -1,11 +1,12 @@
 ---
 purpose: 项目整体架构、数据流、核心设计约束
-last_updated: 2026-05-26
+last_updated: 2026-07-02
 source_of_truth:
   - go.mod（后端技术栈）
   - frontend/package.json（前端技术栈）
   - internal/api/router.go（路由架构）
   - internal/database/database.go（数据库初始化）
+  - internal/dingtalk/dingtalk.go（钉钉多企业配置）
   - frontend/src/services/api.ts（前端 API 封装）
   - frontend/src/store/authStore.ts（状态管理）
 update_when:
@@ -99,12 +100,21 @@ type Response struct {
 
 #### 认证
 - JWT Bearer token
-- Claims 含 `UserID` + `UserName`
+- Claims 含 `UserID` + `UserName` + `OrgID`
 - Handler 内通过 `c.Get("userID")` 取当前用户
 - 中间件：`internal/middleware/jwt.go`
 
+#### 多组织租户隔离
+- 系统支持多个钉钉企业共用一套应用，统一以 `org_id` 作为企业/租户边界。
+- 登录入口可通过 `org_id` / `org` 指定企业；扫码登录把企业写入 OAuth state，钉钉内免登把企业随登录请求提交。
+- JWT、`UserSession`、`LoginLog`、钉钉绑定、组织、考勤、审批、排班、假勤、绩效等业务模型均保留 `org_id`。
+- 已登录请求由 `JWTAuth` 写入 request context，业务查询/写入优先使用 `middleware.RequestDB(c)`，GORM callback 会对带 `OrgID` 字段的模型自动追加 `org_id = 当前企业` 过滤，并在创建时自动填充。
+- 使用 `Table(...)`、`Raw(...)`、手写 join、子查询或递归 CTE 时，不能只依赖模型 callback；必须显式给主表和关联表补 `org_id` 条件，例如用户与员工档案 join 需要 `employee_profiles.org_id = users.org_id`。
+- 同一个自然人可同时属于多个钉钉企业；本地 `User.UserID` / `Department.DepartmentID` 在非默认企业会使用 `org_id:钉钉原始ID` 形成系统内唯一标识，原始钉钉 ID 分别保留在 `ding_talk_user_id` / `ding_talk_department_id`。
+- 新增跨模块业务表时，如数据需要企业隔离，必须增加 `OrgID` 字段并通过 request-scoped DB 访问。
+
 #### 钉钉 ID 存储
-- `User.UserID` 和 `Department.DepartmentID` 存钉钉原始 ID（字符串），不是本地自增主键
+- 默认企业仍可直接使用钉钉原始 ID；多企业场景下 `User.UserID` 和 `Department.DepartmentID` 是系统内 ID，钉钉原始 ID 存在 `DingTalkUserID` / `DingTalkDepartmentID`
 - 本地自增主键是 `ID` 字段（uint）
 
 #### 软删除
@@ -116,13 +126,14 @@ type Response struct {
 - 例如：`User.Extension`、`Approval.Content`
 
 #### 幂等性设计
+- **全局写请求幂等**：已登录 API 写操作支持 `Idempotency-Key`，`internal/middleware/idempotency.go` 会按用户、方法、路由和 key 锁定请求，记录响应并对重复请求重放；前端 `frontend/src/services/api.ts` 会为 JSON 写请求自动生成短期复用的 key。
 - **年假消费**：`AnnualLeaveConsumeLog.request_ref` 唯一索引防重
 - **加班同步**：`OvertimeSyncHistory` 快照，避免重复同步
 - **加班匹配**：`OvertimeMatchResult.match_ref` 用于当前幂等，历史数据仍兼容 `user_id+work_date` 口径
 
 #### 数据库初始化
 - 启动时自动迁移（`AutoMigrate`）
-- 库为空时种默认管理员 `admin / admin123`
+- 库为空时种默认管理员 `admin`，密码由部署流程设置（`ADMIN_PASSWORD` 环境变量或强随机生成）
 - MySQL 连接失败时会尝试自动创建数据库后重连
 
 #### 容错设计
@@ -222,6 +233,7 @@ type Response struct {
 - `DINGTALK_CORP_ID`：钉钉企业 ID
 - `DINGTALK_AGENT_ID`：钉钉应用 Agent ID
 - `DINGTALK_ADMIN_USER_ID`：钉钉管理员用户 ID
+- `DINGTALK_ORGANIZATIONS`：可选，多钉钉企业配置 JSON 数组；未配置时使用单企业默认配置种子化 `organizations` 表
 - `DINGTALK_REDIRECT_URI`：OAuth 回调地址
 - `DINGTALK_APP_HOME_URL`：应用首页地址
 - `APP_BASE_URL`：后端服务地址
