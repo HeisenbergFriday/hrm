@@ -50,6 +50,7 @@ func (r *AttendanceRepository) FindAll(page, pageSize int, filters map[string]st
 	var total int64
 
 	query := r.db.Model(&database.Attendance{})
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 
 	if v, ok := filters["user_id"]; ok && v != "" {
 		query = query.Where("user_id = ?", v)
@@ -59,10 +60,10 @@ func (r *AttendanceRepository) FindAll(page, pageSize int, filters map[string]st
 	}
 	if v, ok := filters["department_id"]; ok && v != "" {
 		// 通过子查询找到该部门下所有用户的 user_id
-		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
+		query = query.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id = ? AND deleted_at IS NULL)", orgID, v)
 	}
 	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
-		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+		query = query.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)", orgID, departmentIDs)
 	}
 	if v, ok := filters["start_date"]; ok && v != "" {
 		t, err := time.Parse("2006-01-02", v)

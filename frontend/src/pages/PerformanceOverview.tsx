@@ -2,11 +2,14 @@ import React, { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert, Card, Col, Row, Space, Table, Tag, Typography, Button, Modal, Form, Input, InputNumber,
-  Select, message, Spin, Drawer, Tooltip, Divider, Descriptions, Steps
+  Select, message, Spin, Tooltip
 } from 'antd'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
+import SelfReviewHistoryDrawer from '../components/SelfReviewHistoryDrawer'
+import PerformanceParticipantTable from '../components/PerformanceParticipantTable'
+import PerformanceActivityDetailDrawer from '../components/PerformanceActivityDetailDrawer'
 import type { ColumnsType } from 'antd/es/table'
 import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
@@ -15,11 +18,19 @@ import {
   performanceAPI,
   PerformanceActivity,
   PerformanceParticipant,
+  PerformanceParticipantStatus,
   PerformanceParticipantImportResult,
   PerformanceActivityManagerAssignment,
   PerformanceDistributionRule,
   PerformanceHRDeadlineStatus,
+  PerformanceHRConfirmReminderResult,
+  PerformanceManagerEvalReminderResult,
+  PerformanceSelfEvalReminderResult,
+  PerformanceReminderRecipientDetail,
+  PerformanceReviewVersion,
   PerformanceIndicatorLibrary,
+  PerformanceDistributionCheck,
+  PerformanceResultSummary,
   PerformanceTemplate,
   AssessmentManagerCandidate,
   AssessmentManagerCandidateSourceGroup,
@@ -33,6 +44,38 @@ import { hasPermission } from '../utils/permission'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
+
+const activityActionButtonStyle: React.CSSProperties = {
+  height: 22,
+  paddingInline: 0,
+  fontSize: 'var(--font-size-sm)',
+  fontWeight: 600,
+  lineHeight: '22px',
+  whiteSpace: 'nowrap',
+}
+
+const activityActionListStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  columnGap: 14,
+  rowGap: 2,
+}
+
+const participantActionColumnWidth = 220
+const participantTableScrollX = 1320
+const participantActionListStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  columnGap: 0,
+  rowGap: 0,
+  maxWidth: '100%',
+}
+const participantActionButtonStyle: React.CSSProperties = {
+  fontSize: 'var(--font-size-sm)',
+  padding: '0 2px',
+}
 
 type RejectGoalFormValues = {
   comment: string
@@ -62,11 +105,6 @@ function getListFromResponse(res: any, keys: string[]): any[] {
   return []
 }
 
-const FLOW_TYPE_LABELS: Record<string, string> = {
-  old: '旧流程',
-  new: '新流程',
-}
-
 const FLOW_TEMPLATE_LABELS: Record<string, string> = {
   old: '小铁文娱流程模版',
   new: '沐腾科技流程模版',
@@ -84,10 +122,6 @@ const BUILT_IN_FLOW_TEMPLATE_NAMES = new Set([
   '旧流程',
   '新流程',
 ])
-
-function getFlowTypeLabel(flowType?: string) {
-  return FLOW_TYPE_LABELS[String(flowType || '').trim()] || '未配置流程'
-}
 
 function getTemplateDisplayName(templateName?: string, flowType?: string) {
   const normalizedName = String(templateName || '').trim()
@@ -112,20 +146,22 @@ function getActivityTemplateDisplay(
     return {
       label: templateDisplayName,
       color: flowType === 'new' ? 'purple' : 'default',
-      tooltip: `流程类型：${getFlowTypeLabel(flowType)}`,
+      tooltip: `流程模板：${templateDisplayName}`,
     }
   }
 
+  const fallbackTemplateName = getTemplateDisplayName('', flowType)
+
   if (templateId) {
     return {
-      label: `模板 #${templateId}`,
-      color: 'warning',
-      tooltip: `未找到模板详情，流程类型：${getFlowTypeLabel(flowType)}`,
+      label: fallbackTemplateName || `模板 #${templateId}`,
+      color: fallbackTemplateName ? (flowType === 'new' ? 'purple' : 'default') : 'warning',
+      tooltip: '未找到模板详情，已按流程模板默认值展示',
     }
   }
 
   return {
-    label: getTemplateDisplayName('', flowType) || getFlowTypeLabel(flowType),
+    label: fallbackTemplateName || '未配置流程模板',
     color: flowType === 'new' ? 'purple' : 'default',
     tooltip: '历史活动未关联绩效模板',
   }
@@ -327,6 +363,20 @@ function isAssessmentManagerConfigured(record: PerformanceParticipant) {
   return Boolean(managerID) && configStatus !== 'PENDING' && configStatus !== 'INVALID'
 }
 
+function getParticipantDisplayLevel(record: PerformanceParticipant, activity?: PerformanceActivity | null) {
+  const finalLevel = String(record.final_level || '').trim()
+  const suggestedLevel = String(record.suggested_level || '').trim()
+  if (
+    String(activity?.status || '').trim() === 'manager_evaluation' &&
+    !record.department_adjusted &&
+    !String(record.department_final_level || '').trim() &&
+    suggestedLevel
+  ) {
+    return suggestedLevel
+  }
+  return finalLevel || suggestedLevel
+}
+
 function getManagerEvaluationBlockedReason(record: PerformanceParticipant) {
   const configStatus = getEffectiveManagerConfigStatus(record)
   if (!String(record.manager_id || '').trim()) return '请先配置考核上级'
@@ -347,8 +397,14 @@ function formatRangeEnd(range?: [Dayjs, Dayjs]) {
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   draft: { label: '草稿', color: 'default' },
   target_setting: { label: '目标设定', color: 'cyan' },
+  target_approval: { label: '目标审核', color: 'geekblue' },
   self_evaluation: { label: '自评中', color: 'processing' },
   manager_evaluation: { label: '主管评分', color: 'warning' },
+  department_evaluation: { label: '部门评分', color: 'orange' },
+  hr_review: { label: 'HR审核', color: 'purple' },
+  result_publish: { label: '结果公布', color: 'blue' },
+  interview: { label: '绩效面谈', color: 'gold' },
+  appeal: { label: '绩效申诉', color: 'volcano' },
   employee_confirmation: { label: '员工确认', color: 'blue' },
   manager_confirmation: { label: '主管确认', color: 'orange' },
   hr_confirmation: { label: 'HR确认', color: 'purple' },
@@ -363,17 +419,40 @@ const ACTIVITY_STATUS_FILTER_IN_PROGRESS = '__in_progress__'
 const ACTIVITY_STATUS_FILTER_CONFIRMED = '__confirmed__'
 const IN_PROGRESS_ACTIVITY_STATUSES = [
   'target_setting',
+  'target_approval',
   'self_evaluation',
   'manager_evaluation',
+  'department_evaluation',
+  'hr_review',
   'employee_confirmation',
   'manager_confirmation',
   'hr_confirmation',
 ]
-const CONFIRMED_ACTIVITY_STATUSES = ['locked', 'result_confirmed']
+const CONFIRMED_ACTIVITY_STATUSES = ['result_publish', 'interview', 'appeal', 'locked', 'result_confirmed']
+const DISTRIBUTION_DETAIL_STATUSES = [
+  'manager_evaluation',
+  'department_evaluation',
+  'hr_review',
+  'result_publish',
+  'interview',
+  'appeal',
+  'employee_confirmation',
+  'manager_confirmation',
+  'hr_confirmation',
+  'locked',
+  'result_confirmed',
+  'archived',
+]
 const PERSONAL_ENTRY_ACTIVITY_STATUSES = [
   'target_setting',
+  'target_approval',
   'self_evaluation',
   'manager_evaluation',
+  'department_evaluation',
+  'hr_review',
+  'result_publish',
+  'interview',
+  'appeal',
   'employee_confirmation',
   'manager_confirmation',
   'hr_confirmation',
@@ -383,11 +462,35 @@ const PERSONAL_ENTRY_ACTIVITY_STATUSES = [
 const PERSONAL_TARGET_STATUSES = ['pending', 'target_pending_approval', 'target_rejected', 'target_set']
 const PERSONAL_SELF_EVAL_STATUSES = ['target_set', 'self_submitted']
 const PERSONAL_RESULT_STATUSES = ['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed']
-const SELF_EVAL_EDITABLE_ACTIVITY_STATUSES = ['self_evaluation', 'manager_evaluation', 'employee_confirmation', 'manager_confirmation', 'hr_confirmation', 'result_confirmed']
+const NEW_FLOW_RESULT_ACTIVITY_STATUSES = ['result_publish', 'interview', 'appeal', 'locked', 'result_confirmed', 'archived']
+const MUTENG_RESULT_VISIBILITY_ACTIVITY_STATUSES = ['department_evaluation', 'hr_review', 'result_publish', 'interview', 'appeal', 'locked', 'result_confirmed', 'archived']
+const SELF_EVAL_EDITABLE_ACTIVITY_STATUSES = ['self_evaluation', 'manager_evaluation', 'department_evaluation', 'hr_review', 'result_publish', 'interview', 'appeal', 'employee_confirmation', 'manager_confirmation', 'hr_confirmation', 'result_confirmed']
 const SELF_EVAL_EDITABLE_PARTICIPANT_STATUSES = ['target_set', 'self_submitted', 'manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed']
+const MUTENG_LATE_TARGET_ACTIVITY_STATUSES = ['target_approval', 'self_evaluation', 'manager_evaluation', 'department_evaluation', 'hr_review', 'result_publish', 'interview', 'appeal', 'hr_confirmation', 'employee_confirmation', 'locked', 'result_confirmed', 'archived']
 const ACTIVITY_STATUS_FILTER_GROUPS: Record<string, string[]> = {
   [ACTIVITY_STATUS_FILTER_IN_PROGRESS]: IN_PROGRESS_ACTIVITY_STATUSES,
   [ACTIVITY_STATUS_FILTER_CONFIRMED]: CONFIRMED_ACTIVITY_STATUSES,
+}
+
+function isSeparatedMutengActivity(activity?: PerformanceActivity | null) {
+  return activity?.flow_type === 'new' && ['goal_setting', 'review_scoring'].includes(String(activity?.activity_kind || '').trim())
+}
+
+function isMutengGoalSettingActivity(activity?: PerformanceActivity | null) {
+  return activity?.flow_type === 'new' && String(activity?.activity_kind || '').trim() === 'goal_setting'
+}
+
+function isSeparatedMutengReviewActivity(activity?: PerformanceActivity | null) {
+  return activity?.flow_type === 'new' && String(activity?.activity_kind || '').trim() === 'review_scoring'
+}
+
+function canOpenTargetPlan(activity: PerformanceActivity | null | undefined, participant: PerformanceParticipant | null | undefined) {
+  if (!activity || !participant || !PERSONAL_TARGET_STATUSES.includes(participant.status)) return false
+  if (activity.status === 'target_setting') return true
+  if (isMutengGoalSettingActivity(activity)) {
+    return MUTENG_LATE_TARGET_ACTIVITY_STATUSES.includes(activity.status)
+  }
+  return activity.flow_type === 'new' && !['locked', 'archived'].includes(activity.status) && MUTENG_LATE_TARGET_ACTIVITY_STATUSES.includes(activity.status)
 }
 const ACTIVITY_STATUS_FILTER_OPTIONS = [
   { value: ACTIVITY_STATUS_FILTER_IN_PROGRESS, label: '进行中活动' },
@@ -398,6 +501,14 @@ const ACTIVITY_STATUS_FILTER_OPTIONS = [
 function resolveActivityStatusFilter(statusFilter?: string) {
   if (!statusFilter) return undefined
   return ACTIVITY_STATUS_FILTER_GROUPS[statusFilter] || [statusFilter]
+}
+
+function shouldLoadDistributionDetail(status?: string) {
+  return DISTRIBUTION_DETAIL_STATUSES.includes(String(status || '').trim())
+}
+
+function shouldLoadHRDeadlineDetail(status?: string) {
+  return String(status || '').trim() === 'hr_confirmation'
 }
 
 const MANAGER_SOURCE_LABELS: Record<AssessmentManagerSource, string> = {
@@ -449,7 +560,55 @@ const PARTICIPANT_STATUS_MAP: Record<string, { label: string; color: string }> =
   removed_from_scope: { label: '已移除', color: 'error' },
 }
 
-const ACTIVITY_FLOW = [
+const MUTENG_PARTICIPANT_STATUS_MAP: Record<string, { label: string; color: string }> = {
+  pending: { label: '待目标拟定', color: 'default' },
+  target_pending_approval: { label: '目标待审核', color: 'cyan' },
+  target_rejected: { label: '目标已驳回', color: 'red' },
+  target_set: { label: '目标已审核', color: 'cyan' },
+  self_submitted: { label: '自评已提交', color: 'processing' },
+  manager_submitted: { label: '主管评分已完成', color: 'warning' },
+  manager_confirmed: { label: '部门评分已完成', color: 'orange' },
+  hr_confirmed: { label: 'HR审核已完成', color: 'purple' },
+  employee_confirmed: { label: '员工已确认', color: 'blue' },
+  locked: { label: '已锁定', color: 'orange' },
+  result_confirmed: { label: '结果已确认', color: 'success' },
+  inactive: { label: '已离职', color: 'error' },
+  removed_from_scope: { label: '已移除', color: 'error' },
+}
+
+const PARTICIPANT_PROGRESS_OPTIONS = Object.entries(PARTICIPANT_STATUS_MAP).map(([value, meta]) => ({
+  value,
+  label: meta.label,
+}))
+
+const MUTENG_PARTICIPANT_PROGRESS_STATUSES: PerformanceParticipantStatus[] = [
+  'pending',
+  'target_pending_approval',
+  'target_rejected',
+  'target_set',
+  'self_submitted',
+  'manager_submitted',
+  'manager_confirmed',
+  'hr_confirmed',
+  'employee_confirmed',
+  'result_confirmed',
+]
+
+const MUTENG_PARTICIPANT_PROGRESS_STATUS_SET = new Set<string>(MUTENG_PARTICIPANT_PROGRESS_STATUSES)
+
+const MUTENG_PARTICIPANT_PROGRESS_STATUS_ALIASES: Partial<Record<PerformanceParticipantStatus, PerformanceParticipantStatus>> = {
+  employee_confirmed: 'manager_submitted',
+  manager_recheck: 'manager_submitted',
+  locked: 'result_confirmed',
+}
+
+const PERFORMANCE_LEVEL_OPTIONS = ['S', 'A', 'B', 'C', 'D'].map(value => ({ value, label: value }))
+
+function hasAnyPermission(...permissionCodes: string[]) {
+  return permissionCodes.some(code => hasPermission(code))
+}
+
+const LEGACY_ACTIVITY_FLOW = [
   { status: 'target_setting', label: '目标设定' },
   { status: 'self_evaluation', label: '自评' },
   { status: 'manager_evaluation', label: '评分' },
@@ -459,15 +618,50 @@ const ACTIVITY_FLOW = [
   { status: 'archived', label: '归档' },
 ]
 
+const MUTENG_ACTIVITY_FLOW = [
+  { status: 'target_setting', label: '目标拟定' },
+  { status: 'target_approval', label: '目标审核' },
+  { status: 'self_evaluation', label: '自评' },
+  { status: 'manager_evaluation', label: '主管评分' },
+  { status: 'department_evaluation', label: '部门评分' },
+  { status: 'hr_confirmation', label: 'HR确认' },
+  { status: 'employee_confirmation', label: '员工确认' },
+  { status: 'archived', label: '锁定/归档' },
+]
+
+const MUTENG_GOAL_SETTING_ACTIVITY_FLOW = [
+  { status: 'target_setting', label: '目标拟定' },
+  { status: 'target_approval', label: '目标审核' },
+  { status: 'archived', label: '锁定/归档' },
+]
+
+const MUTENG_REVIEW_SCORING_ACTIVITY_FLOW = [
+  { status: 'target_setting', label: '目标承接/补录' },
+  { status: 'self_evaluation', label: '自评' },
+  { status: 'manager_evaluation', label: '上级评估' },
+  { status: 'department_evaluation', label: '部门/中心评估' },
+  { status: 'hr_review', label: 'HR审核' },
+  { status: 'result_publish', label: '结果公布' },
+  { status: 'archived', label: '归档' },
+]
+
+function getActivityFlow(activity?: PerformanceActivity | null) {
+  if (isMutengGoalSettingActivity(activity)) return MUTENG_GOAL_SETTING_ACTIVITY_FLOW
+  if (isSeparatedMutengReviewActivity(activity)) return MUTENG_REVIEW_SCORING_ACTIVITY_FLOW
+  return activity?.flow_type === 'new' ? MUTENG_ACTIVITY_FLOW : LEGACY_ACTIVITY_FLOW
+}
+
 function formatDateRange(start?: string, end?: string) {
   if (!start && !end) return '-'
   return `${start || '-'} ~ ${end || '-'}`
 }
 
-function getActivityStepIndex(status?: string) {
-  if (status === 'locked') return ACTIVITY_FLOW.length - 1 // archived step
+function getActivityStepIndex(status?: string, activity?: PerformanceActivity | null) {
+  const flow = getActivityFlow(activity)
+  if (status === 'locked') return flow.length - 1 // archived step
+  if (activity?.flow_type === 'new' && ['locked', 'result_confirmed', 'archived'].includes(status || '')) return flow.length - 1
   if (status === 'draft') return 0
-  const index = ACTIVITY_FLOW.findIndex(item => item.status === status)
+  const index = flow.findIndex(item => item.status === status)
   return index >= 0 ? index : 0
 }
 
@@ -475,8 +669,43 @@ function getStatusMeta(status?: string) {
   return STATUS_MAP[status || ''] || { label: status || '-', color: 'default' }
 }
 
-function getParticipantStatusMeta(status?: string) {
-  return PARTICIPANT_STATUS_MAP[status || ''] || { label: status || '-', color: 'default' }
+function getActivityStatusMeta(activity?: PerformanceActivity | null) {
+  const meta = getStatusMeta(activity?.status)
+  if (activity?.flow_type !== 'new') return meta
+  if (activity.status === 'target_setting') {
+    return { ...meta, label: isSeparatedMutengReviewActivity(activity) ? '目标承接/补录' : '目标拟定' }
+  }
+  if (activity.status === 'manager_evaluation') return { ...meta, label: '主管评分' }
+  return meta
+}
+
+function getParticipantStatusMeta(status?: string, isMutengFlow = false) {
+  const map = isMutengFlow ? MUTENG_PARTICIPANT_STATUS_MAP : PARTICIPANT_STATUS_MAP
+  return map[status || ''] || { label: status || '-', color: 'default' }
+}
+
+function normalizeMutengParticipantProgressStatus(status?: string): PerformanceParticipantStatus | '' {
+  const normalizedStatus = String(status || '').trim()
+  if (!normalizedStatus) return ''
+  if (MUTENG_PARTICIPANT_PROGRESS_STATUS_SET.has(normalizedStatus)) {
+    return normalizedStatus as PerformanceParticipantStatus
+  }
+  return MUTENG_PARTICIPANT_PROGRESS_STATUS_ALIASES[normalizedStatus as PerformanceParticipantStatus] || ''
+}
+
+function getParticipantProgressOptions(isMutengFlow: boolean, currentStatus?: string) {
+  if (!isMutengFlow) return PARTICIPANT_PROGRESS_OPTIONS
+
+  const options = MUTENG_PARTICIPANT_PROGRESS_STATUSES.map(value => ({
+    value,
+    label: getParticipantStatusMeta(value, true).label,
+  }))
+  const normalizedCurrentStatus = normalizeMutengParticipantProgressStatus(currentStatus)
+  if (normalizedCurrentStatus && !options.some(option => option.value === normalizedCurrentStatus)) {
+    const current = getParticipantStatusMeta(normalizedCurrentStatus, true)
+    return [{ value: normalizedCurrentStatus, label: current.label }, ...options]
+  }
+  return options
 }
 
 const PERFORMANCE_PERMISSION_LABELS: Record<string, string> = {
@@ -487,9 +716,495 @@ const PERFORMANCE_PERMISSION_LABELS: Record<string, string> = {
   'performance:manager_eval:submit': '绩效主管评分',
   'performance:result:view': '绩效结果查看',
   'performance:hr_confirm:submit': '绩效HR确认',
+  'performance:department_eval:submit': '绩效部门评分',
+  'performance:hr_review:submit': '绩效HR审核',
+  'performance:result_publish:manage': '绩效结果公布',
+  'performance:result_visibility:manage': '绩效结果屏蔽管理',
+  'performance:hidden_result:view': '绩效屏蔽结果查看',
+  'performance:appeal:manage': '绩效申诉处理',
   'performance:assessment_manager:update': '考核上级调整',
   'performance:assessment_manager:batch_update': '批量考核上级调整',
 }
+
+function unwrapReminderResult<T>(res: any): T | undefined {
+  let value = res
+  for (let i = 0; i < 3; i++) {
+    if (!value || typeof value !== 'object' || !('data' in value)) break
+    value = value.data
+  }
+  return value as T | undefined
+}
+
+function unwrapSelfEvalReminderResult(res: any): PerformanceSelfEvalReminderResult | undefined {
+  return unwrapReminderResult<PerformanceSelfEvalReminderResult>(res)
+}
+
+function unwrapHRConfirmReminderResult(res: any): PerformanceHRConfirmReminderResult | undefined {
+  return unwrapReminderResult<PerformanceHRConfirmReminderResult>(res)
+}
+
+function unwrapManagerEvalReminderResult(res: any): PerformanceManagerEvalReminderResult | undefined {
+  return unwrapReminderResult<PerformanceManagerEvalReminderResult>(res)
+}
+
+function formatReminderRecipient(recipient: PerformanceReminderRecipientDetail) {
+  if (typeof recipient === 'string') return recipient || '-'
+  const userID = String(recipient?.user_id || '').trim()
+  const name = String(recipient?.name || '').trim()
+  if (name && userID) return `${name}（${userID}）`
+  return name || userID || '-'
+}
+
+function renderReminderRecipientList(title: string, recipients?: PerformanceReminderRecipientDetail[]) {
+  if (!recipients?.length) return null
+  return (
+    <div>
+      <Text strong>{title}</Text>
+      <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+        {recipients.map((recipient, index) => (
+          <li key={`${title}-${index}`}>
+            <Text>{formatReminderRecipient(recipient)}</Text>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function showReminderIssueDetails(
+  title: string,
+  result?: {
+    skipped_recipients?: PerformanceReminderRecipientDetail[]
+    failed_recipients?: PerformanceReminderRecipientDetail[]
+    missing_id_participant_ids?: number[]
+  },
+) {
+  const hasSkipped = Boolean(result?.skipped_recipients?.length)
+  const hasFailed = Boolean(result?.failed_recipients?.length)
+  const hasMissingID = Boolean(result?.missing_id_participant_ids?.length)
+  if (!hasSkipped && !hasFailed && !hasMissingID) return
+
+  Modal.warning({
+    title,
+    width: 560,
+    content: (
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        {renderReminderRecipientList('发送失败', result?.failed_recipients)}
+        {renderReminderRecipientList('已跳过（账号不可通知）', result?.skipped_recipients)}
+        {hasMissingID && (
+          <div>
+            <Text strong>缺少员工ID的参与记录</Text>
+            <Paragraph style={{ margin: '6px 0 0' }}>
+              {result?.missing_id_participant_ids?.join('、')}
+            </Paragraph>
+          </div>
+        )}
+      </Space>
+    ),
+  })
+}
+
+function getReviewVersionsFromResponse(response: any): PerformanceReviewVersion[] {
+  let payload = response
+  for (let i = 0; i < 3; i += 1) {
+    if (Array.isArray(payload?.versions)) return payload.versions
+    payload = payload?.data
+  }
+  return []
+}
+
+function sortVersionsDesc(versions: PerformanceReviewVersion[]) {
+  return [...versions].sort((a, b) => {
+    const timeDiff = new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    return timeDiff || b.id - a.id
+  })
+}
+
+type ParticipantActionsProps = {
+  activity: PerformanceActivity | null
+  record: PerformanceParticipant
+  canShowSelfReviewRecords: (record: PerformanceParticipant) => boolean
+  navigateTo: (path: string) => void
+  onOpenAssessmentManager: (record: PerformanceParticipant) => void
+  onOpenSelfReviewRecords: (record: PerformanceParticipant) => void
+  onRejectGoalRecords: (record: PerformanceParticipant) => void
+  onReloadActivityDetail: (activity: PerformanceActivity) => void | Promise<void>
+}
+
+const ParticipantActions = React.memo(function ParticipantActions({
+  activity,
+  record,
+  canShowSelfReviewRecords,
+  navigateTo,
+  onOpenAssessmentManager,
+  onOpenSelfReviewRecords,
+  onRejectGoalRecords,
+  onReloadActivityDetail,
+}: ParticipantActionsProps) {
+  const activityId = activity?.id
+  const activityStatus = activity?.status
+  const isArchived = ['archived', 'locked'].includes(activityStatus || '')
+  if (!activityId) return null
+
+  const isMutengFlow = activity?.flow_type === 'new'
+  const reloadActivityDetail = async () => {
+    if (activity) await onReloadActivityDetail(activity)
+  }
+  const ensureReason = (reason: string, warning: string) => {
+    if (reason.trim()) return true
+    message.warning(warning)
+    return false
+  }
+  const rejectKeepModalOpen = () => Promise.reject(new Error('reason required'))
+
+  const openDepartmentEvaluationModal = () => {
+    const baselineLevel = record.final_level || record.suggested_level || 'B'
+    const baselineScore = record.adjusted_score || record.total_manager_score || record.manager_score || undefined
+    let finalLevel = record.department_final_level || baselineLevel
+    let finalScore: number | undefined = record.department_final_score ?? baselineScore
+    let reason = ''
+    const isAdjusted = () => {
+      const levelChanged = String(finalLevel || '').trim() !== String(baselineLevel || '').trim()
+      const scoreChanged = finalScore !== undefined && Number(finalScore) !== Number(baselineScore || 0)
+      return levelChanged || scoreChanged
+    }
+    Modal.confirm({
+      title: `部门评分：${record.employee_name}`,
+      width: 480,
+      okText: '确认',
+      cancelText: '取消',
+      content: (
+        <Space direction="vertical" style={{ width: '100%', marginTop: 8 }} size={12}>
+          <Alert
+            showIcon
+            type="info"
+            message="可直接确认主管评分结果；如需调整最终等级或分数，请填写原因。"
+          />
+          <Select
+            defaultValue={finalLevel}
+            options={PERFORMANCE_LEVEL_OPTIONS}
+            style={{ width: '100%' }}
+            onChange={value => { finalLevel = value }}
+          />
+          <InputNumber
+            min={0}
+            max={120}
+            precision={1}
+            defaultValue={finalScore}
+            style={{ width: '100%' }}
+            placeholder="最终分，可选"
+            onChange={value => { finalScore = value === null || value === undefined ? undefined : Number(value) }}
+          />
+          <TextArea rows={3} placeholder="调整时必填；不调整可填写确认说明" onChange={event => { reason = event.target.value }} />
+        </Space>
+      ),
+      onOk: async () => {
+        if (isAdjusted() && !ensureReason(reason, '请输入部门/中心调整原因')) return rejectKeepModalOpen()
+        try {
+          await performanceAPI.departmentEvaluateParticipantResult(record.id, {
+            final_level: finalLevel,
+            final_score: finalScore,
+            reason: reason.trim() || '确认不调整',
+          })
+            message.success('部门评分已保存')
+          await reloadActivityDetail()
+        } catch (err: any) {
+          message.error(err?.response?.data?.message || '保存失败')
+          return Promise.reject(err)
+        }
+      },
+    })
+  }
+
+  const openProgressModal = () => {
+    let nextStatus: PerformanceParticipantStatus = isMutengFlow
+      ? normalizeMutengParticipantProgressStatus(record.status) || 'pending'
+      : record.status
+    let reason = ''
+    Modal.confirm({
+      title: `调整进度：${record.employee_name}`,
+      width: 460,
+      okText: '保存',
+      cancelText: '取消',
+      content: (
+        <Space direction="vertical" style={{ width: '100%', marginTop: 8 }} size={12}>
+          <Select
+            defaultValue={nextStatus}
+            options={getParticipantProgressOptions(isMutengFlow, nextStatus)}
+            style={{ width: '100%' }}
+            onChange={value => { nextStatus = value as PerformanceParticipantStatus }}
+          />
+          <TextArea rows={3} placeholder="请输入调整原因" onChange={event => { reason = event.target.value }} />
+        </Space>
+      ),
+      onOk: async () => {
+        if (!ensureReason(reason, '请输入调整进度原因')) return rejectKeepModalOpen()
+        try {
+          await performanceAPI.adminAdjustParticipantProgress(record.id, nextStatus, reason.trim())
+          message.success('进度已调整')
+          await reloadActivityDetail()
+        } catch (err: any) {
+          message.error(err?.response?.data?.message || '调整失败')
+          return Promise.reject(err)
+        }
+      },
+    })
+  }
+
+  const openResultVisibilityModal = () => {
+    const nextHidden = !record.result_hidden
+    let reason = ''
+    Modal.confirm({
+      title: `${nextHidden ? '屏蔽' : '解除屏蔽'}结果：${record.employee_name}`,
+      width: 460,
+      okText: nextHidden ? '屏蔽' : '解除屏蔽',
+      okButtonProps: nextHidden ? { danger: true } : undefined,
+      cancelText: '取消',
+      content: (
+        <Space direction="vertical" style={{ width: '100%', marginTop: 8 }} size={12}>
+          <Text type="secondary">{nextHidden ? '屏蔽后员工看不到任何绩效结果，也不会收到结果通知。' : '解除后员工可按权限查看绩效结果。'}</Text>
+          <TextArea rows={3} placeholder="请输入操作原因" onChange={event => { reason = event.target.value }} />
+        </Space>
+      ),
+      onOk: async () => {
+        if (!ensureReason(reason, '请输入操作原因')) return rejectKeepModalOpen()
+        try {
+          await performanceAPI.setParticipantResultVisibility(record.id, nextHidden, reason.trim())
+          message.success(nextHidden ? '已屏蔽结果' : '已解除屏蔽')
+          await reloadActivityDetail()
+        } catch (err: any) {
+          message.error(err?.response?.data?.message || '操作失败')
+          return Promise.reject(err)
+        }
+      },
+    })
+  }
+
+  const openRemoveModal = () => {
+    let reason = ''
+    Modal.confirm({
+      title: `移除参与人：${record.employee_name}`,
+      width: 460,
+      okText: '移除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      content: (
+        <Space direction="vertical" style={{ width: '100%', marginTop: 8 }} size={12}>
+          <Text type="secondary">移除后该员工的参与记录会软删除，历史操作仍保留。</Text>
+          <TextArea rows={3} placeholder="请输入移除原因" onChange={event => { reason = event.target.value }} />
+        </Space>
+      ),
+      onOk: async () => {
+        if (!ensureReason(reason, '请输入移除原因')) return rejectKeepModalOpen()
+        try {
+          await performanceAPI.removePerformanceParticipant(record.id, reason.trim())
+          message.success('参与人已移除')
+          await reloadActivityDetail()
+        } catch (err: any) {
+          message.error(err?.response?.data?.message || '移除失败')
+          return Promise.reject(err)
+        }
+      },
+    })
+  }
+
+  const mutengAdminLinks = () => {
+    if (!isMutengFlow) return null
+    const items: React.ReactNode[] = []
+    if (hasAnyPermission('performance:result:view', 'performance:manager_eval:submit', 'performance:manager_confirm:submit', 'performance:department_eval:submit', 'performance:hr_review:submit', 'performance:result_publish:manage', 'performance:appeal:manage', 'performance:level_adjust:manage', 'performance:activity:manage')) {
+      items.push(
+        <Button key="previous-result" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-previous-result-${record.id}`} onClick={() => navigateTo(`/performance-result/${activityId}/${record.id}`)}>上期结果</Button>,
+      )
+    }
+    if (
+      ['department_evaluation', 'hr_confirmation', 'employee_confirmation', 'locked', 'archived', 'hr_review', 'result_publish', 'interview', 'appeal'].includes(activityStatus || '') &&
+      hasAnyPermission('performance:department_eval:submit', 'performance:level_adjust:manage', 'performance:activity:manage')
+    ) {
+      items.push(
+        <Button key="department-eval" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-department-eval-${record.id}`} onClick={openDepartmentEvaluationModal}>部门评分</Button>,
+      )
+    }
+    if (
+      MUTENG_RESULT_VISIBILITY_ACTIVITY_STATUSES.includes(activityStatus || '') &&
+      hasPermission('performance:result_visibility:manage')
+    ) {
+      items.push(
+        <Button key="visibility" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-visibility-${record.id}`} onClick={openResultVisibilityModal}>
+          {record.result_hidden ? '解除屏蔽' : '屏蔽'}
+        </Button>,
+      )
+    }
+    if (hasPermission('performance:activity:manage')) {
+      items.push(
+        <Button key="progress" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-progress-${record.id}`} onClick={openProgressModal}>调进度</Button>,
+        <Button key="remove" size="small" type="link" danger style={participantActionButtonStyle} data-testid={`performance-participant-remove-${record.id}`} onClick={openRemoveModal}>移除</Button>,
+      )
+    }
+    return items
+  }
+
+  const archivedTargetButton = isMutengGoalSettingActivity(activity) && canOpenTargetPlan(activity, record) && hasPermission('performance:goal:manage') ? (
+    <Button key="target" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-target-${record.id}`}
+      onClick={() => navigateTo(`/performance-goal-setting/${activityId}/${record.id}`)}
+    >目标</Button>
+  ) : null
+
+  if (isArchived && !hasPermission('performance:result:view') && !archivedTargetButton) return null
+
+  if (isArchived) {
+    const adminLinks = mutengAdminLinks()
+    return (
+      <div style={participantActionListStyle}>
+        {archivedTargetButton}
+        {!isMutengGoalSettingActivity(activity) && hasPermission('performance:result:view') && (
+          <Button size="small" type="link" style={participantActionButtonStyle}
+            onClick={() => navigateTo(`/performance-result/${activityId}/${record.id}`)}
+          >查看</Button>
+        )}
+        {canShowSelfReviewRecords(record) && (
+          <Button size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-self-records-${record.id}`}
+            onClick={() => onOpenSelfReviewRecords(record)}
+          >记录</Button>
+        )}
+        {adminLinks}
+      </div>
+    )
+  }
+
+  const links: React.ReactNode[] = []
+
+  if (hasPermission('performance:assessment_manager:update')) {
+    links.push(
+      <Button key="manager" size="small" type="link" style={participantActionButtonStyle} onClick={() => onOpenAssessmentManager(record)}>调上级</Button>,
+    )
+  }
+
+  const canSelfEvaluateRecord = SELF_EVAL_EDITABLE_ACTIVITY_STATUSES.includes(activityStatus || '') &&
+    SELF_EVAL_EDITABLE_PARTICIPANT_STATUSES.includes(record.status)
+
+  if (canOpenTargetPlan(activity, record) && hasPermission('performance:goal:manage')) {
+    const isSeparatedReviewActivity = isSeparatedMutengReviewActivity(activity)
+    if (!isSeparatedReviewActivity) {
+      links.push(
+        <Button key="target" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-target-${record.id}`}
+          onClick={() => navigateTo(`/performance-goal-setting/${activityId}/${record.id}`)}
+        >目标</Button>,
+      )
+    }
+    if (activity?.flow_type === 'new' && ['target_setting', 'target_approval', 'self_evaluation'].includes(activityStatus || '') && (!isSeparatedMutengActivity(activity) || isSeparatedReviewActivity)) {
+      links.push(
+        <Button key="review-supplement" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-review-supplement-${record.id}`}
+          onClick={() => navigateTo(`/performance-goal-setting/${activityId}/${record.id}?phase=review`)}
+        >补录</Button>,
+      )
+    }
+  }
+
+  if (canSelfEvaluateRecord && hasPermission('performance:self_eval:submit')) {
+    links.push(
+      <Button key="self" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-self-${record.id}`}
+        onClick={() => navigateTo(`/performance-self-eval/${activityId}/${record.id}`)}
+      >{PERSONAL_SELF_EVAL_STATUSES.includes(record.status) ? '自评' : '改自评'}</Button>,
+    )
+  }
+
+  if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && hasPermission('performance:manager_eval:submit')) {
+    const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
+    links.push(
+      managerEvalBlockedReason ? (
+        <Tooltip key="mgr" title={managerEvalBlockedReason}>
+          <span>
+            <Button size="small" type="link" disabled style={participantActionButtonStyle} data-testid={`performance-participant-manager-${record.id}`}>评分</Button>
+          </span>
+        </Tooltip>
+      ) : (
+        <Button key="mgr" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-manager-${record.id}`}
+          onClick={() => navigateTo(`/performance-manager-eval/${activityId}/${record.id}`)}
+        >评分</Button>
+      ),
+    )
+  }
+
+  if (!isMutengFlow && ['manager_confirmation', 'hr_confirmation'].includes(activityStatus || '') && record.status === 'manager_recheck' && hasPermission('performance:manager_confirm:submit')) {
+    const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
+    links.push(
+      managerEvalBlockedReason ? (
+        <Tooltip key="manager-recheck" title={managerEvalBlockedReason}>
+          <span>
+            <Button size="small" type="link" disabled style={participantActionButtonStyle} data-testid={`performance-participant-manager-recheck-${record.id}`}>复核</Button>
+          </span>
+        </Tooltip>
+      ) : (
+        <Button key="manager-recheck" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-manager-recheck-${record.id}`}
+          onClick={() => navigateTo(`/performance-manager-eval/${activityId}/${record.id}`)}
+        >复核</Button>
+      ),
+    )
+  }
+
+  if (['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && hasPermission('performance:result:view')) {
+    links.push(
+      <Button key="result" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-result-${record.id}`}
+        onClick={() => navigateTo(`/performance-result/${activityId}/${record.id}`)}
+      >结果</Button>,
+    )
+  }
+
+  if (canShowSelfReviewRecords(record)) {
+    links.push(
+      <Button key="self-records" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-self-records-${record.id}`}
+        onClick={() => onOpenSelfReviewRecords(record)}
+      >记录</Button>,
+    )
+  }
+
+  const canReviewByHR = activityStatus === 'hr_review' && record.status === 'manager_confirmed' && hasAnyPermission('performance:hr_review:submit', 'performance:activity:manage')
+  const canConfirmByHR = activityStatus === 'hr_confirmation' && record.status === 'manager_confirmed' && hasPermission('performance:hr_confirm:submit')
+  if (canReviewByHR || canConfirmByHR) {
+    const hrActionLabel = canReviewByHR ? 'HR审核' : 'HR确认'
+    links.push(
+      <Button key="hr-confirm" size="small" type="link" style={{ ...participantActionButtonStyle, color: 'var(--color-primary)' }} data-testid={`performance-participant-hr-confirm-${record.id}`}
+        onClick={async () => {
+          try {
+            await performanceAPI.confirmHRResult(record.id)
+            message.success(`${hrActionLabel}成功`)
+            if (activity) await onReloadActivityDetail(activity)
+          } catch (err: any) {
+            message.error(err?.response?.data?.message || `${hrActionLabel}失败`)
+          }
+        }}
+      >{hrActionLabel}</Button>,
+    )
+  }
+
+  if (activityStatus === 'target_approval' && record.status === 'target_pending_approval' && hasAnyPermission('performance:goal:manage', 'performance:hr_review:submit', 'performance:activity:manage')) {
+    links.push(
+      <Button key="approve" size="small" type="link" style={{ ...participantActionButtonStyle, color: 'var(--color-info)' }} data-testid={`performance-participant-approve-${record.id}`}
+        onClick={async () => {
+          try {
+            await performanceAPI.approveGoalRecords(record.id)
+            message.success('目标已通过')
+            if (activity) await onReloadActivityDetail(activity)
+          } catch (err: any) {
+            message.error(err?.response?.data?.message || '审批失败')
+          }
+        }}
+      >通过</Button>,
+    )
+    links.push(
+      <Button key="reject" size="small" type="link" danger style={participantActionButtonStyle} data-testid={`performance-participant-reject-${record.id}`}
+        onClick={() => onRejectGoalRecords(record)}
+      >驳回</Button>,
+    )
+  }
+
+  const adminLinks = mutengAdminLinks()
+  if (adminLinks) {
+    links.push(...adminLinks)
+  }
+
+  return <div style={participantActionListStyle}>{links}</div>
+})
 
 const PerformanceOverview: React.FC = () => {
   const navigate = useNavigate()
@@ -525,10 +1240,14 @@ const PerformanceOverview: React.FC = () => {
   const [participantsLoading, setParticipantsLoading] = useState(false)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [distributionCheckLoading, setDistributionCheckLoading] = useState(false)
-  const [summary, setSummary] = useState<any>(null)
-  const [distributionCheck, setDistributionCheck] = useState<any>(null)
+  const [summary, setSummary] = useState<PerformanceResultSummary | null>(null)
+  const [distributionCheck, setDistributionCheck] = useState<PerformanceDistributionCheck | null>(null)
   const [distributionRules, setDistributionRules] = useState<PerformanceDistributionRule[]>([])
   const [hrDeadlineStatus, setHrDeadlineStatus] = useState<PerformanceHRDeadlineStatus | null>(null)
+  const [selfReviewDrawerVisible, setSelfReviewDrawerVisible] = useState(false)
+  const [selfReviewTarget, setSelfReviewTarget] = useState<PerformanceParticipant | null>(null)
+  const [selfReviewVersions, setSelfReviewVersions] = useState<PerformanceReviewVersion[]>([])
+  const [selfReviewVersionsLoading, setSelfReviewVersionsLoading] = useState(false)
 
   // 评分弹窗
   // 强制分布弹窗
@@ -708,26 +1427,42 @@ const PerformanceOverview: React.FC = () => {
   }, [loadActivities, loadScopeOptions, loadPerformanceTemplates])
 
   // 加载活动详情
-  const loadActivityDetail = async (activity: PerformanceActivity) => {
+  const loadActivityDetail = useCallback(async (activity: PerformanceActivity) => {
+    const loadDistributionDetail = shouldLoadDistributionDetail(activity.status)
+    const loadHRDeadline = shouldLoadHRDeadlineDetail(activity.status)
+    const requests: Array<{
+      key: 'participants' | 'summary' | 'distributionCheck' | 'distributionRules' | 'hrDeadline'
+      request: Promise<any>
+    }> = [
+      { key: 'participants', request: performanceAPI.getParticipants(activity.id, { page: 1, page_size: 200 }) },
+      { key: 'summary', request: performanceAPI.getResultSummary(activity.id) },
+    ]
+    if (loadDistributionDetail) {
+      requests.push(
+        { key: 'distributionCheck', request: performanceAPI.getDistributionCheck(activity.id) },
+        { key: 'distributionRules', request: performanceAPI.getDistributionRules(activity.id) },
+      )
+    }
+    if (loadHRDeadline) {
+      requests.push({ key: 'hrDeadline', request: performanceAPI.getHRConfirmDeadlineStatus(activity.id) })
+    }
     setCurrentActivity(activity)
     setDetailDrawerVisible(true)
     setParticipantsLoading(true)
     setSummaryLoading(true)
-    setDistributionCheckLoading(true)
+    setDistributionCheckLoading(loadDistributionDetail)
     setHrDeadlineStatus(null)
+    if (!loadDistributionDetail) {
+      setDistributionCheck(null)
+      setDistributionRules([])
+    }
 
-    // 使用 Promise.allSettled 避免单个接口失败阻塞整个流程
-    const results = await Promise.allSettled([
-      performanceAPI.getParticipants(activity.id, { page: 1, page_size: 200 }),
-      performanceAPI.getResultSummary(activity.id),
-      performanceAPI.getDistributionCheck(activity.id),
-      performanceAPI.getDistributionRules(activity.id),
-      performanceAPI.getHRConfirmDeadlineStatus(activity.id),
-    ])
+    const results = await Promise.allSettled(requests.map(item => item.request))
+    const resultByKey = new Map(requests.map((item, index) => [item.key, results[index]]))
 
     // 处理参与人
-    const participantsResult = results[0]
-    if (participantsResult.status === 'fulfilled') {
+    const participantsResult = resultByKey.get('participants')
+    if (participantsResult?.status === 'fulfilled') {
       const res = participantsResult.value as any
       const pData = res?.data || res
       setParticipants(pData?.items || [])
@@ -739,8 +1474,8 @@ const PerformanceOverview: React.FC = () => {
     setParticipantsLoading(false)
 
     // 处理统计摘要
-    const summaryResult = results[1]
-    if (summaryResult.status === 'fulfilled') {
+    const summaryResult = resultByKey.get('summary')
+    if (summaryResult?.status === 'fulfilled') {
       const res = summaryResult.value as any
       setSummary(res?.data || null)
     } else {
@@ -748,9 +1483,8 @@ const PerformanceOverview: React.FC = () => {
     }
     setSummaryLoading(false)
 
-    // 处理强制分布检查
-    const distributionCheckResult = results[2]
-    if (distributionCheckResult.status === 'fulfilled') {
+    const distributionCheckResult = resultByKey.get('distributionCheck')
+    if (distributionCheckResult?.status === 'fulfilled') {
       const res = distributionCheckResult.value as any
       const dcData = res?.data || res
       setDistributionCheck(dcData || null)
@@ -759,9 +1493,8 @@ const PerformanceOverview: React.FC = () => {
     }
     setDistributionCheckLoading(false)
 
-    // 处理分布规则
-    const rulesResult = results[3]
-    if (rulesResult.status === 'fulfilled') {
+    const rulesResult = resultByKey.get('distributionRules')
+    if (rulesResult?.status === 'fulfilled') {
       const res = rulesResult.value as any
       const rData = res?.data || res
       setDistributionRules(rData?.rules || [])
@@ -769,16 +1502,16 @@ const PerformanceOverview: React.FC = () => {
       setDistributionRules([])
     }
 
-    const hrDeadlineResult = results[4]
-    if (hrDeadlineResult.status === 'fulfilled') {
+    const hrDeadlineResult = resultByKey.get('hrDeadline')
+    if (hrDeadlineResult?.status === 'fulfilled') {
       const res = hrDeadlineResult.value as any
       setHrDeadlineStatus((res?.data || res) as PerformanceHRDeadlineStatus)
     } else {
       setHrDeadlineStatus(null)
     }
-  }
+  }, [])
 
-  const reloadParticipants = async (activityId: number) => {
+  const reloadParticipants = useCallback(async (activityId: number) => {
     setParticipantsLoading(true)
     try {
       const res: any = await performanceAPI.getParticipants(activityId, { page: 1, page_size: 200 })
@@ -791,7 +1524,7 @@ const PerformanceOverview: React.FC = () => {
     } finally {
       setParticipantsLoading(false)
     }
-  }
+  }, [])
 
   const closeActivityEditor = () => {
     setActivityModalVisible(false)
@@ -856,6 +1589,12 @@ const PerformanceOverview: React.FC = () => {
       )
       const selectedTemplate = performanceTemplates.find(template => String(template.id) === String(values.template_id))
       const flowType = selectedTemplate?.flow_type || values.flow_type || 'old'
+      const activityKind = flowType === 'new'
+        ? (values.activity_kind || editingActivity?.activity_kind || (editingActivity ? undefined : 'goal_setting'))
+        : undefined
+      const shouldSubmitReviewSchedule = flowType !== 'new' || activityKind !== 'goal_setting'
+      const shouldSubmitResultConfirmSchedule = shouldSubmitReviewSchedule
+        && !(flowType === 'new' && activityKind === 'review_scoring')
       const data = {
         name: values.name,
         cycle_type: values.cycle_type,
@@ -863,18 +1602,19 @@ const PerformanceOverview: React.FC = () => {
         end_date: values.date_range[1].format('YYYY-MM-DD'),
         template_id: values.template_id,
         flow_type: flowType,
+        activity_kind: activityKind,
         organization_id: values.organization_id || '',
         applicable_org_scope: normalizeIDArray(values.applicable_org_scope),
         target_set_start_at: formatRangeStart(values.target_set_range),
         target_set_end_at: formatRangeEnd(values.target_set_range),
         snapshot_as_of_date: values.snapshot_as_of_date?.format('YYYY-MM-DD') || '',
         snapshot_source: values.snapshot_as_of_date ? 'assessment_period' : 'current_user',
-        self_eval_start_at: values.self_eval_range[0].format('YYYY-MM-DD'),
-        self_eval_end_at: values.self_eval_range[1].format('YYYY-MM-DD'),
-        manager_eval_start_at: values.manager_eval_range[0].format('YYYY-MM-DD'),
-        manager_eval_end_at: values.manager_eval_range[1].format('YYYY-MM-DD'),
-        result_confirm_start_at: values.result_confirm_range[0].format('YYYY-MM-DD'),
-        result_confirm_end_at: values.result_confirm_range[1].format('YYYY-MM-DD'),
+        self_eval_start_at: shouldSubmitReviewSchedule ? formatRangeStart(values.self_eval_range) : '',
+        self_eval_end_at: shouldSubmitReviewSchedule ? formatRangeEnd(values.self_eval_range) : '',
+        manager_eval_start_at: shouldSubmitReviewSchedule ? formatRangeStart(values.manager_eval_range) : '',
+        manager_eval_end_at: shouldSubmitReviewSchedule ? formatRangeEnd(values.manager_eval_range) : '',
+        result_confirm_start_at: shouldSubmitResultConfirmSchedule ? formatRangeStart(values.result_confirm_range) : '',
+        result_confirm_end_at: shouldSubmitResultConfirmSchedule ? formatRangeEnd(values.result_confirm_range) : '',
         employee_confirm_start_at: formatRangeStart(values.employee_confirm_range),
         employee_confirm_end_at: formatRangeEnd(values.employee_confirm_range),
         manager_confirm_start_at: formatRangeStart(values.manager_confirm_range),
@@ -888,6 +1628,7 @@ const PerformanceOverview: React.FC = () => {
         manager_assignments: managerAssignments,
         default_assessment_manager_source: values.default_assessment_manager_source || 'DIRECT_MANAGER',
         indicator_library_id: values.indicator_library_id,
+        previous_review_activity_id: activityKind === 'review_scoring' ? values.previous_review_activity_id : undefined,
         description: values.description,
         enable_bonus_score: values.enable_bonus_score || false,
         strict_time_mode: values.strict_time_mode || false,
@@ -938,6 +1679,12 @@ const PerformanceOverview: React.FC = () => {
         publish: performanceAPI.publishActivity,
         close: performanceAPI.closeActivity,
         'open-target-setting': performanceAPI.openTargetSetting,
+        'open-target-approval': performanceAPI.openTargetApproval,
+        'open-department-evaluation': performanceAPI.openDepartmentEvaluation,
+        'open-hr-review': performanceAPI.openHRReview,
+        'open-result-publish': performanceAPI.openResultPublish,
+        'open-performance-interview': performanceAPI.openPerformanceInterviewStage,
+        'open-performance-appeal': performanceAPI.openPerformanceAppeal,
         'open-employee-confirmation': performanceAPI.openEmployeeConfirmation,
         'open-manager-confirmation': performanceAPI.openManagerConfirmation,
         'open-hr-confirmation': performanceAPI.openHRConfirmation,
@@ -960,7 +1707,146 @@ const PerformanceOverview: React.FC = () => {
     }
   }
 
-  // 保存强制分布规则
+  const showSelfEvalReminderResult = (result?: PerformanceSelfEvalReminderResult) => {
+    const pending = Number(result?.pending || 0)
+    const candidates = Number(result?.candidates || 0)
+    const sent = Number(result?.sent || 0)
+    const skipped = Number(result?.skipped || 0)
+    const failed = Number(result?.failed || 0)
+
+    if (pending <= 0) {
+      message.warning('当前没有待自评人员，无需发送提醒')
+      return
+    }
+    if (sent > 0) {
+      if (skipped > 0 || failed > 0) {
+        message.warning(`已发送自评提醒 ${sent} 人，跳过 ${skipped} 人，失败 ${failed} 人`)
+        showReminderIssueDetails('自评提醒发送明细', result)
+        return
+      }
+      message.success(`已发送自评提醒 ${sent} 人`)
+      return
+    }
+    if (candidates <= 0) {
+      message.warning('没有找到可通知的待自评人员，请检查参与人配置')
+      showReminderIssueDetails('自评提醒发送明细', result)
+      return
+    }
+    if (failed > 0) {
+      message.error(`自评提醒发送失败：${failed} 人失败`)
+      showReminderIssueDetails('自评提醒发送明细', result)
+      return
+    }
+    if (skipped > 0) {
+      message.warning('自评提醒未发送：接收人不可通知，请检查钉钉账号状态')
+      showReminderIssueDetails('自评提醒发送明细', result)
+      return
+    }
+    message.warning('自评提醒未发送，请检查接收人配置')
+    showReminderIssueDetails('自评提醒发送明细', result)
+  }
+
+  const handleSendSelfEvalReminder = async (activity: PerformanceActivity) => {
+    try {
+      const res: any = await performanceAPI.sendSelfEvalReminder(activity.id)
+      showSelfEvalReminderResult(unwrapSelfEvalReminderResult(res))
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '发送提醒失败')
+    }
+  }
+
+  const showManagerEvalReminderResult = (result?: PerformanceManagerEvalReminderResult) => {
+    const pending = Number(result?.pending || 0)
+    const candidates = Number(result?.candidates || 0)
+    const sent = Number(result?.sent || 0)
+    const skipped = Number(result?.skipped || 0)
+    const failed = Number(result?.failed || 0)
+
+    if (pending <= 0) {
+      message.warning('当前没有待主管评分人员，无需发送提醒')
+      return
+    }
+    if (sent > 0) {
+      if (skipped > 0 || failed > 0) {
+        message.warning(`已发送评分提醒 ${sent} 位主管，待评分 ${pending} 人，跳过 ${skipped} 位，失败 ${failed} 位`)
+        showReminderIssueDetails('评分提醒发送明细', result)
+        return
+      }
+      message.success(`已发送评分提醒 ${sent} 位主管，待评分 ${pending} 人`)
+      return
+    }
+    if (candidates <= 0) {
+      message.warning('没有找到可通知的主管，请检查考核上级配置')
+      return
+    }
+    if (failed > 0) {
+      message.error(`评分提醒发送失败：${failed} 位主管失败`)
+      showReminderIssueDetails('评分提醒发送明细', result)
+      return
+    }
+    if (skipped > 0) {
+      message.warning('评分提醒未发送：主管账号不可通知，请检查钉钉账号状态')
+      showReminderIssueDetails('评分提醒发送明细', result)
+      return
+    }
+    message.warning('评分提醒未发送，请检查接收人配置')
+  }
+
+  const handleSendManagerEvalReminder = async (activity: PerformanceActivity) => {
+    try {
+      const res: any = await performanceAPI.sendManagerEvalReminder(activity.id)
+      showManagerEvalReminderResult(unwrapManagerEvalReminderResult(res))
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '发送提醒失败')
+    }
+  }
+
+  const showHRConfirmReminderResult = (result?: PerformanceHRConfirmReminderResult) => {
+    const pending = Number(result?.pending || 0)
+    const candidates = Number(result?.candidates || 0)
+    const sent = Number(result?.sent || 0)
+    const skipped = Number(result?.skipped || 0)
+    const failed = Number(result?.failed || 0)
+
+    if (pending <= 0) {
+      message.warning('当前没有待HR确认人员，无需发送提醒')
+      return
+    }
+    if (sent > 0) {
+      if (skipped > 0 || failed > 0) {
+        message.warning(`已发送HR确认提醒 ${sent} 人，跳过 ${skipped} 人，失败 ${failed} 人`)
+        showReminderIssueDetails('HR确认提醒发送明细', result)
+        return
+      }
+      message.success(`已发送HR确认提醒 ${sent} 人`)
+      return
+    }
+    if (candidates <= 0) {
+      message.warning('没有找到可通知的HR确认人，请检查HR确认权限配置')
+      return
+    }
+    if (failed > 0) {
+      message.error(`HR确认提醒发送失败：${failed} 人失败`)
+      showReminderIssueDetails('HR确认提醒发送明细', result)
+      return
+    }
+    if (skipped > 0) {
+      message.warning('HR确认提醒未发送：接收人不可通知，请检查钉钉账号状态')
+      showReminderIssueDetails('HR确认提醒发送明细', result)
+      return
+    }
+    message.warning('HR确认提醒未发送，请检查接收人配置')
+  }
+
+  const handleSendHRConfirmReminder = async (activity: PerformanceActivity) => {
+    try {
+      const res: any = await performanceAPI.sendHRConfirmReminder(activity.id)
+      showHRConfirmReminderResult(unwrapHRConfirmReminderResult(res))
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '发送提醒失败')
+    }
+  }
+
   const handleForceLockOverdueHR = (activity: PerformanceActivity) => {
     Modal.confirm({
       title: '逾期强制锁定',
@@ -996,13 +1882,13 @@ const PerformanceOverview: React.FC = () => {
     }
   }
 
-  const handleRejectGoalRecords = (record: PerformanceParticipant) => {
+  const handleRejectGoalRecords = useCallback((record: PerformanceParticipant) => {
     rejectGoalForm.resetFields()
     setRejectGoalTarget(record)
     setRejectGoalModalVisible(true)
-  }
+  }, [rejectGoalForm])
 
-  const renderPermissionButton = (
+  const renderPermissionButton = useCallback((
     permissionCode: string,
     button: React.ReactElement,
     permissionName = PERFORMANCE_PERMISSION_LABELS[permissionCode] || permissionCode,
@@ -1018,18 +1904,48 @@ const PerformanceOverview: React.FC = () => {
         </span>
       </Tooltip>
     )
-  }
+  }, [])
 
-  const renderActivityManageButton = (button: React.ReactElement) =>
-    renderPermissionButton('performance:activity:manage', button)
+  const renderActivityManageButton = useCallback((button: React.ReactElement) =>
+    renderPermissionButton('performance:activity:manage', button), [renderPermissionButton])
 
-  const renderDistributionButton = (button: React.ReactElement) =>
-    renderPermissionButton('performance:distribution:manage', button)
+  const renderHiddenPermissionButton = useCallback((
+    permissionCode: string,
+    button: React.ReactElement,
+  ) => hasPermission(permissionCode) ? button : null, [])
 
-  const renderManagerEvalButton = (button: React.ReactElement) =>
-    renderPermissionButton('performance:manager_eval:submit', button)
+  const renderDetailActivityManageButton = useCallback((button: React.ReactElement) =>
+    renderHiddenPermissionButton('performance:activity:manage', button), [renderHiddenPermissionButton])
 
-  const loadAssessmentManagerCandidates = async (keyword = '', participantId?: number, source?: AssessmentManagerSource) => {
+  const renderDetailAnyPermissionButton = useCallback((permissionCodes: string[], button: React.ReactElement) =>
+    hasAnyPermission(...permissionCodes) ? button : null, [])
+
+  const renderDetailResultPublishButton = useCallback((button: React.ReactElement) =>
+    renderDetailAnyPermissionButton(['performance:activity:manage', 'performance:result_publish:manage'], button), [renderDetailAnyPermissionButton])
+
+  const renderDetailDepartmentEvalButton = useCallback((button: React.ReactElement) =>
+    renderDetailAnyPermissionButton(['performance:activity:manage', 'performance:department_eval:submit'], button), [renderDetailAnyPermissionButton])
+
+  const renderDetailHRReviewButton = useCallback((button: React.ReactElement) =>
+    renderDetailAnyPermissionButton(['performance:activity:manage', 'performance:department_eval:submit', 'performance:hr_review:submit'], button), [renderDetailAnyPermissionButton])
+
+  const renderDetailDistributionButton = useCallback((button: React.ReactElement) =>
+    renderHiddenPermissionButton('performance:distribution:manage', button), [renderHiddenPermissionButton])
+
+  const renderDetailManagerEvalButton = useCallback((button: React.ReactElement) =>
+    renderHiddenPermissionButton('performance:manager_eval:submit', button), [renderHiddenPermissionButton])
+
+  const withActivityActionStyle = useCallback((button: React.ReactElement) => {
+    const props = button.props as { style?: React.CSSProperties }
+    return React.cloneElement(button, {
+      style: {
+        ...activityActionButtonStyle,
+        ...props.style,
+      },
+    } as Partial<React.ComponentProps<typeof Button>>)
+  }, [])
+
+  const loadAssessmentManagerCandidates = useCallback(async (keyword = '', participantId?: number, source?: AssessmentManagerSource) => {
     if (!currentActivity) return
     setManagerCandidateLoading(true)
     try {
@@ -1050,9 +1966,9 @@ const PerformanceOverview: React.FC = () => {
     } finally {
       setManagerCandidateLoading(false)
     }
-  }
+  }, [currentActivity, managerForm])
 
-  const openAssessmentManagerModal = (record?: PerformanceParticipant) => {
+  const openAssessmentManagerModal = useCallback((record?: PerformanceParticipant) => {
     if (!currentActivity) return
     if (!record && selectedParticipantIds.length === 0) {
       message.warning('请先选择参与人')
@@ -1078,7 +1994,7 @@ const PerformanceOverview: React.FC = () => {
     setSelectedManagerSource(managerSource)
     setManagerModalVisible(true)
     loadAssessmentManagerCandidates('', record?.id, managerSource)
-  }
+  }, [currentActivity, loadAssessmentManagerCandidates, loadScopeOptions, managerForm, selectedParticipantIds.length, users.length])
 
   const handleAssessmentManagerSearch = (keyword: string) => {
     loadAssessmentManagerCandidates(keyword, managerTargetParticipant?.id)
@@ -1156,58 +2072,179 @@ const PerformanceOverview: React.FC = () => {
     }
   }
 
+  const batchEvalSelectableParticipantIds = React.useMemo(
+    () => participants
+      .filter(p => (p.status === 'self_submitted' || p.status === 'manager_submitted') && isAssessmentManagerConfigured(p))
+      .map(p => p.id),
+    [participants],
+  )
+
+  const openBatchEvalModal = useCallback(() => {
+    setBatchEvalSelected(batchEvalSelectableParticipantIds)
+    setBatchEvalModalVisible(true)
+  }, [batchEvalSelectableParticipantIds])
+
+  const selfFinalSubmittedCount = React.useMemo(
+    () => participants.reduce((count, record) => (
+      record.status === 'self_submitted' && isSelfFinalAssessmentRecord(record) ? count + 1 : count
+    ), 0),
+    [participants],
+  )
+
+  const detailSummaryCards = React.useMemo(() => {
+    if (!summary) return []
+    const isMutengFlow = currentActivity?.flow_type === 'new'
+    if (isMutengGoalSettingActivity(currentActivity)) {
+      const submittedCount = participants.filter(record => ['target_pending_approval', 'target_set', 'locked', 'result_confirmed'].includes(record.status)).length
+      return [
+        { title: '参与人数', value: summary.total_participants, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
+        { title: '已提交目标', value: submittedCount, color: '#0369a1', bg: '#e0f2fe' },
+        { title: '已审核目标', value: summary.target_set_count || 0, color: '#16a34a', bg: '#dcfce7' },
+        { title: '已锁定', value: summary.locked_count || 0, color: '#b45309', bg: '#fef3c7' },
+      ]
+    }
+    const employeeConfirmedCount = (summary.employee_confirmed_count || 0)
+    return [
+      { title: '参与人数', value: summary.total_participants, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
+      { title: '已自评', value: summary.self_submitted_count, color: '#0369a1', bg: '#e0f2fe' },
+      {
+        title: isMutengFlow ? '已主管评分' : '已评分',
+        value: summary.manager_submitted_count + selfFinalSubmittedCount,
+        color: '#b45309',
+        bg: '#fef3c7',
+      },
+      {
+        title: isMutengFlow ? '员工已确认' : '已确认',
+        value: isMutengFlow ? employeeConfirmedCount : summary.result_confirmed_count,
+        color: 'var(--color-success)',
+        bg: '#dcfce7',
+      },
+    ]
+  }, [currentActivity, participants, selfFinalSubmittedCount, summary])
+
+  const currentActivityStatusConfig = React.useMemo(
+    () => currentActivity ? getActivityStatusMeta(currentActivity) : undefined,
+    [currentActivity],
+  )
+
+  const currentActivityTemplateDisplay = React.useMemo(
+    () => currentActivity ? getActivityTemplateDisplay(currentActivity, performanceTemplateById) : null,
+    [currentActivity, performanceTemplateById],
+  )
+
+  const currentActivityStepItems = React.useMemo(() => {
+    if (!currentActivity) return []
+    const flow = getActivityFlow(currentActivity)
+    const currentStepIndex = getActivityStepIndex(currentActivity.status, currentActivity)
+    return flow.map((item, index) => ({
+      title: item.label,
+      status: item.status === currentActivity.status
+        ? 'process' as const
+        : currentStepIndex > index ? 'finish' as const : 'wait' as const,
+    }))
+  }, [currentActivity])
+
+  const closeDetailDrawer = useCallback(() => {
+    setDetailDrawerVisible(false)
+    setCurrentActivity(null)
+    setParticipants([])
+    setSelectedParticipantIds([])
+    setManagerModalVisible(false)
+    setSummary(null)
+    setDistributionCheck(null)
+    setDistributionRules([])
+    setHrDeadlineStatus(null)
+    setSelfReviewDrawerVisible(false)
+    setSelfReviewTarget(null)
+    setSelfReviewVersions([])
+  }, [])
+
   const renderDetailActionButtons = (activity: PerformanceActivity) => {
     const actions: React.ReactNode[] = []
-    const activityManage = (button: React.ReactElement) => renderActivityManageButton(button)
+    const activityManage = (button: React.ReactElement) => renderDetailActivityManageButton(button)
+    const isMutengFlow = activity.flow_type === 'new'
 
     if (!['locked', 'archived'].includes(activity.status)) {
       actions.push(
-        renderPermissionButton(
+        renderHiddenPermissionButton(
           'performance:assessment_manager:batch_update',
-          <Button key="batch-manager" size="small" onClick={() => openAssessmentManagerModal()}>批量调整考核上级</Button>,
+          <Button key="batch-manager" size="small" data-testid={`performance-detail-batch-manager-${activity.id}`} onClick={() => openAssessmentManagerModal()}>批量调整考核上级</Button>,
         ),
       )
     }
 
     if (activity.status === 'draft') {
       actions.push(
-        activityManage(<Button key="edit-participants" size="small" onClick={() => { setDetailDrawerVisible(false); openActivityModal(activity) }}>编辑参与人</Button>),
-        activityManage(<Button key="open-target-setting" type="primary" size="small" onClick={() => handleActivityAction('open-target-setting', activity)}>开启目标设定</Button>),
-        activityManage(<Button key="publish" size="small" onClick={() => handleActivityAction('publish', activity)}>直接开启自评</Button>),
+        activityManage(<Button key="edit-participants" size="small" data-testid={`performance-detail-edit-participants-${activity.id}`} onClick={() => { setDetailDrawerVisible(false); openActivityModal(activity) }}>编辑参与人</Button>),
+        activityManage(<Button key="open-target-setting" type="primary" size="small" data-testid={`performance-detail-open-target-${activity.id}`} onClick={() => handleActivityAction('open-target-setting', activity)}>{isSeparatedMutengReviewActivity(activity) ? '开启目标承接/补录' : '开启目标设定'}</Button>),
       )
+      if (!isMutengFlow) {
+        actions.push(activityManage(<Button key="publish" size="small" data-testid={`performance-detail-publish-${activity.id}`} onClick={() => handleActivityAction('publish', activity)}>直接开启自评</Button>))
+      }
     }
     if (activity.status === 'target_setting') {
-      actions.push(activityManage(<Button key="open-self-evaluation" type="primary" size="small" onClick={() => handleActivityAction('open-self-evaluation', activity)}>开启自评</Button>))
+      actions.push(activityManage(
+        isSeparatedMutengReviewActivity(activity)
+          ? <Button key="open-self-evaluation" type="primary" size="small" data-testid={`performance-detail-open-self-${activity.id}`} onClick={() => handleActivityAction('open-self-evaluation', activity)}>开启自评</Button>
+          : isMutengFlow
+          ? <Button key="open-target-approval" type="primary" size="small" data-testid={`performance-detail-open-target-approval-${activity.id}`} onClick={() => handleActivityAction('open-target-approval', activity)}>开启目标审核</Button>
+          : <Button key="open-self-evaluation" type="primary" size="small" data-testid={`performance-detail-open-self-${activity.id}`} onClick={() => handleActivityAction('open-self-evaluation', activity)}>开启自评</Button>,
+      ))
+    }
+    if (isMutengGoalSettingActivity(activity) && activity.status === 'target_approval') {
+      actions.push(activityManage(<Button key="lock" type="primary" danger size="small" data-testid={`performance-detail-lock-${activity.id}`} onClick={() => handleActivityAction('lock', activity)}>锁定活动</Button>))
+    } else if (isMutengFlow && activity.status === 'target_approval') {
+      actions.push(activityManage(<Button key="open-self-evaluation" type="primary" size="small" data-testid={`performance-detail-open-self-${activity.id}`} onClick={() => handleActivityAction('open-self-evaluation', activity)}>开启自评</Button>))
     }
     if (activity.status === 'self_evaluation') {
       actions.push(
-        activityManage(<Button key="open-manager-evaluation" type="primary" size="small" onClick={() => handleActivityAction('open-manager-evaluation', activity)}>开启主管评分</Button>),
-        activityManage(<Button key="send-self-reminder" size="small" onClick={async () => { try { await performanceAPI.sendSelfEvalReminder(activity.id); message.success('已发送自评提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒自评</Button>),
+        activityManage(<Button key="open-manager-evaluation" type="primary" size="small" data-testid={`performance-detail-open-manager-${activity.id}`} onClick={() => handleActivityAction('open-manager-evaluation', activity)}>开启主管评分</Button>),
+        activityManage(<Button key="send-self-reminder" size="small" data-testid={`performance-detail-remind-self-${activity.id}`} onClick={() => handleSendSelfEvalReminder(activity)}>提醒自评</Button>),
       )
     }
     if (activity.status === 'manager_evaluation') {
       actions.push(
-        activityManage(<Button key="open-employee-confirmation" type="primary" size="small" onClick={() => handleActivityAction('open-employee-confirmation', activity)}>开启员工确认</Button>),
-        renderDistributionButton(<Button key="distribution" size="small" onClick={() => setDistributionModalVisible(true)}>强制分布</Button>),
-        renderManagerEvalButton(<Button key="batch-eval" size="small" onClick={() => { const selectable = participants.filter(p => (p.status === 'self_submitted' || p.status === 'manager_submitted') && isAssessmentManagerConfigured(p)); setBatchEvalSelected(selectable.map(p => p.id)); setBatchEvalModalVisible(true) }}>批量评分</Button>),
-        activityManage(<Button key="send-manager-reminder" size="small" onClick={async () => { try { await performanceAPI.sendManagerEvalReminder(activity.id); message.success('已发送评分提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒评分</Button>),
+        isMutengFlow
+          ? renderDetailDepartmentEvalButton(<Button key="open-department-evaluation" type="primary" size="small" data-testid={`performance-detail-open-department-${activity.id}`} onClick={() => handleActivityAction('open-department-evaluation', activity)}>开启部门评分</Button>)
+          : activityManage(<Button key="open-employee-confirmation" type="primary" size="small" data-testid={`performance-detail-open-employee-confirm-${activity.id}`} onClick={() => handleActivityAction('open-employee-confirmation', activity)}>开启员工确认</Button>),
+        renderDetailDistributionButton(<Button key="distribution" size="small" data-testid={`performance-detail-distribution-${activity.id}`} onClick={() => setDistributionModalVisible(true)}>强制分布</Button>),
+        renderDetailManagerEvalButton(<Button key="batch-eval" size="small" data-testid={`performance-detail-batch-eval-${activity.id}`} onClick={openBatchEvalModal}>批量评分</Button>),
+        activityManage(<Button key="send-manager-reminder" size="small" data-testid={`performance-detail-remind-manager-${activity.id}`} onClick={() => handleSendManagerEvalReminder(activity)}>提醒评分</Button>),
       )
     }
-    if (activity.status === 'employee_confirmation') {
-      actions.push(activityManage(<Button key="open-manager-confirmation" type="primary" size="small" onClick={() => handleActivityAction('open-manager-confirmation', activity)}>开启主管确认</Button>))
+    if (isMutengFlow && activity.status === 'department_evaluation') {
+      actions.push(
+        renderDetailHRReviewButton(<Button key="open-hr-review" type="primary" size="small" data-testid={`performance-detail-open-hr-review-${activity.id}`} onClick={() => handleActivityAction('open-hr-review', activity)}>开启HR审核</Button>),
+        renderDetailDistributionButton(<Button key="distribution" size="small" data-testid={`performance-detail-distribution-${activity.id}`} onClick={() => setDistributionModalVisible(true)}>强制分布</Button>),
+      )
     }
-    if (activity.status === 'manager_confirmation') {
-      actions.push(activityManage(<Button key="open-hr-confirmation" type="primary" size="small" onClick={() => handleActivityAction('open-hr-confirmation', activity)}>开启HR确认</Button>))
+    if (isMutengFlow && !isSeparatedMutengActivity(activity) && activity.status === 'hr_confirmation') {
+      actions.push(
+        activityManage(<Button key="send-hr-reminder" size="small" data-testid={`performance-detail-remind-hr-${activity.id}`} onClick={() => handleSendHRConfirmReminder(activity)}>提醒HR确认</Button>),
+        activityManage(<Button key="open-employee-confirmation" type="primary" size="small" data-testid={`performance-detail-open-employee-confirm-${activity.id}`} onClick={() => handleActivityAction('open-employee-confirmation', activity)}>开启员工确认</Button>),
+      )
     }
-    if (activity.status === 'hr_confirmation') {
-      actions.push(activityManage(<Button key="send-hr-reminder" size="small" onClick={async () => { try { await performanceAPI.sendHRConfirmReminder(activity.id); message.success('已发送HR确认提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒HR确认</Button>))
+    if (isMutengFlow && !isSeparatedMutengActivity(activity) && activity.status === 'employee_confirmation') {
+      actions.push(activityManage(<Button key="lock" type="primary" danger size="small" data-testid={`performance-detail-lock-${activity.id}`} onClick={() => handleActivityAction('lock', activity)}>锁定活动</Button>))
+    }
+    if (isMutengFlow && activity.status === 'hr_review') {
+      actions.push(renderDetailResultPublishButton(<Button key="open-result-publish" type="primary" size="small" data-testid={`performance-detail-open-result-publish-${activity.id}`} onClick={() => handleActivityAction('open-result-publish', activity)}>开启结果公布</Button>))
+    }
+    if (!isMutengFlow && activity.status === 'employee_confirmation') {
+      actions.push(activityManage(<Button key="open-manager-confirmation" type="primary" size="small" data-testid={`performance-detail-open-manager-confirm-${activity.id}`} onClick={() => handleActivityAction('open-manager-confirmation', activity)}>开启主管确认</Button>))
+    }
+    if (!isMutengFlow && activity.status === 'manager_confirmation') {
+      actions.push(activityManage(<Button key="open-hr-confirmation" type="primary" size="small" data-testid={`performance-detail-open-hr-confirm-${activity.id}`} onClick={() => handleActivityAction('open-hr-confirmation', activity)}>开启HR确认</Button>))
+    }
+    if (!isMutengFlow && activity.status === 'hr_confirmation') {
+      actions.push(activityManage(<Button key="send-hr-reminder" size="small" data-testid={`performance-detail-remind-hr-${activity.id}`} onClick={() => handleSendHRConfirmReminder(activity)}>提醒HR确认</Button>))
       if (hrDeadlineStatus?.can_force_lock) {
-        actions.push(activityManage(<Button key="force-lock-overdue" danger size="small" onClick={() => handleForceLockOverdueHR(activity)}>逾期强制锁定</Button>))
+        actions.push(activityManage(<Button key="force-lock-overdue" danger size="small" data-testid={`performance-detail-force-lock-${activity.id}`} onClick={() => handleForceLockOverdueHR(activity)}>逾期强制锁定</Button>))
       }
-      actions.push(activityManage(<Button key="lock" type="primary" danger size="small" onClick={() => handleActivityAction('lock', activity)}>锁定活动</Button>))
+      actions.push(activityManage(<Button key="lock" type="primary" danger size="small" data-testid={`performance-detail-lock-${activity.id}`} onClick={() => handleActivityAction('lock', activity)}>锁定活动</Button>))
     }
-    if (activity.status === 'locked' || activity.status === 'result_confirmed') {
-      actions.push(activityManage(<Button key="archive" size="small" onClick={() => handleActivityAction('archive', activity)}>归档活动</Button>))
+    if (activity.status === 'locked' || activity.status === 'result_confirmed' || (isMutengFlow && ['result_publish', 'interview', 'appeal'].includes(activity.status))) {
+      actions.push(activityManage(<Button key="archive" size="small" data-testid={`performance-detail-archive-${activity.id}`} onClick={() => handleActivityAction('archive', activity)}>归档活动</Button>))
     }
     return actions
   }
@@ -1230,14 +2267,15 @@ const PerformanceOverview: React.FC = () => {
         cycle_type: activity.cycle_type,
         template_id: activity.template_id,
         flow_type: activity.flow_type || 'old',
+        activity_kind: activity.activity_kind,
         organization_id: activity.organization_id || '',
         applicable_org_scope: normalizeIDArray(activity.applicable_org_scope),
         date_range: [dayjs(activity.start_date), dayjs(activity.end_date)],
         target_set_range: activity.target_set_start_at && activity.target_set_end_at ? [dayjs(activity.target_set_start_at), dayjs(activity.target_set_end_at)] : undefined,
         snapshot_as_of_date: activity.snapshot_as_of_date ? dayjs(activity.snapshot_as_of_date) : undefined,
-        self_eval_range: [dayjs(activity.self_eval_start_at), dayjs(activity.self_eval_end_at)],
-        manager_eval_range: [dayjs(activity.manager_eval_start_at), dayjs(activity.manager_eval_end_at)],
-        result_confirm_range: [dayjs(activity.result_confirm_start_at), dayjs(activity.result_confirm_end_at)],
+        self_eval_range: activity.self_eval_start_at && activity.self_eval_end_at ? [dayjs(activity.self_eval_start_at), dayjs(activity.self_eval_end_at)] : undefined,
+        manager_eval_range: activity.manager_eval_start_at && activity.manager_eval_end_at ? [dayjs(activity.manager_eval_start_at), dayjs(activity.manager_eval_end_at)] : undefined,
+        result_confirm_range: activity.result_confirm_start_at && activity.result_confirm_end_at ? [dayjs(activity.result_confirm_start_at), dayjs(activity.result_confirm_end_at)] : undefined,
         employee_confirm_range: activity.employee_confirm_start_at && activity.employee_confirm_end_at ? [dayjs(activity.employee_confirm_start_at), dayjs(activity.employee_confirm_end_at)] : undefined,
         manager_confirm_range: activity.manager_confirm_start_at && activity.manager_confirm_end_at ? [dayjs(activity.manager_confirm_start_at), dayjs(activity.manager_confirm_end_at)] : undefined,
         hr_confirm_range: activity.hr_confirm_start_at && activity.hr_confirm_end_at ? [dayjs(activity.hr_confirm_start_at), dayjs(activity.hr_confirm_end_at)] : undefined,
@@ -1246,6 +2284,7 @@ const PerformanceOverview: React.FC = () => {
         target_employee_ids: targetEmployeeIDs,
         default_assessment_manager_source: activity.default_assessment_manager_source || 'DIRECT_MANAGER',
         indicator_library_id: activity.indicator_library_id,
+        previous_review_activity_id: activity.previous_review_activity_id,
         description: activity.description,
         enable_bonus_score: activity.enable_bonus_score || false,
         strict_time_mode: activity.strict_time_mode || false,
@@ -1254,7 +2293,7 @@ const PerformanceOverview: React.FC = () => {
       setImportedUserOptions([])
       setImportedManagerAssignments([])
       form.resetFields()
-      form.setFieldsValue({ default_assessment_manager_source: 'DIRECT_MANAGER', flow_type: 'old' })
+      form.setFieldsValue({ default_assessment_manager_source: 'DIRECT_MANAGER', flow_type: 'old', activity_kind: undefined, previous_review_activity_id: undefined })
     }
     setActivityModalVisible(true)
     window.requestAnimationFrame(() => {
@@ -1262,16 +2301,22 @@ const PerformanceOverview: React.FC = () => {
     })
   }
 
-  const renderMyParticipantActionButton = (activity: PerformanceActivity): React.ReactNode => {
+  const renderMyParticipantActionButton = useCallback((activity: PerformanceActivity): React.ReactNode => {
     const participant = activity.my_participant
     if (!participant) return null
 
-    const linkStyle: React.CSSProperties = { paddingInline: 0, fontWeight: 600 }
+    const linkStyle: React.CSSProperties = activityActionButtonStyle
     const activityId = activity.id
     const participantId = participant.id
 
-    if (activity.status === 'target_setting' && PERSONAL_TARGET_STATUSES.includes(participant.status)) {
-      const targetLabel = ['pending', 'target_rejected'].includes(participant.status) ? '填写目标' : '我的目标'
+    if (canOpenTargetPlan(activity, participant)) {
+      const isSeparatedReviewActivity = isSeparatedMutengReviewActivity(activity)
+      const targetLabel = isSeparatedReviewActivity
+        ? '补录目标'
+        : (['pending', 'target_rejected'].includes(participant.status) ? '填写目标' : '我的目标')
+      const targetUrl = isSeparatedReviewActivity
+        ? `/performance-goal-setting/${activityId}/${participantId}?phase=review`
+        : `/performance-goal-setting/${activityId}/${participantId}`
       return renderPermissionButton(
         'performance:goal:manage',
         <Button
@@ -1280,7 +2325,7 @@ const PerformanceOverview: React.FC = () => {
           type="link"
           style={linkStyle}
           data-testid={`performance-activity-my-target-${activity.id}`}
-          onClick={() => navigate(`/performance-goal-setting/${activityId}/${participantId}`)}
+          onClick={() => navigate(targetUrl)}
         >
           {targetLabel}
         </Button>,
@@ -1308,8 +2353,21 @@ const PerformanceOverview: React.FC = () => {
       )
     }
 
-    if (PERSONAL_RESULT_STATUSES.includes(participant.status)) {
-      const resultLabel = activity.status === 'employee_confirmation' && participant.status === 'manager_submitted'
+    const canViewNewFlowResult = activity.flow_type === 'new' &&
+      !isMutengGoalSettingActivity(activity) &&
+      NEW_FLOW_RESULT_ACTIVITY_STATUSES.includes(activity.status) &&
+      ['manager_submitted', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'employee_confirmed', 'locked', 'result_confirmed'].includes(participant.status)
+    const canViewLegacyResult = activity.flow_type !== 'new' && PERSONAL_RESULT_STATUSES.includes(participant.status)
+
+    if (participant.result_hidden && (canViewLegacyResult || canViewNewFlowResult)) {
+      return <Tag color="default">绩效结果暂未公布</Tag>
+    }
+
+    if (canViewLegacyResult || canViewNewFlowResult) {
+      const resultLabel = (
+        (activity.flow_type !== 'new' && activity.status === 'employee_confirmation' && participant.status === 'manager_submitted') ||
+        (activity.flow_type === 'new' && !isSeparatedMutengActivity(activity) && activity.status === 'employee_confirmation' && participant.status === 'hr_confirmed')
+      )
         ? '确认结果'
         : '查看结果'
       return renderPermissionButton(
@@ -1329,12 +2387,11 @@ const PerformanceOverview: React.FC = () => {
     }
 
     return null
-  }
+  }, [navigate, renderPermissionButton])
 
   // 活动列表操作按钮
-  const getActionButtons = (record: PerformanceActivity) => {
+  const getActionButtons = useCallback((record: PerformanceActivity) => {
     const buttons: React.ReactNode[] = []
-    const status = record.status
     const personalActionButton = renderMyParticipantActionButton(record)
 
     if (personalActionButton) {
@@ -1345,55 +2402,85 @@ const PerformanceOverview: React.FC = () => {
         <Button size="small" type="link" data-testid={`performance-activity-view-${record.id}`} onClick={() => loadActivityDetail(record)} key="view">详情</Button>
     )
 
-    if (status === 'draft') {
-      buttons.push(
-        <Button size="small" type="link" data-testid={`performance-activity-edit-${record.id}`} onClick={() => openActivityModal(record)} key="edit">编辑参与人</Button>,
-        <Button size="small" type="link" data-testid={`performance-activity-open-target-${record.id}`} onClick={() => handleActivityAction('open-target-setting', record)} key="start">开启目标</Button>
-      )
-    } else if (status === 'target_setting') {
-      buttons.push(
-        <Button size="small" type="link" data-testid={`performance-activity-open-self-${record.id}`} onClick={() => handleActivityAction('open-self-evaluation', record)} key="open-self">开启自评</Button>
-      )
-    } else if (status === 'self_evaluation') {
-      buttons.push(
-        <Button size="small" type="link" data-testid={`performance-activity-notify-self-${record.id}`} onClick={() => handleActivityAction('notify-self-eval', record)} key="notify-self">提醒自评</Button>,
-        <Button size="small" type="link" data-testid={`performance-activity-open-manager-${record.id}`} onClick={() => handleActivityAction('open-manager-evaluation', record)} key="open-mgr">开启主管评分</Button>
-      )
-    } else if (status === 'manager_evaluation') {
-      buttons.push(
-        <Button size="small" type="link" data-testid={`performance-activity-open-employee-confirm-${record.id}`} onClick={() => handleActivityAction('open-employee-confirmation', record)} key="confirm">员工确认</Button>
-      )
-    } else if (status === 'employee_confirmation') {
-      buttons.push(
-        <Button size="small" type="link" data-testid={`performance-activity-open-manager-confirm-${record.id}`} onClick={() => handleActivityAction('open-manager-confirmation', record)} key="manager-confirm">主管确认</Button>
-      )
-    } else if (status === 'manager_confirmation') {
-      buttons.push(
-        <Button size="small" type="link" data-testid={`performance-activity-open-hr-confirm-${record.id}`} onClick={() => handleActivityAction('open-hr-confirmation', record)} key="hr-confirm">HR确认</Button>
-      )
-    } else if (status === 'hr_confirmation') {
-      buttons.push(
-        <Button size="small" type="link" danger data-testid={`performance-activity-lock-${record.id}`} onClick={() => handleActivityAction('lock', record)} key="lock">锁定</Button>
-      )
-    } else if (status === 'locked') {
-      buttons.push(
-        <Button size="small" type="link" data-testid={`performance-activity-archive-${record.id}`} onClick={() => handleActivityAction('archive', record)} key="archive">归档</Button>
-      )
-    } else if (status === 'result_confirmed') {
-      buttons.push(
-        <Button size="small" type="link" data-testid={`performance-activity-archive-${record.id}`} onClick={() => handleActivityAction('archive', record)} key="archive">归档</Button>
-      )
-    }
+    return buttons.map(button => {
+      if (!React.isValidElement(button)) return button
 
-    return buttons.map(button => (
-      React.isValidElement(button) && button.key !== 'view' && !String(button.key || '').startsWith('my-')
-        ? renderActivityManageButton(button)
-        : button
-    ))
-  }
+      const buttonKey = String(button.key || '')
+      if (buttonKey.startsWith('my-')) return button
+
+      const styledButton = withActivityActionStyle(button)
+      return buttonKey !== 'view'
+        ? renderActivityManageButton(styledButton)
+        : styledButton
+    })
+  }, [loadActivityDetail, renderActivityManageButton, renderMyParticipantActionButton, withActivityActionStyle])
+
+  const renderActivityActions = useCallback((record: PerformanceActivity) => (
+    <div style={activityActionListStyle}>
+      {getActionButtons(record).map((button, index) => (
+        <span key={React.isValidElement(button) ? button.key || index : index} style={{ display: 'inline-flex' }}>
+          {button}
+        </span>
+      ))}
+    </div>
+  ), [getActionButtons])
+
+  const canShowSelfReviewRecords = useCallback((record: PerformanceParticipant) => (
+    hasPermission('performance:result:view') &&
+    ['self_submitted', 'manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status)
+  ), [])
+
+  const handleOpenSelfReviewRecords = useCallback(async (record: PerformanceParticipant) => {
+    setSelfReviewTarget(record)
+    setSelfReviewDrawerVisible(true)
+    setSelfReviewVersions([])
+    setSelfReviewVersionsLoading(true)
+    try {
+      const res = await performanceAPI.getParticipantVersions(record.id)
+      const canViewDepartmentEvaluationRecords = hasAnyPermission(
+        'performance:activity:manage',
+        'performance:department_eval:submit',
+        'performance:hr_confirm:submit',
+        'performance:hr_review:submit',
+        'performance:result_publish:manage',
+        'performance:level_adjust:manage',
+      )
+      const visibleReviewTypes = new Set(['self'])
+      if (canViewDepartmentEvaluationRecords) {
+        visibleReviewTypes.add('department_evaluation')
+      }
+      setSelfReviewVersions(sortVersionsDesc(getReviewVersionsFromResponse(res).filter(version => visibleReviewTypes.has(version.review_type))))
+    } catch (err: any) {
+      setSelfReviewVersions([])
+      message.error(err?.response?.data?.message || '评审记录加载失败')
+    } finally {
+      setSelfReviewVersionsLoading(false)
+    }
+  }, [])
+
+  const renderParticipantActions = useCallback((record: PerformanceParticipant) => (
+    <ParticipantActions
+      activity={currentActivity}
+      record={record}
+      canShowSelfReviewRecords={canShowSelfReviewRecords}
+      navigateTo={navigate}
+      onOpenAssessmentManager={openAssessmentManagerModal}
+      onOpenSelfReviewRecords={handleOpenSelfReviewRecords}
+      onRejectGoalRecords={handleRejectGoalRecords}
+      onReloadActivityDetail={loadActivityDetail}
+    />
+  ), [
+    canShowSelfReviewRecords,
+    currentActivity,
+    handleOpenSelfReviewRecords,
+    handleRejectGoalRecords,
+    loadActivityDetail,
+    navigate,
+    openAssessmentManagerModal,
+  ])
 
   // 活动列表 columns
-  const activityColumns: ColumnsType<PerformanceActivity> = [
+  const activityColumns = React.useMemo<ColumnsType<PerformanceActivity>>(() => [
     { title: '活动名称', dataIndex: 'name', key: 'name', width: 180, ellipsis: true },
     { title: '周期', dataIndex: 'cycle_type', key: 'cycle_type', width: 80, render: (v: string) => getCycleLabel(v) },
     {
@@ -1414,20 +2501,25 @@ const PerformanceOverview: React.FC = () => {
     },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 90,
-      render: (status: string) => {
-        const s = STATUS_MAP[status] || { label: status, color: 'default' }
+      render: (_: string, record: PerformanceActivity) => {
+        const s = getActivityStatusMeta(record)
         return <StatusTag color={s.color}>{s.label}</StatusTag>
       }
     },
     { title: '自评时间', key: 'self_eval', width: 200, render: (_, r) => `${formatDateTime(r.self_eval_start_at)} ~ ${formatDateTime(r.self_eval_end_at)}` },
     { title: '主管评分时间', key: 'mgr_eval', width: 200, render: (_, r) => `${formatDateTime(r.manager_eval_start_at)} ~ ${formatDateTime(r.manager_eval_end_at)}` },
-    { title: '操作', key: 'actions', fixed: 'right', width: 280, render: (_, record) => (
-      <Space size={2} wrap>{getActionButtons(record)}</Space>
-    )},
-  ]
+    {
+      title: '操作',
+      key: 'actions',
+      fixed: 'right',
+      width: 150,
+      onCell: () => ({ style: { verticalAlign: 'middle' } }),
+      render: (_, record) => renderActivityActions(record),
+    },
+  ], [performanceTemplateById, renderActivityActions])
 
   // 参与人 columns
-  const participantColumns: ColumnsType<PerformanceParticipant> = [
+  const participantColumns = React.useMemo<ColumnsType<PerformanceParticipant>>(() => [
     { title: '员工', dataIndex: 'employee_name', key: 'employee_name', width: 80 },
     { title: '部门', dataIndex: 'department_name', key: 'department_name', width: 110, ellipsis: true },
     { title: '岗位', dataIndex: 'position', key: 'position', width: 90, ellipsis: true },
@@ -1467,7 +2559,7 @@ const PerformanceOverview: React.FC = () => {
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 110,
       render: (status: string) => {
-        const s = PARTICIPANT_STATUS_MAP[status] || { label: status, color: 'default' }
+        const s = getParticipantStatusMeta(status, currentActivity?.flow_type === 'new')
         return <StatusTag color={s.color}>{s.label}</StatusTag>
       }
     },
@@ -1499,172 +2591,18 @@ const PerformanceOverview: React.FC = () => {
     },
     {
       title: '等级', dataIndex: 'final_level', key: 'final_level', width: 50,
-      render: (v: string) => {
+      render: (_: string, record: PerformanceParticipant) => {
+        const v = getParticipantDisplayLevel(record, currentActivity)
         if (!v) return <Text type="secondary">-</Text>
         const colorMap: Record<string, string> = { S: '#f50', A: '#1677ff', B: '#52c41a', C: '#faad14', D: '#ff4d4f' }
         return <StatusTag color={colorMap[v] || 'default'}>{v}</StatusTag>
       }
     },
     {
-      title: '操作', key: 'actions', fixed: 'right', width: 150,
-      render: (_, record: PerformanceParticipant) => {
-        const activityId = currentActivity?.id
-        const isArchived = ['archived', 'locked'].includes(currentActivity?.status || '')
-        if (!activityId) return null
-
-        if (isArchived && !hasPermission('performance:result:view')) {
-          return renderPermissionButton(
-            'performance:result:view',
-            <Button size="small" type="link" style={{ fontSize: 'var(--font-size-sm)' }}>查看</Button>
-          )
-        }
-
-        if (isArchived) {
-          return (
-            <Button size="small" type="link" style={{ fontSize: 'var(--font-size-sm)' }}
-              onClick={() => navigate(`/performance-result/${activityId}/${record.id}`)}
-            >查看</Button>
-          )
-        }
-
-        const links: React.ReactNode[] = []
-        const linkStyle = { fontSize: 'var(--font-size-sm)', padding: '0 2px' }
-        const activityStatus = currentActivity?.status
-
-        links.push(renderPermissionButton(
-          'performance:assessment_manager:update',
-          <Button key="manager" size="small" type="link" style={linkStyle} onClick={() => openAssessmentManagerModal(record)}>调上级</Button>,
-        ))
-
-        if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && !hasPermission('performance:goal:manage')) {
-          links.push(renderPermissionButton('performance:goal:manage', <Button key="target-disabled" size="small" type="link" style={linkStyle}>目标</Button>))
-        }
-        const canSelfEvaluateRecord = SELF_EVAL_EDITABLE_ACTIVITY_STATUSES.includes(activityStatus || '') &&
-          SELF_EVAL_EDITABLE_PARTICIPANT_STATUSES.includes(record.status)
-        if (canSelfEvaluateRecord && !hasPermission('performance:self_eval:submit')) {
-          links.push(renderPermissionButton('performance:self_eval:submit', <Button key="self-disabled" size="small" type="link" style={linkStyle}>自评</Button>))
-        }
-        if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && !hasPermission('performance:manager_eval:submit')) {
-          links.push(renderPermissionButton('performance:manager_eval:submit', <Button key="mgr-disabled" size="small" type="link" style={linkStyle}>评分</Button>))
-        }
-        if (['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && !hasPermission('performance:result:view')) {
-          links.push(renderPermissionButton('performance:result:view', <Button key="result-disabled" size="small" type="link" style={linkStyle}>结果</Button>))
-        }
-        if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && !hasPermission('performance:hr_confirm:submit')) {
-          links.push(renderPermissionButton('performance:hr_confirm:submit', <Button key="hr-confirm-disabled" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }}>HR确认</Button>))
-        }
-        if (record.status === 'target_pending_approval' && !hasPermission('performance:goal:manage')) {
-          links.push(renderPermissionButton('performance:goal:manage', <Button key="approve-disabled" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }}>通过</Button>))
-          links.push(renderPermissionButton('performance:goal:manage', <Button key="reject-disabled" size="small" type="link" danger style={linkStyle}>驳回</Button>))
-        }
-
-        // 目标设定：活动必须处于 target_setting 状态，且参与人状态允许
-        if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && hasPermission('performance:goal:manage')) {
-          links.push(
-            <Button key="target" size="small" type="link" style={linkStyle} data-testid={`performance-participant-target-${record.id}`}
-              onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}`)}
-            >目标</Button>
-          )
-          if (currentActivity?.flow_type === 'new') {
-            links.push(
-              <Button key="review-supplement" size="small" type="link" style={linkStyle} data-testid={`performance-participant-review-supplement-${record.id}`}
-                onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}?phase=review`)}
-              >补录</Button>
-            )
-          }
-        }
-        // 自评：HR确认前可修改自评，主管确认后提交会进入待领导复核
-        if (canSelfEvaluateRecord && hasPermission('performance:self_eval:submit')) {
-          links.push(
-            <Button key="self" size="small" type="link" style={linkStyle} data-testid={`performance-participant-self-${record.id}`}
-              onClick={() => navigate(`/performance-self-eval/${activityId}/${record.id}`)}
-            >{PERSONAL_SELF_EVAL_STATUSES.includes(record.status) ? '自评' : '改自评'}</Button>
-          )
-        }
-        // 主管评分：活动必须处于 manager_evaluation 状态，且参与人状态允许
-        if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && hasPermission('performance:manager_eval:submit')) {
-          const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
-          links.push(
-            managerEvalBlockedReason ? (
-              <Tooltip key="mgr" title={managerEvalBlockedReason}>
-                <span>
-                  <Button size="small" type="link" disabled style={linkStyle} data-testid={`performance-participant-manager-${record.id}`}>评分</Button>
-                </span>
-              </Tooltip>
-            ) : (
-              <Button key="mgr" size="small" type="link" style={linkStyle} data-testid={`performance-participant-manager-${record.id}`}
-                onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}
-              >评分</Button>
-            )
-          )
-        }
-        if (['manager_confirmation', 'hr_confirmation'].includes(activityStatus || '') && record.status === 'manager_recheck') {
-          if (!hasPermission('performance:manager_confirm:submit')) {
-            links.push(renderPermissionButton('performance:manager_confirm:submit', <Button key="manager-recheck-disabled" size="small" type="link" style={linkStyle}>复核</Button>))
-          } else {
-            const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
-            links.push(
-              managerEvalBlockedReason ? (
-                <Tooltip key="manager-recheck" title={managerEvalBlockedReason}>
-                  <span>
-                    <Button size="small" type="link" disabled style={linkStyle} data-testid={`performance-participant-manager-recheck-${record.id}`}>复核</Button>
-                  </span>
-                </Tooltip>
-              ) : (
-                <Button key="manager-recheck" size="small" type="link" style={linkStyle} data-testid={`performance-participant-manager-recheck-${record.id}`}
-                  onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}
-                >复核</Button>
-              )
-            )
-          }
-        }
-        if (['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && hasPermission('performance:result:view')) {
-          links.push(
-            <Button key="result" size="small" type="link" style={linkStyle} data-testid={`performance-participant-result-${record.id}`}
-              onClick={() => navigate(`/performance-result/${activityId}/${record.id}`)}
-            >结果</Button>
-          )
-        }
-        if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && hasPermission('performance:hr_confirm:submit')) {
-          links.push(
-            <Button key="hr-confirm" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }} data-testid={`performance-participant-hr-confirm-${record.id}`}
-              onClick={async () => {
-                try {
-                  await performanceAPI.confirmHRResult(record.id)
-                  message.success('HR确认成功')
-                  if (currentActivity) loadActivityDetail(currentActivity)
-                } catch (err: any) {
-                  message.error(err?.response?.data?.message || 'HR确认失败')
-                }
-              }}
-            >HR确认</Button>
-          )
-        }
-        if (record.status === 'target_pending_approval' && hasPermission('performance:goal:manage')) {
-          links.push(
-            <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }} data-testid={`performance-participant-approve-${record.id}`}
-              onClick={async () => {
-                try {
-                  await performanceAPI.approveGoalRecords(record.id)
-                  message.success('目标已通过')
-                  if (currentActivity) loadActivityDetail(currentActivity)
-                } catch (err: any) {
-                  message.error(err?.response?.data?.message || '审批失败')
-                }
-              }}
-            >通过</Button>
-          )
-          links.push(
-            <Button key="reject" size="small" type="link" danger style={linkStyle} data-testid={`performance-participant-reject-${record.id}`}
-              onClick={() => handleRejectGoalRecords(record)}
-            >驳回</Button>
-          )
-        }
-
-        return <Space size={0}>{links}</Space>
-      }
+      title: '操作', key: 'actions', fixed: 'right', width: participantActionColumnWidth,
+      render: (_, record: PerformanceParticipant) => renderParticipantActions(record),
     },
-  ]
+  ], [currentActivity, renderParticipantActions])
 
   // 统计数据
   const selectedActivityStatuses = React.useMemo(
@@ -1685,15 +2623,27 @@ const PerformanceOverview: React.FC = () => {
       activityListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }, [])
-  const inProgressCount = activities.filter(a => IN_PROGRESS_ACTIVITY_STATUSES.includes(a.status)).length
-  const confirmedCount = activities.filter(a => CONFIRMED_ACTIVITY_STATUSES.includes(a.status)).length
-  const archivedCount = activities.filter(a => a.status === 'archived').length
-  const activityStatCards = [
-    { title: '绩效活动总数', value: activitiesTotal, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
-    { title: '进行中活动', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe', filter: ACTIVITY_STATUS_FILTER_IN_PROGRESS },
-    { title: '已确认结果', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
-    { title: '已归档活动', value: archivedCount, color: 'var(--color-text-secondary)', bg: 'var(--color-bg-hover)', filter: 'archived' },
-  ]
+  const activityCounts = React.useMemo(
+    () => activities.reduce(
+      (counts, activity) => {
+        if (IN_PROGRESS_ACTIVITY_STATUSES.includes(activity.status)) counts.inProgress += 1
+        if (CONFIRMED_ACTIVITY_STATUSES.includes(activity.status)) counts.confirmed += 1
+        if (activity.status === 'archived') counts.archived += 1
+        return counts
+      },
+      { inProgress: 0, confirmed: 0, archived: 0 },
+    ),
+    [activities],
+  )
+  const activityStatCards = React.useMemo(
+    () => [
+      { title: '绩效活动总数', value: activitiesTotal, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
+      { title: '进行中活动', value: activityCounts.inProgress, color: '#0369a1', bg: '#e0f2fe', filter: ACTIVITY_STATUS_FILTER_IN_PROGRESS },
+      { title: '已确认结果', value: activityCounts.confirmed, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
+      { title: '已归档活动', value: activityCounts.archived, color: 'var(--color-text-secondary)', bg: 'var(--color-bg-hover)', filter: 'archived' },
+    ],
+    [activitiesTotal, activityCounts],
+  )
   const activityListActions = (
     <Space>
       <Button type="primary" data-testid="performance-create-activity" icon={<PlusOutlined />} onClick={() => openActivityModal()}>新建活动</Button>
@@ -1776,6 +2726,8 @@ const PerformanceOverview: React.FC = () => {
             saving={activitySaving}
             performanceTemplates={performanceTemplates}
             performanceTemplatesLoading={performanceTemplatesLoading}
+            activities={activities}
+            currentActivityId={editingActivity?.id}
             indicatorLibraries={indicatorLibraries}
             indicatorLibrariesLoading={indicatorLibrariesLoading}
             departmentOptions={departmentOptions}
@@ -1817,7 +2769,7 @@ const PerformanceOverview: React.FC = () => {
                 rowKey="id"
                 pagination={{ pageSize: 10 }}
                 size="small"
-                scroll={{ x: 900 }}
+                scroll={{ x: 1202 }}
               />
             </Spin>
           </PageCard>
@@ -1825,203 +2777,45 @@ const PerformanceOverview: React.FC = () => {
 
       </Card>
 
-      {/* 活动详情抽屉 */}
-      <Drawer
-        title={`活动详情：${currentActivity?.name || ''}`}
-        placement="right"
-        width={1000}
+      <PerformanceActivityDetailDrawer
         open={detailDrawerVisible}
-        onClose={() => { setDetailDrawerVisible(false); setCurrentActivity(null); setParticipants([]); setSelectedParticipantIds([]); setManagerModalVisible(false); setSummary(null); setDistributionCheck(null); setDistributionRules([]); setHrDeadlineStatus(null); }}
-        styles={{ footer: { paddingTop: 12 } }}
-      >
-        {currentActivity && (
-          <div data-testid="performance-detail-content">
-            <Steps
-              current={getActivityStepIndex(currentActivity.status)}
-              items={ACTIVITY_FLOW.map(item => ({
-                title: item.label,
-                status: item.status === currentActivity.status ? 'process'
-                  : getActivityStepIndex(currentActivity.status) > ACTIVITY_FLOW.findIndex(f => f.status === item.status) ? 'finish' : 'wait'
-              }))}
-              style={{ marginBottom: 20 }}
-              size="small"
-            />
-            <Descriptions column={3} size="small" style={{ marginBottom: 16 }} bordered>
-              <Descriptions.Item label="状态">
-                <StatusTag color={STATUS_MAP[currentActivity.status]?.color}>{STATUS_MAP[currentActivity.status]?.label}</StatusTag>
-              </Descriptions.Item>
-              <Descriptions.Item label="周期类型">{getCycleLabel(currentActivity.cycle_type)}</Descriptions.Item>
-              <Descriptions.Item label="流程类型">
-                <Tag color={currentActivity.flow_type === 'new' ? 'purple' : 'default'}>
-                  {currentActivity.flow_type === 'new' ? '新流程' : '旧流程'}
-                </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="绩效周期">{formatDateTime(currentActivity.start_date)} ~ {formatDateTime(currentActivity.end_date)}</Descriptions.Item>
-              <Descriptions.Item label="自评时间">{formatDateTime(currentActivity.self_eval_start_at)} ~ {formatDateTime(currentActivity.self_eval_end_at)}</Descriptions.Item>
-              <Descriptions.Item label="主管评分">{formatDateTime(currentActivity.manager_eval_start_at)} ~ {formatDateTime(currentActivity.manager_eval_end_at)}</Descriptions.Item>
-              <Descriptions.Item label="结果确认">{formatDateTime(currentActivity.result_confirm_start_at)} ~ {formatDateTime(currentActivity.result_confirm_end_at)}</Descriptions.Item>
-            </Descriptions>
-
-            {/* 操作按钮 - 紧凑布局 */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-              {renderDetailActionButtons(currentActivity)}
-              {false && (
-                <>
-              {currentActivity.status === 'draft' && (
-                <>
-                  <Button type="primary" size="small" onClick={() => handleActivityAction('open-target-setting', currentActivity)}>开启目标设定</Button>
-                  <Button size="small" onClick={() => handleActivityAction('publish', currentActivity)}>直接开启自评</Button>
-                </>
-              )}
-              {currentActivity.status === 'target_setting' && (
-                <Button type="primary" size="small" onClick={() => handleActivityAction('open-self-evaluation', currentActivity)}>开启自评</Button>
-              )}
-              {currentActivity.status === 'self_evaluation' && (
-                <>
-                  <Button type="primary" size="small" onClick={() => handleActivityAction('open-manager-evaluation', currentActivity)}>开启主管评分</Button>
-                  <Button size="small" onClick={async () => { try { await performanceAPI.sendSelfEvalReminder(currentActivity.id); message.success('已发送自评提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒自评</Button>
-                </>
-              )}
-              {currentActivity.status === 'manager_evaluation' && (
-                <>
-                  <Button type="primary" size="small" onClick={() => handleActivityAction('open-employee-confirmation', currentActivity)}>开启员工确认</Button>
-                  <Button size="small" onClick={() => setDistributionModalVisible(true)}>强制分布</Button>
-                    <Button size="small" onClick={() => { const selectable = participants.filter(p => (p.status === 'self_submitted' || p.status === 'manager_submitted') && isAssessmentManagerConfigured(p)); setBatchEvalSelected(selectable.map(p => p.id)); setBatchEvalModalVisible(true) }}>批量评分</Button>
-                  <Button size="small" onClick={async () => { try { await performanceAPI.sendManagerEvalReminder(currentActivity.id); message.success('已发送评分提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒评分</Button>
-                </>
-              )}
-              {currentActivity.status === 'employee_confirmation' && (
-                <Button type="primary" size="small" onClick={() => handleActivityAction('open-manager-confirmation', currentActivity)}>开启主管确认</Button>
-              )}
-              {currentActivity.status === 'manager_confirmation' && (
-                <Button type="primary" size="small" onClick={() => handleActivityAction('open-hr-confirmation', currentActivity)}>开启HR确认</Button>
-              )}
-              {currentActivity.status === 'hr_confirmation' && (
-                <>
-                  <Button size="small" onClick={async () => { try { await performanceAPI.sendHRConfirmReminder(currentActivity.id); message.success('已发送HR确认提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒HR确认</Button>
-                  {hrDeadlineStatus?.can_force_lock && (
-                    <Button danger size="small" onClick={() => handleForceLockOverdueHR(currentActivity)}>逾期强制锁定</Button>
-                  )}
-                  <Button type="primary" danger size="small" onClick={() => handleActivityAction('lock', currentActivity)}>锁定活动</Button>
-                </>
-              )}
-              {currentActivity.status === 'locked' && (
-                <Button size="small" onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
-              )}
-              {currentActivity.status === 'result_confirmed' && (
-                <Button size="small" onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
-              )}
-                </>
-              )}
-            </div>
-
-            <Divider style={{ margin: '8px 0 10px' }} orientationMargin={0}>统计摘要</Divider>
-            {currentActivity.status === 'hr_confirmation' && hrDeadlineStatus && (
-              <Alert
-                type={hrDeadlineStatus.overdue ? 'warning' : 'info'}
-                showIcon
-                style={{ marginBottom: 12 }}
-                message={`HR确认截止：${hrDeadlineStatus.deadline || '未设置'}，待确认 ${hrDeadlineStatus.pending_count || 0} 人${hrDeadlineStatus.overdue ? '，已逾期' : ''}`}
-              />
-            )}
-
-            <Spin spinning={summaryLoading}>
-              {summary ? (
-                <div style={{ display: 'flex', gap: 0, marginBottom: 10, borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)', overflow: 'hidden' }}>
-                  {[
-                    { title: '参与人数', value: summary.total_participants, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
-                    { title: '已自评', value: summary.self_submitted_count, color: '#0369a1', bg: '#e0f2fe' },
-                    {
-                      title: '已评分',
-                      value: summary.manager_submitted_count + participants.filter(record =>
-                        record.status === 'self_submitted' && isSelfFinalAssessmentRecord(record)
-                      ).length,
-                      color: '#b45309',
-                      bg: '#fef3c7',
-                    },
-                    { title: '已确认', value: summary.result_confirmed_count, color: 'var(--color-success)', bg: '#dcfce7' },
-                  ].map((item, idx) => (
-                    <div key={item.title} style={{
-                      flex: 1, padding: '10px 14px', textAlign: 'center',
-                      background: item.bg, borderRight: idx < 3 ? '1px solid var(--color-border)' : 'none',
-                    }}>
-                      <div style={{ fontSize: 22, fontWeight: 'var(--font-weight-bold)', color: item.color, lineHeight: 1.2 }}>{item.value}</div>
-                      <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', marginTop: 2 }}>{item.title}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : <Text type="secondary">暂无数据</Text>}
-            </Spin>
-
-            {distributionCheck && (
-              <Card size="small" style={{ marginBottom: 10 }}>
-                <Row gutter={[6, 6]}>
-                  {['S', 'A', 'B', 'C', 'D'].map(level => {
-                    const dist = distributionCheck.distribution?.[level]
-                    if (!dist) return null
-                    const statusColor = dist.status === 'exceeded' ? 'exception' : dist.status === 'warning' ? 'normal' : 'success'
-                    const bg = dist.status === 'exceeded' ? '#fff2f0' : dist.status === 'warning' ? '#fffbe6' : '#f6ffed'
-                    const barColor = dist.status === 'exceeded' ? '#ff4d4f' : dist.status === 'warning' ? '#faad14' : '#52c41a'
-                    return (
-                      <Col span={4} key={level} style={{ minWidth: 0 }}>
-                        <div style={{
-                          textAlign: 'center', padding: '8px 4px', borderRadius: 'var(--radius-md)',
-                          background: bg, border: `1px solid ${barColor}20`,
-                        }}>
-                          <div style={{
-                            fontSize: 18, fontWeight: 'var(--font-weight-bold)', color: barColor, lineHeight: 1,
-                          }}>{level}</div>
-                          <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text)', margin: '4px 0 2px' }}>
-                            {dist.actual_count}/{dist.expected_count}人
-                          </div>
-                          <div style={{
-                            height: 4, borderRadius: 2, background: 'var(--color-border)',
-                            overflow: 'hidden', margin: '0 8px',
-                          }}>
-                            <div style={{
-                              height: '100%', borderRadius: 2, background: barColor,
-                              width: `${Math.min(dist.progress, 100)}%`,
-                            }} />
-                          </div>
-                          <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
-                            期望 {dist.expected_percent}%
-                          </div>
-                        </div>
-                      </Col>
-                    )
-                  })}
-                </Row>
-                {!distributionCheck.passed && distributionCheck.warnings?.length > 0 && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message="配额超限"
-                    description={distributionCheck.warnings.join('；')}
-                    style={{ marginTop: 6 }}
-                    closable
-                  />
-                )}
-              </Card>
-            )}
-
-            <Divider style={{ margin: '12px 0' }}>参与人列表</Divider>
-            <Spin spinning={participantsLoading}>
-              <Table
-                columns={participantColumns}
-                dataSource={participants}
-                rowKey="id"
-                rowSelection={hasPermission('performance:assessment_manager:batch_update') ? {
-                  selectedRowKeys: selectedParticipantIds,
-                  onChange: setSelectedParticipantIds,
-                } : undefined}
-                pagination={{ pageSize: 10, size: 'small' }}
-                size="small"
-                scroll={{ x: 1250 }}
-              />
-            </Spin>
-          </div>
+        activity={currentActivity}
+        stepItems={currentActivityStepItems}
+        statusLabel={currentActivityStatusConfig?.label}
+        statusColor={currentActivityStatusConfig?.color}
+        templateDisplay={currentActivityTemplateDisplay}
+        actionButtons={currentActivity ? renderDetailActionButtons(currentActivity) : null}
+        hrDeadlineStatus={hrDeadlineStatus}
+        summaryLoading={summaryLoading}
+        summaryCards={detailSummaryCards}
+        distributionCheck={distributionCheck}
+        participantTable={(
+          <PerformanceParticipantTable
+            columns={participantColumns}
+            participants={participants}
+            loading={participantsLoading}
+            selectedParticipantIds={selectedParticipantIds}
+            onSelectionChange={setSelectedParticipantIds}
+            selectable={hasPermission('performance:assessment_manager:batch_update')}
+            scrollX={participantTableScrollX}
+            scrollY={520}
+            virtual={participants.length > 50}
+          />
         )}
-      </Drawer>
+        onClose={closeDetailDrawer}
+      />
+
+      <SelfReviewHistoryDrawer
+        open={selfReviewDrawerVisible}
+        target={selfReviewTarget}
+        versions={selfReviewVersions}
+        loading={selfReviewVersionsLoading}
+        onClose={() => {
+          setSelfReviewDrawerVisible(false)
+          setSelfReviewTarget(null)
+          setSelfReviewVersions([])
+        }}
+      />
 
       <Modal
         title="驳回目标"

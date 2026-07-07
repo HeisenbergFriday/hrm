@@ -78,12 +78,13 @@ func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[str
 	var total int64
 
 	query := r.db.Model(&database.EmployeeProfile{})
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 
 	if v, ok := filters["department_id"]; ok && v != "" {
-		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
+		query = query.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id = ? AND deleted_at IS NULL)", orgID, v)
 	}
 	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
-		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+		query = query.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)", orgID, departmentIDs)
 	}
 	if v, ok := filters["user_id"]; ok && v != "" {
 		query = query.Where("user_id = ?", v)
@@ -105,13 +106,15 @@ func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[str
 }
 
 func (r *EmployeeRepository) buildLifecycleLedgerQuery(filters map[string]string) *gorm.DB {
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 	query := r.db.Table("users").
-		Joins("LEFT JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
-		Joins("LEFT JOIN departments current_departments ON current_departments.department_id = users.department_id AND current_departments.deleted_at IS NULL").
+		Joins("LEFT JOIN employee_profiles ON employee_profiles.org_id = users.org_id AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Joins("LEFT JOIN departments current_departments ON current_departments.org_id = users.org_id AND current_departments.department_id = users.department_id AND current_departments.deleted_at IS NULL").
 		Joins(`LEFT JOIN employee_onboardings latest_onboarding ON latest_onboarding.id = (
 			SELECT eo.id
 			FROM employee_onboardings eo
 			WHERE eo.deleted_at IS NULL
+			  AND eo.org_id = users.org_id
 			  AND (eo.employee_id = users.user_id OR eo.employee_id = employee_profiles.employee_id)
 			ORDER BY eo.entry_date DESC, eo.id DESC
 			LIMIT 1
@@ -120,6 +123,7 @@ func (r *EmployeeRepository) buildLifecycleLedgerQuery(filters map[string]string
 			SELECT et.id
 			FROM employee_transfers et
 			WHERE et.deleted_at IS NULL
+			  AND et.org_id = users.org_id
 			  AND et.user_id = users.user_id
 			ORDER BY et.transfer_date DESC, et.id DESC
 			LIMIT 1
@@ -128,10 +132,12 @@ func (r *EmployeeRepository) buildLifecycleLedgerQuery(filters map[string]string
 			SELECT er.id
 			FROM employee_resignations er
 			WHERE er.deleted_at IS NULL
+			  AND er.org_id = users.org_id
 			  AND er.user_id = users.user_id
 			ORDER BY er.resign_date DESC, er.id DESC
 			LIMIT 1
 		)`).
+		Where("users.org_id = ?", orgID).
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin")
 
@@ -178,12 +184,15 @@ func (r *EmployeeRepository) FindLifecycleLedger(page, pageSize int, filters map
 // 3. 判断是否已建档只能通过 employee_profiles.employee_id 匹配工号
 // 4. 后续建议：增加 employee_onboardings.user_id 字段建立明确关联
 func (r *EmployeeRepository) FindCandidateOnboardings(filters map[string]string) ([]EmployeeLifecycleLedgerItem, int64, error) {
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 	query := r.db.Table("employee_onboardings").
+		Where("employee_onboardings.org_id = ?", orgID).
 		Where("employee_onboardings.deleted_at IS NULL").
 		Where("employee_onboardings.status IN (?)", []string{"pending", "processing", "completed"}).
 		Where(`NOT EXISTS (
 			SELECT 1 FROM employee_profiles ep
 			WHERE ep.employee_id = employee_onboardings.employee_id
+			  AND ep.org_id = employee_onboardings.org_id
 			  AND ep.deleted_at IS NULL
 		)`)
 

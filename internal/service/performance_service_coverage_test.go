@@ -2,6 +2,7 @@ package service
 
 import (
 	"database/sql/driver"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -364,7 +365,7 @@ func TestSendSelfEvalReminders_ActivityNotFound(t *testing.T) {
 		columns: []string{"id"},
 		rows:    nil,
 	})
-	err := svc.SendSelfEvalReminders("999")
+	_, err := svc.SendSelfEvalReminders("999")
 	if err == nil {
 		t.Fatal("SendSelfEvalReminders(activity not found) expected error")
 	}
@@ -388,12 +389,12 @@ func TestSendSelfEvalReminders_NoParticipants(t *testing.T) {
 			rows:    nil,
 		},
 	)
-	err := svc.SendSelfEvalReminders("1")
-	if err == nil {
-		t.Fatal("SendSelfEvalReminders(no participants) expected error")
+	result, err := svc.SendSelfEvalReminders("1")
+	if err != nil {
+		t.Fatalf("SendSelfEvalReminders(no participants) error = %v, want nil", err)
 	}
-	if !strings.Contains(err.Error(), "没有需要发送自评提醒的参与人") {
-		t.Fatalf("SendSelfEvalReminders error = %v, want no participants error", err)
+	if result.Pending != 0 || result.Candidates != 0 || result.Sent != 0 {
+		t.Fatalf("SendSelfEvalReminders(no participants) result = %+v, want zero counts", result)
 	}
 }
 
@@ -416,12 +417,12 @@ func TestSendSelfEvalReminders_FiltersSubmittedParticipants(t *testing.T) {
 			},
 		},
 	)
-	err := svc.SendSelfEvalReminders("1")
-	if err == nil {
-		t.Fatal("SendSelfEvalReminders(all filtered) expected error")
+	result, err := svc.SendSelfEvalReminders("1")
+	if err != nil {
+		t.Fatalf("SendSelfEvalReminders(all filtered) error = %v, want nil", err)
 	}
-	if !strings.Contains(err.Error(), "没有需要发送自评提醒的参与人") {
-		t.Fatalf("SendSelfEvalReminders error = %v, want no participants after filter", err)
+	if result.Pending != 0 || result.Candidates != 0 || result.Sent != 0 {
+		t.Fatalf("SendSelfEvalReminders(all filtered) result = %+v, want zero counts", result)
 	}
 }
 
@@ -433,9 +434,12 @@ func TestSendManagerEvalReminders_NoSelfSubmittedParticipants(t *testing.T) {
 		columns: performanceParticipantStubColumns(),
 		rows:    [][]driver.Value{},
 	})
-	err := svc.SendManagerEvalReminders("1")
+	result, err := svc.SendManagerEvalReminders("1")
 	if err != nil {
 		t.Fatalf("SendManagerEvalReminders(no participants) error = %v, want nil", err)
+	}
+	if result.Pending != 0 || result.Candidates != 0 || result.Sent != 0 {
+		t.Fatalf("SendManagerEvalReminders(no participants) result = %+v, want zero counts", result)
 	}
 }
 
@@ -452,9 +456,12 @@ func TestSendManagerEvalReminders_FiltersOnlySelfSubmitted(t *testing.T) {
 	})
 
 	// 注意：真实环境会调用 dingtalk，测试环境无法 mock，所以只能验证不报错
-	err := svc.SendManagerEvalReminders("1")
+	result, err := svc.SendManagerEvalReminders("1")
 	if err != nil {
 		t.Fatalf("SendManagerEvalReminders error = %v, want nil", err)
+	}
+	if result.Pending != 1 || result.Candidates != 0 || result.Sent != 0 {
+		t.Fatalf("SendManagerEvalReminders result = %+v, want pending=1 candidates=0 sent=0", result)
 	}
 }
 
@@ -568,11 +575,14 @@ func TestSendSelfEvalReminders_SkipsNonNotifiableUsers(t *testing.T) {
 			},
 		},
 	)
-	err := svc.SendSelfEvalReminders("1")
+	result, err := svc.SendSelfEvalReminders("1")
 	// admin、system 会被 IsNotifiableUserID 检查并 skipped，不算错误
 	// 根据代码逻辑：succeeded=0, skipped=2, failed=0 → 不满足 line 2871 条件，返回 nil
 	if err != nil {
 		t.Fatalf("SendSelfEvalReminders(skipped users) error = %v, want nil", err)
+	}
+	if result.Pending != 2 || result.Candidates != 2 || result.Skipped != 2 || len(result.SkippedRecipients) != 2 {
+		t.Fatalf("SendSelfEvalReminders(skipped users) result = %+v, want pending=2 candidates=2 skipped=2 with recipients", result)
 	}
 }
 
@@ -596,8 +606,49 @@ func TestSendSelfEvalReminders_DuplicateNonNotifiableUsersDoNotError(t *testing.
 			},
 		},
 	)
-	if err := svc.SendSelfEvalReminders("1"); err != nil {
+	result, err := svc.SendSelfEvalReminders("1")
+	if err != nil {
 		t.Fatalf("SendSelfEvalReminders(non-notifiable duplicates) error = %v, want nil", err)
+	}
+	if result.Pending != 3 || result.Candidates != 2 || result.Skipped != 2 {
+		t.Fatalf("SendSelfEvalReminders(non-notifiable duplicates) result = %+v, want pending=3 candidates=2 skipped=2", result)
+	}
+}
+
+func TestSendSelfEvalReminders_ReturnsFailedRecipientDetails(t *testing.T) {
+	originalSender := sendPerformanceActionCardToUser
+	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+		return errors.New("dingtalk failed")
+	}
+	t.Cleanup(func() {
+		sendPerformanceActionCardToUser = originalSender
+	})
+
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_activities"),
+			columns: []string{"id", "name", "status"},
+			rows: [][]driver.Value{
+				{int64(1), "Q2", "self_evaluation"},
+			},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				{int64(1), "activity-1", "user-1", "张三", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
+			},
+		},
+	)
+	result, err := svc.SendSelfEvalReminders("1")
+	if err != nil {
+		t.Fatalf("SendSelfEvalReminders(failed recipient) error = %v, want nil", err)
+	}
+	if result.Pending != 1 || result.Candidates != 1 || result.Failed != 1 || len(result.FailedRecipients) != 1 {
+		t.Fatalf("SendSelfEvalReminders(failed recipient) result = %+v, want one failed recipient", result)
+	}
+	if result.FailedRecipients[0].UserID != "user-1" || result.FailedRecipients[0].Name != "张三" {
+		t.Fatalf("failed recipient = %+v, want 张三(user-1)", result.FailedRecipients[0])
 	}
 }
 
@@ -608,15 +659,26 @@ func TestSendManagerEvalReminders_SkipsNonNotifiableManagersAfterAggregation(t *
 			return strings.Contains(strings.ToLower(query), "performance_participants") &&
 				strings.Contains(strings.ToLower(query), "status = ?")
 		},
-		columns: append(performanceParticipantStubColumns(), "manager_id"),
+		columns: append(performanceParticipantStubColumns(), "manager_id", "manager_name"),
 		rows: [][]driver.Value{
-			{int64(1), "activity-1", "user-1", "User 1", "dept-1", "Dept", "self_submitted", 80.0, "s1", 0.0, "", false, nil, nil, nil, "admin"},
-			{int64(2), "activity-1", "user-2", "User 2", "dept-1", "Dept", "self_submitted", 85.0, "s2", 0.0, "", false, nil, nil, nil, "admin"},
-			{int64(3), "activity-1", "user-3", "User 3", "dept-2", "Dept2", "self_submitted", 90.0, "s3", 0.0, "", false, nil, nil, nil, "system"},
+			{int64(1), "activity-1", "user-1", "User 1", "dept-1", "Dept", "self_submitted", 80.0, "s1", 0.0, "", false, nil, nil, nil, "admin", "管理员"},
+			{int64(2), "activity-1", "user-2", "User 2", "dept-1", "Dept", "self_submitted", 85.0, "s2", 0.0, "", false, nil, nil, nil, "admin", "管理员"},
+			{int64(3), "activity-1", "user-3", "User 3", "dept-2", "Dept2", "self_submitted", 90.0, "s3", 0.0, "", false, nil, nil, nil, "system", "系统"},
 		},
 	})
-	if err := svc.SendManagerEvalReminders("1"); err != nil {
+	result, err := svc.SendManagerEvalReminders("1")
+	if err != nil {
 		t.Fatalf("SendManagerEvalReminders(non-notifiable managers) error = %v, want nil", err)
+	}
+	if result.Pending != 3 || result.Candidates != 2 || result.Skipped != 2 || len(result.SkippedRecipients) != 2 {
+		t.Fatalf("SendManagerEvalReminders(non-notifiable managers) result = %+v, want pending=3 candidates=2 skipped=2 with recipients", result)
+	}
+	recipients := map[string]string{}
+	for _, recipient := range result.SkippedRecipients {
+		recipients[recipient.UserID] = recipient.Name
+	}
+	if recipients["admin"] != "管理员" || recipients["system"] != "系统" {
+		t.Fatalf("SendManagerEvalReminders skipped recipients = %+v, want names for admin and system", result.SkippedRecipients)
 	}
 }
 
@@ -809,6 +871,36 @@ func TestTriggerPerformanceInterviewWithManagerSkipsNonNotifiableEmployee(t *tes
 	}
 }
 
+func TestTriggerPerformanceInterviewSkipsHiddenEmployeeGradeNotice(t *testing.T) {
+	originalSender := sendPerformanceActionCardToUser
+	sentTo := make([]string, 0)
+	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+		sentTo = append(sentTo, userID)
+		if userID == "user-1" && strings.Contains(content, "绩效等级") {
+			t.Fatalf("hidden employee received grade notice: title=%q content=%q", title, content)
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		sendPerformanceActionCardToUser = originalSender
+	})
+
+	svc := newStubPerformanceService(t, stubQueryResponse{
+		match:   stubTableMatcher("performance_participants"),
+		columns: []string{"id", "activity_id", "employee_id", "employee_name", "final_level", "result_hidden"},
+		rows: [][]driver.Value{
+			{int64(1), "activity-1", "user-1", "Alice", "S", true},
+		},
+	})
+
+	if err := svc.TriggerPerformanceInterview("1", "required"); err != nil {
+		t.Fatalf("TriggerPerformanceInterview(hidden) error = %v, want nil", err)
+	}
+	if len(sentTo) != 0 {
+		t.Fatalf("hidden employee should not receive grade notice, sentTo=%v", sentTo)
+	}
+}
+
 func TestSetBonusPenaltyScoreActivityNotFound(t *testing.T) {
 	svc := newStubPerformanceService(t,
 		coverageParticipantWithScoresResponse("manager_submitted", "manager-1", false, 85),
@@ -902,41 +994,53 @@ func TestSendHRConfirmRemindersActivityNotFound(t *testing.T) {
 		},
 	)
 
-	if err := svc.SendHRConfirmReminders("activity-1"); err == nil {
+	if _, err := svc.SendHRConfirmReminders("activity-1"); err == nil {
 		t.Fatal("SendHRConfirmReminders(activity not found) expected error")
 	}
 }
 
-func TestSendHRConfirmRemindersCreatedByEmptySkipsNotification(t *testing.T) {
+func TestSendHRConfirmRemindersNoHRPermissionRecipients(t *testing.T) {
 	svc := newStubPerformanceService(t,
 		coveragePendingHRConfirmResponse(),
 		coveragePerformanceActivityResponse("hr_confirmation", "", false),
+		hrConfirmReminderRecipientsResponse(),
 	)
 
-	if err := svc.SendHRConfirmReminders("activity-1"); err != nil {
-		t.Fatalf("SendHRConfirmReminders(empty recipient) error = %v, want nil", err)
+	result, err := svc.SendHRConfirmReminders("activity-1")
+	if err != nil {
+		t.Fatalf("SendHRConfirmReminders(no recipients) error = %v, want nil", err)
+	}
+	if result.Pending == 0 || result.Candidates != 0 || result.Sent != 0 {
+		t.Fatalf("SendHRConfirmReminders() result = %#v, want pending only", result)
 	}
 }
 
-func TestSendHRConfirmRemindersCreatedBySystemSkipsNotification(t *testing.T) {
-	svc := newStubPerformanceService(t,
-		coveragePendingHRConfirmResponse(),
-		coveragePerformanceActivityResponse("hr_confirmation", "system", false),
-	)
-
-	if err := svc.SendHRConfirmReminders("activity-1"); err != nil {
-		t.Fatalf("SendHRConfirmReminders(system recipient) error = %v, want nil", err)
+func TestSendHRConfirmRemindersUsesHRPermissionRecipients(t *testing.T) {
+	originalSender := sendPerformanceActionCardToUser
+	sentTo := []string{}
+	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+		sentTo = append(sentTo, userID)
+		return nil
 	}
-}
+	t.Cleanup(func() {
+		sendPerformanceActionCardToUser = originalSender
+	})
 
-func TestSendHRConfirmRemindersCreatedByAdminSwallowsNonNotifiableError(t *testing.T) {
 	svc := newStubPerformanceService(t,
 		coveragePendingHRConfirmResponse(),
-		coveragePerformanceActivityResponse("hr_confirmation", "admin", false),
+		coveragePerformanceActivityResponse("hr_confirmation", "creator-1", false),
+		hrConfirmReminderRecipientsResponse("hr-1", "hr-2"),
 	)
 
-	if err := svc.SendHRConfirmReminders("activity-1"); err != nil {
-		t.Fatalf("SendHRConfirmReminders(admin recipient) error = %v, want nil", err)
+	result, err := svc.SendHRConfirmReminders("activity-1")
+	if err != nil {
+		t.Fatalf("SendHRConfirmReminders(hr recipients) error = %v, want nil", err)
+	}
+	if result.Sent != 2 || len(sentTo) != 2 || sentTo[0] != "hr-1" || sentTo[1] != "hr-2" {
+		t.Fatalf("SendHRConfirmReminders() result = %#v sentTo=%v, want two HR recipients", result, sentTo)
+	}
+	if len(result.SentRecipients) != 2 || result.SentRecipients[0].Name != "hr-1 name" || result.SentRecipients[1].Name != "hr-2 name" {
+		t.Fatalf("SendHRConfirmReminders() sent recipients = %#v, want HR names", result.SentRecipients)
 	}
 }
 

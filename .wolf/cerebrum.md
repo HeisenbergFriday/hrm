@@ -36,6 +36,7 @@
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
 <!-- Format: [YYYY-MM-DD] Description of what went wrong and what to do instead. -->
+- [2026-07-06] 不要在未确认当前生产域名/反向代理拓扑前，把生产 Docker 端口从 `8080:8080` 收敛到 `127.0.0.1:8080:8080`。本项目当前 `http://hr.example.com/` 依赖外部可达 8080；若要修复直连暴露，应先配置同机 Nginx/宝塔/负载均衡或防火墙来源限制，再收敛端口。
 
 ## Decision Log
 

@@ -430,7 +430,7 @@ const RoleManagement: React.FC = () => {
 
   // 角色列表卡片
   const renderRoleList = () => (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div className="permission-role-list" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={{ marginBottom: 16 }}>
         <Input
           placeholder="搜索角色"
@@ -446,7 +446,7 @@ const RoleManagement: React.FC = () => {
           </Button>
         )}
       </div>
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      <div className="permission-role-list-scroll" style={{ flex: 1, overflow: 'auto' }}>
         {filteredRoles.map((role: Role) => (
           <Card
             key={role.id}
@@ -919,10 +919,11 @@ const RoleManagement: React.FC = () => {
   }
 
   return (
-    <PageContainer title="权限管理" icon={<KeyOutlined />} subtitle="管理系统角色与权限配置">
-      <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 200px)' }}>
+    <PageContainer className="permission-page" title="权限管理" icon={<KeyOutlined />} subtitle="管理系统角色与权限配置">
+      <div className="permission-page-layout" style={{ display: 'flex', gap: 16, height: 'calc(100vh - 200px)' }}>
         {/* 左侧角色列表 */}
         <Card
+          className="permission-role-card"
           title={<Space><UsergroupAddOutlined /> <Text strong>角色列表</Text></Space>}
           extra={<Badge count={filteredRoles.length} style={{ backgroundColor: '#4338ca' }} />}
           style={{ width: 280, flexShrink: 0 }}
@@ -932,7 +933,7 @@ const RoleManagement: React.FC = () => {
         </Card>
 
         {/* 右侧权限配置 */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="permission-detail-pane" style={{ flex: 1, minWidth: 0 }}>
           <Tabs items={tabItems} size="large" />
         </div>
       </div>

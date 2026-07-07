@@ -93,8 +93,9 @@ func (r *UserRepository) FindSyncedEmployees(page, pageSize int) ([]database.Use
 	var total int64
 
 	offset := (page - 1) * pageSize
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 	query := r.db.Model(&database.User{}).
-		Joins("JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Joins("JOIN employee_profiles ON employee_profiles.org_id = ? AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL", orgID).
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin")
 
@@ -135,8 +136,9 @@ func (r *UserRepository) FindSyncedEmployeesByDepartment(departmentID string, pa
 	var total int64
 
 	offset := (page - 1) * pageSize
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 	query := r.db.Model(&database.User{}).
-		Joins("JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Joins("JOIN employee_profiles ON employee_profiles.org_id = ? AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL", orgID).
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin").
 		Where("users.department_id = ?", departmentID)

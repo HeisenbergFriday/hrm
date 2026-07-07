@@ -1,6 +1,14 @@
 import React from 'react'
+import axios from 'axios'
 import { Row, Col, Typography, Spin, Alert, Button, Result } from 'antd'
-import { UserOutlined, TeamOutlined, ClockCircleOutlined, FileOutlined, DashboardOutlined, LockOutlined } from '@ant-design/icons'
+import {
+  UserOutlined,
+  TeamOutlined,
+  ClockCircleOutlined,
+  FileOutlined,
+  DashboardOutlined,
+  LockOutlined,
+} from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { userAPI, departmentAPI, attendanceAPI, approvalAPI } from '../services/api'
@@ -10,74 +18,141 @@ import { useAuthStore } from '../store/authStore'
 const { Text } = Typography
 
 const statCards = [
-  { key: 'users', title: '员工总数', icon: <UserOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', shadow: 'rgba(102,126,234,0.35)' },
-  { key: 'departments', title: '部门总数', icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)', shadow: 'rgba(67,233,123,0.3)' },
-  { key: 'attendance', title: '考勤率', icon: <ClockCircleOutlined />, gradient: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)', shadow: 'rgba(250,112,154,0.3)' },
-  { key: 'approvals', title: '审批数量', icon: <FileOutlined />, gradient: 'linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)', shadow: 'rgba(161,140,209,0.3)' },
+  {
+    key: 'users',
+    title: '员工总数',
+    icon: <UserOutlined />,
+    gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    shadow: 'rgba(102,126,234,0.35)',
+  },
+  {
+    key: 'departments',
+    title: '部门总数',
+    icon: <TeamOutlined />,
+    gradient: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
+    shadow: 'rgba(67,233,123,0.3)',
+  },
+  {
+    key: 'attendance',
+    title: '考勤率',
+    icon: <ClockCircleOutlined />,
+    gradient: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+    shadow: 'rgba(250,112,154,0.3)',
+  },
+  {
+    key: 'approvals',
+    title: '审批数量',
+    icon: <FileOutlined />,
+    gradient: 'linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)',
+    shadow: 'rgba(161,140,209,0.3)',
+  },
 ] as const
+
+function isForbiddenError(error: unknown): boolean {
+  return axios.isAxiosError(error) && error.response?.status === 403
+}
+
+function formatStatValue(cardKey: string, value: number | string): string | number {
+  if (cardKey === 'attendance' && typeof value === 'number') {
+    return `${value}%`
+  }
+  return value
+}
 
 const Home: React.FC = () => {
   const navigate = useNavigate()
   const { menuKeys } = useAuthStore()
 
-  const { data: usersData, isLoading: usersLoading, isError: usersError } = useQuery({
+  const {
+    data: usersData,
+    isLoading: usersLoading,
+    isError: usersError,
+    error: usersQueryError,
+  } = useQuery({
     queryKey: ['users'],
     queryFn: () => userAPI.getUsers({ page: 1, page_size: 1 }),
-    enabled: menuKeys.length > 0
+    enabled: menuKeys.length > 0,
   })
 
-  const { data: departmentsData, isLoading: deptsLoading, isError: deptsError } = useQuery({
+  const {
+    data: departmentsData,
+    isLoading: deptsLoading,
+    isError: deptsError,
+    error: departmentsQueryError,
+  } = useQuery({
     queryKey: ['departments'],
     queryFn: departmentAPI.getDepartments,
-    enabled: menuKeys.length > 0
+    enabled: menuKeys.length > 0,
   })
 
-  const { data: attendanceData, isLoading: attendanceLoading, isError: attendanceError } = useQuery({
+  const {
+    data: attendanceData,
+    isLoading: attendanceLoading,
+    isError: attendanceError,
+    error: attendanceQueryError,
+  } = useQuery({
     queryKey: ['attendanceStats'],
     queryFn: () => attendanceAPI.getStats({}),
-    enabled: menuKeys.length > 0
+    enabled: menuKeys.length > 0,
   })
 
-  const { data: approvalsData, isLoading: approvalsLoading, isError: approvalsError } = useQuery({
+  const {
+    data: approvalsData,
+    isLoading: approvalsLoading,
+    isError: approvalsError,
+    error: approvalsQueryError,
+  } = useQuery({
     queryKey: ['approvals'],
     queryFn: () => approvalAPI.getInstances({ page: 1, page_size: 1 }),
-    enabled: menuKeys.length > 0
+    enabled: menuKeys.length > 0,
   })
 
-  // 未分配角色的用户不显示任何数据
   if (menuKeys.length === 0) {
     return (
       <PageContainer>
-        <div style={{
-          background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 50%, #818cf8 100%)',
-          borderRadius: 'var(--radius-2xl)',
-          padding: '28px 32px',
-          marginBottom: 'var(--space-6)',
-          color: '#fff',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          boxShadow: '0 4px 20px rgba(67,56,202,0.3)',
-        }}>
+        <div
+          style={{
+            background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 50%, #818cf8 100%)',
+            borderRadius: 'var(--radius-2xl)',
+            padding: '28px 32px',
+            marginBottom: 'var(--space-6)',
+            color: '#fff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            boxShadow: '0 4px 20px rgba(67,56,202,0.3)',
+          }}
+        >
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
               <DashboardOutlined style={{ fontSize: 28 }} />
-              <span style={{ margin: 0, color: '#fff', fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-xl)' }}>系统概览</span>
+              <span
+                style={{
+                  margin: 0,
+                  color: '#fff',
+                  fontWeight: 'var(--font-weight-bold)',
+                  fontSize: 'var(--font-size-xl)',
+                }}
+              >
+                系统概览
+              </span>
             </div>
             <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 'var(--font-size-base)' }}>
               欢迎使用人事管理系统
             </Text>
           </div>
-          <div style={{
-            width: 64,
-            height: 64,
-            borderRadius: 'var(--radius-2xl)',
-            background: 'rgba(255,255,255,0.15)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backdropFilter: 'blur(10px)',
-          }}>
+          <div
+            style={{
+              width: 64,
+              height: 64,
+              borderRadius: 'var(--radius-2xl)',
+              background: 'rgba(255,255,255,0.15)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backdropFilter: 'blur(10px)',
+            }}
+          >
             <DashboardOutlined style={{ fontSize: 32, color: '#fff' }} />
           </div>
         </div>
@@ -91,6 +166,14 @@ const Home: React.FC = () => {
   }
 
   const isLoading = usersLoading || deptsLoading || attendanceLoading || approvalsLoading
+  const queryErrors = [
+    usersQueryError,
+    departmentsQueryError,
+    attendanceQueryError,
+    approvalsQueryError,
+  ].filter(Boolean)
+  const hasPermissionLimitedError = queryErrors.some(isForbiddenError)
+  const hasBlockingError = queryErrors.some((error) => !isForbiddenError(error))
   const isError = usersError || deptsError || attendanceError || approvalsError
 
   if (isLoading) {
@@ -101,7 +184,7 @@ const Home: React.FC = () => {
     )
   }
 
-  if (isError) {
+  if (isError && hasBlockingError) {
     return (
       <PageContainer>
         <Alert
@@ -109,16 +192,22 @@ const Home: React.FC = () => {
           description="请检查网络连接后重试"
           type="error"
           showIcon
-          action={<Button size="small" onClick={() => window.location.reload()}>重试</Button>}
+          action={
+            <Button size="small" onClick={() => window.location.reload()}>
+              重试
+            </Button>
+          }
         />
       </PageContainer>
     )
   }
 
-  const userCount = usersData?.data?.total || 0
-  const departmentCount = departmentsData?.data?.departments?.length || 0
-  const attendanceRate = attendanceData?.data?.summary?.normal_rate ? parseFloat(attendanceData.data.summary.normal_rate) : 0
-  const approvalCount = approvalsData?.data?.total || 0
+  const userCount: number | string = usersData?.data?.total ?? '--'
+  const departmentCount: number | string = departmentsData?.data?.departments?.length ?? '--'
+  const attendanceRate: number | string = attendanceData?.data?.summary?.normal_rate
+    ? parseFloat(attendanceData.data.summary.normal_rate)
+    : '--'
+  const approvalCount: number | string = approvalsData?.data?.total ?? '--'
 
   const values: Record<string, number | string> = {
     users: userCount,
@@ -129,57 +218,79 @@ const Home: React.FC = () => {
 
   return (
     <PageContainer>
-      {/* 欢迎区 */}
-      <div style={{
-        background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 50%, #818cf8 100%)',
-        borderRadius: 'var(--radius-2xl)',
-        padding: '28px 32px',
-        marginBottom: 'var(--space-6)',
-        color: '#fff',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        boxShadow: '0 4px 20px rgba(67,56,202,0.3)',
-      }}>
+      {hasPermissionLimitedError ? (
+        <Alert
+          message="部分首页数据未展示"
+          description="当前账号已登录成功，但部分统计接口返回了 403，说明是权限不足，不是网络问题。"
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
+
+      <div
+        style={{
+          background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 50%, #818cf8 100%)',
+          borderRadius: 'var(--radius-2xl)',
+          padding: '28px 32px',
+          marginBottom: 'var(--space-6)',
+          color: '#fff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          boxShadow: '0 4px 20px rgba(67,56,202,0.3)',
+        }}
+      >
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
             <DashboardOutlined style={{ fontSize: 28 }} />
-            <span style={{ margin: 0, color: '#fff', fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-xl)' }}>系统概览</span>
+            <span
+              style={{
+                margin: 0,
+                color: '#fff',
+                fontWeight: 'var(--font-weight-bold)',
+                fontSize: 'var(--font-size-xl)',
+              }}
+            >
+              系统概览
+            </span>
           </div>
           <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 'var(--font-size-base)' }}>
             欢迎使用人事管理系统，以下是当前系统核心数据概况
           </Text>
         </div>
-        <div style={{
-          width: 64,
-          height: 64,
-          borderRadius: 'var(--radius-2xl)',
-          background: 'rgba(255,255,255,0.15)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backdropFilter: 'blur(10px)',
-        }}>
+        <div
+          style={{
+            width: 64,
+            height: 64,
+            borderRadius: 'var(--radius-2xl)',
+            background: 'rgba(255,255,255,0.15)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backdropFilter: 'blur(10px)',
+          }}
+        >
           <DashboardOutlined style={{ fontSize: 32, color: '#fff' }} />
         </div>
       </div>
 
-      {/* 统计卡片 */}
       <Row gutter={[20, 20]}>
         {statCards.map((card) => (
           <Col xs={24} sm={12} lg={6} key={card.key}>
-            <div style={{
-              background: 'var(--color-bg-card)',
-              borderRadius: 'var(--radius-xl)',
-              padding: '22px 24px',
-              boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-              border: '1px solid var(--color-border)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 16,
-              transition: 'var(--transition-normal)',
-              cursor: 'default',
-            }}
+            <div
+              style={{
+                background: 'var(--color-bg-card)',
+                borderRadius: 'var(--radius-xl)',
+                padding: '22px 24px',
+                boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+                border: '1px solid var(--color-border)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 16,
+                transition: 'var(--transition-normal)',
+                cursor: 'default',
+              }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.boxShadow = `0 4px 20px ${card.shadow}`
                 e.currentTarget.style.transform = 'translateY(-2px)'
@@ -189,34 +300,43 @@ const Home: React.FC = () => {
                 e.currentTarget.style.transform = 'translateY(0)'
               }}
             >
-              <div style={{
-                width: 52,
-                height: 52,
-                borderRadius: 'var(--radius-xl)',
-                background: card.gradient,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 24,
-                color: '#fff',
-                flexShrink: 0,
-                boxShadow: `0 4px 12px ${card.shadow}`,
-              }}>
+              <div
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 'var(--radius-xl)',
+                  background: card.gradient,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 24,
+                  color: '#fff',
+                  flexShrink: 0,
+                  boxShadow: `0 4px 12px ${card.shadow}`,
+                }}
+              >
                 {card.icon}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{card.title}</Text>
-                <div style={{
-                  fontSize: 28,
-                  fontWeight: 'var(--font-weight-bold)',
-                  color: 'var(--color-text-title)',
-                  lineHeight: 1.2,
-                  marginTop: 4,
-                }}>
-                  {card.key === 'attendance'
-                    ? `${values[card.key]}%`
-                    : values[card.key]
-                  }
+                <Text
+                  style={{
+                    color: 'var(--color-text-secondary)',
+                    fontSize: 'var(--font-size-sm)',
+                    fontWeight: 'var(--font-weight-medium)',
+                  }}
+                >
+                  {card.title}
+                </Text>
+                <div
+                  style={{
+                    fontSize: 28,
+                    fontWeight: 'var(--font-weight-bold)',
+                    color: 'var(--color-text-title)',
+                    lineHeight: 1.2,
+                    marginTop: 4,
+                  }}
+                >
+                  {formatStatValue(card.key, values[card.key])}
                 </div>
               </div>
             </div>
@@ -224,9 +344,18 @@ const Home: React.FC = () => {
         ))}
       </Row>
 
-      {/* 快捷入口 */}
       <div style={{ marginTop: 'var(--space-6)' }}>
-        <span style={{ color: '#374151', fontWeight: 'var(--font-weight-bold)', marginBottom: 'var(--space-4)', display: 'block', fontSize: 'var(--font-size-md)' }}>快捷入口</span>
+        <span
+          style={{
+            color: '#374151',
+            fontWeight: 'var(--font-weight-bold)',
+            marginBottom: 'var(--space-4)',
+            display: 'block',
+            fontSize: 'var(--font-size-md)',
+          }}
+        >
+          快捷入口
+        </span>
         <Row gutter={[16, 16]}>
           {[
             { label: '组织架构', icon: <TeamOutlined />, color: '#4338ca', bg: '#eef2ff', path: '/department-tree' },
@@ -235,16 +364,17 @@ const Home: React.FC = () => {
             { label: '绩效管理', icon: <DashboardOutlined />, color: '#15803d', bg: '#dcfce7', path: '/performance-overview' },
           ].map((item) => (
             <Col xs={12} sm={6} key={item.label}>
-              <div style={{
-                background: 'var(--color-bg-card)',
-                borderRadius: 'var(--radius-lg)',
-                padding: '20px 16px',
-                textAlign: 'center',
-                boxShadow: 'var(--shadow-sm)',
-                border: '1px solid var(--color-border-light)',
-                cursor: 'pointer',
-                transition: 'var(--transition-normal)',
-              }}
+              <div
+                style={{
+                  background: 'var(--color-bg-card)',
+                  borderRadius: 'var(--radius-lg)',
+                  padding: '20px 16px',
+                  textAlign: 'center',
+                  boxShadow: 'var(--shadow-sm)',
+                  border: '1px solid var(--color-border-light)',
+                  cursor: 'pointer',
+                  transition: 'var(--transition-normal)',
+                }}
                 onClick={() => navigate(item.path)}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.boxShadow = `0 4px 16px ${item.color}22`
@@ -255,21 +385,31 @@ const Home: React.FC = () => {
                   e.currentTarget.style.transform = 'translateY(0)'
                 }}
               >
-                <div style={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: 'var(--radius-lg)',
-                  background: item.bg,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 'var(--font-size-xl)',
-                  color: item.color,
-                  marginBottom: 10,
-                }}>
+                <div
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 'var(--radius-lg)',
+                    background: item.bg,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 'var(--font-size-xl)',
+                    color: item.color,
+                    marginBottom: 10,
+                  }}
+                >
                   {item.icon}
                 </div>
-                <div style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: '#1f2937' }}>{item.label}</div>
+                <div
+                  style={{
+                    fontWeight: 'var(--font-weight-semibold)',
+                    fontSize: 'var(--font-size-base)',
+                    color: '#1f2937',
+                  }}
+                >
+                  {item.label}
+                </div>
               </div>
             </Col>
           ))}

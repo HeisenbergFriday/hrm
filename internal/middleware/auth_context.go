@@ -14,6 +14,8 @@ import (
 const authContextKey = "authContext"
 
 type AuthContext struct {
+	OrgID            string
+	Organization     *database.Organization
 	RawUserID        string
 	UserID           string
 	User             *database.User
@@ -82,7 +84,9 @@ func UserDataScope(c *gin.Context) (*service.OrgDataScope, error) {
 
 func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 	rawUserID := strings.TrimSpace(c.GetString("userID"))
+	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
 	authCtx := &AuthContext{
+		OrgID:         orgID,
 		RawUserID:     rawUserID,
 		UserID:        rawUserID,
 		PermissionSet: make(map[string]struct{}),
@@ -93,6 +97,12 @@ func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 	}
 
 	db := RequestDB(c)
+	organization, err := loadCurrentOrganization(db, orgID)
+	if err != nil {
+		return nil, err
+	}
+	authCtx.Organization = organization
+
 	user, normalizedUserID, err := loadCurrentUser(db, rawUserID)
 	if err != nil {
 		return nil, err
@@ -122,6 +132,16 @@ func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 	}
 
 	return authCtx, nil
+}
+
+func loadCurrentOrganization(db *gorm.DB, orgID string) (*database.Organization, error) {
+	orgID = database.NormalizeOrganizationID(orgID)
+	var organization database.Organization
+	err := db.Where("org_id = ? AND status = ? AND deleted_at IS NULL", orgID, "active").First(&organization).Error
+	if err == nil {
+		return &organization, nil
+	}
+	return nil, nil
 }
 
 func loadCurrentUser(db *gorm.DB, rawUserID string) (*database.User, string, error) {

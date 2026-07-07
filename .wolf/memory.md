@@ -2,6 +2,55 @@
 
 > Chronological action log. Hooks and AI append to this file automatically.
 > Old sessions are consolidated by the daemon weekly.
+
+## Session: 2026-07-06
+> 阻断钉钉多企业 unionId-only 误入企业
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| -- | 调整回调企业解析 | internal/api/handlers.go | 多企业无预选扫码时只接受 corpId/企业内 userid 自动解析；unionId/openId-only 不再反查自动进企业 | ~220 |
+| -- | 增加安全诊断日志 | internal/api/handlers.go | userInfo 日志新增字段名 keys，不打印字段值，便于确认钉钉是否返回 corpId/userid | ~80 |
+| -- | 更新认证文档 | .ai/MODULES/auth.md | 记录企业内部应用下 unionId-only 不可作为钉钉官方组织选择依据 | ~120 |
+| -- | 验证 | internal/api, internal/dingtalk | gofmt 后聚焦 DingTalk 登录测试通过 | ~80 |
+| -- | 更新 buglog | .wolf/buglog.json | 新增 bug-244 记录选机器人集合误进 xiaotie 的根因和修复 | ~120 |
+
+## Session: 2026-07-06
+> 修复本机 Go toolchain / GOROOT 版本不一致
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| -- | 诊断 Go 环境 | local Go environment | 发现 PATH 命中 Go 1.26.4 toolchain，但用户级 GOROOT 固定为 D:\Go，导致混用 1.26.3 标准库对象 | ~80 |
+| -- | 删除用户级 GOROOT | user environment | 执行 SetEnvironmentVariable('GOROOT', null, 'User')，当前 shell 也清空 GOROOT，Go 自动使用 active toolchain GOROOT | ~60 |
+| -- | 复跑后端认证测试 | internal/api, internal/dingtalk | 聚焦 DingTalk 登录相关 Go 测试通过 | ~80 |
+| -- | 更新 buglog | .wolf/buglog.json | 新增 bug-241 记录 Go 版本不一致根因和修复 | ~80 |
+
+## Session: 2026-07-06
+> 修复钉钉电脑扫码多企业登录流程
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| -- | 取消扫码前本地企业选择 | frontend/src/pages/Login.tsx | 电脑端扫码直接请求统一 QR 入口，不传 org_id；文案改为在钉钉官方页选择身份/组织 | ~220 |
+| -- | 修正扫码回调企业上下文 | frontend/src/pages/Callback.tsx | 回调只透传 URL 直接 org_id，不再用记忆企业影响无预选扫码；成功后按后端返回 user.org_id 进入空间 | ~120 |
+| -- | 强化钉钉身份解析 | internal/api/handlers.go | 无 org_id 回调优先 corpId/userid，其次用 unionId 反查各活跃企业 userid，唯一命中后登录；无法反查时提示通讯录权限 | ~280 |
+| -- | 移除回调内联样式 | frontend/src/index.css, frontend/src/pages/Callback.tsx | 新增 callback-page 样式，消除 IDE inline style 警告 | ~80 |
+| -- | 更新认证文档与 buglog | .ai/MODULES/auth.md, .wolf/buglog.json | 记录直接扫码与 unionId 反查要求；新增 bug-240 | ~180 |
+| -- | 验证 | npm --prefix frontend run lint/test/build; go test focused auth packages | 前端 lint、authRedirect 测试 14/14、build 通过；Go 测试被本机 Go 1.26.3/1.26.4 标准库版本不一致阻塞 | ~120 |
+
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| -- | 收敛审计日志入口权限 | frontend/src/App.tsx | `/audit-logs` 增加 `audit_log:read` 操作权限；`/log` 改为重定向到 `/audit-logs`，不再直接渲染旧 Log 页面 | ~100 |
+
+## Session: 2026-07-06
+> 回滚生产 8080 本机绑定以恢复当前域名访问
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| -- | 恢复生产 Compose 端口映射 | docker-compose.prod.yml | 将 `127.0.0.1:8080:8080` 恢复为 `8080:8080`，因为当前 `http://hr.example.com/` 依赖外部可达 8080 | ~80 |
+| -- | 同步部署文档 | deploy/README.md, DEPLOYMENT.md | 说明当前未完成同机反向代理时需保持 8080 外部可达；后续完成 Nginx/宝塔/负载均衡后再收敛到 127.0.0.1 | ~180 |
+
+## Session: 2026-07-06
+> 修复生产 8080 直连暴露风险
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| -- | 收敛生产 Compose 端口绑定 | docker-compose.prod.yml | 将 `8080:8080` 改为 `127.0.0.1:8080:8080`，避免默认公网直连后端容器端口 | ~80 |
+| -- | 同步部署文档 | deploy/README.md, DEPLOYMENT.md | Docker Run 示例改为本机绑定；生产钉钉地址示例改为 HTTPS 域名，明确 8080 仅供本机反代 | ~180 |
 ## Session: 2026-06-09
 > Fixed GitHub Actions frontend CI failure and stabilized frontend test gate
 | Time | Action | File(s) | Outcome | ~Tokens |
@@ -2007,6 +2056,1026 @@
 |------|--------|---------|---------|--------|
 
 ## Session: 2026-06-10 15:22
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-10 15:58
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-10 16:37
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-10 16:50
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-10 16:50
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 17:10 | Created C:/Users/吴列德/.claude/plans/sleepy-tickling-bear.md | — | ~1304 |
+
+## Session: 2026-06-10 17:58
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 18:31 | Created C:/Users/吴列德/.claude/plans/whimsical-gliding-rabbit.md | — | ~3101 |
+
+## Session: 2026-06-11 10:15
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-11 10:15
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-11 10:15
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-11 10:15
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-11 10:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-11 10:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-11 10:22
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 11:45
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 11:45
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 14:21
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 14:21
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 14:21
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 14:21
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 14:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 14:25
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 14:42
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 14:43
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 14:43
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-06-12 14:59
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 14:44
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 15:02 | Created C:/Users/吴列德/.claude/plans/zazzy-puzzling-narwhal.md | — | ~1585 |
+
+## Session: 2026-07-02 15:12
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:15
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:15
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:17
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:27
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:30
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:32
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:33
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:33
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:34
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:37
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:37
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 15:40
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 15:43 | Edited tools/attendance_toolbox/python/runner.py | modified in() | ~162 |
+| 15:43 | Edited tools/attendance_toolbox/python/runner.py | modified run_dingtalk_sync() | ~657 |
+| 15:43 | Edited tools/attendance_toolbox/python/runner.py | 7→8 lines | ~54 |
+| 15:43 | Edited internal/service/attendance_toolbox_service.go | modified attendanceToolboxSpecs() | ~631 |
+| 15:44 | Edited internal/api/router.go | 2→3 lines | ~122 |
+| 15:44 | Edited internal/api/attendance_toolbox_handlers.go | modified RunAttendanceToolbox() | ~728 |
+| 15:45 | Edited internal/service/attendance_toolbox_service.go | modified func() | ~1179 |
+| 15:45 | Edited frontend/src/pages/AttendanceToolbox.tsx | 22→26 lines | ~269 |
+| 15:45 | Edited frontend/src/pages/AttendanceToolbox.tsx | CSS: zipOutputName | ~212 |
+| 15:45 | Edited frontend/src/pages/AttendanceToolbox.tsx | expanded (+7 lines) | ~246 |
+| 15:46 | Edited frontend/src/pages/AttendanceToolbox.tsx | added 3 condition(s) | ~719 |
+| 15:47 | Edited frontend/src/pages/AttendanceToolbox.tsx | added nullish coalescing | ~1702 |
+| 15:47 | Edited frontend/src/services/api.ts | expanded (+16 lines) | ~226 |
+| 15:49 | Edited frontend/src/pages/AttendanceToolbox.tsx | 13→13 lines | ~154 |
+| 15:49 | Edited frontend/src/pages/AttendanceToolbox.tsx | 14→14 lines | ~162 |
+| 16:12 | Edited internal/database/database.go | modified migrateAttendanceToolboxMenuPermissions() | ~325 |
+
+## Session: 2026-07-02 16:46
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 16:59
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 16:59
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 17:07 | Edited C:/Users/吴列德/.claude/plans/zazzy-puzzling-narwhal.md | expanded (+29 lines) | ~357 |
+| 17:08 | Edited C:/Users/吴列德/.claude/plans/zazzy-puzzling-narwhal.md | reduced (-23 lines) | ~578 |
+| 17:08 | Edited C:/Users/吴列德/.claude/plans/zazzy-puzzling-narwhal.md | 29→29 lines | ~315 |
+| 17:09 | Edited C:/Users/吴列德/.claude/plans/zazzy-puzzling-narwhal.md | expanded (+14 lines) | ~402 |
+| 17:09 | Edited C:/Users/吴列德/.claude/plans/zazzy-puzzling-narwhal.md | 15→17 lines | ~127 |
+| 17:09 | Edited C:/Users/吴列德/.claude/plans/zazzy-puzzling-narwhal.md | reduced (-11 lines) | ~112 |
+| 17:10 | Edited C:/Users/吴列德/.claude/plans/zazzy-puzzling-narwhal.md | 14→12 lines | ~112 |
+| 17:13 | Created tools/attendance_toolbox/python/requirements.txt | — | ~61 |
+| 17:16 | Edited tools/attendance_toolbox/python/runner.py | modified action_export_rules() | ~1971 |
+| 17:17 | Edited tools/attendance_toolbox/python/runner.py | modified main() | ~693 |
+| 17:19 | Edited internal/service/attendance_toolbox_service.go | modified ContentDispositionAttachment() | ~1524 |
+| 17:19 | Edited internal/api/attendance_toolbox_handlers.go | modified RunDingtalkSync() | ~1325 |
+| 17:19 | Edited internal/api/attendance_toolbox_handlers.go | 6→9 lines | ~30 |
+| 17:20 | Edited internal/api/router.go | 3→6 lines | ~265 |
+| 17:22 | Edited frontend/src/services/api.ts | expanded (+16 lines) | ~378 |
+| 17:22 | Edited frontend/src/pages/AttendanceToolbox.tsx | 19→22 lines | ~226 |
+| 17:22 | Edited frontend/src/pages/AttendanceToolbox.tsx | 12→14 lines | ~284 |
+| 17:23 | Edited frontend/src/pages/AttendanceToolbox.tsx | CSS: warnings | ~436 |
+| 17:23 | Edited frontend/src/pages/AttendanceToolbox.tsx | added optional chaining | ~1016 |
+| 17:24 | Created frontend/src/pages/OvertimeRulesEditor.tsx | — | ~1763 |
+| 17:24 | Edited frontend/src/pages/AttendanceToolbox.tsx | added 1 import(s) | ~61 |
+| 17:24 | Edited frontend/src/pages/AttendanceToolbox.tsx | CSS: key, label, children | ~138 |
+| 17:29 | Edited .ai/MODULES/attendance.md | 19→22 lines | ~204 |
+| 17:29 | Edited .ai/MODULES/attendance.md | expanded (+64 lines) | ~390 |
+| 17:30 | Edited .ai/MODULES/attendance.md | 5→5 lines | ~83 |
+| 17:30 | Edited .ai/MODULES/attendance.md | expanded (+10 lines) | ~117 |
+
+## Session: 2026-07-02 17:47
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:48
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:48
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:48
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:49
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:50
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:50
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:50
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:50
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:53
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:54
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:55
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:55
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 17:55
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-02 18:09
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:05
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:05
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:05
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:15
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:17
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:19
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:19
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:20
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:23
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:49
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:51
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:52
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 09:56
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 10:00
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 10:02
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 10:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 10:07
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:01
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:11
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:11
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:11
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:11
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:11
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:11
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:12
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:13
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:29
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:30
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 11:33
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 11:43 | Edited .ai/ARCHITECTURE.md | "admin / admin123" → "admin" | ~16 |
+| 11:43 | Edited BACKEND_API_DESIGN.md | inline fix | ~12 |
+| 11:43 | Edited DATABASE_DESIGN.md | "admin123" → "ADMIN_PASSWORD" | ~21 |
+| 11:43 | Edited deploy/peopleops.env.example | inline fix | ~13 |
+| 11:43 | Edited deploy/peopleops.env.example | inline fix | ~37 |
+| 11:43 | Edited deploy/peopleops.test.env.example | 11→11 lines | ~110 |
+| 11:44 | Edited README.md | expanded (+6 lines) | ~121 |
+
+## Session: 2026-07-03 11:53
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 12:14 | Created tools/attendance_toolbox/python/excel_compat.py | — | ~2075 |
+| 12:16 | Created tools/attendance_toolbox/python/templates.py | — | ~5067 |
+| 12:17 | Edited tools/attendance_toolbox/python/runner.py | added 2 import(s) | ~78 |
+| 12:18 | Edited tools/attendance_toolbox/python/runner.py | modified action_export_templates() | ~1491 |
+| 12:19 | Edited internal/api/attendance_toolbox_handlers.go | modified ImportOvertimeRulesPreview() | ~1195 |
+| 12:20 | Edited internal/service/attendance_toolbox_service.go | modified attendanceToolboxTemplatesZipName() | ~2262 |
+
+## Session: 2026-07-03 12:21
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 12:21 | Edited internal/service/attendance_toolbox_service.go | modified func() | ~1126 |
+| 12:21 | Edited internal/service/attendance_toolbox_service.go | modified HasSuffix() | ~225 |
+| 12:22 | Edited internal/service/attendance_toolbox_service.go | modified HasSuffix() | ~252 |
+| 12:22 | Edited internal/api/router.go | 6→8 lines | ~357 |
+| 12:31 | Edited frontend/src/services/api.ts | expanded (+13 lines) | ~246 |
+| 12:31 | Edited frontend/src/pages/AttendanceToolbox.tsx | 13→14 lines | ~78 |
+| 12:32 | Edited frontend/src/pages/AttendanceToolbox.tsx | CSS: id, file_name | ~53 |
+| 12:33 | Edited frontend/src/pages/AttendanceToolbox.tsx | expanded (+19 lines) | ~1541 |
+| 12:33 | Edited frontend/src/pages/AttendanceToolbox.tsx | added optional chaining | ~733 |
+| 12:33 | Edited frontend/src/pages/AttendanceToolbox.tsx | added error handling | ~688 |
+| 12:34 | Edited frontend/src/pages/AttendanceToolbox.tsx | added 1 condition(s) | ~119 |
+| 12:34 | Edited frontend/src/pages/AttendanceToolbox.tsx | CSS: margin, paddingLeft | ~813 |
+| 12:35 | Edited frontend/src/pages/AttendanceToolbox.tsx | expanded (+46 lines) | ~486 |
+| 12:36 | Edited frontend/src/pages/AttendanceToolbox.tsx | CSS: fieldName, fileList | ~336 |
+| 14:15 | Created deploy/update.sh | — | ~703 |
+| 14:25 | Edited deploy/update.sh | 2→3 lines | ~46 |
+| 14:25 | Edited deploy/update.sh | "${LOCAL_TAR}" → "${REMOTE_PORT}" | ~25 |
+| 14:25 | Edited deploy/update.sh | "${REMOTE_HOST}" → "${REMOTE_PORT}" | ~20 |
+| 14:26 | Edited deploy/update.sh | 4→5 lines | ~78 |
+| 14:26 | Edited deploy/update.sh | 6→7 lines | ~63 |
+| 14:26 | Edited deploy/update.sh | inline fix | ~30 |
+| 14:26 | Edited deploy/update.sh | "镜像标签   : ${IMAGE_TAG}" → "目标端口   : ${REMOTE_PORT}" | ~8 |
+| 14:26 | Edited deploy/update.sh | inline fix | ~26 |
+| 14:27 | Edited deploy/update.sh | 5→5 lines | ~60 |
+| 14:36 | Edited deploy/update.sh | "/opt/peopleops-hr-test" → "/home/ubuntu/peopleops-hr" | ~12 |
+| 14:47 | Edited deploy/update.sh | 8→8 lines | ~88 |
+| 14:52 | Edited deploy/update.sh | 3→6 lines | ~52 |
+| 14:56 | Created deploy/update.ps1 | — | ~851 |
+| 14:58 | Created deploy/update.ps1 | — | ~946 |
+| 15:00 | Edited deploy/update.ps1 | modified if() | ~113 |
+
+## Session: 2026-07-03 15:07
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 15:11 | Edited frontend/src/pages/AttendanceToolbox.tsx | reduced (-6 lines) | ~245 |
+| 15:11 | Edited frontend/src/pages/AttendanceToolbox.tsx | reduced (-6 lines) | ~102 |
+
+## Session: 2026-07-03 15:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 15:24 | Created frontend/src/pages/AttendanceToolbox.tsx | — | ~12255 |
+| 15:24 | Created frontend/src/pages/AttendanceToolbox.test.tsx | — | ~1270 |
+
+## Session: 2026-07-03 15:36
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 15:37
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 15:38
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 15:38
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 15:39
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 15:41 | Edited deploy/peopleops.env | 3→6 lines | ~218 |
+
+## Session: 2026-07-03 15:47
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 15:53 | Edited frontend/src/pages/AttendanceToolbox.tsx | expanded (+102 lines) | ~1674 |
+| 15:53 | Edited frontend/src/pages/AttendanceToolbox.tsx | 2→3 lines | ~21 |
+| 15:57 | Edited frontend/src/pages/AttendanceToolbox.tsx | 20→22 lines | ~472 |
+| 15:57 | Edited frontend/src/pages/AttendanceToolbox.tsx | modified catch() | ~568 |
+
+## Session: 2026-07-03 15:59
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 16:00 | Edited frontend/src/pages/AttendanceToolbox.tsx | CSS: fieldName, list | ~449 |
+| 16:00 | Edited frontend/src/pages/AttendanceToolbox.tsx | expanded (+75 lines) | ~966 |
+
+## Session: 2026-07-03 16:35
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 16:35
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 16:35
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 16:45 | Edited frontend/src/pages/AttendanceToolbox.tsx | 26→26 lines | ~190 |
+| 16:46 | Edited frontend/src/pages/AttendanceToolbox.tsx | inline fix | ~10 |
+| 16:52 | Edited internal/api/router.go | 3→4 lines | ~50 |
+| 16:52 | Edited internal/api/handlers.go | modified ListActiveOrganizations() | ~286 |
+| 16:53 | Edited frontend/src/services/api.ts | 4→8 lines | ~55 |
+| 16:54 | Created frontend/src/pages/Login.tsx | — | ~2761 |
+| 16:55 | Edited frontend/src/pages/Login.tsx | 5→5 lines | ~44 |
+| 16:56 | Edited frontend/src/index.css | CSS: display, justify-content, padding | ~38 |
+
+## Session: 2026-07-03 16:58
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:02
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:04
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:08
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:10
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:12
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:18
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:20
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:34
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 17:34
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-03 18:12
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 10:23
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 10:50 | Created C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/test-server-ssh-entry.md | — | ~259 |
+| 10:50 | Edited C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/MEMORY.md | — | ~27 |
+| 10:54 | Edited .ai/MODULES/auth.md | 5→7 lines | ~175 |
+| 10:54 | Edited .ai/PROJECT_MAP.md | 2→2 lines | ~15 |
+| 10:54 | Edited .ai/PROJECT_MAP.md | 3→3 lines | ~26 |
+| 10:59 | Edited deploy/TEST_SERVER_DEPLOY.md | 17→20 lines | ~179 |
+| 10:59 | Edited deploy/TEST_SERVER_DEPLOY.md | 15→15 lines | ~90 |
+
+## Session: 2026-07-04 11:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 11:59
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:06
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:07
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:08
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:08
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:19
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:27
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 12:29
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 14:02
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 14:02
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 14:03
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 14:07
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 14:07
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 14:08
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-04 14:33
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 14:36 | Edited internal/api/handlers.go | 5→4 lines | ~13 |
+
+## Session: 2026-07-04 14:59
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 10:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 10:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 10:41
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 10:41
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 10:42
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 10:43
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 11:02
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 11:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 11:25
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 12:03 | Created C:/Users/吴列德/.claude/plans/encapsulated-dancing-key.md | — | ~1357 |
+| 12:06 | Created C:/Users/吴列德/.claude/plans/encapsulated-dancing-key.md | — | ~545 |
+| 12:08 | Edited docker-compose.prod.yml | 3→3 lines | ~12 |
+| 12:08 | Edited deploy/README.md | 3→6 lines | ~40 |
+| 12:08 | Edited deploy/README.md | 2→2 lines | ~8 |
+| 12:08 | Edited deploy/README.md | 2→2 lines | ~14 |
+| 12:08 | Edited deploy/README.md | 2→2 lines | ~24 |
+| 12:09 | Edited DEPLOYMENT.md | 10→11 lines | ~104 |
+| 12:17 | Edited docker-compose.prod.yml | 3→3 lines | ~9 |
+| 12:17 | Edited deploy/README.md | 3→3 lines | ~25 |
+| 12:18 | Edited deploy/README.md | 2→2 lines | ~5 |
+| 12:18 | Edited deploy/README.md | expanded (+6 lines) | ~136 |
+| 12:19 | Edited DEPLOYMENT.md | 11→11 lines | ~139 |
+| 12:28 | Edited frontend/src/App.tsx | 2→2 lines | ~26 |
+| 12:28 | Edited frontend/src/App.tsx | CSS: audit_log | ~44 |
+| 12:28 | Edited frontend/src/App.tsx | 2→2 lines | ~25 |
+| 12:28 | Edited frontend/src/App.tsx | — | ~0 |
+
+## Session: 2026-07-06 14:36
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 15:02
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 15:21
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 15:35 | Edited frontend/src/pages/Login.tsx | 11→10 lines | ~224 |
+| 15:35 | Edited frontend/src/pages/Login.tsx | reduced (-8 lines) | ~57 |
+| 15:35 | Edited frontend/src/pages/Login.tsx | "点击下方按钮后，电脑当前页面会跳到钉钉官方登录页。" → "点击下方按钮后，电脑当前页面会跳到钉钉官方登录页。" | ~25 |
+| 15:35 | Edited frontend/src/pages/Login.tsx | "电脑扫码登录的回调地址需要配置到钉钉开放平台，并与" → "电脑扫码登录的回调地址需要配置到钉钉开放平台，并与" | ~21 |
+| 15:35 | Edited frontend/src/pages/Login.tsx | inline fix | ~10 |
+| 15:36 | Edited frontend/src/pages/Callback.tsx | 3→2 lines | ~15 |
+| 15:36 | Edited frontend/src/pages/Callback.tsx | 3→2 lines | ~29 |
+| 15:36 | Edited frontend/src/pages/Callback.tsx | 3→3 lines | ~54 |
+| 15:36 | Edited frontend/src/pages/Callback.tsx | inline fix | ~16 |
+| 15:37 | Edited frontend/src/pages/Callback.tsx | 3→3 lines | ~26 |
+| 15:37 | Edited frontend/src/pages/Login.tsx | 2→1 lines | ~10 |
+| 15:37 | Edited frontend/src/pages/Login.tsx | — | ~0 |
+| 15:37 | Edited frontend/src/pages/Callback.tsx | inline fix | ~20 |
+| 15:38 | Edited internal/api/handlers.go | modified resolveDingTalkCallbackOrgID() | ~365 |
+| 15:39 | Edited frontend/src/pages/Login.tsx | 4→2 lines | ~19 |
+| 15:39 | Edited frontend/src/pages/Callback.tsx | CSS: code, state, org_id | ~62 |
+| 15:40 | Edited frontend/src/pages/Callback.tsx | — | ~0 |
+| 15:40 | Edited frontend/src/pages/Callback.tsx | "100vh" → "callback-page" | ~12 |
+| 15:40 | Edited frontend/src/pages/Callback.tsx | "flex" → "callback-page" | ~10 |
+| 15:41 | Edited frontend/src/index.css | expanded (+8 lines) | ~45 |
+| 15:41 | Edited frontend/src/pages/Login.tsx | added 1 condition(s) | ~177 |
+| 15:43 | Edited .ai/MODULES/auth.md | 2→2 lines | ~85 |
+| 15:54 | Edited .ai/MODULES/auth.md | inline fix | ~7 |
+| 16:21 | Edited internal/api/handlers.go | 2→3 lines | ~13 |
+| 16:22 | Edited internal/api/handlers.go | modified resolveDingTalkCallbackOrgID() | ~419 |
+| 16:22 | Edited internal/api/handlers.go | "[dingtalk/callback] user_" → "[dingtalk/callback] user_" | ~51 |
+| 16:25 | Edited .ai/MODULES/auth.md | 2→2 lines | ~78 |
+
+## Session: 2026-07-06 16:26
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 16:27
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 16:27
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 16:27
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 16:57 | Edited frontend/src/pages/Login.tsx | 9→10 lines | ~220 |
+| 16:57 | Edited frontend/src/pages/Login.tsx | reduced (-6 lines) | ~28 |
+| 16:57 | Edited frontend/src/pages/Login.tsx | inline fix | ~4 |
+| 16:58 | Edited frontend/src/pages/Login.tsx | inline fix | ~29 |
+| 17:13 | Edited frontend/src/pages/Login.tsx | 10→9 lines | ~205 |
+| 17:13 | Edited frontend/src/pages/Login.tsx | added 1 condition(s) | ~62 |
+| 17:14 | Edited frontend/src/pages/Login.tsx | 3→3 lines | ~20 |
+| 17:15 | Edited frontend/src/pages/Login.tsx | inline fix | ~34 |
+| 17:16 | Edited internal/dingtalk/dingtalk.go | modified getOAuthUserInfoWithUserToken() | ~326 |
+| 17:16 | Edited .ai/MODULES/auth.md | 1→2 lines | ~109 |
+
+## Session: 2026-07-06 17:31
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 17:31
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 17:35
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 17:36
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 17:44 | Continued DingTalk QR login fix after 503 | internal/dingtalk/dingtalk.go; internal/api/handlers.go; frontend/src/pages/Login.tsx; frontend/src/pages/Callback.tsx | Confirmed new OAuth getInfo-first flow, old users/me fallback, safe callback key logging, and multi-org unionId/openId-only refusal are present | ~850 |
+| 17:44 | Verified focused auth build | internal/api; internal/dingtalk; frontend | gofmt run; go test ./internal/api ./internal/dingtalk passed; npm --prefix frontend run lint passed; npm --prefix frontend run build passed after sandbox EPERM retry outside sandbox | ~450 |
+| 17:44 | Recorded follow-up bug memory | .wolf/buglog.json | Added bug-252 and repaired pre-existing invalid bug-234 JSON strings so buglog parses again | ~300 |
+| 18:10 | Investigated blocked DingTalk QR callback on test server | server logs; internal/api/handlers.go; internal/dingtalk/dingtalk.go; frontend/src/pages/Login.tsx | Logs showed getInfo 404 and users/me returned visitor-only keys; added DINGTALK_QR_DEFAULT_ORG_ID support, removed invalid getInfo probe, and set remote test env to default | ~900 |
+| 18:12 | Verified default QR org fix | internal/api; internal/dingtalk; frontend | gofmt run; go test ./internal/api ./internal/dingtalk passed; npm lint passed; npm build passed after sandbox EPERM retry outside sandbox; diff check and buglog JSON parse passed | ~500 |
+| 18:50 | Investigated post-deploy QR login failure | server logs; internal/api/handlers.go; .ai/MODULES/auth.md | Logs showed state_org_id=default but oauth_org_id=xiaotie, causing default org unionId lookup to fail with illegal unionid; changed QR OAuth org resolution to also use DINGTALK_QR_DEFAULT_ORG_ID | ~650 |
+
+## Session: 2026-07-06 18:52
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-06 18:52
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 09:47
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 09:47
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 09:47
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 09:53
 
 | Time | Action | File(s) | Outcome | ~Tokens |
 |------|--------|---------|---------|--------|

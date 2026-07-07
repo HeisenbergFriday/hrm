@@ -381,7 +381,7 @@ func (s *OvertimeMatchingService) syncOvertimeToDingTalk(match *database.Overtim
 
 	requestID := fmt.Sprintf("overtime:%s:%s:%d", match.UserID, match.WorkDate, match.ID)
 	reason := fmt.Sprintf("休息日加班调休 %s %d分钟", match.WorkDate, match.EffectiveOvertimeMinutes)
-	if err := dingtalk.UpdateCompensatoryLeaveQuota(match.UserID, match.EffectiveOvertimeMinutes, match.WorkDate, reason); err != nil {
+	if err := dingtalk.UpdateCompensatoryLeaveQuotaForOrg(orgIDFromDB(s.db), match.UserID, match.EffectiveOvertimeMinutes, match.WorkDate, reason); err != nil {
 		_ = s.matchRepo.UpdateSyncStatus(match.ID, "failed", requestID, err.Error())
 		_ = s.matchRepo.UpdateStatus(match.ID, "dingtalk_sync_failed", "钉钉调休余额同步失败："+err.Error())
 		return nil
@@ -1154,7 +1154,7 @@ func (s *OvertimeMatchingService) syncAbsoluteOvertimeBalances(scopes []overtime
 		}
 
 		reason := fmt.Sprintf("加班匹配重算回写 %d", scope.Year)
-		if err := dingtalk.SetCompensatoryLeaveQuota(scope.UserID, scope.Year, totalMinutes, reason); err != nil {
+		if err := dingtalk.SetCompensatoryLeaveQuotaForOrg(orgIDFromDB(s.db), scope.UserID, scope.Year, totalMinutes, reason); err != nil {
 			_ = s.markOvertimeYearSyncFailed(scope, err)
 			return fmt.Errorf("user %s year %d: %w", scope.UserID, scope.Year, err)
 		}

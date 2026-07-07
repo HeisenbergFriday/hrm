@@ -176,11 +176,171 @@ code {
   margin-bottom: 0;
 }
 
+.app-layout {
+  min-height: 100vh;
+}
+
+.app-sider {
+  position: fixed !important;
+  inset: 0 auto 0 0;
+  height: 100vh;
+  overflow: hidden;
+  z-index: 100;
+  transition: all var(--transition-slow);
+}
+
+.app-main-layout {
+  min-width: 0;
+  transition: margin-left var(--transition-slow);
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-6);
+}
+
+.app-header-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-inverse);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-header-spacer {
+  flex: 1 1 auto;
+}
+
+.app-header-user {
+  max-width: 160px;
+  overflow: hidden;
+  color: var(--color-text-inverse);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-header-logout,
+.app-mobile-menu-button {
+  color: var(--color-text-inverse);
+}
+
+.app-mobile-menu-button {
+  display: none;
+}
+
+.app-layout-mobile .app-mobile-menu-button {
+  display: inline-flex;
+}
+
+.app-header-logout:hover,
+.app-header-logout:focus-visible,
+.app-mobile-menu-button:hover,
+.app-mobile-menu-button:focus-visible {
+  color: var(--color-text-inverse) !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+}
+
+.app-content {
+  margin: 0;
+  padding: 0 !important;
+  min-height: calc(100vh - 64px);
+  overflow-x: hidden;
+  background: var(--color-bg-page);
+}
+
+.app-auth-loading,
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: var(--space-4);
+  background: var(--color-bg-body);
+}
+
+.app-auth-loading-card,
+.login-loading-card {
+  width: min(100%, 460px);
+  text-align: center;
+}
+
+.app-auth-loading-card p,
+.login-loading-card p {
+  margin-top: var(--space-4);
+  margin-bottom: 0;
+}
+
+.callback-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--color-bg-body);
+}
+
+.login-card {
+  width: min(100%, 440px);
+}
+
+.login-title {
+  margin: 0 !important;
+}
+
+.login-space {
+  width: 100%;
+}
+
+.login-helper,
+.login-status {
+  margin-bottom: 0 !important;
+}
+
+.login-status {
+  margin-top: var(--space-3);
+}
+
+.login-orgs-loading {
+  display: flex;
+  justify-content: center;
+  padding: 20px;
+}
+
+.login-org-selector {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-container);
+}
+
+.login-org-radio,
+.login-org-options {
+  width: 100%;
+}
+
+.login-org-radio {
+  margin-top: var(--space-2);
+}
+
 .app-sider .ant-layout-sider-children {
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 64px;
+  overflow: hidden;
+  color: var(--color-text-inverse);
+  font-size: 16px;
+  font-weight: var(--font-weight-bold);
+  white-space: nowrap;
 }
 
 .app-sider-menu-scroll {
@@ -221,11 +381,20 @@ code {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
   cursor: pointer;
   color: rgba(255, 255, 255, 0.65);
   background: rgba(0, 0, 0, 0.15);
+  border: 0;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   transition: all 0.3s;
+}
+
+.app-sider-trigger:hover,
+.app-sider-trigger:focus-visible {
+  color: var(--color-text-inverse);
+  background: rgba(0, 0, 0, 0.3);
+  outline: none;
 }
 
 .app-sider-collapsed .logo {
@@ -332,6 +501,19 @@ code {
   font-weight: var(--font-weight-semibold);
 }
 
+.app-mobile-drawer .ant-drawer-body {
+  padding: 0;
+}
+
+.app-mobile-drawer .ant-menu {
+  border-inline-end: 0;
+}
+
+.app-mobile-drawer .ant-menu-item,
+.app-mobile-drawer .ant-menu-submenu-title {
+  min-height: 44px;
+}
+
 /* ========== 通用工具类 ========== */
 
 .loading-container {
@@ -361,4 +543,1319 @@ code {
 
 .retry-button {
   margin-top: var(--space-4);
+}
+
+.week-calendar-mobile-panel {
+  display: none;
+}
+
+@media (max-width: 767.98px) {
+  :root {
+    --page-padding: var(--space-3);
+    --card-padding: var(--space-4);
+  }
+
+  body {
+    min-width: 0;
+  }
+
+  .app-layout-mobile .app-header {
+    position: sticky;
+    top: 0;
+    z-index: 90;
+    gap: var(--space-2);
+    padding: 0 var(--space-3);
+  }
+
+  .app-layout-mobile .app-header-user {
+    max-width: 96px;
+  }
+
+  .app-layout-mobile .app-header-logout {
+    padding-inline: var(--space-2);
+  }
+
+  .app-layout-mobile .app-content {
+    min-height: calc(100vh - 64px);
+    overflow-x: hidden;
+  }
+
+  .page-container {
+    min-width: 0;
+    padding: var(--space-3);
+    overflow-x: hidden;
+  }
+
+  .page-container > .ant-card,
+  .ant-card {
+    margin-bottom: var(--space-3);
+    border-radius: var(--radius-md);
+  }
+
+  .ant-card .ant-card-body {
+    padding: var(--space-4);
+  }
+
+  .ant-card .ant-card-head {
+    padding: 0 var(--space-4);
+  }
+
+  .ant-card .ant-card-head-title {
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .ant-form-inline {
+    row-gap: var(--space-2);
+  }
+
+  .ant-form-inline .ant-form-item {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  .ant-form-inline .ant-form-item-control,
+  .ant-picker,
+  .ant-select,
+  .ant-input-number,
+  .ant-input-affix-wrapper {
+    width: 100%;
+  }
+
+  .ant-table-wrapper {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .ant-table {
+    min-width: max-content;
+  }
+
+  .ant-descriptions-view,
+  .ant-tabs,
+  .ant-collapse,
+  .ant-timeline {
+    max-width: 100%;
+  }
+
+  .ant-descriptions-item-label,
+  .ant-descriptions-item-content,
+  .ant-timeline-item-content,
+  .ant-collapse-header-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ant-tabs-nav {
+    margin-bottom: var(--space-3);
+  }
+
+  .ant-tabs-nav-wrap {
+    overflow-x: auto;
+  }
+
+  .ant-collapse > .ant-collapse-item > .ant-collapse-header {
+    align-items: flex-start;
+    padding: var(--space-3);
+  }
+
+  .ant-collapse-content > .ant-collapse-content-box {
+    padding: var(--space-3);
+  }
+
+  .ant-modal {
+    max-width: calc(100vw - 24px);
+    margin: var(--space-3) auto;
+  }
+
+  .ant-drawer-content-wrapper {
+    max-width: 100vw;
+  }
+
+  .login-page {
+    align-items: stretch;
+    padding: var(--space-3);
+  }
+
+  .login-card,
+  .login-loading-card {
+    align-self: center;
+  }
+
+  .performance-archive-sheet {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .performance-archive-sheet .archive-table {
+    min-width: 960px;
+  }
+
+  .performance-goal-plan-table {
+    margin-inline: calc(var(--space-4) * -1);
+    padding-inline: var(--space-4);
+  }
+
+  .leave-overtime-toolbar,
+  .ant-space {
+    max-width: 100%;
+  }
+}
+
+@media (hover: none), (pointer: coarse), (any-pointer: coarse) {
+  .app-sider {
+    display: none !important;
+  }
+
+  .app-main-layout {
+    margin-left: 0 !important;
+  }
+
+  .app-mobile-menu-button {
+    display: inline-flex;
+  }
+
+  .app-content {
+    overflow-x: hidden;
+  }
+}
+
+.peopleops-mobile-runtime {
+  --page-padding: var(--space-3);
+  --card-padding: var(--space-4);
+}
+
+.peopleops-mobile-runtime body {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.peopleops-mobile-runtime .app-sider {
+  display: none !important;
+}
+
+.peopleops-mobile-runtime .app-main-layout {
+  margin-left: 0 !important;
+  min-width: 0;
+}
+
+.peopleops-mobile-runtime .app-header {
+  position: sticky;
+  top: 0;
+  z-index: 90;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+}
+
+.peopleops-mobile-runtime .app-header-user {
+  max-width: 96px;
+}
+
+.peopleops-mobile-runtime .app-header-logout {
+  padding-inline: var(--space-2);
+}
+
+.peopleops-mobile-runtime .app-mobile-menu-button {
+  display: inline-flex;
+}
+
+.peopleops-mobile-runtime .app-content {
+  min-height: calc(100vh - 64px);
+  overflow-x: hidden;
+}
+
+.peopleops-mobile-runtime .page-container {
+  min-width: 0;
+  padding: var(--space-3) !important;
+  overflow-x: hidden;
+}
+
+.peopleops-mobile-runtime .page-container-no-padding {
+  padding: 0 !important;
+}
+
+.peopleops-mobile-runtime .page-container > .ant-card,
+.peopleops-mobile-runtime .ant-card {
+  max-width: 100%;
+  margin-bottom: var(--space-3);
+  border-radius: var(--radius-md);
+}
+
+.peopleops-mobile-runtime .ant-card .ant-card-head {
+  min-height: auto;
+  padding: 0 var(--space-4);
+}
+
+.peopleops-mobile-runtime .ant-card .ant-card-head-wrapper {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.peopleops-mobile-runtime .ant-card .ant-card-head-title {
+  min-width: 0;
+  padding: var(--space-3) 0 var(--space-2);
+  white-space: normal;
+}
+
+.peopleops-mobile-runtime .ant-card .ant-card-extra {
+  max-width: 100%;
+  margin-inline-start: 0;
+  padding: 0 0 var(--space-3);
+}
+
+.peopleops-mobile-runtime .ant-card .ant-card-body {
+  padding: var(--space-4);
+}
+
+.peopleops-mobile-runtime .ant-row {
+  row-gap: var(--space-3);
+}
+
+.peopleops-mobile-runtime .page-container .ant-row > .ant-col {
+  flex: 0 0 100% !important;
+  max-width: 100% !important;
+}
+
+.peopleops-mobile-runtime .ant-space {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.peopleops-mobile-runtime .ant-space-item {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.peopleops-mobile-runtime .page-container [style*="grid-template-columns"] {
+  grid-template-columns: 1fr !important;
+}
+
+.peopleops-mobile-runtime .page-container [style*="min-width"] {
+  min-width: 0 !important;
+}
+
+.peopleops-mobile-runtime .ant-btn {
+  max-width: 100%;
+}
+
+.peopleops-mobile-runtime .page-container .ant-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  min-width: 0;
+  padding-inline: var(--space-3);
+  border-radius: 10px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  box-shadow: none;
+}
+
+.peopleops-mobile-runtime .page-container .ant-btn-sm {
+  height: 32px;
+  padding-inline: 10px;
+  border-radius: 10px;
+}
+
+.peopleops-mobile-runtime .page-container .ant-btn-icon-only {
+  width: 34px;
+  min-width: 34px;
+  padding-inline: 0;
+}
+
+.peopleops-mobile-runtime .page-container .ant-btn-primary {
+  box-shadow: 0 5px 12px rgba(67, 56, 202, 0.18);
+}
+
+.peopleops-mobile-runtime .page-container .ant-btn-dangerous:not(.ant-btn-primary) {
+  color: #b4232a;
+  background: #fff1f2;
+  border-color: #fecdd3;
+}
+
+.peopleops-mobile-runtime .page-container .ant-btn-dangerous:not(.ant-btn-primary):hover,
+.peopleops-mobile-runtime .page-container .ant-btn-dangerous:not(.ant-btn-primary):focus {
+  color: #991b1b;
+  background: #ffe4e6;
+  border-color: #fda4af;
+}
+
+.peopleops-mobile-runtime .ant-btn > span:not(.anticon) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.peopleops-mobile-runtime .ant-form-inline {
+  row-gap: var(--space-2);
+}
+
+.peopleops-mobile-runtime .ant-form-inline .ant-form-item {
+  width: 100%;
+  margin-right: 0;
+}
+
+.peopleops-mobile-runtime .ant-form-inline .ant-form-item-control,
+.peopleops-mobile-runtime .ant-form-inline .ant-form-item-control-input,
+.peopleops-mobile-runtime .ant-form-inline .ant-form-item-control-input-content {
+  width: 100%;
+}
+
+.peopleops-mobile-runtime .page-container .ant-form-inline .ant-input,
+.peopleops-mobile-runtime .page-container .ant-form-inline .ant-input-affix-wrapper,
+.peopleops-mobile-runtime .page-container .ant-form-inline .ant-input-number,
+.peopleops-mobile-runtime .page-container .ant-form-inline .ant-picker,
+.peopleops-mobile-runtime .page-container .ant-form-inline .ant-select {
+  width: 100% !important;
+}
+
+.peopleops-mobile-runtime .page-container .ant-picker,
+.peopleops-mobile-runtime .page-container .ant-select,
+.peopleops-mobile-runtime .page-container .ant-input-number,
+.peopleops-mobile-runtime .page-container .ant-input-affix-wrapper {
+  max-width: 100%;
+}
+
+.peopleops-mobile-runtime .ant-table-wrapper {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.peopleops-mobile-runtime .ant-table-wrapper .ant-spin-nested-loading,
+.peopleops-mobile-runtime .ant-table-wrapper .ant-spin-container {
+  min-width: 0;
+}
+
+.peopleops-mobile-runtime .ant-table-container,
+.peopleops-mobile-runtime .ant-table-content,
+.peopleops-mobile-runtime .ant-table-body {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+.peopleops-mobile-runtime .ant-table {
+  min-width: max-content;
+}
+
+.peopleops-mobile-runtime .ant-table-thead > tr > th,
+.peopleops-mobile-runtime .ant-table-tbody > tr > td {
+  white-space: nowrap;
+}
+
+.peopleops-mobile-runtime .ant-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-1);
+}
+
+.peopleops-mobile-runtime .ant-pagination-options {
+  margin-inline-start: 0;
+}
+
+.peopleops-mobile-runtime .ant-descriptions-view,
+.peopleops-mobile-runtime .ant-tabs,
+.peopleops-mobile-runtime .ant-collapse,
+.peopleops-mobile-runtime .ant-timeline,
+.peopleops-mobile-runtime .ant-steps,
+.peopleops-mobile-runtime .ant-tree,
+.peopleops-mobile-runtime .ant-list,
+.peopleops-mobile-runtime .ant-upload-wrapper {
+  max-width: 100%;
+}
+
+.peopleops-mobile-runtime .ant-descriptions-view,
+.peopleops-mobile-runtime .ant-tree {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.peopleops-mobile-runtime .ant-descriptions-item-label,
+.peopleops-mobile-runtime .ant-descriptions-item-content,
+.peopleops-mobile-runtime .ant-timeline-item-content,
+.peopleops-mobile-runtime .ant-collapse-header-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.peopleops-mobile-runtime .ant-tabs-nav {
+  margin-bottom: var(--space-3);
+}
+
+.peopleops-mobile-runtime .ant-tabs-nav-wrap {
+  overflow-x: auto;
+}
+
+.peopleops-mobile-runtime .ant-collapse > .ant-collapse-item > .ant-collapse-header {
+  align-items: flex-start;
+  padding: var(--space-3);
+}
+
+.peopleops-mobile-runtime .ant-collapse-content > .ant-collapse-content-box {
+  padding: var(--space-3);
+}
+
+.peopleops-mobile-runtime .ant-modal {
+  max-width: calc(100vw - 24px);
+  margin: var(--space-3) auto;
+}
+
+.peopleops-mobile-runtime .ant-modal-content,
+.peopleops-mobile-runtime .ant-modal-body {
+  max-width: 100%;
+}
+
+.peopleops-mobile-runtime .ant-drawer-content-wrapper {
+  max-width: 100vw;
+}
+
+.peopleops-mobile-runtime .ant-statistic-content {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.peopleops-mobile-runtime .login-page {
+  align-items: stretch;
+  padding: var(--space-3);
+}
+
+.peopleops-mobile-runtime .login-card,
+.peopleops-mobile-runtime .login-loading-card {
+  align-self: center;
+}
+
+.peopleops-mobile-runtime .performance-archive-sheet {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.peopleops-mobile-runtime .performance-archive-sheet .archive-table {
+  min-width: 960px;
+}
+
+.peopleops-mobile-runtime .performance-goal-plan-table {
+  margin-inline: calc(var(--space-4) * -1);
+  padding-inline: var(--space-4);
+}
+
+.peopleops-mobile-runtime .leave-overtime-toolbar {
+  max-width: 100%;
+}
+
+/* Mobile table cards */
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready.ant-table-wrapper {
+  overflow-x: visible;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-spin-nested-loading,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-spin-container,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-container,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-content,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-body {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: visible !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table {
+  margin-top: var(--space-3);
+  background: transparent;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table table {
+  display: block;
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: auto !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready colgroup,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-thead,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-sticky-holder,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-cell-scrollbar {
+  display: none;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody {
+  display: block;
+  width: 100%;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr {
+  display: block;
+  width: 100%;
+  margin-bottom: var(--space-3);
+  overflow: hidden;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr:last-child {
+  margin-bottom: 0;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr:hover > td {
+  background: transparent !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td {
+  position: static !important;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100% !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  padding: 10px 12px !important;
+  color: var(--color-text-primary);
+  white-space: normal !important;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  background: transparent !important;
+  border-bottom: 1px solid var(--color-border-light) !important;
+  border-inline-end: 0 !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td:last-child {
+  border-bottom: 0 !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td::before {
+  content: attr(data-label);
+  flex: 0 0 36%;
+  max-width: 42%;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: 22px;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-label=''] {
+  justify-content: flex-start;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-label='']::before {
+  display: none;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td .ant-space {
+  justify-content: flex-end;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true']::before {
+  flex: 0 0 100%;
+  max-width: 100%;
+  margin-bottom: var(--space-1);
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-space {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-cell-fix-left,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-cell-fix-right {
+  left: auto !important;
+  right: auto !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-cell-fix-left::after,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-cell-fix-right::after {
+  display: none;
+}
+
+/* Mobile visual polish */
+.peopleops-mobile-runtime .app-header {
+  height: 52px;
+  min-height: 52px;
+  line-height: 52px;
+}
+
+.peopleops-mobile-runtime .app-content {
+  min-height: calc(100vh - 52px);
+}
+
+.peopleops-mobile-runtime .page-container {
+  padding: 10px var(--space-3) var(--space-4) !important;
+}
+
+.peopleops-mobile-runtime .page-container > div:first-child {
+  margin-bottom: 10px !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-table-card-host {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-table-card-host > .ant-card-body {
+  padding: 0 !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-table-card-host > .ant-card-body > div:first-child:has(.ant-select, .ant-picker, .ant-input, .ant-btn):not(.ant-table-wrapper):not(.ant-tabs) {
+  padding: var(--space-3);
+  margin-bottom: var(--space-3) !important;
+  background: var(--color-bg-card);
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-md);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-table-card-host > .ant-card-body > div:first-child:has(.ant-select, .ant-picker, .ant-input, .ant-btn):not(.ant-table-wrapper):not(.ant-tabs) .ant-select {
+  flex: 1 1 calc(50% - var(--space-1));
+  min-width: 0;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-table-card-host > .ant-card-body > div:first-child:has(.ant-select, .ant-picker, .ant-input, .ant-btn):not(.ant-table-wrapper):not(.ant-tabs) .ant-picker,
+.peopleops-mobile-runtime .peopleops-mobile-table-card-host > .ant-card-body > div:first-child:has(.ant-select, .ant-picker, .ant-input, .ant-btn):not(.ant-table-wrapper):not(.ant-tabs) .ant-input-affix-wrapper {
+  flex: 1 1 100%;
+  width: 100% !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-table-card-host > .ant-card-body > div:first-child:has(.ant-select, .ant-picker, .ant-input, .ant-btn):not(.ant-table-wrapper):not(.ant-tabs) .ant-space {
+  width: 100%;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-table-card-host > .ant-card-body > div:first-child:has(.ant-select, .ant-picker, .ant-input, .ant-btn):not(.ant-table-wrapper):not(.ant-tabs) .ant-space-item {
+  flex: 1 1 0;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-table-card-host > .ant-card-body > div:first-child:has(.ant-select, .ant-picker, .ant-input, .ant-btn):not(.ant-table-wrapper):not(.ant-tabs) .ant-space-item .ant-btn {
+  width: 100%;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-table-card-host .ant-table-wrapper {
+  margin-top: var(--space-3);
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table {
+  margin-top: 0;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr {
+  margin-bottom: 10px;
+  border-color: #dde4ee;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td {
+  min-height: 38px;
+  padding: var(--space-2) 14px !important;
+  font-size: var(--font-size-base);
+  line-height: 20px;
+  text-align: right;
+  border-bottom-color: #edf1f6 !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td::before {
+  flex: 0 0 88px;
+  max-width: 38%;
+  color: #64748b;
+  line-height: 20px;
+  text-align: left;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-primary='true'] {
+  display: block;
+  min-height: 0;
+  padding: var(--space-3) 14px !important;
+  text-align: left;
+  background: #f8fafc !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-primary='true']::before {
+  display: block;
+  max-width: 100%;
+  margin-bottom: var(--space-1);
+  color: #64748b;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-primary='true'] > * {
+  color: var(--color-primary) !important;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  line-height: 22px;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] {
+  min-height: 0;
+  padding: 10px 14px !important;
+  background: #f8fafc !important;
+  border-top: 1px solid #edf1f6 !important;
+  border-bottom: 0 !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true']::before {
+  display: none;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-btn {
+  height: 30px;
+  padding-inline: 0;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-space {
+  gap: var(--space-2) !important;
+  align-items: center;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-space-item {
+  display: flex;
+  flex: 0 1 auto;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-btn {
+  min-width: 58px;
+  height: 32px;
+  padding-inline: 10px !important;
+  color: #334155 !important;
+  background: #ffffff !important;
+  border: 1px solid #dbe4f0 !important;
+  border-radius: var(--radius-pill) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  text-decoration: none;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-btn-primary {
+  color: #ffffff !important;
+  background: var(--color-primary) !important;
+  border-color: var(--color-primary) !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-btn-dangerous:not(.ant-btn-primary) {
+  color: #b4232a !important;
+  background: #fff1f2 !important;
+  border-color: #fecdd3 !important;
+  box-shadow: none;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-btn-dangerous:not(.ant-btn-primary):hover,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-btn-dangerous:not(.ant-btn-primary):focus {
+  color: #991b1b !important;
+  background: #ffe4e6 !important;
+  border-color: #fda4af !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-btn-link,
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-btn-text {
+  text-decoration: none;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td[data-mobile-actions='true'] .ant-btn-icon-only {
+  width: 34px;
+  min-width: 34px;
+  padding-inline: 0 !important;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-table-tbody > tr > td .ant-tag {
+  margin-inline-end: 0;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-pagination {
+  margin-top: var(--space-3);
+  padding: var(--space-1) 0;
+}
+
+.peopleops-mobile-runtime .peopleops-mobile-card-table-ready .ant-pagination-total-text {
+  flex: 0 0 100%;
+  margin-inline-end: 0;
+  text-align: center;
+}
+
+/* Mobile page-specific compatibility */
+.peopleops-mobile-runtime .permission-page-layout,
+.peopleops-mobile-runtime .performance-indicator-layout {
+  flex-direction: column;
+  height: auto !important;
+  gap: var(--space-3) !important;
+}
+
+.peopleops-mobile-runtime .permission-role-card,
+.peopleops-mobile-runtime .permission-detail-pane,
+.peopleops-mobile-runtime .performance-indicator-list-card,
+.peopleops-mobile-runtime .performance-indicator-detail-card {
+  width: 100% !important;
+  max-width: 100% !important;
+  flex: none !important;
+}
+
+.peopleops-mobile-runtime .permission-role-card > .ant-card-body {
+  height: auto !important;
+  max-height: 340px;
+  overflow: auto !important;
+}
+
+.peopleops-mobile-runtime .permission-role-card > .ant-card-body {
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.peopleops-mobile-runtime .permission-role-list {
+  height: auto !important;
+}
+
+.peopleops-mobile-runtime .permission-role-list-scroll {
+  overflow: visible !important;
+}
+
+.peopleops-mobile-runtime .permission-page .ant-tabs {
+  overflow: hidden;
+}
+
+.peopleops-mobile-runtime .permission-page .ant-tabs-nav,
+.peopleops-mobile-runtime .performance-indicator-page .ant-tabs-nav,
+.peopleops-mobile-runtime .employee-flow-page .ant-tabs-nav {
+  margin-bottom: var(--space-3);
+}
+
+.peopleops-mobile-runtime .permission-page .ant-tabs-nav-wrap,
+.peopleops-mobile-runtime .performance-indicator-page .ant-tabs-nav-wrap,
+.peopleops-mobile-runtime .employee-flow-page .ant-tabs-nav-wrap {
+  overflow-x: auto;
+}
+
+.peopleops-mobile-runtime .permission-page .ant-tabs-nav-wrap {
+  overflow: visible !important;
+}
+
+.peopleops-mobile-runtime .permission-page .ant-tabs-nav-list {
+  width: 100%;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  transform: none !important;
+}
+
+.peopleops-mobile-runtime .permission-page .ant-tabs-tab {
+  flex: 1 1 calc(50% - var(--space-1));
+  justify-content: center;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 9px var(--space-2) !important;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-pill);
+}
+
+.peopleops-mobile-runtime .permission-page .ant-tabs-tab-active {
+  background: var(--color-primary-bg);
+  border-color: #c7d2fe;
+}
+
+.peopleops-mobile-runtime .permission-page .ant-tabs-tab-btn {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.peopleops-mobile-runtime .permission-page .ant-tabs-ink-bar,
+.peopleops-mobile-runtime .permission-page .ant-tabs-nav-operations {
+  display: none !important;
+}
+
+.peopleops-mobile-runtime .permission-page .ant-tabs-tab,
+.peopleops-mobile-runtime .performance-indicator-page .ant-tabs-tab,
+.peopleops-mobile-runtime .employee-flow-page .ant-tabs-tab {
+  min-width: max-content;
+  padding: var(--space-2) var(--space-3);
+}
+
+.peopleops-mobile-runtime .permission-page .ant-card-head-wrapper,
+.peopleops-mobile-runtime .performance-indicator-page .ant-card-head-wrapper,
+.peopleops-mobile-runtime .employee-flow-page .ant-card-head-wrapper,
+.peopleops-mobile-runtime .week-schedule-page .ant-card-head-wrapper {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.peopleops-mobile-runtime .permission-page .ant-card-extra,
+.peopleops-mobile-runtime .performance-indicator-page .ant-card-extra,
+.peopleops-mobile-runtime .employee-flow-page .ant-card-extra,
+.peopleops-mobile-runtime .week-schedule-page .ant-card-extra {
+  width: 100%;
+  margin-inline-start: 0;
+  padding-bottom: var(--space-3);
+}
+
+.peopleops-mobile-runtime .permission-page .ant-card-extra .ant-space,
+.peopleops-mobile-runtime .performance-indicator-page .ant-card-extra .ant-space,
+.peopleops-mobile-runtime .employee-flow-page .ant-card-extra .ant-space,
+.peopleops-mobile-runtime .week-schedule-page .ant-card-extra .ant-space {
+  width: 100%;
+}
+
+.peopleops-mobile-runtime .permission-page .ant-card-extra .ant-btn,
+.peopleops-mobile-runtime .performance-indicator-page .ant-card-extra .ant-btn,
+.peopleops-mobile-runtime .employee-flow-page .ant-card-extra .ant-btn,
+.peopleops-mobile-runtime .week-schedule-page .ant-card-extra .ant-btn {
+  flex: 1 1 auto;
+}
+
+.peopleops-mobile-runtime .performance-indicator-detail-anchor {
+  width: 100% !important;
+  max-width: 100% !important;
+  flex: none !important;
+  scroll-margin-top: 62px;
+}
+
+.peopleops-mobile-runtime .employee-flow-page .ant-tabs-content-holder {
+  padding-top: var(--space-2);
+}
+
+.peopleops-mobile-runtime .employee-flow-page .ant-tabs-tabpane > .ant-card {
+  margin-top: var(--space-2);
+}
+
+.peopleops-mobile-runtime .employee-flow-action-bar {
+  width: 100%;
+  padding-top: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.peopleops-mobile-runtime .employee-flow-action-bar .ant-btn {
+  flex: 1 1 calc(50% - var(--space-1));
+}
+
+.peopleops-mobile-runtime .performance-indicator-page > div[style*='background'],
+.peopleops-mobile-runtime .employee-flow-page > .ant-alert,
+.peopleops-mobile-runtime .employee-shift-config-page > .ant-alert {
+  margin-bottom: var(--space-3) !important;
+}
+
+.peopleops-mobile-runtime .mobile-stat-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) !important;
+  margin-right: 0 !important;
+  margin-left: 0 !important;
+}
+
+.peopleops-mobile-runtime .mobile-stat-grid > .ant-col {
+  width: 100% !important;
+  max-width: 100% !important;
+  padding: 0 !important;
+  flex: none !important;
+}
+
+.peopleops-mobile-runtime .mobile-stat-grid .ant-statistic,
+.peopleops-mobile-runtime .mobile-stat-grid .ant-card {
+  min-height: 88px;
+  margin-bottom: 0;
+  padding: var(--space-3);
+  background: var(--color-bg-card);
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-md);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+}
+
+.peopleops-mobile-runtime .mobile-stat-grid .ant-card .ant-card-body {
+  padding: 0;
+}
+
+.peopleops-mobile-runtime .mobile-stat-grid .ant-statistic-title {
+  margin-bottom: var(--space-1);
+  font-size: var(--font-size-xs);
+}
+
+.peopleops-mobile-runtime .mobile-stat-grid .ant-statistic-content {
+  font-size: var(--font-size-lg);
+}
+
+.peopleops-mobile-runtime .week-schedule-page .ant-card {
+  border-radius: var(--radius-md) !important;
+}
+
+.peopleops-mobile-runtime .week-schedule-page .ant-card-extra .ant-space .ant-space-item {
+  flex: 1 1 auto;
+}
+
+.peopleops-mobile-runtime .week-schedule-page .ant-card-extra .ant-picker,
+.peopleops-mobile-runtime .week-schedule-page .ant-card-extra .ant-input-number,
+.peopleops-mobile-runtime .week-schedule-page .ant-card-extra .ant-select {
+  width: 100% !important;
+}
+
+.peopleops-mobile-runtime .week-calendar-month-card > .ant-card-body {
+  padding: var(--space-2) !important;
+  overflow: visible !important;
+}
+
+.peopleops-mobile-runtime .week-calendar-legend {
+  display: none;
+}
+
+.peopleops-mobile-runtime .week-calendar-month-card .ant-card-head {
+  display: none;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-panel {
+  display: block;
+  padding: var(--space-4) var(--space-3) var(--space-3);
+  background: #ffffff;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-month-title {
+  margin-bottom: var(--space-4);
+  padding: 0 var(--space-1);
+  color: #111827;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-weekdays,
+.peopleops-mobile-runtime .week-calendar-mobile-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-weekdays {
+  margin-bottom: var(--space-1);
+  color: #111827;
+  font-size: 13px;
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-weekdays span {
+  line-height: 24px;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-grid {
+  row-gap: 8px;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  min-height: 48px;
+  padding: 3px 0;
+  color: #111827;
+  font: inherit;
+  text-align: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day:disabled {
+  cursor: default;
+  color: inherit;
+  -webkit-text-fill-color: currentColor;
+  opacity: 1;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='work'],
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='workday'],
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='saturday-work'] {
+  color: #1f1f1f;
+  background: transparent;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='rest'] {
+  color: #1f1f1f;
+  background: transparent;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='holiday'] {
+  color: #1f1f1f;
+  background: transparent;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='outside'] {
+  color: #bfbfbf;
+  background: transparent;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day-note {
+  display: inline-block;
+  max-width: calc(100% - 2px);
+  min-height: 16px;
+  margin-top: 1px;
+  padding: 0 4px;
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 10.5px;
+  line-height: 16px;
+  border-radius: var(--radius-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='work'] .week-calendar-mobile-day-note {
+  color: #8a6d00;
+  background: #fff7cc;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='holiday'] .week-calendar-mobile-day-note {
+  color: #ffffff;
+  background: #ff4d4f;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='holiday'] .week-calendar-mobile-day-number {
+  color: #cf1322;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='holiday'][data-today='true'] .week-calendar-mobile-day-number {
+  color: #ffffff;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='saturday-work'] .week-calendar-mobile-day-note,
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-state='workday'] .week-calendar-mobile-day-note {
+  color: #8a6d00;
+  background: #fff7cc;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-outside='true'] {
+  color: #bfbfbf;
+  background: transparent;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-outside='true'] .week-calendar-mobile-day-note {
+  background: transparent;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day[data-today='true'] .week-calendar-mobile-day-number {
+  color: #ffffff;
+  background: #1677ff;
+}
+
+.peopleops-mobile-runtime .week-calendar-mobile-day:not(:disabled):active {
+  background: #eef2ff;
+}
+
+.peopleops-mobile-runtime .week-calendar-table {
+  display: none !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: auto !important;
+  border-collapse: separate !important;
+}
+
+.peopleops-mobile-runtime .week-calendar-table thead {
+  display: none;
+}
+
+.peopleops-mobile-runtime .week-calendar-table tbody {
+  display: block;
+}
+
+.peopleops-mobile-runtime .week-calendar-table tbody tr {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2);
+  background: var(--color-bg-card);
+  border: 1px solid #dde4ee;
+  border-radius: var(--radius-md);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
+}
+
+.peopleops-mobile-runtime .week-calendar-table tbody td {
+  display: block;
+  min-height: 56px;
+  padding: 6px var(--space-1) !important;
+  overflow: hidden;
+  border: 0 !important;
+  border-radius: var(--radius-sm);
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+}
+
+.peopleops-mobile-runtime .week-calendar-table tbody td:first-child,
+.peopleops-mobile-runtime .week-calendar-table tbody td:last-child {
+  grid-column: 1 / -1;
+  min-height: auto;
+  padding: var(--space-2) var(--space-3) !important;
+  background: #f8fafc !important;
+  color: var(--color-text-primary) !important;
+}
+
+.peopleops-mobile-runtime .week-calendar-table tbody td:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.peopleops-mobile-runtime .week-calendar-table tbody td:last-child {
+  display: block;
+}
+
+.peopleops-mobile-runtime .week-calendar-table tbody td div {
+  font-size: 11px !important;
+}
+
+.peopleops-mobile-runtime .week-calendar-table tbody td:first-child div:first-child,
+.peopleops-mobile-runtime .week-calendar-table tbody td:last-child div:first-child {
+  font-size: var(--font-size-base) !important;
+  font-weight: var(--font-weight-bold) !important;
+}
+
+.peopleops-mobile-runtime .employee-shift-toolbar {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.peopleops-mobile-runtime .employee-shift-toolbar .ant-btn {
+  flex: 1 1 100%;
+}
+
+.peopleops-mobile-runtime .employee-shift-toolbar .ant-typography {
+  width: 100%;
+  line-height: 20px !important;
+}
+
+.peopleops-mobile-runtime .ant-modal [style*='grid-template-columns'] {
+  grid-template-columns: 1fr !important;
+}
+
+.peopleops-mobile-runtime .ant-modal .ant-radio-group {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.peopleops-mobile-runtime .ant-modal .ant-radio-button-wrapper {
+  flex: 1 1 auto;
+  text-align: center;
 }

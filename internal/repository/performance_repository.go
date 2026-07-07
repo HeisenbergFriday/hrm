@@ -274,7 +274,8 @@ func (r *PerformanceTemplateRepository) IsReferencedByActivity(templateID uint) 
 		return false, nil
 	}
 	var count int64
-	if err := r.db.Table("performance_activities").Where("template_id = ? AND deleted_at IS NULL", templateID).Count(&count).Error; err != nil {
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
+	if err := r.db.Table("performance_activities").Where("org_id = ? AND template_id = ? AND deleted_at IS NULL", orgID, templateID).Count(&count).Error; err != nil {
 		return false, err
 	}
 	return count > 0, nil

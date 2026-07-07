@@ -1,0 +1,11 @@
+services:
+  peopleops:
+    image: peopleops:latest
+    container_name: peopleops
+    restart: unless-stopped
+    env_file:
+      - ./deploy/peopleops.env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./uploads:/app/uploads

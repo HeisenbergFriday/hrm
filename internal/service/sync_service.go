@@ -28,6 +28,7 @@ func (s *SyncService) GetAllSyncStatus() ([]database.SyncStatus, error) {
 
 func (s *SyncService) UpdateSyncStatus(syncType, status, message string) error {
 	return s.syncRepo.Upsert(&database.SyncStatus{
+		OrgID:        database.CurrentOrganizationIDFromDB(s.syncRepo.DB()),
 		Type:         syncType,
 		LastSyncTime: time.Now(),
 		Status:       status,

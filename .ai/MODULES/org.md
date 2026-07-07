@@ -1,6 +1,6 @@
 ---
 purpose: 组织与员工模块业务规则说明
-last_updated: 2026-04-30
+last_updated: 2026-07-02
 source_of_truth:
   - internal/api/handlers.go（组织相关 handler）
   - internal/service/user_service.go（用户服务）
@@ -21,6 +21,10 @@ update_when:
 ## 模块定位
 
 管理部门树、员工列表、聚合员工详情，并从钉钉同步组织架构数据。
+
+组织模块支持多个钉钉企业共用一套系统，统一以 `org_id` 隔离部门、员工、档案和组织同步结果。同一自然人可存在于多个企业；跨企业用户和部门不会复用本地系统 ID。
+
+花名册、组织概览、部门树、员工生命周期台账等组织查询如果使用 `users`、`departments`、`employee_profiles` 的 join 或子查询，必须同时约束当前 `org_id`；员工档案 join 必须使用 `employee_profiles.org_id = users.org_id`，按部门筛选用户的子查询也必须包含 `users.org_id = 当前企业`。
 
 本次阶段 1A 在组织模块侧只沉淀员工详情聚合与档案字段补齐相关长期知识，不涉及组织分析、绩效、权限、强制分布、C/D 面谈等能力变更。
 
@@ -68,7 +72,9 @@ update_when:
 ```go
 type Department struct {
     ID           uint
-    DepartmentID string  // 钉钉部门 ID（唯一键）
+    OrgID        string  // 当前钉钉企业/租户 ID
+    DepartmentID string  // 系统内部门 ID（多企业时可为 org_id:钉钉部门ID）
+    DingTalkDepartmentID string // 钉钉原始部门 ID
     Name         string
     ParentID     string  // 父部门钉钉 ID
     Order        int
@@ -85,7 +91,9 @@ type Department struct {
 ```go
 type User struct {
     ID           uint
-    UserID       string  // 钉钉用户 ID（唯一键）
+    OrgID        string  // 当前钉钉企业/租户 ID
+    UserID       string  // 系统内用户 ID（多企业时可为 org_id:钉钉用户ID）
+    DingTalkUserID string // 钉钉原始用户 ID
     Name         string
     Email        string
     Mobile       string
@@ -297,6 +305,8 @@ Response：
 ### POST /api/v1/org/sync
 同步组织架构
 
+同步使用当前登录会话的 `org_id` 选择钉钉企业配置，只写入当前企业的部门、员工和档案数据。同步时部门、用户、主管、部门负责人等关联 ID 都按当前 `org_id` 转成系统内 ID，原始钉钉 ID 保留在对应 `DingTalk*` 字段。
+
 Body：
 ```json
 {
@@ -438,6 +448,7 @@ GET /topapi/v2/user/get
 - `DINGTALK_APP_KEY`：钉钉应用 Key
 - `DINGTALK_APP_SECRET`：钉钉应用 Secret
 - `DINGTALK_CORP_ID`：钉钉企业 ID
+- `DINGTALK_ORGANIZATIONS`：可选，多企业配置 JSON 数组；用于初始化或补充 `organizations` 表
 
 ---
 

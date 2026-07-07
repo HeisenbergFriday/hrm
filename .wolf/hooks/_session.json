@@ -1,23 +1,33 @@
 {
-  "session_id": "session-2026-06-10-1522",
-  "started": "2026-06-10T07:22:30.451Z",
+  "session_id": "session-2026-07-07-0953",
+  "started": "2026-07-07T01:53:58.955Z",
   "files_read": {
-    "D:/ai项目/.ai/DESIGN_SYSTEM.md": {
+    "C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/test-server-ssh-entry.md": {
+      "count": 1,
+      "tokens": 262,
+      "first_read": "2026-07-07T01:54:15.480Z"
+    },
+    "d:/AITEAM/HR/DEPLOYMENT.md": {
+      "count": 1,
+      "tokens": 1042,
+      "first_read": "2026-07-07T01:54:15.807Z"
+    },
+    "d:/AITEAM/HR/.ai/COMMANDS.md": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-06-10T07:24:28.909Z"
+      "first_read": "2026-07-07T01:54:16.105Z"
     },
-    "D:/ai项目/.wolf/anatomy.md": {
-      "count": 2,
-      "tokens": 0,
-      "first_read": "2026-06-10T07:24:29.092Z"
+    "d:/AITEAM/HR/.ai/PROJECT_MAP.md": {
+      "count": 1,
+      "tokens": 3119,
+      "first_read": "2026-07-07T01:54:16.521Z"
     }
   },
   "files_written": [],
   "edit_counts": {},
-  "anatomy_hits": 0,
-  "anatomy_misses": 1,
-  "repeated_reads_warned": 1,
+  "anatomy_hits": 4,
+  "anatomy_misses": 0,
+  "repeated_reads_warned": 0,
   "cerebrum_warnings": 0,
-  "stop_count": 2
+  "stop_count": 0
 }

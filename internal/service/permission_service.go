@@ -13,6 +13,7 @@ import (
 
 type PermissionService struct {
 	db                 *gorm.DB
+	orgID              string
 	roleRepo           *repository.RoleRepository
 	permissionRepo     *repository.PermissionRepository
 	userRoleRepo       *repository.UserRoleRepository
@@ -26,6 +27,7 @@ type PermissionService struct {
 func NewPermissionService(db *gorm.DB) *PermissionService {
 	return &PermissionService{
 		db:                 db,
+		orgID:              database.CurrentOrganizationIDFromDB(db),
 		roleRepo:           repository.NewRoleRepository(db),
 		permissionRepo:     repository.NewPermissionRepository(db),
 		userRoleRepo:       repository.NewUserRoleRepository(db),
@@ -58,7 +60,14 @@ var systemPermissionDefinitions = []SystemPermissionDefinition{
 	{Name: "绩效主管评分", Code: "performance:manager_eval:submit", Description: "主管绩效评分"},
 	{Name: "绩效员工确认", Code: "performance:employee_confirm:submit", Description: "员工确认绩效结果"},
 	{Name: "绩效主管确认", Code: "performance:manager_confirm:submit", Description: "主管确认绩效结果"},
-	{Name: "绩效HR确认", Code: "performance:hr_confirm:submit", Description: "HR确认绩效结果"},
+	{Name: "绩效HR确认", Code: "performance:hr_confirm:submit", Description: "旧流程HR确认绩效结果"},
+	{Name: "绩效部门/中心评估", Code: "performance:department_eval:submit", Description: "部门/中心负责人确认或调整绩效结果"},
+	{Name: "绩效HR审核", Code: "performance:hr_review:submit", Description: "HR审核沐腾科技流程绩效结果"},
+	{Name: "绩效结果公布", Code: "performance:result_publish:manage", Description: "公布沐腾科技流程绩效结果"},
+	{Name: "绩效结果屏蔽管理", Code: "performance:result_visibility:manage", Description: "设置或解除绩效结果屏蔽"},
+	{Name: "绩效屏蔽结果查看", Code: "performance:hidden_result:view", Description: "查看已屏蔽的绩效结果"},
+	{Name: "绩效面谈管理", Code: "performance:interview:manage", Description: "安排、记录和完成绩效面谈"},
+	{Name: "绩效申诉处理", Code: "performance:appeal:manage", Description: "处理沐腾科技流程绩效申诉"},
 	{Name: "绩效等级调整", Code: "performance:level_adjust:manage", Description: "调整绩效最终等级"},
 	{Name: "绩效分布规则", Code: "performance:distribution:manage", Description: "设置绩效分布规则"},
 	{Name: "绩效指标库管理", Code: "performance:indicator:manage", Description: "指标库/指标项 CRUD"},
@@ -114,10 +123,16 @@ func (s *PermissionService) GetRoles() ([]database.Role, int64, error) {
 }
 
 func (s *PermissionService) CreateRole(role *database.Role) error {
+	if role != nil && strings.TrimSpace(role.OrgID) == "" {
+		role.OrgID = s.orgID
+	}
 	return s.roleRepo.Create(role)
 }
 
 func (s *PermissionService) UpdateRole(role *database.Role) error {
+	if _, err := s.requireRole(role.ID); err != nil {
+		return err
+	}
 	return s.roleRepo.Update(role)
 }
 
@@ -132,11 +147,17 @@ func (s *PermissionService) GetRolePermissions(roleID uint) ([]database.Permissi
 	if err := s.EnsureSystemPermissions(); err != nil {
 		return nil, err
 	}
+	if _, err := s.requireRole(roleID); err != nil {
+		return nil, err
+	}
 	return s.rolePermissionRepo.FindByRoleID(roleID)
 }
 
 func (s *PermissionService) SaveRolePermissions(roleID uint, permissionIDs []uint) error {
 	if err := s.EnsureSystemPermissions(); err != nil {
+		return err
+	}
+	if _, err := s.requireRole(roleID); err != nil {
 		return err
 	}
 	seen := make(map[uint]struct{}, len(permissionIDs))
@@ -274,7 +295,14 @@ func (s *PermissionService) GetUserRoles(userID string) ([]database.Role, error)
 
 // AssignUserRole 设置用户角色，会替换该用户原有角色。
 func (s *PermissionService) AssignUserRole(userID string, roleID uint) error {
-	return s.userRoleRepo.Assign(s.normalizeUserID(userID), roleID)
+	normalizedUserID, err := s.requireUser(userID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.requireRole(roleID); err != nil {
+		return err
+	}
+	return s.userRoleRepo.Assign(normalizedUserID, roleID)
 }
 
 // AssignDefaultEmployeeRoleIfUnassigned assigns the default employee role only when the user has no role.
@@ -319,6 +347,9 @@ func (s *PermissionService) ensureDefaultEmployeeRole() (*database.Role, error) 
 	}
 
 	role = database.Role{Name: DefaultEmployeeRoleName, Description: DefaultEmployeeRoleName}
+	if strings.TrimSpace(role.OrgID) == "" {
+		role.OrgID = s.orgID
+	}
 	if err := s.db.Create(&role).Error; err != nil {
 		return nil, err
 	}
@@ -373,11 +404,21 @@ func (s *PermissionService) grantDefaultEmployeeRoleMenuPermissions(roleID uint)
 
 // RemoveUserRole removes a role from a user.
 func (s *PermissionService) RemoveUserRole(userID string, roleID uint) error {
-	return s.userRoleRepo.Remove(s.normalizeUserID(userID), roleID)
+	normalizedUserID, err := s.requireUser(userID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.requireRole(roleID); err != nil {
+		return err
+	}
+	return s.userRoleRepo.Remove(normalizedUserID, roleID)
 }
 
 // GetRoleUsers 获取角色下的所有用户
 func (s *PermissionService) GetRoleUsers(roleID uint) ([]database.User, error) {
+	if _, err := s.requireRole(roleID); err != nil {
+		return nil, err
+	}
 	return s.userRoleRepo.FindByRoleID(roleID)
 }
 
@@ -394,6 +435,9 @@ func (s *PermissionService) GetUserPerformanceScope(userID string) (*OrgDataScop
 
 // GetMenuPermission 获取角色的菜单权限
 func (s *PermissionService) GetMenuPermission(roleID uint) (string, error) {
+	if _, err := s.requireRole(roleID); err != nil {
+		return "", err
+	}
 	keys, err := s.GetRoleMenuKeys(roleID)
 	if err != nil {
 		return "", err
@@ -416,6 +460,9 @@ func (s *PermissionService) SaveMenuPermission(roleID uint, menuKeys string) err
 
 // SaveMenuPermissionKeys 保存角色的菜单权限。
 func (s *PermissionService) SaveMenuPermissionKeys(roleID uint, menuKeys []string) error {
+	if _, err := s.requireRole(roleID); err != nil {
+		return err
+	}
 	payload, err := json.Marshal(NormalizeMenuPermissionKeys(menuKeys))
 	if err != nil {
 		return err
@@ -425,6 +472,9 @@ func (s *PermissionService) SaveMenuPermissionKeys(roleID uint, menuKeys []strin
 
 // GetDataPermission 获取角色的数据权限
 func (s *PermissionService) GetDataPermission(roleID uint) (scope string, departmentKeys string, err error) {
+	if _, err := s.requireRole(roleID); err != nil {
+		return "", "", err
+	}
 	dp, err := s.dataPermRepo.FindByRoleID(roleID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -437,6 +487,9 @@ func (s *PermissionService) GetDataPermission(roleID uint) (scope string, depart
 
 // SaveDataPermission 保存角色的数据权限
 func (s *PermissionService) SaveDataPermission(roleID uint, scope string, departmentKeys string) error {
+	if _, err := s.requireRole(roleID); err != nil {
+		return err
+	}
 	return s.dataPermRepo.Save(roleID, scope, departmentKeys)
 }
 
@@ -462,6 +515,9 @@ func (s *PermissionService) GetUserMenuKeys(userID string) ([]string, error) {
 
 // GetRoleMenuKeys 从 menu_permissions 表读取角色菜单权限。
 func (s *PermissionService) GetRoleMenuKeys(roleID uint) ([]string, error) {
+	if _, err := s.requireRole(roleID); err != nil {
+		return nil, err
+	}
 	mp, err := s.menuPermRepo.FindByRoleID(roleID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -730,4 +786,24 @@ func sortedKeys(keySet map[string]struct{}) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func (s *PermissionService) requireRole(roleID uint) (*database.Role, error) {
+	if roleID == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return s.roleRepo.FindByID(roleID)
+}
+
+func (s *PermissionService) requireUser(userID string) (string, error) {
+	normalized := s.normalizeUserID(userID)
+	if normalized == "" {
+		return "", gorm.ErrRecordNotFound
+	}
+	if _, err := s.userRepo.FindByUserID(normalized); err == nil {
+		return normalized, nil
+	} else if err != gorm.ErrRecordNotFound {
+		return "", err
+	}
+	return "", gorm.ErrRecordNotFound
 }

@@ -1,19 +1,27 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-06-09T01:35:50.287Z
-> Files: 52 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-06T09:16:51.450Z
+> Files: 90 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ./
 
 - `绩效service测试覆盖率补强报告.md` — 绩效 Service 测试覆盖率补强报告 (~1071 tok)
+- `BACKEND_API_DESIGN.md` — PeopleOps 后端 API 设计 (~2138 tok)
+- `DATABASE_DESIGN.md` — PeopleOps 数据库设计 (~1499 tok)
+- `DEPLOYMENT.md` — PeopleOps 联调与部署说明 (~1042 tok)
+- `docker-compose.prod.yml` — Docker Compose: 1 services (~66 tok)
+- `README.md` — Project documentation (~1172 tok)
 
 ## .ai/
 
+- `ARCHITECTURE.md` — 架构设计 (~1763 tok)
 - `COMMANDS.md` — 常用命令 (~690 tok)
-- `PROJECT_MAP.md` — 项目结构索引 (~3082 tok)
+- `PROJECT_MAP.md` — 项目结构索引 (~3119 tok)
 
 ## .ai/MODULES/
 
+- `attendance.md` — 考勤模块 (~2097 tok)
+- `auth.md` — 认证模块 (~2460 tok)
 
 ## .ai/plans/
 
@@ -32,16 +40,35 @@
 
 - `cosmic-jingling-acorn.md` — 修复绩效模块 Playwright E2E 执行计划 (~1113 tok)
 - `eager-wibbling-music.md` — 计划：补强绩效 API handler 测试覆盖 (~1834 tok)
+- `encapsulated-dancing-key.md` — Context (~511 tok)
 - `humming-booping-planet.md` — 绩效 Service 覆盖率补强计划 (~1594 tok)
 - `peppy-wibbling-liskov.md` — 补强绩效 API handler 覆盖测试计划 (~1366 tok)
 - `replicated-plotting-finch.md` — Plan: 为 PerformanceOverview 补充真实组件交互测试 (~596 tok)
+- `sleepy-tickling-bear.md` — Context (~1222 tok)
+- `whimsical-gliding-rabbit.md` — Context (~2907 tok)
 - `witty-greeting-blanket.md` — 为 `performance_repository.go` 补充测试覆盖计划 (~1207 tok)
+- `zazzy-puzzling-narwhal.md` — Context (~1878 tok)
+
+## C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/
+
+- `MEMORY.md` (~26 tok)
+- `test-server-ssh-entry.md` (~262 tok)
 
 ## api-docs/
 
 
 ## cmd/
 
+
+## deploy/
+
+- `peopleops.env` (~533 tok)
+- `peopleops.env.example` (~299 tok)
+- `peopleops.test.env.example` (~371 tok)
+- `README.md` — Project documentation (~464 tok)
+- `TEST_SERVER_DEPLOY.md` — PeopleOps HR 测试服隔离部署说明 (~666 tok)
+- `update.ps1` — Requires -Version 5.1 (~915 tok)
+- `update.sh` — 测试服一键部署脚本 (~848 tok)
 
 ## frontend/
 
@@ -58,7 +85,8 @@
 
 ## frontend/src/
 
-- `App.tsx` — Login (~5529 tok)
+- `App.tsx` — Login (~7320 tok)
+- `index.css` — Styles: 90 rules, 81 vars (~13465 tok)
 - `main.tsx` — queryClient (~180 tok)
 
 ## frontend/src/components/
@@ -72,6 +100,11 @@
 
 ## frontend/src/pages/
 
+- `AttendanceToolbox.test.tsx` — mockRun (~1270 tok)
+- `AttendanceToolbox.tsx` — modules (~15036 tok)
+- `Callback.tsx` — isDingTalkEnv (~978 tok)
+- `Login.tsx` — isDingTalkEnv (~3002 tok)
+- `OvertimeRulesEditor.tsx` — DATE_TYPE_LABELS — renders table (~1763 tok)
 - `PerformanceGoalSetting.interaction.test.tsx` — PerformanceGoalSetting 组件交互测试 (~3720 tok)
 - `PerformanceGoalSetting.test.ts` — 测试辅助函数 (~1986 tok)
 - `PerformanceGoalSetting.tsx` — targetReadonlyParticipantStatuses (~8009 tok)
@@ -91,6 +124,7 @@
 
 ## frontend/src/services/
 
+- `api.ts` — API routes: GET, POST, PUT (68 endpoints) (~17917 tok)
 
 ## frontend/src/store/
 
@@ -115,8 +149,11 @@
 
 ## internal/api/
 
+- `attendance_toolbox_handlers.go` — GetAttendanceToolboxDefaults, RunAttendanceToolbox, RunDingtalkSync, ExportOvertimeRules, ImportOver (~2377 tok)
+- `handlers.go` — Struct: loginState (~42605 tok)
 - `performance_handlers_coverage_test.go` — TestRefreshPerformanceParticipants_InvalidActivityID, TestRefreshPerformanceParticipants_Success, Te (~19426 tok)
 - `performance_handlers_test.go` — TestCreatePerformanceActivityHandlerMissingRequired, TestUpdatePerformanceActivityHandlerMissingRequ (~9419 tok)
+- `router.go` — SetupRouter (~9984 tok)
 
 ## internal/cache/
 
@@ -126,9 +163,11 @@
 
 ## internal/database/
 
+- `database.go` — Struct: envOrganization (~16783 tok)
 
 ## internal/dingtalk/
 
+- `dingtalk.go` — Struct: Config (~34248 tok)
 
 ## internal/middleware/
 
@@ -143,6 +182,7 @@
 
 ## internal/service/
 
+- `attendance_toolbox_service.go` — Struct: AttendanceToolboxService (~8231 tok)
 - `performance_indicator_service_test.go` — TestCreateLibrary_Validation, TestCreateLibrary_Success, TestGetLibrary, TestUpdateLibrary_NotFound, (~4958 tok)
 - `performance_lifecycle_test.go` — TestPerformanceFullLifecycle_HappyPath (~6199 tok)
 - `performance_service_coverage_test.go` — TestUpdateActivity_NotFound, TestUpdateActivity_DraftAllowsScopeChange, TestUpdateActivity_NonDraftR (~9143 tok)
@@ -153,6 +193,13 @@
 
 ## tools/
 
+
+## tools/attendance_toolbox/python/
+
+- `excel_compat.py` — _Cell: cell, iter_rows, close, load_workbook_compat + 2 more (~2075 tok)
+- `requirements.txt` — Python dependencies (~57 tok)
+- `runner.py` — path_or_empty, paths, names, names_or_default (~7965 tok)
+- `templates.py` — Blank Excel template builders for the attendance toolbox. (~5067 tok)
 
 ## tools/hooks/
 

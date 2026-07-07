@@ -159,12 +159,14 @@ type OrgOverview struct {
 }
 
 type OrgDepartmentSyncItem struct {
-	DepartmentID string
-	Name         string
-	ParentID     string
-	Order        int
-	HeadUserIDs  []string
-	Extension    map[string]interface{}
+	OrgID                string
+	DepartmentID         string
+	DingTalkDepartmentID string
+	Name                 string
+	ParentID             string
+	Order                int
+	HeadUserIDs          []string
+	Extension            map[string]interface{}
 }
 
 type OrgDepartmentSyncResult struct {
@@ -465,7 +467,9 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(items []OrgDepartmentSyncItem,
 	result := OrgDepartmentSyncResult{}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		for _, item := range items {
+			item.OrgID = database.NormalizeOrganizationID(item.OrgID)
 			item.DepartmentID = strings.TrimSpace(item.DepartmentID)
+			item.DingTalkDepartmentID = strings.TrimSpace(item.DingTalkDepartmentID)
 			item.Name = strings.TrimSpace(item.Name)
 			item.ParentID = strings.TrimSpace(item.ParentID)
 			if item.DepartmentID == "" || item.Name == "" {
@@ -474,19 +478,21 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(items []OrgDepartmentSyncItem,
 
 			result.Count++
 			var existing database.Department
-			err := tx.Where("department_id = ?", item.DepartmentID).First(&existing).Error
+			err := tx.Where("org_id = ? AND department_id = ?", item.OrgID, item.DepartmentID).First(&existing).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				department := database.Department{
-					DepartmentID: item.DepartmentID,
-					Name:         item.Name,
-					ParentID:     item.ParentID,
-					Order:        item.Order,
-					Extension:    departmentSyncExtension(nil, item),
+					OrgID:                item.OrgID,
+					DepartmentID:         item.DepartmentID,
+					DingTalkDepartmentID: item.DingTalkDepartmentID,
+					Name:                 item.Name,
+					ParentID:             item.ParentID,
+					Order:                item.Order,
+					Extension:            departmentSyncExtension(nil, item),
 				}
 				if err := tx.Create(&department).Error; err != nil {
 					return err
 				}
-				if err := createDepartmentChangeLog(tx, item.DepartmentID, item.Name, "created", "department", "", item.Name, source, s.nowFn()); err != nil {
+				if err := createDepartmentChangeLog(tx, item.OrgID, item.DepartmentID, item.Name, "created", "department", "", item.Name, source, s.nowFn()); err != nil {
 					return err
 				}
 				result.ChangeLogCount++
@@ -498,20 +504,26 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(items []OrgDepartmentSyncItem,
 
 			logs := make([]database.DepartmentChangeLog, 0, 3)
 			if existing.Name != item.Name {
-				logs = append(logs, newDepartmentChangeLog(item.DepartmentID, item.Name, "updated", "name", existing.Name, item.Name, source, s.nowFn()))
+				logs = append(logs, newDepartmentChangeLog(item.OrgID, item.DepartmentID, item.Name, "updated", "name", existing.Name, item.Name, source, s.nowFn()))
 				existing.Name = item.Name
 			}
 			if existing.ParentID != item.ParentID {
-				logs = append(logs, newDepartmentChangeLog(item.DepartmentID, item.Name, "updated", "parent_id", existing.ParentID, item.ParentID, source, s.nowFn()))
+				logs = append(logs, newDepartmentChangeLog(item.OrgID, item.DepartmentID, item.Name, "updated", "parent_id", existing.ParentID, item.ParentID, source, s.nowFn()))
 				existing.ParentID = item.ParentID
 			}
 			if existing.Order != item.Order {
-				logs = append(logs, newDepartmentChangeLog(item.DepartmentID, item.Name, "updated", "order", strconv.Itoa(existing.Order), strconv.Itoa(item.Order), source, s.nowFn()))
+				logs = append(logs, newDepartmentChangeLog(item.OrgID, item.DepartmentID, item.Name, "updated", "order", strconv.Itoa(existing.Order), strconv.Itoa(item.Order), source, s.nowFn()))
 				existing.Order = item.Order
+			}
+			if existing.OrgID != item.OrgID {
+				existing.OrgID = item.OrgID
+			}
+			if existing.DingTalkDepartmentID != item.DingTalkDepartmentID {
+				existing.DingTalkDepartmentID = item.DingTalkDepartmentID
 			}
 			nextExtension := departmentSyncExtension(existing.Extension, item)
 			if !reflect.DeepEqual(existing.Extension, nextExtension) {
-				logs = append(logs, newDepartmentChangeLog(item.DepartmentID, item.Name, "updated", "extension", "", "dingtalk_department_head_sync", source, s.nowFn()))
+				logs = append(logs, newDepartmentChangeLog(item.OrgID, item.DepartmentID, item.Name, "updated", "extension", "", "dingtalk_department_head_sync", source, s.nowFn()))
 				existing.Extension = nextExtension
 			}
 			if len(logs) == 0 {
@@ -893,8 +905,9 @@ func (s *OrgService) GetEmployeeAggregate(scope *OrgDataScope, id string) (*Empl
 }
 
 func (s *OrgService) baseEmployeeQuery(departmentIDs []string) *gorm.DB {
+	orgID := orgIDFromDB(s.db)
 	query := s.db.Model(&database.User{}).
-		Joins("JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Joins("JOIN employee_profiles ON employee_profiles.org_id = ? AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL", orgID).
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin")
 	if len(departmentIDs) > 0 {
@@ -1592,8 +1605,9 @@ func sortDepartmentTree(nodes []*OrgDepartmentTreeNode) {
 	}
 }
 
-func newDepartmentChangeLog(departmentID, departmentName, changeType, fieldName, oldValue, newValue, source string, changedAt time.Time) database.DepartmentChangeLog {
+func newDepartmentChangeLog(orgID, departmentID, departmentName, changeType, fieldName, oldValue, newValue, source string, changedAt time.Time) database.DepartmentChangeLog {
 	return database.DepartmentChangeLog{
+		OrgID:          database.NormalizeOrganizationID(orgID),
 		DepartmentID:   departmentID,
 		DepartmentName: departmentName,
 		ChangeType:     changeType,
@@ -1605,8 +1619,8 @@ func newDepartmentChangeLog(departmentID, departmentName, changeType, fieldName,
 	}
 }
 
-func createDepartmentChangeLog(tx *gorm.DB, departmentID, departmentName, changeType, fieldName, oldValue, newValue, source string, changedAt time.Time) error {
-	logItem := newDepartmentChangeLog(departmentID, departmentName, changeType, fieldName, oldValue, newValue, source, changedAt)
+func createDepartmentChangeLog(tx *gorm.DB, orgID, departmentID, departmentName, changeType, fieldName, oldValue, newValue, source string, changedAt time.Time) error {
+	logItem := newDepartmentChangeLog(orgID, departmentID, departmentName, changeType, fieldName, oldValue, newValue, source, changedAt)
 	return tx.Create(&logItem).Error
 }
 

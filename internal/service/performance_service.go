@@ -43,11 +43,44 @@ const (
 var sendPerformanceActionCardToUser = dingtalk.SendCorpActionCardToUser
 
 type SelfEvalReminderSendResult struct {
-	Candidates  int
-	Sent        int
-	Skipped     int
-	AlreadySent int
-	Failed      int
+	Pending                 int                 `json:"pending"`
+	Candidates              int                 `json:"candidates"`
+	Sent                    int                 `json:"sent"`
+	Skipped                 int                 `json:"skipped"`
+	AlreadySent             int                 `json:"already_sent"`
+	Failed                  int                 `json:"failed"`
+	SentRecipients          []ReminderRecipient `json:"sent_recipients,omitempty"`
+	SkippedRecipients       []ReminderRecipient `json:"skipped_recipients,omitempty"`
+	AlreadySentRecipients   []ReminderRecipient `json:"already_sent_recipients,omitempty"`
+	FailedRecipients        []ReminderRecipient `json:"failed_recipients,omitempty"`
+	MissingIDParticipantIDs []uint              `json:"missing_id_participant_ids,omitempty"`
+}
+
+type ReminderRecipient struct {
+	UserID string `json:"user_id"`
+	Name   string `json:"name,omitempty"`
+}
+
+type HRConfirmReminderSendResult struct {
+	Pending           int                 `json:"pending"`
+	Candidates        int                 `json:"candidates"`
+	Sent              int                 `json:"sent"`
+	Skipped           int                 `json:"skipped"`
+	Failed            int                 `json:"failed"`
+	SentRecipients    []ReminderRecipient `json:"sent_recipients,omitempty"`
+	SkippedRecipients []ReminderRecipient `json:"skipped_recipients,omitempty"`
+	FailedRecipients  []ReminderRecipient `json:"failed_recipients,omitempty"`
+}
+
+type ManagerEvalReminderSendResult struct {
+	Pending           int                 `json:"pending"`
+	Candidates        int                 `json:"candidates"`
+	Sent              int                 `json:"sent"`
+	Skipped           int                 `json:"skipped"`
+	Failed            int                 `json:"failed"`
+	SentRecipients    []ReminderRecipient `json:"sent_recipients,omitempty"`
+	SkippedRecipients []ReminderRecipient `json:"skipped_recipients,omitempty"`
+	FailedRecipients  []ReminderRecipient `json:"failed_recipients,omitempty"`
 }
 
 type AutoSelfEvalReminderResult struct {
@@ -140,6 +173,7 @@ type CreateActivityRequest struct {
 	EndDate                        string
 	TemplateID                     *uint
 	FlowType                       string
+	ActivityKind                   string
 	OrganizationID                 string
 	ApplicableOrgScope             []string
 	TargetSetStartAt               string
@@ -206,6 +240,9 @@ const (
 	PerformanceTemplateCodeOld = "legacy_performance"
 	PerformanceTemplateCodeNew = "new_performance"
 
+	PerformanceActivityKindGoalSetting   = "goal_setting"
+	PerformanceActivityKindReviewScoring = "review_scoring"
+
 	PerformanceGoalPhaseReview = "review"
 	PerformanceGoalPhasePlan   = "plan"
 )
@@ -236,11 +273,11 @@ func normalizePerformanceFlowType(flowType string) string {
 	}
 }
 
-func performanceFlowTypeLabel(flowType string) string {
+func performanceFlowTemplateLabel(flowType string) string {
 	if normalizePerformanceFlowType(flowType) == PerformanceFlowNew {
-		return "新流程"
+		return "沐腾科技流程模版"
 	}
-	return "旧流程"
+	return "小铁文娱流程模版"
 }
 
 func builtInPerformanceTemplateFlowType(code string) (string, bool) {
@@ -271,6 +308,64 @@ func isNewPerformanceFlow(activity *database.PerformanceActivity) bool {
 	return activity != nil && normalizePerformanceFlowType(activity.FlowType) == PerformanceFlowNew
 }
 
+func normalizePerformanceActivityKind(flowType, kind string, defaultForNew bool) (string, error) {
+	if normalizePerformanceFlowType(flowType) != PerformanceFlowNew {
+		return "", nil
+	}
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "":
+		if defaultForNew {
+			return PerformanceActivityKindGoalSetting, nil
+		}
+		return "", nil
+	case PerformanceActivityKindGoalSetting:
+		return PerformanceActivityKindGoalSetting, nil
+	case PerformanceActivityKindReviewScoring:
+		return PerformanceActivityKindReviewScoring, nil
+	default:
+		return "", errors.New("沐腾科技活动类型只能是目标设定活动或评分活动")
+	}
+}
+
+func performanceActivityKind(activity *database.PerformanceActivity) string {
+	if !isNewPerformanceFlow(activity) {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(activity.ActivityKind)) {
+	case PerformanceActivityKindGoalSetting:
+		return PerformanceActivityKindGoalSetting
+	case PerformanceActivityKindReviewScoring:
+		return PerformanceActivityKindReviewScoring
+	default:
+		return ""
+	}
+}
+
+func isMutengGoalSettingActivity(activity *database.PerformanceActivity) bool {
+	return performanceActivityKind(activity) == PerformanceActivityKindGoalSetting
+}
+
+func isMutengReviewScoringActivity(activity *database.PerformanceActivity) bool {
+	return performanceActivityKind(activity) == PerformanceActivityKindReviewScoring
+}
+
+func isExplicitMutengActivityKind(activity *database.PerformanceActivity) bool {
+	return isMutengGoalSettingActivity(activity) || isMutengReviewScoringActivity(activity)
+}
+
+func isCompletedPerformanceActivityStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "locked", "result_confirmed", "archived":
+		return true
+	default:
+		return false
+	}
+}
+
+func completedPerformanceActivityStatuses() []string {
+	return []string{"locked", "result_confirmed", "archived"}
+}
+
 func normalizePerformanceGoalPhase(phase string) string {
 	switch strings.ToLower(strings.TrimSpace(phase)) {
 	case PerformanceGoalPhasePlan:
@@ -281,6 +376,9 @@ func normalizePerformanceGoalPhase(phase string) string {
 }
 
 func targetSettingGoalPhaseForActivity(activity *database.PerformanceActivity) string {
+	if isMutengReviewScoringActivity(activity) {
+		return PerformanceGoalPhaseReview
+	}
 	if isNewPerformanceFlow(activity) {
 		return PerformanceGoalPhasePlan
 	}
@@ -352,16 +450,9 @@ func defaultPerformanceWorkflowConfig(flowType string) map[string]interface{} {
 				"department_evaluation",
 				"hr_review",
 				"result_publish",
-				"interview",
-				"employee_interview_confirm",
-				"appeal",
-				"hr_appeal_process",
-				"manager_recheck",
-				"rescore",
 				"archive",
 			},
 			"self_evaluation_required": false,
-			"interview_required":       true,
 			"allow_return_between":     []string{"manager_evaluation", "department_evaluation", "hr_review"},
 		}
 	}
@@ -370,18 +461,36 @@ func defaultPerformanceWorkflowConfig(flowType string) map[string]interface{} {
 	}
 }
 
+func applyActivityKindWorkflowDefaults(activity *database.PerformanceActivity) {
+	if activity == nil || !isNewPerformanceFlow(activity) {
+		return
+	}
+	var nodes []string
+	switch performanceActivityKind(activity) {
+	case PerformanceActivityKindGoalSetting:
+		nodes = []string{"target_setting", "target_approval", "archive"}
+	case PerformanceActivityKindReviewScoring:
+		nodes = []string{"target_setting", "self_evaluation", "manager_evaluation", "department_evaluation", "hr_review", "result_publish", "archive"}
+	default:
+		return
+	}
+	if activity.WorkflowConfig == nil {
+		activity.WorkflowConfig = map[string]interface{}{}
+	}
+	activity.WorkflowConfig["nodes"] = nodes
+	if isMutengReviewScoringActivity(activity) {
+		activity.WorkflowConfig["self_evaluation_required"] = false
+		activity.WorkflowConfig["allow_return_between"] = []string{"manager_evaluation", "department_evaluation", "hr_review"}
+	}
+}
+
 func defaultPerformanceFormConfig(flowType string) map[string]interface{} {
 	if normalizePerformanceFlowType(flowType) == PerformanceFlowNew {
 		return map[string]interface{}{
-			"score_scale":                 map[string]interface{}{"min": 0, "max": 10, "allow_decimal": true},
-			"review_weight_total_policy":  "allow_over_100",
-			"target_plan_total_weight":    1,
-			"target_plan_variable_weight": 0.7,
-			"fixed_items": []map[string]interface{}{
-				{"fixed_key": "manager_arrangement", "name": "上级安排事项完成情况", "weight": 0.15, "required": true, "locked": true, "description": "上级安排的所有事项需在规定时间内完成，工作结果得到领导认可"},
-				{"fixed_key": "values_discipline", "name": "价值观及工作纪律", "weight": 0.15, "required": true, "locked": true, "description": "拥抱公司价值观，不得违反公司管理制度、规范等"},
-			},
-			"variable_goal_types": []string{"okr", "kpi"},
+			"score_scale":                map[string]interface{}{"min": 0, "max": 10, "allow_decimal": true},
+			"review_weight_total_policy": "allow_over_100",
+			"target_plan_total_weight":   1,
+			"variable_goal_types":        []string{"okr", "kpi"},
 		}
 	}
 	return map[string]interface{}{
@@ -799,7 +908,7 @@ func (s *PerformanceService) loadTemplateForActivity(templateID *uint, flowType 
 		}
 		templateFlowType := performanceTemplateFlowType(template, normalizedFlowType)
 		if strings.TrimSpace(flowType) != "" && templateFlowType != normalizedFlowType {
-			return nil, "", fmt.Errorf("流程模板与流程类型不一致，请清空模板或选择%s模板", performanceFlowTypeLabel(normalizedFlowType))
+			return nil, "", fmt.Errorf("流程模板与流程类型不一致，请清空模板或选择%s", performanceFlowTemplateLabel(normalizedFlowType))
 		}
 		return template, templateFlowType, nil
 	}
@@ -870,6 +979,14 @@ func (s *PerformanceService) CreateActivity(req CreateActivityRequest, createdBy
 	if err := s.validateActivityIndicatorLibrary(req.IndicatorLibraryID, cycleType, performanceTemplateIDForValidation(template, req.TemplateID)); err != nil {
 		return nil, err
 	}
+	activityKind, err := normalizePerformanceActivityKind(flowType, req.ActivityKind, true)
+	if err != nil {
+		return nil, err
+	}
+	previousReviewActivityID, err := s.normalizePreviousReviewActivityID(0, flowType, activityKind, cycleType, req.PreviousReviewActivityID)
+	if err != nil {
+		return nil, err
+	}
 	activity := &database.PerformanceActivity{
 		Name:                           strings.TrimSpace(req.Name),
 		CycleType:                      cycleType,
@@ -878,6 +995,7 @@ func (s *PerformanceService) CreateActivity(req CreateActivityRequest, createdBy
 		IndicatorLibraryID:             req.IndicatorLibraryID,
 		TemplateID:                     req.TemplateID,
 		FlowType:                       flowType,
+		ActivityKind:                   activityKind,
 		OrganizationID:                 strings.TrimSpace(req.OrganizationID),
 		TargetSetStartAt:               strings.TrimSpace(req.TargetSetStartAt),
 		TargetSetEndAt:                 strings.TrimSpace(req.TargetSetEndAt),
@@ -903,7 +1021,7 @@ func (s *PerformanceService) CreateActivity(req CreateActivityRequest, createdBy
 		SnapshotAsOfDate:               strings.TrimSpace(req.SnapshotAsOfDate),
 		SnapshotSource:                 strings.TrimSpace(req.SnapshotSource),
 		TargetPlanActivityID:           req.TargetPlanActivityID,
-		PreviousReviewActivityID:       req.PreviousReviewActivityID,
+		PreviousReviewActivityID:       previousReviewActivityID,
 		PublishMode:                    normalizePublishMode(req.PublishMode),
 		PublishAt:                      strings.TrimSpace(req.PublishAt),
 		ReminderConfig:                 cloneJSONMap(req.ReminderConfig),
@@ -913,6 +1031,7 @@ func (s *PerformanceService) CreateActivity(req CreateActivityRequest, createdBy
 		CreatedBy:                      createdBy,
 	}
 	applyTemplateSnapshotToActivity(activity, template, flowType)
+	applyActivityKindWorkflowDefaults(activity)
 
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(activity).Error; err != nil {
@@ -948,7 +1067,8 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 		(activity.TemplateID != nil && req.TemplateID == nil) ||
 		(activity.TemplateID != nil && req.TemplateID != nil && *activity.TemplateID != *req.TemplateID) ||
 		(strings.TrimSpace(req.FlowType) != "" && normalizePerformanceFlowType(activity.FlowType) != normalizePerformanceFlowType(req.FlowType))
-	if oldStatus != "draft" && scopeChanged {
+	currentActivityIsNewFlow := isNewPerformanceFlow(activity)
+	if oldStatus != "draft" && scopeChanged && !currentActivityIsNewFlow {
 		return nil, errors.New("目标设定开启后不能调整参与范围")
 	}
 	if oldStatus != "draft" && templateChanged {
@@ -978,6 +1098,21 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 	if err := s.validateActivityIndicatorLibrary(req.IndicatorLibraryID, cycleType, validationTemplateID); err != nil {
 		return nil, err
 	}
+	activityKind := strings.TrimSpace(activity.ActivityKind)
+	if normalizePerformanceFlowType(flowType) != PerformanceFlowNew {
+		activityKind = ""
+	} else if strings.TrimSpace(req.ActivityKind) != "" {
+		activityKind, err = normalizePerformanceActivityKind(flowType, req.ActivityKind, false)
+		if err != nil {
+			return nil, err
+		}
+	} else if strings.TrimSpace(activityKind) == "" && !currentActivityIsNewFlow {
+		activityKind = PerformanceActivityKindGoalSetting
+	}
+	previousReviewActivityID, err := s.normalizePreviousReviewActivityID(activity.ID, flowType, activityKind, cycleType, req.PreviousReviewActivityID)
+	if err != nil {
+		return nil, err
+	}
 	activity.Name = strings.TrimSpace(req.Name)
 	activity.CycleType = cycleType
 	activity.StartDate = strings.TrimSpace(req.StartDate)
@@ -987,6 +1122,7 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 		activity.TemplateID = req.TemplateID
 		activity.FlowType = flowType
 	}
+	activity.ActivityKind = activityKind
 	activity.OrganizationID = strings.TrimSpace(req.OrganizationID)
 	activity.TargetSetStartAt = strings.TrimSpace(req.TargetSetStartAt)
 	activity.TargetSetEndAt = strings.TrimSpace(req.TargetSetEndAt)
@@ -1011,7 +1147,7 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 	activity.SnapshotAsOfDate = strings.TrimSpace(req.SnapshotAsOfDate)
 	activity.SnapshotSource = strings.TrimSpace(req.SnapshotSource)
 	activity.TargetPlanActivityID = req.TargetPlanActivityID
-	activity.PreviousReviewActivityID = req.PreviousReviewActivityID
+	activity.PreviousReviewActivityID = previousReviewActivityID
 	activity.PublishMode = normalizePublishMode(req.PublishMode)
 	activity.PublishAt = strings.TrimSpace(req.PublishAt)
 	activity.ReminderConfig = cloneJSONMap(req.ReminderConfig)
@@ -1022,11 +1158,16 @@ func (s *PerformanceService) UpdateActivity(activityID string, req CreateActivit
 	if shouldApplyTemplate {
 		applyTemplateSnapshotToActivity(activity, template, flowType)
 	}
+	applyActivityKindWorkflowDefaults(activity)
 
 	if err := s.actRepo.Update(activity); err != nil {
 		return nil, err
 	}
-	if oldStatus == "draft" && strings.TrimSpace(activity.Status) == "draft" && (scopeChanged || managerAssignmentsChanged) {
+	if strings.TrimSpace(activity.Status) == "draft" && oldStatus == "draft" && (scopeChanged || managerAssignmentsChanged) {
+		if _, err := s.RefreshParticipants(activityID, updatedBy); err != nil {
+			return nil, err
+		}
+	} else if currentActivityIsNewFlow && oldStatus != "draft" && (scopeChanged || managerAssignmentsChanged) {
 		if _, err := s.RefreshParticipants(activityID, updatedBy); err != nil {
 			return nil, err
 		}
@@ -1042,6 +1183,25 @@ func (s *PerformanceService) PublishActivity(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return err
+	}
+
+	if isNewPerformanceFlow(activity) {
+		switch activity.Status {
+		case "self_evaluation":
+			return nil
+		case "target_setting":
+			if isMutengReviewScoringActivity(activity) {
+				return s.OpenSelfEvaluation(activityID, userID)
+			}
+			return s.OpenTargetApproval(activityID, userID)
+		case "target_approval":
+			if isMutengGoalSettingActivity(activity) {
+				return s.LockActivity(activityID, userID)
+			}
+			return s.OpenSelfEvaluation(activityID, userID)
+		default:
+			return errors.New("状态冲突：沐腾科技流程需按目标拟定、目标审核后再开启自评")
+		}
 	}
 
 	// 幂等：publish 旧接口兼容到 open-self-evaluation
@@ -1215,6 +1375,17 @@ var participantStageStatuses = map[string]map[string]struct{}{
 		"locked":             {},
 		"result_confirmed":   {},
 	},
+	"target_approval": {
+		"target_set":         {},
+		"self_submitted":     {},
+		"manager_submitted":  {},
+		"employee_confirmed": {},
+		"manager_recheck":    {},
+		"manager_confirmed":  {},
+		"hr_confirmed":       {},
+		"locked":             {},
+		"result_confirmed":   {},
+	},
 	"self_evaluation": {
 		"self_submitted":     {},
 		"manager_submitted":  {},
@@ -1226,6 +1397,47 @@ var participantStageStatuses = map[string]map[string]struct{}{
 		"result_confirmed":   {},
 	},
 	"manager_evaluation": {
+		"manager_submitted":  {},
+		"employee_confirmed": {},
+		"manager_recheck":    {},
+		"manager_confirmed":  {},
+		"hr_confirmed":       {},
+		"locked":             {},
+		"result_confirmed":   {},
+	},
+	"department_evaluation": {
+		"manager_submitted":  {},
+		"employee_confirmed": {},
+		"manager_recheck":    {},
+		"manager_confirmed":  {},
+		"hr_confirmed":       {},
+		"locked":             {},
+		"result_confirmed":   {},
+	},
+	"hr_review": {
+		"hr_confirmed":     {},
+		"locked":           {},
+		"result_confirmed": {},
+	},
+	"result_publish": {
+		"manager_submitted":  {},
+		"employee_confirmed": {},
+		"manager_recheck":    {},
+		"manager_confirmed":  {},
+		"hr_confirmed":       {},
+		"locked":             {},
+		"result_confirmed":   {},
+	},
+	"interview": {
+		"manager_submitted":  {},
+		"employee_confirmed": {},
+		"manager_recheck":    {},
+		"manager_confirmed":  {},
+		"hr_confirmed":       {},
+		"locked":             {},
+		"result_confirmed":   {},
+	},
+	"appeal": {
 		"manager_submitted":  {},
 		"employee_confirmed": {},
 		"manager_recheck":    {},
@@ -1257,8 +1469,14 @@ var participantStageStatuses = map[string]map[string]struct{}{
 
 var participantStageDisplayNames = map[string]string{
 	"target_setting":        "目标设定/审批",
+	"target_approval":       "目标审核",
 	"self_evaluation":       "自评",
 	"manager_evaluation":    "主管评分",
+	"department_evaluation": "部门/中心评估",
+	"hr_review":             "HR审核",
+	"result_publish":        "结果公布",
+	"interview":             "绩效面谈",
+	"appeal":                "绩效申诉",
 	"employee_confirmation": "员工确认",
 	"manager_confirmation":  "主管确认",
 	"hr_confirmation":       "HR确认",
@@ -1266,11 +1484,17 @@ var participantStageDisplayNames = map[string]string{
 
 var participantStageAdvanceActions = map[string]string{
 	"target_setting":        "开启自评",
+	"target_approval":       "开启自评",
 	"self_evaluation":       "开启主管评分",
-	"manager_evaluation":    "开启员工确认",
+	"manager_evaluation":    "开启下一阶段",
+	"department_evaluation": "开启HR审核",
+	"hr_review":             "开启结果公布",
+	"result_publish":        "归档活动",
+	"interview":             "归档活动",
+	"appeal":                "归档活动",
 	"employee_confirmation": "开启主管确认",
 	"manager_confirmation":  "开启HR确认",
-	"hr_confirmation":       "锁定活动",
+	"hr_confirmation":       "推进下一阶段",
 }
 
 var participantStatusDisplayNames = map[string]string{
@@ -1286,6 +1510,57 @@ var participantStatusDisplayNames = map[string]string{
 	"hr_confirmed":            "HR已确认",
 	"locked":                  "已锁定",
 	"result_confirmed":        "结果已确认",
+}
+
+var validPerformanceParticipantStatuses = map[string]struct{}{
+	"pending":                 {},
+	"target_pending_approval": {},
+	"target_rejected":         {},
+	"target_set":              {},
+	"self_submitted":          {},
+	"manager_submitted":       {},
+	"employee_confirmed":      {},
+	"manager_recheck":         {},
+	"manager_confirmed":       {},
+	"hr_confirmed":            {},
+	"locked":                  {},
+	"result_confirmed":        {},
+	"inactive":                {},
+	"removed_from_scope":      {},
+}
+
+var performanceParticipantProgressRank = map[string]int{
+	"pending":                 0,
+	"target_pending_approval": 1,
+	"target_rejected":         1,
+	"target_set":              2,
+	"self_submitted":          3,
+	"manager_submitted":       4,
+	"manager_confirmed":       5,
+	"hr_confirmed":            6,
+	"employee_confirmed":      7,
+	"result_confirmed":        8,
+	"locked":                  9,
+	"inactive":                0,
+	"removed_from_scope":      0,
+}
+
+func normalizePerformanceParticipantStatus(status string) (string, error) {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return "", errors.New("进度状态不能为空")
+	}
+	if _, ok := validPerformanceParticipantStatuses[status]; !ok {
+		return "", fmt.Errorf("不支持的进度状态：%s", status)
+	}
+	return status, nil
+}
+
+func performanceParticipantStatusRank(status string) int {
+	if rank, ok := performanceParticipantProgressRank[strings.TrimSpace(status)]; ok {
+		return rank
+	}
+	return -1
 }
 
 func isIgnoredPerformanceParticipantStatus(status string) bool {
@@ -1415,8 +1690,8 @@ func (s *PerformanceService) GetDistributionCheck(activityID string) (*Distribut
 			continue
 		}
 		activeCount++
-		if p.FinalLevel != "" {
-			levelCount[p.FinalLevel]++
+		if level := performanceDistributionLevel(activity, p); level != "" {
+			levelCount[level]++
 		}
 	}
 
@@ -1471,6 +1746,22 @@ func (s *PerformanceService) GetDistributionCheck(activityID string) (*Distribut
 	}
 
 	return result, nil
+}
+
+func performanceDistributionLevel(activity *database.PerformanceActivity, participant database.PerformanceParticipant) string {
+	finalLevel := strings.TrimSpace(participant.FinalLevel)
+	suggestedLevel := strings.TrimSpace(participant.SuggestedLevel)
+	if activity != nil &&
+		strings.TrimSpace(activity.Status) == "manager_evaluation" &&
+		!participant.DepartmentAdjusted &&
+		strings.TrimSpace(participant.DepartmentFinalLevel) == "" &&
+		suggestedLevel != "" {
+		return suggestedLevel
+	}
+	if finalLevel != "" {
+		return finalLevel
+	}
+	return suggestedLevel
 }
 
 func (s *PerformanceService) SetDistributionRules(activityID string, req []struct {
@@ -1758,9 +2049,12 @@ func applyActivityManagerAssignment(participant *database.PerformanceParticipant
 }
 
 type RefreshResult struct {
-	AddedCount    int `json:"added_count"`
-	UpdatedCount  int `json:"updated_count"`
-	InactiveCount int `json:"inactive_count"`
+	AddedCount                       int      `json:"added_count"`
+	UpdatedCount                     int      `json:"updated_count"`
+	InactiveCount                    int      `json:"inactive_count"`
+	MissingPreviousPlanEmployeeIDs   []string `json:"missing_previous_plan_employee_ids,omitempty"`
+	MissingPreviousPlanEmployeeNames []string `json:"missing_previous_plan_employee_names,omitempty"`
+	Warnings                         []string `json:"warnings,omitempty"`
 }
 
 func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*RefreshResult, error) {
@@ -1769,7 +2063,7 @@ func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*Re
 	if err != nil {
 		return nil, errors.New("活动不存在")
 	}
-	if strings.TrimSpace(activity.Status) != "draft" {
+	if strings.TrimSpace(activity.Status) != "draft" && !isNewPerformanceFlow(activity) {
 		return nil, errors.New("目标设定开启后不能增减参与人")
 	}
 
@@ -1782,6 +2076,14 @@ func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*Re
 	})
 	if err != nil {
 		return nil, err
+	}
+	if isNewPerformanceFlow(activity) {
+		if err := s.syncPreviousPlanRecordsForNewFlowActivity(activity, userID); err != nil {
+			return nil, err
+		}
+		if err := s.appendMissingPreviousPlanWarnings(activity, ctx.result); err != nil {
+			return nil, err
+		}
 	}
 
 	return ctx.result, nil
@@ -1797,6 +2099,13 @@ type participantRefreshContext struct {
 	users                     []database.User
 	managerAssignmentByUserID map[string]database.PerformanceActivityManagerAssignment
 	deptMap                   map[string]database.Department
+	orgSnapshotByUserID       map[string]performanceOrgSnapshot
+}
+
+type performanceOrgSnapshot struct {
+	DepartmentID   string
+	DepartmentName string
+	Position       string
 }
 
 func (s *PerformanceService) buildParticipantRefreshContext(db *gorm.DB, activity *database.PerformanceActivity, userID string) (*participantRefreshContext, error) {
@@ -1804,22 +2113,18 @@ func (s *PerformanceService) buildParticipantRefreshContext(db *gorm.DB, activit
 		return nil, errors.New("活动不存在")
 	}
 
+	snapshotAsOf, useSnapshotDate, err := parsePerformanceSnapshotDate(activity.SnapshotAsOfDate)
+	if err != nil {
+		return nil, err
+	}
+
 	// 2. 获取所有在职员工（从 User 表）
 	var allUsers []database.User
 	if err := db.Where("status = ? AND deleted_at IS NULL", "active").Find(&allUsers).Error; err != nil {
 		return nil, err
 	}
-	activeUserByID := make(map[string]database.User, len(allUsers))
-	users := make([]database.User, 0, len(allUsers))
-	for _, user := range allUsers {
-		activeUserByID[user.UserID] = user
-		if activityIncludesUser(activity, user) {
-			users = append(users, user)
-		}
-	}
-	managerAssignmentByUserID := activityManagerAssignmentsByUser(activity.ManagerAssignments)
 
-	// 3. 获取部门信息映射
+	// 3. 获取部门信息映射，历史快照回放时也用于补全部门名称
 	var departments []database.Department
 	if err := db.Where("deleted_at IS NULL").Find(&departments).Error; err != nil {
 		return nil, err
@@ -1828,6 +2133,34 @@ func (s *PerformanceService) buildParticipantRefreshContext(db *gorm.DB, activit
 	for _, d := range departments {
 		deptMap[d.DepartmentID] = d
 	}
+
+	transferHistoryByUserID := map[string][]database.EmployeeTransfer{}
+	if useSnapshotDate {
+		userIDs := make([]string, 0, len(allUsers))
+		for _, user := range allUsers {
+			userID := strings.TrimSpace(user.UserID)
+			if userID != "" {
+				userIDs = append(userIDs, userID)
+			}
+		}
+		transferHistoryByUserID, err = s.loadPerformanceTransferHistoryByUser(db, userIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	activeUserByID := make(map[string]database.User, len(allUsers))
+	users := make([]database.User, 0, len(allUsers))
+	orgSnapshotByUserID := make(map[string]performanceOrgSnapshot, len(allUsers))
+	for _, user := range allUsers {
+		activeUserByID[user.UserID] = user
+		orgSnapshot := performanceOrgSnapshotForUser(user, transferHistoryByUserID[user.UserID], snapshotAsOf, useSnapshotDate, deptMap)
+		orgSnapshotByUserID[user.UserID] = orgSnapshot
+		if activityIncludesUserInDepartment(activity, user, orgSnapshot.DepartmentID) {
+			users = append(users, user)
+		}
+	}
+	managerAssignmentByUserID := activityManagerAssignmentsByUser(activity.ManagerAssignments)
 
 	return &participantRefreshContext{
 		result:                    &RefreshResult{},
@@ -1839,6 +2172,7 @@ func (s *PerformanceService) buildParticipantRefreshContext(db *gorm.DB, activit
 		users:                     users,
 		managerAssignmentByUserID: managerAssignmentByUserID,
 		deptMap:                   deptMap,
+		orgSnapshotByUserID:       orgSnapshotByUserID,
 	}, nil
 }
 
@@ -1858,15 +2192,15 @@ func (s *PerformanceService) applyParticipantRefresh(tx *gorm.DB, ctx *participa
 
 	now := time.Now()
 	for _, user := range ctx.users {
-		dept, hasDept := ctx.deptMap[user.DepartmentID]
-		deptName := ""
-		if hasDept {
-			deptName = dept.Name
+		orgSnapshot := ctx.orgSnapshotByUserID[user.UserID]
+		if strings.TrimSpace(orgSnapshot.DepartmentID) == "" {
+			orgSnapshot = performanceOrgSnapshotForUser(user, nil, time.Time{}, false, ctx.deptMap)
 		}
+		profileUser := userWithPerformanceOrgSnapshot(user, orgSnapshot)
 
 		existing, exists := existingMap[user.UserID]
 		if exists {
-			changed, changeLogs := refreshPerformanceParticipantProfile(existing, user, deptName, ctx.activityID, ctx.userID, now)
+			changed, changeLogs := refreshPerformanceParticipantProfile(existing, profileUser, orgSnapshot.DepartmentName, ctx.activityID, ctx.userID, now)
 			if assignment, ok := ctx.managerAssignmentByUserID[user.UserID]; ok && shouldApplyActivityManagerAssignment(existing) {
 				managerChanged, managerLog := applyActivityManagerAssignment(existing, assignment, ctx.activeUserByID, ctx.userID, now)
 				if managerChanged {
@@ -1888,7 +2222,7 @@ func (s *PerformanceService) applyParticipantRefresh(tx *gorm.DB, ctx *participa
 				ctx.result.UpdatedCount++
 			}
 		} else {
-			participant := s.newPerformanceParticipantForActivity(ctx.activity, ctx.userID, user, deptName)
+			participant := s.newPerformanceParticipantForActivity(ctx.activity, ctx.userID, profileUser, orgSnapshot.DepartmentName)
 			managerChanged, managerLog := false, (*database.PerformanceRelationshipChangeLog)(nil)
 			if assignment, ok := ctx.managerAssignmentByUserID[user.UserID]; ok {
 				managerChanged, managerLog = applyActivityManagerAssignment(&participant, assignment, ctx.activeUserByID, ctx.userID, now)
@@ -1932,7 +2266,15 @@ func (s *PerformanceService) applyParticipantRefresh(tx *gorm.DB, ctx *participa
 			p.EmployeeStatus = newEmployeeStatus
 			p.Status = "removed_from_scope"
 			p.UpdatedBy = ctx.userID
-			tx.Save(p)
+			if isNewPerformanceFlow(ctx.activity) && strings.TrimSpace(ctx.activity.Status) != "draft" {
+				p.RemovedReason = "活动开启后刷新参与范围自动移除"
+				p.RemovedAt = &now
+				p.RemovedBy = ctx.userID
+				p.DeletedAt = &now
+			}
+			if err := tx.Save(p).Error; err != nil {
+				return err
+			}
 
 			if err := tx.Create(&database.PerformanceRelationshipChangeLog{
 				ActivityID:    ctx.activityID,
@@ -1946,6 +2288,24 @@ func (s *PerformanceService) applyParticipantRefresh(tx *gorm.DB, ctx *participa
 				CreatedBy:     ctx.userID,
 			}).Error; err != nil {
 				return err
+			}
+			if isNewPerformanceFlow(ctx.activity) && strings.TrimSpace(ctx.activity.Status) != "draft" {
+				if err := tx.Create(&database.PerformanceReviewVersion{
+					ParticipantID: p.ID,
+					ActivityID:    ctx.activityID,
+					ReviewType:    "participant_removed",
+					AdjustReason:  p.RemovedReason,
+					CreatedBy:     ctx.userID,
+					OperationMeta: map[string]interface{}{
+						"old_status":          oldStatus,
+						"new_status":          p.Status,
+						"old_employee_status": oldEmployeeStatus,
+						"new_employee_status": p.EmployeeStatus,
+						"source":              "refresh_participants",
+					},
+				}).Error; err != nil {
+					return err
+				}
 			}
 			ctx.result.InactiveCount++
 		}
@@ -2195,6 +2555,10 @@ func (s *PerformanceService) validateActivityIndicatorLibrary(indicatorLibraryID
 }
 
 func activityIncludesUser(activity *database.PerformanceActivity, user database.User) bool {
+	return activityIncludesUserInDepartment(activity, user, user.DepartmentID)
+}
+
+func activityIncludesUserInDepartment(activity *database.PerformanceActivity, user database.User, scopedDepartmentID string) bool {
 	hasEmployeeScope := false
 	for _, employeeID := range activity.TargetEmployeeIDs {
 		employeeID = strings.TrimSpace(employeeID)
@@ -2211,21 +2575,624 @@ func activityIncludesUser(activity *database.PerformanceActivity, user database.
 	}
 
 	hasDepartmentScope := false
-	for _, departmentID := range activity.TargetDepartmentIDs {
-		departmentID = strings.TrimSpace(departmentID)
-		if departmentID == "" {
+	scopedDepartmentID = strings.TrimSpace(scopedDepartmentID)
+	for _, targetDepartmentID := range activity.TargetDepartmentIDs {
+		targetDepartmentID = strings.TrimSpace(targetDepartmentID)
+		if targetDepartmentID == "" {
 			continue
 		}
 		hasDepartmentScope = true
-		if departmentID == user.DepartmentID {
+		if targetDepartmentID == scopedDepartmentID {
 			return true
 		}
 	}
 	return !hasDepartmentScope
 }
 
+func parsePerformanceSnapshotDate(value string) (time.Time, bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false, nil
+	}
+	parsed, ok := parsePerformanceDate(value, time.Local)
+	if !ok {
+		return time.Time{}, false, fmt.Errorf("组织快照日期格式错误，应为 YYYY-MM-DD")
+	}
+	return parsed, true, nil
+}
+
+func (s *PerformanceService) loadPerformanceTransferHistoryByUser(db *gorm.DB, userIDs []string) (map[string][]database.EmployeeTransfer, error) {
+	result := make(map[string][]database.EmployeeTransfer)
+	normalizedUserIDs := uniqueStrings(userIDs)
+	if len(normalizedUserIDs) == 0 {
+		return result, nil
+	}
+
+	var transfers []database.EmployeeTransfer
+	if err := db.Where("deleted_at IS NULL").
+		Where("user_id IN ?", normalizedUserIDs).
+		Where("LOWER(status) IN ?", []string{"approved", "completed"}).
+		Order("transfer_date ASC, id ASC").
+		Find(&transfers).Error; err != nil {
+		return nil, err
+	}
+	for _, transfer := range transfers {
+		userID := strings.TrimSpace(transfer.UserID)
+		if userID == "" {
+			continue
+		}
+		result[userID] = append(result[userID], transfer)
+	}
+	return result, nil
+}
+
+func performanceOrgSnapshotForUser(
+	user database.User,
+	transfers []database.EmployeeTransfer,
+	asOfDate time.Time,
+	useSnapshotDate bool,
+	deptMap map[string]database.Department,
+) performanceOrgSnapshot {
+	snapshot := performanceOrgSnapshot{
+		DepartmentID:   strings.TrimSpace(user.DepartmentID),
+		Position:       strings.TrimSpace(user.Position),
+		DepartmentName: departmentNameFromDepartmentMap(strings.TrimSpace(user.DepartmentID), deptMap),
+	}
+	if !useSnapshotDate {
+		return snapshot
+	}
+
+	var latestEffective *database.EmployeeTransfer
+	var latestEffectiveDate time.Time
+	var earliestFuture *database.EmployeeTransfer
+	var earliestFutureDate time.Time
+
+	for i := range transfers {
+		transfer := &transfers[i]
+		if !isEffectivePerformanceTransferStatus(transfer.Status) {
+			continue
+		}
+		transferDate, ok := parsePerformanceDate(transfer.TransferDate, time.Local)
+		if !ok {
+			continue
+		}
+		if !transferDate.After(asOfDate) {
+			if latestEffective == nil || transferDate.After(latestEffectiveDate) || (transferDate.Equal(latestEffectiveDate) && transfer.ID > latestEffective.ID) {
+				latestEffective = transfer
+				latestEffectiveDate = transferDate
+			}
+			continue
+		}
+		if earliestFuture == nil || transferDate.Before(earliestFutureDate) || (transferDate.Equal(earliestFutureDate) && transfer.ID < earliestFuture.ID) {
+			earliestFuture = transfer
+			earliestFutureDate = transferDate
+		}
+	}
+
+	if latestEffective != nil {
+		snapshot.DepartmentID = strings.TrimSpace(latestEffective.NewDepartmentID)
+		snapshot.DepartmentName = departmentNameForSnapshot(snapshot.DepartmentID, latestEffective.NewDepartmentName, deptMap)
+		snapshot.Position = firstNonEmpty(strings.TrimSpace(latestEffective.NewPosition), snapshot.Position)
+		return snapshot
+	}
+	if earliestFuture != nil {
+		snapshot.DepartmentID = strings.TrimSpace(earliestFuture.OldDepartmentID)
+		snapshot.DepartmentName = departmentNameForSnapshot(snapshot.DepartmentID, earliestFuture.OldDepartmentName, deptMap)
+		snapshot.Position = firstNonEmpty(strings.TrimSpace(earliestFuture.OldPosition), snapshot.Position)
+	}
+	return snapshot
+}
+
+func isEffectivePerformanceTransferStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "approved", "completed":
+		return true
+	default:
+		return false
+	}
+}
+
+func departmentNameForSnapshot(departmentID, preferredName string, deptMap map[string]database.Department) string {
+	preferredName = strings.TrimSpace(preferredName)
+	if preferredName != "" {
+		return preferredName
+	}
+	departmentID = strings.TrimSpace(departmentID)
+	if departmentID == "" {
+		return ""
+	}
+	if department, ok := deptMap[departmentID]; ok && strings.TrimSpace(department.Name) != "" {
+		return strings.TrimSpace(department.Name)
+	}
+	return departmentID
+}
+
+func departmentNameFromDepartmentMap(departmentID string, deptMap map[string]database.Department) string {
+	departmentID = strings.TrimSpace(departmentID)
+	if departmentID == "" {
+		return ""
+	}
+	if department, ok := deptMap[departmentID]; ok {
+		return strings.TrimSpace(department.Name)
+	}
+	return ""
+}
+
+func userWithPerformanceOrgSnapshot(user database.User, snapshot performanceOrgSnapshot) database.User {
+	cloned := user
+	if strings.TrimSpace(snapshot.DepartmentID) != "" {
+		cloned.DepartmentID = strings.TrimSpace(snapshot.DepartmentID)
+	}
+	if strings.TrimSpace(snapshot.Position) != "" {
+		cloned.Position = strings.TrimSpace(snapshot.Position)
+	}
+	return cloned
+}
+
 func (s *PerformanceService) GetParticipant(participantID string) (*database.PerformanceParticipant, error) {
 	return s.participantR.GetByID(participantID)
+}
+
+var participantProgressOverrideStaleReviewTypes = map[string]struct{}{
+	"self":                    {},
+	"manager":                 {},
+	"manager_recheck":         {},
+	"department_evaluation":   {},
+	"adjust_final_level":      {},
+	"confirm_employee":        {},
+	"confirm_manager":         {},
+	"confirm_manager_recheck": {},
+	"confirm_hr":              {},
+}
+
+func operationMetaString(meta interface{}, key string) string {
+	switch value := meta.(type) {
+	case map[string]interface{}:
+		if raw, ok := value[key]; ok && raw != nil {
+			return strings.TrimSpace(fmt.Sprint(raw))
+		}
+		return ""
+	case map[string]string:
+		return strings.TrimSpace(value[key])
+	case nil:
+		return ""
+	default:
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return ""
+		}
+		var decoded map[string]interface{}
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return ""
+		}
+		if raw, ok := decoded[key]; ok && raw != nil {
+			return strings.TrimSpace(fmt.Sprint(raw))
+		}
+		return ""
+	}
+}
+
+func (s *PerformanceService) GetParticipantProgressStatusOverride(participantID, currentStatus string) (string, error) {
+	participantID = strings.TrimSpace(participantID)
+	currentStatus = strings.TrimSpace(currentStatus)
+	if participantID == "" || currentStatus == "" {
+		return "", nil
+	}
+	versions, err := s.versionRepo.ListByParticipant(participantID)
+	if err != nil {
+		return "", err
+	}
+	for _, version := range versions {
+		reviewType := strings.TrimSpace(version.ReviewType)
+		if reviewType == "admin_progress_adjust" {
+			if newStatus := operationMetaString(version.OperationMeta, "new_status"); newStatus == currentStatus {
+				return newStatus, nil
+			}
+			return "", nil
+		}
+		if _, ok := participantProgressOverrideStaleReviewTypes[reviewType]; ok {
+			return "", nil
+		}
+	}
+	return "", nil
+}
+
+func (s *PerformanceService) loadNewFlowParticipantForUpdate(tx *gorm.DB, participantID uint) (*database.PerformanceParticipant, *database.PerformanceActivity, error) {
+	if participantID == 0 {
+		return nil, nil, errors.New("参与人不能为空")
+	}
+	var participant database.PerformanceParticipant
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND deleted_at IS NULL", participantID).
+		First(&participant).Error; err != nil {
+		return nil, nil, errors.New("参与人不存在")
+	}
+	var activity database.PerformanceActivity
+	if err := tx.Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
+		return nil, nil, errors.New("绩效活动不存在")
+	}
+	if !isNewPerformanceFlow(&activity) {
+		return nil, nil, errors.New("该能力仅支持沐腾科技流程模板")
+	}
+	return &participant, &activity, nil
+}
+
+func normalizePerformanceOperatorID(userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return "system"
+	}
+	return userID
+}
+
+func requirePerformanceReason(reason, message string) (string, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "", errors.New(message)
+	}
+	return reason, nil
+}
+
+func resetParticipantProgressArtifactsForStatus(participant *database.PerformanceParticipant, status string) []string {
+	if participant == nil {
+		return nil
+	}
+	rank := performanceParticipantStatusRank(status)
+	if rank < 0 {
+		return nil
+	}
+	resetFields := make([]string, 0)
+	addReset := func(field string) {
+		for _, existing := range resetFields {
+			if existing == field {
+				return
+			}
+		}
+		resetFields = append(resetFields, field)
+	}
+
+	if rank < performanceParticipantStatusRank("manager_confirmed") {
+		if participant.DepartmentAdjusted ||
+			participant.DepartmentFinalScore != nil ||
+			strings.TrimSpace(participant.DepartmentFinalLevel) != "" ||
+			strings.TrimSpace(participant.DepartmentAdjustReason) != "" ||
+			participant.DepartmentAdjustedAt != nil ||
+			strings.TrimSpace(participant.DepartmentAdjustedBy) != "" {
+			addReset("department_evaluation")
+		}
+		participant.DepartmentAdjusted = false
+		participant.DepartmentFinalScore = nil
+		participant.DepartmentFinalLevel = ""
+		participant.DepartmentAdjustReason = ""
+		participant.DepartmentAdjustedAt = nil
+		participant.DepartmentAdjustedBy = ""
+		if suggestedLevel := strings.TrimSpace(participant.SuggestedLevel); suggestedLevel != "" {
+			if participant.FinalLevel != suggestedLevel {
+				addReset("final_level")
+			}
+			participant.FinalLevel = suggestedLevel
+		}
+		if strings.TrimSpace(participant.AdjustReason) != "" {
+			addReset("adjust_reason")
+			participant.AdjustReason = ""
+		}
+		score := participant.TotalManagerScore
+		if score == 0 {
+			score = participant.ManagerScore
+		}
+		if score > 0 || participant.AdjustedScore != 0 {
+			adjustedScore := score + participant.BonusScore - participant.PenaltyScore
+			if adjustedScore < 0 {
+				adjustedScore = 0
+			}
+			if participant.AdjustedScore != roundScore(adjustedScore) {
+				addReset("adjusted_score")
+			}
+			participant.AdjustedScore = roundScore(adjustedScore)
+		}
+	}
+
+	if rank < performanceParticipantStatusRank("hr_confirmed") {
+		if participant.HRConfirmedAt != nil || strings.TrimSpace(participant.HRConfirmedBy) != "" {
+			addReset("hr_review")
+		}
+		participant.HRConfirmedAt = nil
+		participant.HRConfirmedBy = ""
+	}
+
+	if rank < performanceParticipantStatusRank("employee_confirmed") {
+		if participant.EmployeeConfirmedAt != nil || strings.TrimSpace(participant.EmployeeConfirmedBy) != "" {
+			addReset("employee_confirmation")
+		}
+		participant.EmployeeConfirmedAt = nil
+		participant.EmployeeConfirmedBy = ""
+	}
+
+	if rank < performanceParticipantStatusRank("result_confirmed") {
+		if participant.ConfirmedAt != nil || strings.TrimSpace(participant.ConfirmedBy) != "" {
+			addReset("result_publish")
+		}
+		participant.ConfirmedAt = nil
+		participant.ConfirmedBy = ""
+	}
+
+	if rank < performanceParticipantStatusRank("locked") {
+		if participant.IsLocked ||
+			participant.LockedAt != nil ||
+			strings.TrimSpace(participant.LockedBy) != "" ||
+			participant.ForceLocked ||
+			strings.TrimSpace(participant.ForceLockedReason) != "" {
+			addReset("locked")
+		}
+		participant.IsLocked = false
+		participant.LockedAt = nil
+		participant.LockedBy = ""
+		participant.ForceLocked = false
+		participant.ForceLockedReason = ""
+	}
+
+	return resetFields
+}
+
+func (s *PerformanceService) AdminAdjustParticipantProgress(participantID uint, status, reason, userID string) (*database.PerformanceParticipant, *database.PerformanceReviewVersion, error) {
+	normalizedStatus, err := normalizePerformanceParticipantStatus(status)
+	if err != nil {
+		return nil, nil, err
+	}
+	reason, err = requirePerformanceReason(reason, "调整进度原因不能为空")
+	if err != nil {
+		return nil, nil, err
+	}
+	userID = normalizePerformanceOperatorID(userID)
+
+	var updated database.PerformanceParticipant
+	var version database.PerformanceReviewVersion
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		participant, _, err := s.loadNewFlowParticipantForUpdate(tx, participantID)
+		if err != nil {
+			return err
+		}
+		oldStatus := participant.Status
+		oldLocked := participant.IsLocked
+		now := time.Now()
+		participant.Status = normalizedStatus
+		resetFields := resetParticipantProgressArtifactsForStatus(participant, normalizedStatus)
+		if normalizedStatus == "hr_confirmed" && participant.HRConfirmedAt == nil {
+			participant.HRConfirmedAt = &now
+			participant.HRConfirmedBy = userID
+		}
+		if normalizedStatus == "employee_confirmed" && participant.EmployeeConfirmedAt == nil {
+			participant.EmployeeConfirmedAt = &now
+			participant.EmployeeConfirmedBy = userID
+		}
+		if normalizedStatus == "locked" {
+			participant.IsLocked = true
+			if participant.LockedAt == nil {
+				participant.LockedAt = &now
+			}
+			participant.LockedBy = userID
+		} else if oldStatus == "locked" || participant.IsLocked {
+			participant.IsLocked = false
+			participant.LockedAt = nil
+			participant.LockedBy = ""
+		}
+		participant.UpdatedBy = userID
+		if err := tx.Save(participant).Error; err != nil {
+			return err
+		}
+		version = database.PerformanceReviewVersion{
+			ParticipantID: participant.ID,
+			ActivityID:    participant.ActivityID,
+			ReviewType:    "admin_progress_adjust",
+			AdjustReason:  reason,
+			CreatedBy:     userID,
+			OperationMeta: map[string]interface{}{
+				"old_status":   oldStatus,
+				"new_status":   normalizedStatus,
+				"old_locked":   oldLocked,
+				"new_locked":   participant.IsLocked,
+				"reset_fields": resetFields,
+				"reason":       reason,
+			},
+		}
+		if err := tx.Create(&version).Error; err != nil {
+			return err
+		}
+		updated = *participant
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &updated, &version, nil
+}
+
+func (s *PerformanceService) RemovePerformanceParticipant(participantID uint, reason, userID string) (*database.PerformanceReviewVersion, error) {
+	reason, err := requirePerformanceReason(reason, "移除参与人原因不能为空")
+	if err != nil {
+		return nil, err
+	}
+	userID = normalizePerformanceOperatorID(userID)
+
+	var version database.PerformanceReviewVersion
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		participant, _, err := s.loadNewFlowParticipantForUpdate(tx, participantID)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		oldStatus := participant.Status
+		participant.Status = "removed_from_scope"
+		participant.RemovedReason = reason
+		participant.RemovedAt = &now
+		participant.RemovedBy = userID
+		participant.UpdatedBy = userID
+		participant.DeletedAt = &now
+		if err := tx.Save(participant).Error; err != nil {
+			return err
+		}
+		version = database.PerformanceReviewVersion{
+			ParticipantID: participant.ID,
+			ActivityID:    participant.ActivityID,
+			ReviewType:    "participant_removed",
+			AdjustReason:  reason,
+			CreatedBy:     userID,
+			OperationMeta: map[string]interface{}{
+				"old_status": oldStatus,
+				"new_status": participant.Status,
+				"reason":     reason,
+				"removed_at": now.Format(time.RFC3339),
+			},
+		}
+		return tx.Create(&version).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &version, nil
+}
+
+func (s *PerformanceService) DepartmentAdjustParticipantResult(participantID uint, finalLevel string, finalScore *float64, reason, userID string) (*database.PerformanceParticipant, *database.PerformanceReviewVersion, error) {
+	finalLevel = strings.TrimSpace(finalLevel)
+	if finalLevel == "" {
+		return nil, nil, errors.New("部门/中心最终等级不能为空")
+	}
+	if finalScore != nil && (*finalScore < 0 || *finalScore > 120) {
+		return nil, nil, errors.New("部门/中心最终分需在 0 到 120 之间")
+	}
+	reason, err := requirePerformanceReason(reason, "部门/中心调整原因不能为空")
+	if err != nil {
+		return nil, nil, err
+	}
+	userID = normalizePerformanceOperatorID(userID)
+
+	var updated database.PerformanceParticipant
+	var version database.PerformanceReviewVersion
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		participant, _, err := s.loadNewFlowParticipantForUpdate(tx, participantID)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		oldFinalLevel := participant.FinalLevel
+		oldAdjustedScore := participant.AdjustedScore
+		oldDepartmentScore := participant.DepartmentFinalScore
+		baselineLevel := strings.TrimSpace(oldFinalLevel)
+		if baselineLevel == "" {
+			baselineLevel = strings.TrimSpace(participant.SuggestedLevel)
+		}
+		baselineScore := oldAdjustedScore
+		if baselineScore == 0 {
+			baselineScore = participant.TotalManagerScore
+		}
+		if baselineScore == 0 {
+			baselineScore = participant.ManagerScore
+		}
+		departmentAdjusted := finalLevel != baselineLevel
+		if finalScore != nil && *finalScore != baselineScore {
+			departmentAdjusted = true
+		}
+		participant.DepartmentAdjusted = departmentAdjusted
+		participant.DepartmentFinalScore = finalScore
+		participant.DepartmentFinalLevel = finalLevel
+		participant.DepartmentAdjustReason = reason
+		participant.DepartmentAdjustedAt = &now
+		participant.DepartmentAdjustedBy = userID
+		participant.FinalLevel = finalLevel
+		if departmentAdjusted {
+			participant.AdjustReason = reason
+		} else {
+			participant.AdjustReason = ""
+		}
+		if finalScore != nil {
+			participant.AdjustedScore = *finalScore
+		}
+		participant.Status = "manager_confirmed"
+		participant.UpdatedBy = userID
+		if err := tx.Save(participant).Error; err != nil {
+			return err
+		}
+		version = database.PerformanceReviewVersion{
+			ParticipantID:  participant.ID,
+			ActivityID:     participant.ActivityID,
+			ReviewType:     "department_evaluation",
+			ManagerScore:   participant.ManagerScore,
+			SuggestedLevel: participant.SuggestedLevel,
+			FinalLevel:     finalLevel,
+			AdjustReason:   reason,
+			CreatedBy:      userID,
+			OperationMeta: map[string]interface{}{
+				"old_manager_score":       participant.ManagerScore,
+				"old_total_manager_score": participant.TotalManagerScore,
+				"old_adjusted_score":      oldAdjustedScore,
+				"old_department_score":    oldDepartmentScore,
+				"new_department_score":    finalScore,
+				"old_final_level":         oldFinalLevel,
+				"new_final_level":         finalLevel,
+				"baseline_level":          baselineLevel,
+				"baseline_score":          baselineScore,
+				"department_adjusted":     departmentAdjusted,
+				"reason":                  reason,
+			},
+		}
+		if err := tx.Create(&version).Error; err != nil {
+			return err
+		}
+		updated = *participant
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &updated, &version, nil
+}
+
+func (s *PerformanceService) SetParticipantResultVisibility(participantID uint, hidden bool, reason, userID string) (*database.PerformanceParticipant, *database.PerformanceReviewVersion, error) {
+	reason, err := requirePerformanceReason(reason, "调整结果公布屏蔽原因不能为空")
+	if err != nil {
+		return nil, nil, err
+	}
+	userID = normalizePerformanceOperatorID(userID)
+
+	var updated database.PerformanceParticipant
+	var version database.PerformanceReviewVersion
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		participant, _, err := s.loadNewFlowParticipantForUpdate(tx, participantID)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		oldHidden := participant.ResultHidden
+		participant.ResultHidden = hidden
+		participant.ResultHiddenReason = reason
+		participant.ResultHiddenAt = &now
+		participant.ResultHiddenBy = userID
+		participant.UpdatedBy = userID
+		if err := tx.Save(participant).Error; err != nil {
+			return err
+		}
+		version = database.PerformanceReviewVersion{
+			ParticipantID: participant.ID,
+			ActivityID:    participant.ActivityID,
+			ReviewType:    "result_visibility",
+			AdjustReason:  reason,
+			CreatedBy:     userID,
+			OperationMeta: map[string]interface{}{
+				"old_hidden": oldHidden,
+				"new_hidden": hidden,
+				"reason":     reason,
+			},
+		}
+		if err := tx.Create(&version).Error; err != nil {
+			return err
+		}
+		updated = *participant
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &updated, &version, nil
 }
 
 type AssessmentManagerUpdateRequest struct {
@@ -2651,7 +3618,33 @@ func (s *PerformanceService) syncSelfFinalAssessmentsForActivity(activityID, ope
 	})
 }
 
-func (s *PerformanceService) participantCompletedStageForFlow(participant database.PerformanceParticipant, stage string) bool {
+func (s *PerformanceService) participantCompletedStageForFlow(activity *database.PerformanceActivity, participant database.PerformanceParticipant, stage string) bool {
+	if isNewPerformanceFlow(activity) {
+		status := strings.TrimSpace(participant.Status)
+		switch stage {
+		case "department_evaluation":
+			return participant.DepartmentAdjustedAt != nil ||
+				status == "manager_confirmed" ||
+				status == "hr_confirmed" ||
+				status == "employee_confirmed" ||
+				status == "locked" ||
+				status == "result_confirmed"
+		case "hr_review":
+			return participant.HRConfirmedAt != nil ||
+				status == "hr_confirmed" ||
+				status == "locked" ||
+				status == "result_confirmed"
+		case "hr_confirmation":
+			return participant.HRConfirmedAt != nil ||
+				status == "employee_confirmed" ||
+				status == "locked" ||
+				status == "result_confirmed"
+		case "employee_confirmation":
+			return (status == "employee_confirmed" && participant.EmployeeConfirmedAt != nil) ||
+				status == "locked" ||
+				status == "result_confirmed"
+		}
+	}
 	if participantCompletedStage(participant.Status, stage) {
 		return true
 	}
@@ -3466,8 +4459,112 @@ func (s *PerformanceService) GetActivityRelationshipChangeLogs(activityID string
 	return s.changeRepo.ListByActivity(activityID)
 }
 
+type PreviousPerformanceResult struct {
+	Activity    *database.PerformanceActivity       `json:"activity,omitempty"`
+	Participant *database.PerformanceParticipant    `json:"participant,omitempty"`
+	GoalRecords []database.PerformanceGoalRecord    `json:"goal_records,omitempty"`
+	Versions    []database.PerformanceReviewVersion `json:"versions,omitempty"`
+}
+
+func (s *PerformanceService) GetPreviousPerformanceResult(participantID uint) (*PreviousPerformanceResult, error) {
+	currentParticipant, err := s.participantR.GetByID(strconv.FormatUint(uint64(participantID), 10))
+	if err != nil {
+		return nil, fmt.Errorf("参与人不存在: %w", err)
+	}
+	currentActivity, err := s.actRepo.GetByID(currentParticipant.ActivityID)
+	if err != nil {
+		return nil, fmt.Errorf("当前绩效活动不存在: %w", err)
+	}
+	previousActivity, err := s.findPreviousPlanActivity(currentActivity)
+	if err != nil {
+		return nil, err
+	}
+	if previousActivity == nil || previousActivity.ID == 0 {
+		return &PreviousPerformanceResult{}, nil
+	}
+
+	var previousParticipant database.PerformanceParticipant
+	previousActivityID := strconv.FormatUint(uint64(previousActivity.ID), 10)
+	if err := s.db.
+		Where("activity_id = ? AND employee_id = ? AND deleted_at IS NULL", previousActivityID, currentParticipant.EmployeeID).
+		First(&previousParticipant).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &PreviousPerformanceResult{Activity: previousActivity}, nil
+		}
+		return nil, err
+	}
+	records, err := s.goalRepo.FindByParticipant(previousParticipant.ID)
+	if err != nil {
+		return nil, err
+	}
+	versions, err := s.versionRepo.ListByParticipant(strconv.FormatUint(uint64(previousParticipant.ID), 10))
+	if err != nil {
+		return nil, err
+	}
+	s.HydrateParticipantTargetConfirmers(&previousParticipant)
+	return &PreviousPerformanceResult{
+		Activity:    previousActivity,
+		Participant: &previousParticipant,
+		GoalRecords: records,
+		Versions:    versions,
+	}, nil
+}
+
+func (s *PerformanceService) normalizePreviousReviewActivityID(currentActivityID uint, flowType, activityKind, cycleType string, previousReviewActivityID *uint) (*uint, error) {
+	if normalizePerformanceFlowType(flowType) != PerformanceFlowNew {
+		return nil, nil
+	}
+	if activityKind == PerformanceActivityKindGoalSetting {
+		if previousReviewActivityID != nil && *previousReviewActivityID > 0 {
+			return nil, errors.New("目标设定活动不需要承接上一目标活动")
+		}
+		return nil, nil
+	}
+	if activityKind == PerformanceActivityKindReviewScoring && (previousReviewActivityID == nil || *previousReviewActivityID == 0) {
+		return nil, errors.New("评分活动必须选择上一目标设定活动")
+	}
+	if previousReviewActivityID == nil || *previousReviewActivityID == 0 {
+		return nil, nil
+	}
+	if currentActivityID > 0 && *previousReviewActivityID == currentActivityID {
+		return nil, errors.New("上一期绩效活动不能选择当前活动")
+	}
+
+	previous, err := s.actRepo.GetByID(strconv.FormatUint(uint64(*previousReviewActivityID), 10))
+	if err != nil {
+		return nil, errors.New("上一期绩效活动不存在")
+	}
+	if err := validatePreviousPlanActivityCandidate(previous, strings.TrimSpace(cycleType)); err != nil {
+		return nil, err
+	}
+	normalizedID := previous.ID
+	return &normalizedID, nil
+}
+
+func validatePreviousPlanActivityCandidate(previous *database.PerformanceActivity, currentCycleType string) error {
+	if previous == nil || previous.ID == 0 {
+		return errors.New("上一期绩效活动不存在")
+	}
+	if !isNewPerformanceFlow(previous) {
+		return errors.New("上一期绩效活动必须使用沐腾科技流程模版")
+	}
+	if !isCompletedPerformanceActivityStatus(previous.Status) {
+		return errors.New("上一期绩效活动必须已完成（已锁定、已确认或已归档）")
+	}
+	if kind := performanceActivityKind(previous); kind != "" && kind != PerformanceActivityKindGoalSetting {
+		return errors.New("上一期绩效活动必须是目标设定活动")
+	}
+	if currentCycleType != "" && strings.TrimSpace(previous.CycleType) != "" && strings.TrimSpace(previous.CycleType) != currentCycleType {
+		return errors.New("上一期绩效活动周期类型必须与当前活动一致")
+	}
+	return nil
+}
+
 func (s *PerformanceService) findPreviousPlanActivity(activity *database.PerformanceActivity) (*database.PerformanceActivity, error) {
 	if activity == nil || activity.ID == 0 || !isNewPerformanceFlow(activity) {
+		return nil, nil
+	}
+	if isMutengGoalSettingActivity(activity) {
 		return nil, nil
 	}
 	if activity.PreviousReviewActivityID != nil && *activity.PreviousReviewActivityID > 0 {
@@ -3475,15 +4572,22 @@ func (s *PerformanceService) findPreviousPlanActivity(activity *database.Perform
 		if err != nil {
 			return nil, errors.New("上一期绩效活动不存在")
 		}
+		if err := validatePreviousPlanActivityCandidate(previous, strings.TrimSpace(activity.CycleType)); err != nil {
+			return nil, err
+		}
 		return previous, nil
+	}
+	if isMutengReviewScoringActivity(activity) {
+		return nil, errors.New("评分活动必须选择上一目标设定活动")
 	}
 
 	var previous database.PerformanceActivity
 	query := s.db.Where(
-		"deleted_at IS NULL AND id <> ? AND flow_type = ? AND cycle_type = ?",
+		"deleted_at IS NULL AND id <> ? AND flow_type = ? AND cycle_type = ? AND status IN ?",
 		activity.ID,
 		PerformanceFlowNew,
 		activity.CycleType,
+		completedPerformanceActivityStatuses(),
 	)
 	if strings.TrimSpace(activity.StartDate) != "" {
 		query = query.Where("end_date < ?", strings.TrimSpace(activity.StartDate))
@@ -3514,7 +4618,7 @@ func clonePlanRecordAsReview(source database.PerformanceGoalRecord, currentActiv
 		ItemDefinition:  source.ItemDefinition,
 		Weight:          source.Weight,
 		RedLineValue:    source.RedLineValue,
-		TargetValue:     source.TargetValue,
+		TargetValue:     "",
 		ChallengeValue:  source.ChallengeValue,
 		MetricUnit:      source.MetricUnit,
 		CompletionRate:  source.CompletionRate,
@@ -3628,6 +4732,13 @@ func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity 
 				return err
 			}
 			if existingCount > 0 {
+				if canMarkReviewGoalsReady(participant.Status) {
+					if err := tx.Model(&database.PerformanceParticipant{}).
+						Where("id = ? AND deleted_at IS NULL", participant.ID).
+						Updates(map[string]interface{}{"status": "target_set", "updated_by": userID}).Error; err != nil {
+						return err
+					}
+				}
 				continue
 			}
 
@@ -3638,13 +4749,20 @@ func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity 
 			if err := tx.Create(&newRecords).Error; err != nil {
 				return err
 			}
+			if canMarkReviewGoalsReady(participant.Status) {
+				if err := tx.Model(&database.PerformanceParticipant{}).
+					Where("id = ? AND deleted_at IS NULL", participant.ID).
+					Updates(map[string]interface{}{"status": "target_set", "updated_by": userID}).Error; err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})
 }
 
 func (s *PerformanceService) ensureNewFlowReviewRecordsReady(activity *database.PerformanceActivity) error {
-	if activity == nil || !isNewPerformanceFlow(activity) || activity.ID == 0 {
+	if activity == nil || !isNewPerformanceFlow(activity) || isMutengGoalSettingActivity(activity) || activity.ID == 0 {
 		return nil
 	}
 
@@ -3684,11 +4802,70 @@ func (s *PerformanceService) ensureNewFlowReviewRecordsReady(activity *database.
 		readyParticipantIDs[row.ParticipantID] = struct{}{}
 	}
 	if len(readyParticipantIDs) < len(participants) {
-		return fmt.Errorf("新流程缺少上一季度绩效考核指标，仍有 %d/%d 名参与人没有可自评指标，无法开启自评。请先确认上一期活动已有下季度目标计划，或补录/导入本期上一季度考核指标",
+		return fmt.Errorf("沐腾科技流程模版缺少上一季度绩效考核指标，仍有 %d/%d 名参与人没有可自评指标，无法开启自评。请先确认上一期活动已有下季度目标计划，或补录/导入本期上一季度考核指标",
 			len(participants)-len(readyParticipantIDs),
 			len(participants),
 		)
 	}
+	return nil
+}
+
+func (s *PerformanceService) appendMissingPreviousPlanWarnings(activity *database.PerformanceActivity, result *RefreshResult) error {
+	if activity == nil || result == nil || !isNewPerformanceFlow(activity) || isMutengGoalSettingActivity(activity) || activity.ID == 0 {
+		return nil
+	}
+	activityID := strconv.FormatUint(uint64(activity.ID), 10)
+	var participants []database.PerformanceParticipant
+	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList()).
+		Order("id ASC").
+		Find(&participants).Error; err != nil {
+		return err
+	}
+	if len(participants) == 0 {
+		return nil
+	}
+	participantIDs := make([]uint, 0, len(participants))
+	for _, participant := range participants {
+		participantIDs = append(participantIDs, participant.ID)
+	}
+	var rows []struct {
+		ParticipantID uint `gorm:"column:participant_id"`
+	}
+	if err := s.db.Model(&database.PerformanceGoalRecord{}).
+		Select("participant_id").
+		Where("activity_id = ? AND participant_id IN ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
+			activityID,
+			participantIDs,
+			PerformanceGoalPhaseReview,
+			[]string{"quantitative", "key_action"},
+		).
+		Group("participant_id").
+		Find(&rows).Error; err != nil {
+		return err
+	}
+	readyParticipantIDs := make(map[uint]struct{}, len(rows))
+	for _, row := range rows {
+		readyParticipantIDs[row.ParticipantID] = struct{}{}
+	}
+	for _, participant := range participants {
+		if _, ok := readyParticipantIDs[participant.ID]; ok {
+			continue
+		}
+		result.MissingPreviousPlanEmployeeIDs = append(result.MissingPreviousPlanEmployeeIDs, participant.EmployeeID)
+		result.MissingPreviousPlanEmployeeNames = append(result.MissingPreviousPlanEmployeeNames, participant.EmployeeName)
+	}
+	if len(result.MissingPreviousPlanEmployeeIDs) == 0 {
+		return nil
+	}
+	preview := result.MissingPreviousPlanEmployeeNames
+	if len(preview) > 5 {
+		preview = preview[:5]
+	}
+	result.Warnings = append(result.Warnings, fmt.Sprintf(
+		"有 %d 名参与人未承接到上一季度目标：%s。请补录上一季度考核指标后再推进自评。",
+		len(result.MissingPreviousPlanEmployeeIDs),
+		strings.Join(preview, "、"),
+	))
 	return nil
 }
 
@@ -3729,6 +4906,39 @@ func (s *PerformanceService) OpenSelfEvaluation(activityID, userID string) error
 	if activity.Status == "self_evaluation" {
 		return nil
 	}
+	if isNewPerformanceFlow(activity) {
+		if isMutengGoalSettingActivity(activity) {
+			return errors.New("目标设定活动不进入自评，请完成目标审核后锁定归档")
+		}
+		if isMutengReviewScoringActivity(activity) {
+			if activity.Status != "target_setting" {
+				return errors.New("状态冲突：评分活动需先完成目标承接/补录，再开启自评")
+			}
+			if err := s.syncPreviousPlanRecordsForNewFlowActivity(activity, userID); err != nil {
+				return err
+			}
+			if err := s.ensureNewFlowReviewRecordsReady(activity); err != nil {
+				return err
+			}
+			if err := s.ensureParticipantStageComplete(activityID, "target_setting"); err != nil {
+				return err
+			}
+			return s.actRepo.UpdateStatus(activityID, "self_evaluation", userID)
+		}
+		if activity.Status != "target_approval" {
+			return errors.New("状态冲突：沐腾科技流程需先完成目标审核，再开启自评")
+		}
+		if err := s.syncPreviousPlanRecordsForNewFlowActivity(activity, userID); err != nil {
+			return err
+		}
+		if err := s.ensureNewFlowReviewRecordsReady(activity); err != nil {
+			return err
+		}
+		if err := s.ensureParticipantStageComplete(activityID, "target_approval"); err != nil {
+			return err
+		}
+		return s.actRepo.UpdateStatus(activityID, "self_evaluation", userID)
+	}
 	if activity.Status != "target_setting" {
 		return errors.New("状态冲突：只有目标设定阶段活动可以开启自评")
 	}
@@ -3742,6 +4952,30 @@ func (s *PerformanceService) OpenSelfEvaluation(activityID, userID string) error
 		return err
 	}
 	return s.actRepo.UpdateStatus(activityID, "self_evaluation", userID)
+}
+
+// OpenTargetApproval 开启目标审核阶段（沐腾科技流程：target_setting -> target_approval）
+func (s *PerformanceService) OpenTargetApproval(activityID, userID string) error {
+	activity, err := s.actRepo.GetByID(activityID)
+	if err != nil {
+		return errors.New("活动不存在")
+	}
+	if !isNewPerformanceFlow(activity) {
+		return errors.New("只有沐腾科技流程模版可以开启目标审核")
+	}
+	if isMutengReviewScoringActivity(activity) {
+		return errors.New("评分活动不包含目标审核节点，请完成目标承接/补录后开启自评")
+	}
+	if activity.Status == "target_approval" {
+		return nil
+	}
+	if activity.Status != "target_setting" {
+		return errors.New("状态冲突：只有目标拟定阶段可以开启目标审核")
+	}
+	if err := s.ensureTargetDraftingSubmitted(activityID); err != nil {
+		return err
+	}
+	return s.actRepo.UpdateStatus(activityID, "target_approval", userID)
 }
 
 // OpenManagerEvaluation 开启主管评分阶段（self_evaluation -> manager_evaluation）
@@ -3760,7 +4994,7 @@ func (s *PerformanceService) OpenManagerEvaluation(activityID, userID string) er
 		return err
 	}
 	go func() {
-		if err := s.SendManagerEvalReminders(activityID); err != nil {
+		if _, err := s.SendManagerEvalReminders(activityID); err != nil {
 			logrus.Warnf("send manager evaluation reminders after opening manager evaluation failed: %v", err)
 		}
 	}()
@@ -3769,10 +5003,17 @@ func (s *PerformanceService) OpenManagerEvaluation(activityID, userID string) er
 
 // ConfirmResults 兼容旧接口：主管评分完成后进入员工确认阶段
 func (s *PerformanceService) ConfirmResults(activityID, userID string) error {
+	activity, err := s.actRepo.GetByID(activityID)
+	if err != nil {
+		return errors.New("活动不存在")
+	}
+	if isNewPerformanceFlow(activity) {
+		return s.OpenDepartmentEvaluation(activityID, userID)
+	}
 	return s.OpenEmployeeConfirmation(activityID, userID)
 }
 
-// ArchiveActivity 归档活动（locked/result_confirmed -> archived）
+// ArchiveActivity 归档活动（locked/result_confirmed -> archived；沐腾评分活动 result_publish 后可归档）
 func (s *PerformanceService) ArchiveActivity(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
@@ -3780,6 +5021,9 @@ func (s *PerformanceService) ArchiveActivity(activityID, userID string) error {
 	}
 	if activity.Status == "archived" {
 		return nil
+	}
+	if isNewPerformanceFlow(activity) && (activity.Status == "result_publish" || activity.Status == "interview" || activity.Status == "appeal") {
+		return s.actRepo.UpdateStatus(activityID, "archived", userID)
 	}
 	if activity.Status != "locked" && activity.Status != "result_confirmed" {
 		return errors.New("状态冲突：只有已锁定或旧版结果已确认的活动可以归档")
@@ -3815,11 +5059,28 @@ func (s *PerformanceService) OpenTargetSetting(activityID, userID string) error 
 	return s.actRepo.UpdateStatus(activityID, "target_setting", userID)
 }
 
-// OpenEmployeeConfirmation 开启员工确认阶段（manager_evaluation -> employee_confirmation）
+// OpenEmployeeConfirmation 开启员工确认阶段
+// 小铁文娱流程：manager_evaluation -> employee_confirmation
+// 沐腾科技流程：hr_confirmation -> employee_confirmation
 func (s *PerformanceService) OpenEmployeeConfirmation(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
+	}
+	if isNewPerformanceFlow(activity) {
+		if isExplicitMutengActivityKind(activity) {
+			return errors.New("沐腾科技新模型不包含员工确认节点")
+		}
+		if activity.Status == "employee_confirmation" {
+			return nil
+		}
+		if activity.Status != "hr_confirmation" {
+			return errors.New("状态冲突：沐腾科技流程只有HR确认阶段可以开启员工确认")
+		}
+		if err := s.ensureParticipantStageComplete(activityID, "hr_confirmation"); err != nil {
+			return err
+		}
+		return s.actRepo.UpdateStatus(activityID, "employee_confirmation", userID)
 	}
 	if activity.Status != "manager_evaluation" {
 		return errors.New("状态冲突：只有主管评分阶段可以开启员工确认")
@@ -3840,11 +5101,45 @@ func (s *PerformanceService) OpenEmployeeConfirmation(activityID, userID string)
 	return s.actRepo.UpdateStatus(activityID, "employee_confirmation", userID)
 }
 
-// OpenManagerConfirmation 开启主管确认阶段（employee_confirmation -> manager_confirmation）
+// OpenDepartmentEvaluation 开启部门/中心评估阶段（沐腾科技流程：manager_evaluation -> department_evaluation）
+func (s *PerformanceService) OpenDepartmentEvaluation(activityID, userID string) error {
+	activity, err := s.actRepo.GetByID(activityID)
+	if err != nil {
+		return errors.New("活动不存在")
+	}
+	if !isNewPerformanceFlow(activity) {
+		return errors.New("只有沐腾科技流程模版可以开启部门/中心评估")
+	}
+	if activity.Status == "department_evaluation" {
+		return nil
+	}
+	if activity.Status != "manager_evaluation" {
+		return errors.New("状态冲突：只有上级评估阶段可以开启部门/中心评估")
+	}
+	if err := s.syncSelfFinalAssessmentsForActivity(activityID, userID); err != nil {
+		return err
+	}
+	if err := s.ensureParticipantStageComplete(activityID, "manager_evaluation"); err != nil {
+		return err
+	}
+	check, err := s.GetDistributionCheck(activityID)
+	if err != nil {
+		return err
+	}
+	if !check.Passed {
+		return errors.New("强制分布不合规，无法开启部门/中心评估")
+	}
+	return s.actRepo.UpdateStatus(activityID, "department_evaluation", userID)
+}
+
+// OpenManagerConfirmation 开启主管确认阶段（小铁文娱流程：employee_confirmation -> manager_confirmation）
 func (s *PerformanceService) OpenManagerConfirmation(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
+	}
+	if isNewPerformanceFlow(activity) {
+		return errors.New("沐腾科技流程模版不包含主管确认节点")
 	}
 	if activity.Status != "employee_confirmation" {
 		return errors.New("状态冲突：只有员工确认阶段可以开启主管确认")
@@ -3855,11 +5150,55 @@ func (s *PerformanceService) OpenManagerConfirmation(activityID, userID string) 
 	return s.actRepo.UpdateStatus(activityID, "manager_confirmation", userID)
 }
 
-// OpenHRConfirmation 开启HR确认阶段（manager_confirmation -> hr_confirmation）
+// OpenHRReview 开启 HR 审核阶段。
+func (s *PerformanceService) OpenHRReview(activityID, userID string) error {
+	activity, err := s.actRepo.GetByID(activityID)
+	if err != nil {
+		return errors.New("活动不存在")
+	}
+	if !isNewPerformanceFlow(activity) {
+		return errors.New("只有沐腾科技流程模版可以开启HR审核")
+	}
+	if isMutengGoalSettingActivity(activity) {
+		return errors.New("目标设定活动不包含HR审核节点")
+	}
+	if !isMutengReviewScoringActivity(activity) && (activity.Status == "department_evaluation" || activity.Status == "hr_confirmation") {
+		return s.OpenHRConfirmation(activityID, userID)
+	}
+	if activity.Status == "hr_review" {
+		return nil
+	}
+	if activity.Status != "department_evaluation" {
+		return errors.New("状态冲突：只有部门/中心评估阶段可以开启HR审核")
+	}
+	if err := s.ensureParticipantStageComplete(activityID, "department_evaluation"); err != nil {
+		return err
+	}
+	return s.actRepo.UpdateStatus(activityID, "hr_review", userID)
+}
+
+// OpenHRConfirmation 开启HR确认阶段
+// 小铁文娱流程：manager_confirmation -> hr_confirmation
+// 历史沐腾混合流程：department_evaluation -> hr_confirmation
 func (s *PerformanceService) OpenHRConfirmation(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
+	}
+	if isNewPerformanceFlow(activity) {
+		if isExplicitMutengActivityKind(activity) {
+			return errors.New("沐腾科技新模型不包含HR确认节点，请开启HR审核")
+		}
+		if activity.Status == "hr_confirmation" {
+			return nil
+		}
+		if activity.Status != "department_evaluation" {
+			return errors.New("状态冲突：沐腾科技流程只有部门评分阶段可以开启HR确认")
+		}
+		if err := s.ensureParticipantStageComplete(activityID, "department_evaluation"); err != nil {
+			return err
+		}
+		return s.actRepo.UpdateStatus(activityID, "hr_confirmation", userID)
 	}
 	if activity.Status != "manager_confirmation" {
 		return errors.New("状态冲突：只有主管确认阶段可以开启HR确认")
@@ -3870,7 +5209,47 @@ func (s *PerformanceService) OpenHRConfirmation(activityID, userID string) error
 	return s.actRepo.UpdateStatus(activityID, "hr_confirmation", userID)
 }
 
-// LockActivity 锁定活动（hr_confirmation -> locked）
+// OpenResultPublish 开启结果公布阶段（沐腾科技流程：hr_review -> result_publish）
+func (s *PerformanceService) OpenResultPublish(activityID, userID string) error {
+	activity, err := s.actRepo.GetByID(activityID)
+	if err != nil {
+		return errors.New("活动不存在")
+	}
+	if !isNewPerformanceFlow(activity) {
+		return errors.New("只有沐腾科技流程模版可以开启结果公布")
+	}
+	if activity.Status == "result_publish" {
+		return nil
+	}
+	if activity.Status != "hr_review" {
+		return errors.New("状态冲突：只有HR审核阶段可以开启结果公布")
+	}
+	if err := s.ensureParticipantStageComplete(activityID, "hr_review"); err != nil {
+		return err
+	}
+	return s.actRepo.UpdateStatus(activityID, "result_publish", userID)
+}
+
+// OpenPerformanceInterview 旧的绩效活动主流程面谈阶段入口。
+func (s *PerformanceService) OpenPerformanceInterview(activityID, userID string) error {
+	if _, err := s.actRepo.GetByID(activityID); err != nil {
+		return errors.New("活动不存在")
+	}
+	return errors.New("绩效面谈已从绩效活动主流程移出，请在独立模块处理")
+}
+
+// OpenPerformanceAppeal 旧的绩效活动主流程申诉阶段入口。
+func (s *PerformanceService) OpenPerformanceAppeal(activityID, userID string) error {
+	if _, err := s.actRepo.GetByID(activityID); err != nil {
+		return errors.New("活动不存在")
+	}
+	return errors.New("绩效申诉已从绩效活动主流程移出，请在独立模块处理")
+}
+
+// LockActivity 锁定活动
+// 小铁文娱流程：hr_confirmation -> locked
+// 历史沐腾混合流程：employee_confirmation -> locked
+// 沐腾科技目标设定活动：target_approval -> locked
 func (s *PerformanceService) LockActivity(activityID, userID string) error {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
@@ -3879,10 +5258,26 @@ func (s *PerformanceService) LockActivity(activityID, userID string) error {
 	if activity.Status == "locked" {
 		return nil
 	}
-	if activity.Status != "hr_confirmation" {
+	lockStage := "hr_confirmation"
+	if isNewPerformanceFlow(activity) {
+		if isMutengReviewScoringActivity(activity) {
+			return errors.New("状态冲突：评分活动结果公布后可直接归档，不走锁定节点")
+		}
+		lockStage = "employee_confirmation"
+		if isMutengGoalSettingActivity(activity) {
+			lockStage = "target_approval"
+		}
+	}
+	if activity.Status != lockStage {
+		if isNewPerformanceFlow(activity) {
+			if isMutengGoalSettingActivity(activity) {
+				return errors.New("状态冲突：目标设定活动只有目标审核阶段可以锁定")
+			}
+			return errors.New("状态冲突：沐腾科技流程只有员工确认阶段可以锁定活动")
+		}
 		return errors.New("状态冲突：只有HR确认阶段可以锁定活动")
 	}
-	if err := s.ensureParticipantStageComplete(activityID, "hr_confirmation"); err != nil {
+	if err := s.ensureParticipantStageComplete(activityID, lockStage); err != nil {
 		return err
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
@@ -3923,7 +5318,57 @@ func (s *PerformanceService) countActiveParticipants(activityID string) (int64, 
 	return count, nil
 }
 
+func (s *PerformanceService) ensureTargetDraftingSubmitted(activityID string) error {
+	var participants []database.PerformanceParticipant
+	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL", activityID).Find(&participants).Error; err != nil {
+		return err
+	}
+
+	activeCount := 0
+	incompleteCount := 0
+	blockers := make([]string, 0, 3)
+	for _, participant := range participants {
+		if isIgnoredPerformanceParticipantStatus(participant.Status) {
+			continue
+		}
+		activeCount++
+		if issue := participantAssessmentManagerIssue(participant); issue != "" {
+			incompleteCount++
+			if len(blockers) < 3 {
+				blockers = append(blockers, formatParticipantStageBlocker(participant, issue))
+			}
+			continue
+		}
+		switch strings.TrimSpace(participant.Status) {
+		case "target_pending_approval", "target_set", "self_submitted", "manager_submitted", "employee_confirmed", "manager_recheck", "manager_confirmed", "hr_confirmed", "locked", "result_confirmed":
+			continue
+		default:
+			incompleteCount++
+			if len(blockers) < 3 {
+				reason := "目标尚未提交"
+				if participant.Status == "target_rejected" {
+					reason = "目标被驳回后未重新提交"
+				}
+				blockers = append(blockers, formatParticipantStageBlocker(participant, reason))
+			}
+		}
+	}
+
+	if activeCount == 0 {
+		return errors.New("活动没有可参与员工，无法开启目标审核")
+	}
+	if incompleteCount > 0 {
+		return fmt.Errorf("无法开启目标审核：还有 %d 名参与人未完成目标拟定（%s）", incompleteCount, strings.Join(blockers, "；"))
+	}
+	return nil
+}
+
 func (s *PerformanceService) ensureParticipantStageComplete(activityID, stage string) error {
+	activity, err := s.actRepo.GetByID(activityID)
+	if err != nil {
+		return errors.New("活动不存在")
+	}
+
 	var participants []database.PerformanceParticipant
 	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL", activityID).Find(&participants).Error; err != nil {
 		return err
@@ -3938,7 +5383,7 @@ func (s *PerformanceService) ensureParticipantStageComplete(activityID, stage st
 			continue
 		}
 		activeCount++
-		if !s.participantCompletedStageForFlow(participant, stage) || !participantHasStageEvidence(participant, stage) {
+		if !s.participantCompletedStageForFlow(activity, participant, stage) || !participantHasStageEvidence(participant, stage) {
 			incompleteCount++
 			if len(blockers) < 3 {
 				reason := participantStageIncompleteReason(participant, stage)
@@ -3988,16 +5433,28 @@ func participantStageAdvanceSuggestion(stage string, reasons []string) string {
 			return "请先配置考核上级，并完成目标提交/审批。"
 		}
 		return "请先完成目标提交/审批，通过后再开启自评。"
+	case "target_approval":
+		return "请先完成所有目标审核，通过后再开启自评。"
 	case "self_evaluation":
 		return "请提醒员工完成自评后再推进。"
 	case "manager_evaluation":
 		return "请提醒主管完成评分，且确认强制分布合规后再推进。"
+	case "department_evaluation":
+		return "请完成部门评分后再开启HR审核。"
+	case "hr_review":
+		return "请确认HR审核后再开启结果公布。"
+	case "result_publish":
+		return "结果公布后可直接归档；绩效面谈和绩效申诉请在独立模块处理。"
+	case "interview":
+		return "绩效面谈已从绩效活动主流程移出，可直接归档；面谈记录请在独立模块处理。"
+	case "appeal":
+		return "绩效申诉已从绩效活动主流程移出，可直接归档；申诉处理请在独立模块处理。"
 	case "employee_confirmation":
 		return "请提醒员工确认绩效结果后再推进。"
 	case "manager_confirmation":
 		return "请提醒主管确认绩效结果后再推进。"
 	case "hr_confirmation":
-		return "请完成HR确认后再锁定活动。"
+		return "请完成HR确认后再推进。"
 	default:
 		return "请处理未完成参与人后再推进。"
 	}
@@ -4035,7 +5492,7 @@ func participantDisplayName(participant database.PerformanceParticipant) string 
 
 func participantStageIncompleteReason(participant database.PerformanceParticipant, stage string) string {
 	switch stage {
-	case "target_setting":
+	case "target_setting", "target_approval":
 		switch participant.Status {
 		case "target_pending_approval":
 			return "目标已提交，待审批通过或驳回"
@@ -4071,8 +5528,21 @@ func participantStageIncompleteReason(participant database.PerformanceParticipan
 		case "self_submitted":
 			return "主管未完成评分"
 		}
+	case "department_evaluation":
+		if participant.DepartmentAdjustedAt == nil {
+			return "部门/中心未确认评估结果"
+		}
+	case "hr_review":
+		switch participant.Status {
+		case "manager_confirmed":
+			return "HR未审核结果"
+		case "manager_submitted":
+			return "部门/中心未确认评估结果"
+		}
 	case "employee_confirmation":
 		switch participant.Status {
+		case "hr_confirmed":
+			return "员工未确认结果"
 		case "manager_submitted":
 			return "员工未确认结果"
 		case "self_submitted":
@@ -4129,6 +5599,10 @@ func participantHasStageEvidence(participant database.PerformanceParticipant, st
 		return true
 	}
 	switch stage {
+	case "department_evaluation":
+		return participant.DepartmentAdjustedAt != nil
+	case "hr_review":
+		return participant.Status != "hr_confirmed" || participant.HRConfirmedAt != nil
 	case "employee_confirmation":
 		return participant.Status != "employee_confirmed" || participant.EmployeeConfirmedAt != nil
 	case "manager_confirmation":
@@ -4412,7 +5886,7 @@ func builtInPerformanceTemplate(code string) (*database.PerformanceTemplate, []d
 		}}
 		items := []database.PerformanceTemplateItem{{
 			Name:        "综合评分",
-			Description: "旧流程综合评分项",
+			Description: "小铁文娱流程模版综合评分项",
 			MaxScore:    100,
 			Weight:      100,
 			SortOrder:   1,
@@ -4647,20 +6121,31 @@ func (s *PerformanceService) ConfirmEmployeeResult(participantID uint, userID st
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 			return errors.New("参与人不存在")
 		}
-		if p.Status == "employee_confirmed" || p.Status == "manager_confirmed" || p.Status == "hr_confirmed" || p.Status == "locked" {
-			return nil
-		}
-		if p.IsLocked {
-			return errors.New("结果已锁定，无法确认")
-		}
 		var activity database.PerformanceActivity
 		if err := tx.Where("id = ? AND deleted_at IS NULL", p.ActivityID).First(&activity).Error; err != nil {
 			return errors.New("绩效活动不存在")
 		}
+		isNewFlow := isNewPerformanceFlow(&activity)
+		if isNewFlow {
+			if p.Status == "employee_confirmed" || p.Status == "locked" || p.Status == "result_confirmed" {
+				return nil
+			}
+		} else {
+			if p.Status == "employee_confirmed" || p.Status == "manager_confirmed" || p.Status == "hr_confirmed" || p.Status == "locked" || p.Status == "result_confirmed" {
+				return nil
+			}
+		}
+		if p.IsLocked {
+			return errors.New("结果已锁定，无法确认")
+		}
 		if activity.Status != "employee_confirmation" {
 			return errors.New("状态冲突：活动尚未进入员工确认阶段")
 		}
-		if p.Status != "manager_submitted" && p.Status != "result_confirmed" {
+		if isNewFlow {
+			if p.Status != "hr_confirmed" {
+				return errors.New("状态冲突：只有HR确认后员工可以确认")
+			}
+		} else if p.Status != "manager_submitted" && p.Status != "result_confirmed" {
 			return errors.New("状态冲突：只有主管评分完成后员工可以确认")
 		}
 		now := time.Now()
@@ -4679,22 +6164,26 @@ func (s *PerformanceService) ConfirmManagerResult(participantID uint, userID str
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 			return errors.New("参与人不存在")
 		}
-		if p.Status == "manager_confirmed" || p.Status == "hr_confirmed" || p.Status == "locked" {
-			return nil
-		}
-		if p.IsLocked {
-			return errors.New("结果已锁定，无法确认")
-		}
+		status := strings.TrimSpace(p.Status)
+		isManagerRecheck := isManagerRecheckParticipant(p)
 		var activity database.PerformanceActivity
 		if err := tx.Where("id = ? AND deleted_at IS NULL", p.ActivityID).First(&activity).Error; err != nil {
 			return errors.New("绩效活动不存在")
 		}
-		isManagerRecheck := strings.TrimSpace(p.Status) == "manager_recheck"
+		if isNewPerformanceFlow(&activity) {
+			return errors.New("沐腾科技流程不包含主管确认节点")
+		}
+		if status == "manager_confirmed" || status == "hr_confirmed" || status == "locked" {
+			return nil
+		}
+		if p.IsLocked && !isManagerRecheck {
+			return errors.New("结果已锁定，无法确认")
+		}
 		validActivityStatus := activity.Status == "manager_confirmation" || (isManagerRecheck && activity.Status == "hr_confirmation")
 		if !validActivityStatus {
 			return errors.New("状态冲突：活动尚未进入主管确认阶段")
 		}
-		if p.Status != "employee_confirmed" && !isManagerRecheck {
+		if status != "employee_confirmed" && !isManagerRecheck {
 			return errors.New("状态冲突：只有员工确认后主管可以确认")
 		}
 		now := time.Now()
@@ -4736,23 +6225,35 @@ func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) 
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 			return errors.New("参与人不存在")
 		}
-		if p.Status == "hr_confirmed" || p.Status == "locked" {
-			return nil
-		}
 		var activity database.PerformanceActivity
 		if err := tx.Where("id = ? AND deleted_at IS NULL", p.ActivityID).First(&activity).Error; err != nil {
 			return errors.New("绩效活动不存在")
 		}
-		if activity.Status != "hr_confirmation" {
-			return errors.New("状态冲突：活动尚未进入 HR 确认阶段")
+		isNewFlow := isNewPerformanceFlow(&activity)
+		expectedActivityStatus := "hr_confirmation"
+		stageLabel := "HR确认"
+		if isMutengReviewScoringActivity(&activity) {
+			expectedActivityStatus = "hr_review"
+			stageLabel = "HR审核"
+		} else if isMutengGoalSettingActivity(&activity) {
+			return errors.New("目标设定活动不包含HR审核节点")
+		}
+		if p.Status == "hr_confirmed" || p.Status == "locked" {
+			return nil
+		}
+		if activity.Status != expectedActivityStatus {
+			return fmt.Errorf("状态冲突：活动尚未进入%s阶段", stageLabel)
 		}
 		if p.Status != "manager_confirmed" {
+			if isNewFlow {
+				return fmt.Errorf("状态冲突：只有部门评分后HR可以%s", strings.TrimPrefix(stageLabel, "HR"))
+			}
 			return errors.New("状态冲突：只有主管确认后HR可以确认")
 		}
 
 		// 完度校验：确保前置流程数据完整
 		if p.FinalLevel == "" {
-			return errors.New("数据不完整：最终等级未设定，无法 HR 确认")
+			return fmt.Errorf("数据不完整：最终等级未设定，无法%s", stageLabel)
 		}
 		if p.ManagerScore == 0 {
 			var itemCount int64
@@ -4760,10 +6261,14 @@ func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) 
 				Where("participant_id = ? AND deleted_at IS NULL AND manager_score > 0", p.ID).
 				Count(&itemCount)
 			if itemCount == 0 {
-				return errors.New("数据不完整：主管评分缺失，无法 HR 确认")
+				return fmt.Errorf("数据不完整：主管评分缺失，无法%s", stageLabel)
 			}
 		}
-		if p.ManagerConfirmedAt == nil {
+		if isNewFlow {
+			if p.DepartmentAdjustedAt == nil {
+				return fmt.Errorf("数据不完整：部门评分未完成，无法%s", stageLabel)
+			}
+		} else if p.ManagerConfirmedAt == nil {
 			return errors.New("数据不完整：主管确认时间缺失，无法 HR 确认")
 		}
 
@@ -4778,23 +6283,18 @@ func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) 
 }
 
 // SendSelfEvalReminders 发送自评提醒给未提交的参与者
-func (s *PerformanceService) SendSelfEvalReminders(activityID string) error {
+func (s *PerformanceService) SendSelfEvalReminders(activityID string) (*SelfEvalReminderSendResult, error) {
+	result := &SelfEvalReminderSendResult{}
 	var activity database.PerformanceActivity
 	if err := s.db.Where("id = ? AND deleted_at IS NULL", activityID).First(&activity).Error; err != nil {
-		return fmt.Errorf("活动不存在: %v", err)
+		return result, fmt.Errorf("活动不存在: %v", err)
 	}
 	result, err := s.sendSelfEvalRemindersForActivity(&activity, selfEvalReminderSendOptions{})
 	if err != nil {
-		return err
+		return result, err
 	}
 	logrus.Infof("sent self eval reminders: succeeded=%d skipped=%d already_sent=%d failed=%d", result.Sent, result.Skipped, result.AlreadySent, result.Failed)
-	if result.Sent == 0 && result.Skipped == 0 && result.Failed == 0 && result.AlreadySent == 0 {
-		return fmt.Errorf("没有需要发送自评提醒的参与人")
-	}
-	if result.Failed > 0 {
-		return fmt.Errorf("自评提醒发送失败：成功 %d 人，跳过 %d 人，失败 %d 人，请查看后端日志", result.Sent, result.Skipped, result.Failed)
-	}
-	return nil
+	return result, nil
 }
 
 func (s *PerformanceService) SendDueSelfEvalAutoReminders(now time.Time) (*AutoSelfEvalReminderResult, error) {
@@ -4938,16 +6438,19 @@ func (s *PerformanceService) sendSelfEvalRemindersForActivity(activity *database
 		filtered = append(filtered, participant)
 	}
 	participants = filtered
+	result.Pending = len(participants)
 
 	handledUsers := make(map[string]struct{})
 	for _, p := range participants {
 		employeeID := strings.TrimSpace(p.EmployeeID)
 		if employeeID == "" {
+			result.MissingIDParticipantIDs = append(result.MissingIDParticipantIDs, p.ID)
 			continue
 		}
 		if _, exists := handledUsers[employeeID]; exists {
 			continue
 		}
+		recipient := ReminderRecipient{UserID: employeeID, Name: strings.TrimSpace(p.EmployeeName)}
 		result.Candidates++
 		if opts.Automatic {
 			alreadySent, err := s.hasPerformanceReminderLog(activityID, p.ID, performanceReminderStageSelfEval, opts.ReminderKey, opts.ReminderDate)
@@ -4956,6 +6459,7 @@ func (s *PerformanceService) sendSelfEvalRemindersForActivity(activity *database
 			}
 			if alreadySent {
 				result.AlreadySent++
+				result.AlreadySentRecipients = append(result.AlreadySentRecipients, recipient)
 				handledUsers[employeeID] = struct{}{}
 				continue
 			}
@@ -4975,6 +6479,7 @@ func (s *PerformanceService) sendSelfEvalRemindersForActivity(activity *database
 				logrus.Infof("skip self eval reminder to non-notifiable user %s: %v", employeeID, err)
 				handledUsers[employeeID] = struct{}{}
 				result.Skipped++
+				result.SkippedRecipients = append(result.SkippedRecipients, recipient)
 				if opts.Automatic {
 					_ = s.createPerformanceReminderLog(activityID, p, opts, "skipped", err.Error())
 				}
@@ -4982,9 +6487,11 @@ func (s *PerformanceService) sendSelfEvalRemindersForActivity(activity *database
 			}
 			logrus.Warnf("send self eval reminder to %s failed: %v", employeeID, err)
 			result.Failed++
+			result.FailedRecipients = append(result.FailedRecipients, recipient)
 		} else {
 			handledUsers[employeeID] = struct{}{}
 			result.Sent++
+			result.SentRecipients = append(result.SentRecipients, recipient)
 			if opts.Automatic {
 				if err := s.createPerformanceReminderLog(activityID, p, opts, "sent", ""); err != nil {
 					return result, err
@@ -5148,15 +6655,18 @@ func (s *PerformanceService) notifyManagerSelfEvaluationRecheck(activity databas
 }
 
 // SendManagerEvalReminders 发送主管评分提醒
-func (s *PerformanceService) SendManagerEvalReminders(activityID string) error {
+func (s *PerformanceService) SendManagerEvalReminders(activityID string) (*ManagerEvalReminderSendResult, error) {
+	result := &ManagerEvalReminderSendResult{}
 	var participants []database.PerformanceParticipant
 	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL AND status = ?", activityID, "self_submitted").
 		Find(&participants).Error; err != nil {
-		return err
+		return result, err
 	}
+	result.Pending = len(participants)
 
 	managerCounts := make(map[string]int)
 	managerFirstParticipant := make(map[string]database.PerformanceParticipant)
+	managerRecipients := make(map[string]ReminderRecipient)
 	for _, p := range participants {
 		if p.ManagerID == nil {
 			continue
@@ -5165,31 +6675,51 @@ func (s *PerformanceService) SendManagerEvalReminders(activityID string) error {
 		if managerID == "" {
 			continue
 		}
+		managerName := ptrStringValue(p.ManagerName)
 		managerCounts[managerID]++
 		if _, exists := managerFirstParticipant[managerID]; !exists {
 			managerFirstParticipant[managerID] = p
+			managerRecipients[managerID] = ReminderRecipient{UserID: managerID, Name: managerName}
+		} else if managerName != "" && managerRecipients[managerID].Name == "" {
+			recipient := managerRecipients[managerID]
+			recipient.Name = managerName
+			managerRecipients[managerID] = recipient
 		}
 	}
+	result.Candidates = len(managerCounts)
 
-	var succeeded, skipped, failed int
 	for managerID, count := range managerCounts {
 		title := "绩效评分提醒"
 		content := fmt.Sprintf("您有%d位员工的绩效待评分，请尽快完成。", count)
 		firstParticipant := managerFirstParticipant[managerID]
+		recipient := managerRecipients[managerID]
+		if strings.TrimSpace(recipient.UserID) == "" {
+			recipient = ReminderRecipient{UserID: managerID}
+		}
 		if err := dingtalk.SendCorpActionCardToUser(managerID, title, content, "去完成评分", PerformanceManagerEvalURL(activityID, firstParticipant.ID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logrus.Infof("skip manager eval reminder to non-notifiable user %s: %v", managerID, err)
-				skipped++
+				result.Skipped++
+				result.SkippedRecipients = append(result.SkippedRecipients, recipient)
 				continue
 			}
 			logrus.Warnf("send manager eval reminder to %s failed: %v", managerID, err)
-			failed++
+			result.Failed++
+			result.FailedRecipients = append(result.FailedRecipients, recipient)
 		} else {
-			succeeded++
+			result.Sent++
+			result.SentRecipients = append(result.SentRecipients, recipient)
 		}
 	}
-	logrus.Infof("sent manager eval reminders: succeeded=%d, skipped=%d, failed=%d", succeeded, skipped, failed)
-	return nil
+	logrus.Infof(
+		"sent manager eval reminders: pending=%d, candidates=%d, succeeded=%d, skipped=%d, failed=%d",
+		result.Pending,
+		result.Candidates,
+		result.Sent,
+		result.Skipped,
+		result.Failed,
+	)
+	return result, nil
 }
 
 // TriggerPerformanceInterview 触发绩效面谈流程
@@ -5201,22 +6731,44 @@ func (s *PerformanceService) TriggerPerformanceInterview(participantID string, i
 
 	// interviewType: "required" (C/D级) 或 "optional" (A级以上)
 	// 这里可以实现创建面谈任务的逻辑
+	parsedID, err := strconv.ParseUint(strings.TrimSpace(participantID), 10, 32)
+	if err != nil || parsedID == 0 {
+		return errors.New("无效的参与人 ID")
+	}
+	if _, err := NewPerformanceFollowupService(s.db).ArrangeInterview(PerformanceInterviewPayload{
+		ParticipantID:  uint(parsedID),
+		InterviewType:  interviewType,
+		Status:         PerformanceInterviewStatusPending,
+		OperatorID:     "system",
+		SuppressNotice: true,
+	}); err != nil {
+		logrus.Warnf("create performance interview followup record failed for participant %s: %v", participantID, err)
+	}
 	logrus.Infof("trigger performance interview for participant %s, type=%s, final_level=%s",
 		participantID, interviewType, p.FinalLevel)
 
-	// 发送钉钉通知给员工和主管
-	if p.ManagerID != nil && *p.ManagerID != "" {
-		var content string
+	if !p.ResultHidden {
+		employeeContent := fmt.Sprintf("您的绩效等级为 %s，绩效面谈已发起，请关注面谈安排。", p.FinalLevel)
 		if interviewType == "required" {
-			content = fmt.Sprintf("您的绩效等级为%s，需要与主管进行绩效面谈，请联系您的直属主管安排面谈时间。", p.FinalLevel)
-		} else {
-			content = fmt.Sprintf("恭喜您获得绩效等级%s，主管可以选择与您进行绩效面谈反馈。", p.FinalLevel)
+			employeeContent = fmt.Sprintf("您的绩效等级为 %s，需要进行绩效面谈，请关注面谈安排。", p.FinalLevel)
 		}
-		if err := dingtalk.SendCorpActionCardToUser(p.EmployeeID, "绩效面谈通知", content, "查看绩效结果", PerformanceResultURL(p.ActivityID, p.ID)); err != nil {
+		if err := sendPerformanceActionCardToUser(p.EmployeeID, "绩效面谈通知", employeeContent, "查看绩效结果", PerformanceResultURL(p.ActivityID, p.ID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logrus.Infof("skip interview notification to non-notifiable user %s: %v", p.EmployeeID, err)
 			} else {
 				logrus.Warnf("send interview notification to employee %s failed: %v", p.EmployeeID, err)
+			}
+		}
+	}
+
+	managerID := ptrStringValue(p.ManagerID)
+	if managerID != "" {
+		managerContent := fmt.Sprintf("员工：%s\n绩效等级：%s\n面谈类型：%s\n请及时安排并完成绩效面谈。", p.EmployeeName, p.FinalLevel, interviewType)
+		if err := sendPerformanceActionCardToUser(managerID, "绩效面谈安排提醒", managerContent, "查看绩效结果", PerformanceResultURL(p.ActivityID, p.ID)); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logrus.Infof("skip interview manager notification to non-notifiable user %s: %v", managerID, err)
+			} else {
+				logrus.Warnf("send interview notification to manager %s failed: %v", managerID, err)
 			}
 		}
 	}
@@ -5314,55 +6866,16 @@ func targetSettingApproved(participantStatus string, records []database.Performa
 	return false
 }
 
-var newPerformanceFixedGoalItems = []GoalRecordRequest{
-	{
-		SectionType:    "key_action",
-		GoalPhase:      "plan",
-		GoalType:       "fixed",
-		FixedKey:       "manager_arrangement",
-		IsFixed:        true,
-		ItemName:       "上级安排事项完成情况",
-		ItemDefinition: "上级安排的所有事项需在规定时间内完成，工作结果得到领导认可",
-		Weight:         0.15,
-	},
-	{
-		SectionType:    "key_action",
-		GoalPhase:      "plan",
-		GoalType:       "fixed",
-		FixedKey:       "values_discipline",
-		IsFixed:        true,
-		ItemName:       "价值观及工作纪律",
-		ItemDefinition: "拥抱公司价值观，不得违反公司管理制度、规范等",
-		Weight:         0.15,
-	},
-}
-
 func normalizeNewPerformanceGoalRecords(records []GoalRecordRequest, goalPhase string) []GoalRecordRequest {
 	goalPhase = normalizePerformanceGoalPhase(goalPhase)
-	normalized := make([]GoalRecordRequest, 0, len(records)+len(newPerformanceFixedGoalItems))
-	fixedByKey := make(map[string]GoalRecordRequest)
+	normalized := make([]GoalRecordRequest, 0, len(records))
 	for _, r := range records {
-		key := strings.TrimSpace(r.FixedKey)
-		if key != "" {
-			fixedByKey[key] = r
-		}
-	}
-	for _, fixed := range newPerformanceFixedGoalItems {
-		item := fixed
-		item.GoalPhase = goalPhase
-		if existing, ok := fixedByKey[fixed.FixedKey]; ok {
-			item.ID = existing.ID
-			item.ActualResult = existing.ActualResult
-			item.SelfScore = existing.SelfScore
-			item.ManagerScore = existing.ManagerScore
-			item.Attachments = existing.Attachments
-			item.SortOrder = existing.SortOrder
-		}
-		normalized = append(normalized, item)
-	}
-	for _, r := range records {
-		if strings.TrimSpace(r.FixedKey) != "" {
+		if r.IsFixed || strings.TrimSpace(r.FixedKey) != "" || strings.TrimSpace(r.GoalType) == "fixed" {
 			continue
+		}
+		r.GoalPhase = goalPhase
+		if goalPhase == PerformanceGoalPhasePlan {
+			r.TargetValue = ""
 		}
 		normalized = append(normalized, r)
 	}
@@ -5406,12 +6919,12 @@ func (s *PerformanceService) batchSaveGoalRecords(participantID uint, records []
 
 	if isReviewSupplement {
 		if !isNewPerformanceFlow(activity) {
-			return nil, fmt.Errorf("只有新流程活动可以补录上一季度考核指标")
+			return nil, fmt.Errorf("只有沐腾科技流程模版活动可以补录上一季度考核指标")
 		}
-		if activity.Status != "target_setting" && activity.Status != "self_evaluation" {
+		if activity.Status != "target_setting" && activity.Status != "target_approval" && activity.Status != "self_evaluation" {
 			return nil, fmt.Errorf("当前活动状态不允许补录上一季度考核指标，活动状态为: %s", activity.Status)
 		}
-	} else if activity.Status != "target_setting" {
+	} else if activity.Status != "target_setting" && !canSaveNewFlowPlanAfterTargetSetting(activity, participant) {
 		return nil, fmt.Errorf("当前活动状态不允许设定目标，活动状态为: %s", activity.Status)
 	}
 
@@ -5608,6 +7121,21 @@ func (s *PerformanceService) batchSaveGoalRecords(participantID uint, records []
 				}
 			}
 		}
+		if isReviewSupplement && isMutengReviewScoringActivity(activity) && canMarkReviewGoalsReady(lockedP.Status) {
+			displayName := s.displayNameForUser(userID)
+			if err := tx.Model(&database.PerformanceParticipant{}).
+				Where("id = ? AND deleted_at IS NULL", participantID).
+				Updates(map[string]interface{}{
+					"status":                       "target_set",
+					"employee_target_confirmed_at": now,
+					"employee_target_confirmed_by": displayName,
+					"manager_target_confirmed_at":  now,
+					"manager_target_confirmed_by":  displayName,
+					"updated_by":                   userID,
+				}).Error; err != nil {
+				return err
+			}
+		}
 
 		return nil
 	})
@@ -5628,6 +7156,32 @@ func canSupplementReviewGoalRecords(participantStatus string) bool {
 	}
 }
 
+func canMarkReviewGoalsReady(participantStatus string) bool {
+	switch strings.TrimSpace(participantStatus) {
+	case "", "pending", "target_pending_approval", "target_rejected":
+		return true
+	default:
+		return false
+	}
+}
+
+func canSaveNewFlowPlanAfterTargetSetting(activity *database.PerformanceActivity, participant *database.PerformanceParticipant) bool {
+	if !isNewPerformanceFlow(activity) || activity == nil || participant == nil {
+		return false
+	}
+	switch strings.TrimSpace(activity.Status) {
+	case "target_approval", "self_evaluation", "manager_evaluation", "department_evaluation", "hr_review", "result_publish", "interview", "appeal", "employee_confirmation", "manager_confirmation", "hr_confirmation", "result_confirmed":
+	default:
+		return false
+	}
+	switch strings.TrimSpace(participant.Status) {
+	case "", "pending", "target_pending_approval", "target_rejected":
+		return true
+	default:
+		return false
+	}
+}
+
 // SubmitGoalApproval 提交/审批/驳回目标
 func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comment, userID string) error {
 	participant, err := s.participantR.GetByID(strconv.FormatUint(uint64(participantID), 10))
@@ -5640,8 +7194,8 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 	if err != nil {
 		return fmt.Errorf("获取绩效活动失败: %w", err)
 	}
-	if activity.Status != "target_setting" {
-		return fmt.Errorf("当前活动状态不允许进行目标审批，活动状态为: %s", activity.Status)
+	if isMutengReviewScoringActivity(activity) {
+		return fmt.Errorf("评分活动不走目标审批，请通过上一季度目标补录/承接后开启自评")
 	}
 	targetGoalPhase := targetSettingGoalPhaseForActivity(activity)
 
@@ -5656,6 +7210,9 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 	var participantStatus string
 	switch action {
 	case "submit":
+		if activity.Status != "target_setting" && !canSaveNewFlowPlanAfterTargetSetting(activity, participant) {
+			return fmt.Errorf("当前活动状态不允许提交目标，活动状态为: %s", activity.Status)
+		}
 		// 员工提交目标
 		if latestLog != nil && latestLog.Action == "submit" {
 			return fmt.Errorf("目标已提交，请勿重复提交")
@@ -5663,6 +7220,9 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 		targetStatus = "pending"
 		participantStatus = "target_pending_approval"
 	case "approve":
+		if activity.Status != "target_approval" {
+			return fmt.Errorf("当前活动状态不允许审核目标，活动状态为: %s", activity.Status)
+		}
 		// 上级审批通过
 		if latestLog == nil || latestLog.Action != "submit" {
 			return fmt.Errorf("目标未提交，无法审批")
@@ -5670,6 +7230,9 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 		targetStatus = "approved"
 		participantStatus = "target_set"
 	case "reject":
+		if activity.Status != "target_approval" {
+			return fmt.Errorf("当前活动状态不允许审核目标，活动状态为: %s", activity.Status)
+		}
 		// 上级驳回
 		if latestLog == nil || latestLog.Action != "submit" {
 			return fmt.Errorf("目标未提交，无法驳回")
@@ -5900,7 +7463,17 @@ func validateGoalScoreForActivity(activity *database.PerformanceActivity, score 
 
 func canEditSelfEvaluationInActivity(activityStatus string) bool {
 	switch strings.TrimSpace(activityStatus) {
-	case "self_evaluation", "manager_evaluation", "employee_confirmation", "manager_confirmation", "hr_confirmation", "result_confirmed":
+	case "self_evaluation",
+		"manager_evaluation",
+		"department_evaluation",
+		"hr_review",
+		"result_publish",
+		"interview",
+		"appeal",
+		"employee_confirmation",
+		"manager_confirmation",
+		"hr_confirmation",
+		"result_confirmed":
 		return true
 	default:
 		return false
@@ -5914,7 +7487,21 @@ func isHRFinalizedParticipant(participant database.PerformanceParticipant) bool 
 
 func isSelfEditAfterManagerConfirm(participant database.PerformanceParticipant) bool {
 	status := strings.TrimSpace(participant.Status)
-	return participant.ManagerConfirmedAt != nil || status == "manager_confirmed" || status == "manager_recheck"
+	return participant.ManagerConfirmedAt != nil || status == "manager_confirmed" || isManagerRecheckParticipant(participant)
+}
+
+func isManagerRecheckParticipant(participant database.PerformanceParticipant) bool {
+	return strings.TrimSpace(participant.Status) == "manager_recheck"
+}
+
+func selfEvaluationStatusAfterSubmit(previous database.PerformanceParticipant) string {
+	status := strings.TrimSpace(previous.Status)
+	switch status {
+	case "self_submitted", "manager_submitted", "employee_confirmed", "result_confirmed":
+		return status
+	default:
+		return "self_submitted"
+	}
 }
 
 func managerRecheckOperationMeta(previous database.PerformanceParticipant, itemCount, bonusItemCount int) map[string]interface{} {
@@ -5922,6 +7509,7 @@ func managerRecheckOperationMeta(previous database.PerformanceParticipant, itemC
 		"previous_status":                 previous.Status,
 		"previous_self_score":             previous.SelfScore,
 		"previous_total_self_score":       previous.TotalSelfScore,
+		"previous_self_summary":           previous.SelfSummary,
 		"previous_evaluation_good":        previous.SelfEvaluationGood,
 		"previous_evaluation_improvement": previous.SelfEvaluationImprovement,
 		"edit_after_manager_confirm":      isSelfEditAfterManagerConfirm(previous),
@@ -5986,7 +7574,7 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 			}
 		}
 		if isNewPerformanceFlow(&activity) && reviewRecordCount == 0 {
-			return errors.New("新流程缺少上一季度绩效考核指标，无法提交自评。请联系HR先补录/导入本期上一季度考核指标，或从上一期活动的下季度目标计划承接后再自评")
+			return errors.New("沐腾科技流程模版缺少上一季度绩效考核指标，无法提交自评。请联系HR先补录/导入本期上一季度考核指标，或从上一期活动的下季度目标计划承接后再自评")
 		}
 
 		for _, item := range items {
@@ -6042,10 +7630,10 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 			participant.ManagerConfirmedAt = nil
 			participant.ManagerConfirmedBy = ""
 		} else {
-			participant.Status = "self_submitted"
+			participant.Status = selfEvaluationStatusAfterSubmit(previousParticipant)
 		}
 		participant.UpdatedBy = userID
-		if err := tx.Save(&participant).Error; err != nil {
+		if err := tx.Select("*").Save(&participant).Error; err != nil {
 			return err
 		}
 		if err := s.applySelfFinalAssessmentWithDB(tx, &participant, &activity, userID); err != nil {
@@ -6096,7 +7684,7 @@ func (s *PerformanceService) SubmitGoalManagerEvaluation(participantID uint, ite
 			return fmt.Errorf("绩效活动不存在: %w", err)
 		}
 
-		isManagerRecheckSubmission := strings.TrimSpace(participant.Status) == "manager_recheck"
+		isManagerRecheckSubmission := isManagerRecheckParticipant(participant)
 		if isHRFinalizedParticipant(participant) {
 			return fmt.Errorf("HR已确认或结果已锁定，无法提交上级评分")
 		}
@@ -6355,6 +7943,9 @@ func (s *PerformanceService) ForceLockOverdueHRConfirmation(activityID, userID s
 			"total_count":          0,
 		}, nil
 	}
+	if isNewPerformanceFlow(activity) {
+		return nil, errors.New("沐腾科技流程需完成员工确认后再锁定活动")
+	}
 	if activity.Status != "hr_confirmation" {
 		return nil, errors.New("状态冲突：只有 HR 确认阶段可以执行逾期强制锁定")
 	}
@@ -6444,34 +8035,96 @@ func (s *PerformanceService) ForceLockOverdueHRConfirmation(activityID, userID s
 	return result, nil
 }
 
-func (s *PerformanceService) SendHRConfirmReminders(activityID string) error {
+func (s *PerformanceService) SendHRConfirmReminders(activityID string) (*HRConfirmReminderSendResult, error) {
+	result := &HRConfirmReminderSendResult{}
 	pending, err := s.GetPendingHRConfirm(activityID)
 	if err != nil {
-		return err
+		return result, err
 	}
+	result.Pending = len(pending)
 	if len(pending) == 0 {
-		return nil
+		return result, nil
 	}
 
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
-		return err
+		return result, err
 	}
-	recipient := strings.TrimSpace(activity.CreatedBy)
-	if recipient == "" || recipient == "system" {
-		return nil
+	recipients, err := s.findHRConfirmReminderRecipients()
+	if err != nil {
+		return result, err
+	}
+	result.Candidates = len(recipients)
+	if len(recipients) == 0 {
+		logrus.Warnf("skip HR confirm reminder for activity %s: no users with performance:hr_confirm:submit permission", activityID)
+		return result, nil
 	}
 
 	title := "绩效 HR 确认提醒"
 	content := fmt.Sprintf("活动：%s\n当前仍有 %d 名员工待 HR 确认，请及时处理。", activity.Name, len(pending))
-	if err := dingtalk.SendCorpActionCardToUser(recipient, title, content, "去处理确认", PerformanceOverviewURL(activityID)); err != nil {
-		if dingtalk.IsUserNotNotifiableError(err) {
-			logrus.Infof("skip HR confirm reminder to non-notifiable user %s: %v", recipient, err)
-			return nil
+	for _, recipient := range recipients {
+		if err := sendPerformanceActionCardToUser(recipient.UserID, title, content, "去处理确认", PerformanceOverviewURL(activityID)); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logrus.Infof("skip HR confirm reminder to non-notifiable user %s: %v", recipient.UserID, err)
+				result.Skipped++
+				result.SkippedRecipients = append(result.SkippedRecipients, recipient)
+				continue
+			}
+			logrus.Warnf("send HR confirm reminder to %s failed: %v", recipient.UserID, err)
+			result.Failed++
+			result.FailedRecipients = append(result.FailedRecipients, recipient)
+			continue
 		}
-		return err
+		result.Sent++
+		result.SentRecipients = append(result.SentRecipients, recipient)
 	}
-	return nil
+	logrus.Infof(
+		"sent HR confirm reminders: activity=%s pending=%d candidates=%d sent=%d skipped=%d failed=%d",
+		activityID,
+		result.Pending,
+		result.Candidates,
+		result.Sent,
+		result.Skipped,
+		result.Failed,
+	)
+	return result, nil
+}
+
+func (s *PerformanceService) findHRConfirmReminderRecipients() ([]ReminderRecipient, error) {
+	var recipients []ReminderRecipient
+	orgID := orgIDFromDB(s.db)
+	if err := s.db.Table("users").
+		Select("DISTINCT users.user_id AS user_id, users.name AS name").
+		Joins("JOIN user_roles ON user_roles.user_id = users.user_id AND user_roles.deleted_at IS NULL").
+		Joins("JOIN role_permissions ON role_permissions.role_id = user_roles.role_id AND role_permissions.deleted_at IS NULL").
+		Joins("JOIN permissions ON permissions.id = role_permissions.permission_id AND permissions.deleted_at IS NULL").
+		Where("permissions.code = ?", "performance:hr_confirm:submit").
+		Where("users.org_id = ?", orgID).
+		Where("users.deleted_at IS NULL").
+		Where("users.status = ?", "active").
+		Order("users.user_id ASC").
+		Scan(&recipients).Error; err != nil {
+		return nil, err
+	}
+	return normalizeReminderRecipients(recipients), nil
+}
+
+func normalizeReminderRecipients(input []ReminderRecipient) []ReminderRecipient {
+	seen := make(map[string]struct{}, len(input))
+	recipients := make([]ReminderRecipient, 0, len(input))
+	for _, recipient := range input {
+		recipient.UserID = strings.TrimSpace(recipient.UserID)
+		recipient.Name = strings.TrimSpace(recipient.Name)
+		if recipient.UserID == "" {
+			continue
+		}
+		if _, exists := seen[recipient.UserID]; exists {
+			continue
+		}
+		seen[recipient.UserID] = struct{}{}
+		recipients = append(recipients, recipient)
+	}
+	return recipients
 }
 
 func normalizeGoalWeight(weight float64) float64 {

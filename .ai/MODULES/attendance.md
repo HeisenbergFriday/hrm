@@ -1,23 +1,31 @@
 ---
 purpose: 考勤模块业务规则说明
-last_updated: 2026-04-30
+last_updated: 2026-07-02
 source_of_truth:
   - internal/api/handlers.go（考勤相关 handler）
+  - internal/api/attendance_toolbox_handlers.go（考勤工具箱上传计算 handler）
   - internal/service/attendance_service.go（考勤服务）
+  - internal/service/attendance_toolbox_service.go（考勤工具箱服务）
   - internal/database/models.go（Attendance 模型）
   - frontend/src/pages/Attendance.tsx（考勤查询）
   - frontend/src/pages/AttendanceStats.tsx（考勤统计）
+  - frontend/src/pages/AttendanceToolbox.tsx（考勤工具箱）
+  - frontend/src/pages/OvertimeRulesEditor.tsx（加班规则配置编辑器）
+  - tools/attendance_toolbox/python/runner.py（Excel 计算入口，支持 --action 扩展）
+  - tools/attendance_toolbox/python/requirements.txt（Python 依赖）
 update_when:
   - 修改考勤同步逻辑时
   - 修改考勤查询逻辑时
   - 修改考勤统计逻辑时
+  - 修改考勤工具箱上传计算逻辑时
+  - 修改加班规则配置逻辑时
 ---
 
 # 考勤模块
 
 ## 模块定位
 
-从钉钉同步打卡记录，查询考勤记录，统计考勤异常，导出考勤报表。
+从钉钉同步打卡记录，查询考勤记录，统计考勤异常，导出考勤报表；考勤工具箱提供系统内 Excel 上传、计算和结果下载能力。
 
 ---
 
@@ -218,6 +226,94 @@ Response：
 }
 ```
 
+### POST /api/v1/attendance/toolbox/:module/run
+在系统内运行考勤 Excel 工具箱。
+
+Path 参数：
+- `module`：`leave` / `overtime` / `subsidy` / `final` / `parttime` / `dingtalk_sync`
+
+Request：
+- `multipart/form-data`
+- 文件字段由前端 `AttendanceToolbox.tsx` 统一维护
+- 文本名单字段支持逗号分隔
+
+Response：
+- 成功时返回 `.xlsx` 或 `.zip` 附件
+- 失败时返回统一 JSON 错误信息
+
+### POST /api/v1/attendance/toolbox/dingtalk-sync
+从钉钉同步审批数据，生成中间表。
+
+Body：
+```json
+{
+  "start_date": "2026-06-01",
+  "end_date": "2026-06-30",
+  "flow_keys": ["leave", "overtime", "attendance_correction", "position_transfer"],
+  "max_instances": 100,
+  "padding_days": 31
+}
+```
+
+Response：
+- 成功时返回 `.xlsx` 或 `.zip` 附件
+
+### GET /api/v1/attendance/toolbox/defaults
+
+读取考勤工具箱 Python 规则中的默认文本名单，前端进入 `AttendanceToolbox.tsx` 时会自动带入输入框。
+
+### POST /api/v1/attendance/toolbox/rules/export
+导出加班规则配置为 Excel 文件。
+
+Response：
+- 成功时返回 `.xlsx` 附件
+
+### POST /api/v1/attendance/toolbox/rules/import-preview
+导入加班规则配置 Excel，返回 JSON 预览。
+
+Request：
+- `multipart/form-data`
+- `rules_file`：规则配置 Excel 文件
+
+Response：
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "premium_rules": [...],
+    "department_rules": [...],
+    "params": {...}
+  }
+}
+```
+
+### POST /api/v1/attendance/toolbox/:module/validate
+校验上传的 Excel 文件表头是否匹配预期。
+
+Request：
+- `multipart/form-data`
+- 文件字段与对应模块一致
+
+Response：
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "ok": true,
+    "results": {
+      "leave_export": {"ok": true, "headers": [...], "missing": []}
+    }
+  }
+}
+```
+
+### 考勤工具箱文件兼容与校验口径
+
+- 花名册/员工信息表需要兼容 `.xlsx` 和旧版 `.xls`。`.xlsx` 继续使用 `openpyxl`，`.xls` 通过 `tools/attendance_toolbox/python/excel_compat.py` 使用 `xlrd` 读取；运行时依赖必须包含 `xlrd>=2.0,<3`。
+- 加班导出文件可能包含历史 sheet。节假日年份校验应先按作息表或加班数据推断出的目标月份过滤有效行，再校验实际参与本次输出的年份，避免不参与输出的历史年份阻塞计算。
+
 ---
 
 ## 核心业务流程
@@ -264,6 +360,7 @@ Response：
 |---|---|---|
 | `AttendanceService` | `attendance_service.go` | 考勤管理 |
 | `AttendanceRuleEngine` | `attendance_rule_engine.go` | 考勤规则引擎（计算异常） |
+| `AttendanceToolboxService` | `attendance_toolbox_service.go` | 保存上传 Excel、调用内置 Python 计算引擎、返回结果文件；支持 rules export/import/validate/preview 动作 |
 
 ---
 
@@ -290,6 +387,25 @@ Response：
 - 创建导出任务
 - 查看导出任务列表
 - 下载导出文件
+
+### 考勤工具箱页面
+`frontend/src/pages/AttendanceToolbox.tsx`
+
+功能：
+- 六个页签：钉钉同步、请假明细、加班明细、补贴扣款、最终汇总、兼职汇总
+- 上传 Excel 后由 HR 后端调用 `tools/attendance_toolbox/python/runner.py`
+- 结果直接下载，不再跳转到外部 Streamlit 工具
+- 特殊名单、成都作息名单、产研部门关键字、晚走补贴人员、兼职特殊人员名单进入页面时直接展示原工具默认值，用户可按需修改或清空
+- 大文件上传时显示警告提示
+- 运行日志可折叠查看（需后端支持返回 log 字段）
+
+### 加班规则配置编辑器
+`frontend/src/pages/OvertimeRulesEditor.tsx`
+
+功能：
+- 导出默认加班规则配置为 Excel
+- 导入规则配置 Excel 并预览（倍数规则、部门匹配规则、排除名单）
+- 支持查看当前规则配置详情
 
 ---
 
@@ -323,6 +439,9 @@ Body：
 - `DINGTALK_APP_KEY`：钉钉应用 Key
 - `DINGTALK_APP_SECRET`：钉钉应用 Secret
 - `DINGTALK_CORP_ID`：钉钉企业 ID
+- `ATTENDANCE_TOOLBOX_DIR`：考勤工具箱 Python 引擎目录，默认自动查找 `tools/attendance_toolbox/python`
+- `ATTENDANCE_TOOLBOX_PYTHON`：Python 可执行文件，默认 Windows 使用 `python`，Linux 使用 `python3`
+- `ATTENDANCE_TOOLBOX_TIMEOUT_SECONDS`：工具箱单次计算超时时间，默认 600 秒
 
 ---
 

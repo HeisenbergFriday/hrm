@@ -7,6 +7,7 @@ import {
   Input,
   Progress,
   Row,
+  Segmented,
   Select,
   Space,
   Switch,
@@ -33,6 +34,8 @@ interface PerformanceActivityEditorProps {
   saving?: boolean
   performanceTemplates?: any[]
   performanceTemplatesLoading?: boolean
+  activities?: any[]
+  currentActivityId?: number | string
   indicatorLibraries: any[]
   indicatorLibrariesLoading: boolean
   departmentOptions: SelectOption[]
@@ -87,6 +90,13 @@ const flowTypeLabels: Record<string, string> = {
   new: '沐腾科技流程模版',
 }
 
+const mutengActivityKindLabels: Record<string, string> = {
+  goal_setting: '目标设定活动',
+  review_scoring: '评分活动',
+}
+
+const completedActivityStatuses = new Set(['locked', 'result_confirmed', 'archived'])
+
 const builtInFlowTemplateNames = new Set([
   '旧绩效流程模板',
   '新绩效流程模板',
@@ -114,6 +124,11 @@ function getFlowTypeLabel(value?: string) {
   return flowTypeLabels[normalized] || '选择模板后自动带出'
 }
 
+function getMutengActivityKindLabel(value?: string) {
+  const normalized = String(value || '').trim()
+  return mutengActivityKindLabels[normalized] || '历史混合活动'
+}
+
 function getTemplateDisplayName(template: any) {
   const flowType = String(template?.flow_type || '').trim()
   const templateName = String(template?.name || '').trim()
@@ -123,6 +138,11 @@ function getTemplateDisplayName(template: any) {
 
 function getFlowTemplateOptionLabel(template: any) {
   return getTemplateDisplayName(template)
+}
+
+function getPreviousActivityOptionLabel(activity: any) {
+  const period = [activity?.start_date, activity?.end_date].filter(Boolean).join(' ~ ')
+  return `${activity?.name || `活动 #${activity?.id}`}${period ? `（${period}）` : ''}`
 }
 
 function normalizeEditorIDArray(value: unknown): string[] {
@@ -160,6 +180,8 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
   saving = false,
   performanceTemplates = [],
   performanceTemplatesLoading = false,
+  activities = [],
+  currentActivityId,
   indicatorLibraries,
   indicatorLibrariesLoading,
   departmentOptions,
@@ -177,14 +199,22 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
   const targetEmployeeIDs = normalizeEditorIDArray(values.target_employee_ids)
   const selectedIndicatorLibraryId = values.indicator_library_id as number | string | undefined
   const selectedTemplateId = values.template_id as number | string | undefined
+  const selectedPreviousReviewActivityId = values.previous_review_activity_id as number | string | undefined
   const normalizedCycleType = normalizeCycleType(cycleType)
   const selectedIndicatorLibraryIdKey = selectedIndicatorLibraryId == null ? '' : String(selectedIndicatorLibraryId)
   const selectedTemplateIdKey = selectedTemplateId == null ? '' : String(selectedTemplateId)
+  const currentActivityIdKey = currentActivityId == null ? '' : String(currentActivityId)
   const selectedTemplate = React.useMemo(
     () => performanceTemplates.find(template => String(template.id) === selectedTemplateIdKey) || null,
     [performanceTemplates, selectedTemplateIdKey],
   )
   const selectedFlowType = String(selectedTemplate?.flow_type || values.flow_type || '').trim()
+  const isMutengTemplate = selectedFlowType === 'new'
+  const selectedActivityKind = String(values.activity_kind || '').trim()
+  const isHistoricalMutengActivity = editing && isMutengTemplate && !selectedActivityKind
+  const isMutengReviewScoringActivity = isMutengTemplate && selectedActivityKind === 'review_scoring'
+  const requiresReviewSchedule = !isMutengTemplate || isMutengReviewScoringActivity || isHistoricalMutengActivity
+  const requiresResultConfirmSchedule = requiresReviewSchedule && !isMutengReviewScoringActivity
   React.useEffect(() => {
     if (selectedTemplateIdKey || performanceTemplatesLoading || performanceTemplates.length === 0) return
     const currentFlowType = String(form.getFieldValue('flow_type') || 'old').trim()
@@ -194,9 +224,19 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
     form.setFieldsValue({
       template_id: defaultTemplate.id,
       flow_type: defaultTemplate.flow_type || currentFlowType,
+      activity_kind: String(defaultTemplate.flow_type || currentFlowType).trim() === 'new' ? 'goal_setting' : undefined,
     })
     forceFormRerender(version => version + 1)
   }, [form, performanceTemplates, performanceTemplatesLoading, selectedTemplateIdKey])
+  React.useEffect(() => {
+    if (isMutengTemplate) return
+    if (form.getFieldValue('previous_review_activity_id')) {
+      form.setFieldValue('previous_review_activity_id', undefined)
+    }
+    if (form.getFieldValue('activity_kind')) {
+      form.setFieldValue('activity_kind', undefined)
+    }
+  }, [form, isMutengTemplate])
   const selectedIndicatorLibrary = React.useMemo(
     () => indicatorLibraries.find(lib => String(lib.id) === selectedIndicatorLibraryIdKey) || null,
     [indicatorLibraries, selectedIndicatorLibraryIdKey],
@@ -228,15 +268,39 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
 
     return [...filteredLibraries, selectedIndicatorLibrary]
   }, [indicatorLibraries, normalizedCycleType, selectedTemplateIdKey, indicatorLibraryCycleMismatch, indicatorLibraryTemplateMismatch, selectedIndicatorLibrary])
+  const previousReviewActivityOptions = React.useMemo(() => {
+    if (!isMutengReviewScoringActivity) return []
+    return activities
+      .filter(activity => {
+        const activityId = activity?.id == null ? '' : String(activity.id)
+        if (!activityId || activityId === currentActivityIdKey) return false
+        if (String(activity.flow_type || '').trim() !== 'new') return false
+        const kind = String(activity.activity_kind || '').trim()
+        if (kind && kind !== 'goal_setting') return false
+        if (!completedActivityStatuses.has(String(activity.status || '').trim())) return false
+        if (normalizedCycleType && normalizeCycleType(activity.cycle_type) !== normalizedCycleType) return false
+        return true
+      })
+      .sort((a, b) => {
+        const endDiff = String(b.end_date || '').localeCompare(String(a.end_date || ''))
+        return endDiff || Number(b.id || 0) - Number(a.id || 0)
+      })
+      .map(activity => ({
+        value: activity.id,
+        label: getPreviousActivityOptionLabel(activity),
+      }))
+  }, [activities, currentActivityIdKey, isMutengReviewScoringActivity, normalizedCycleType])
   const requiredChecks = [
     { id: 'activity-basic-section', label: '基础信息', done: Boolean(values.name && values.cycle_type && values.template_id) },
     { id: 'activity-period-section', label: '周期设置', done: isRangeFilled(values.date_range) },
     {
       id: 'activity-review-section',
       label: '评审流程',
-      done: isRangeFilled(values.self_eval_range)
+      done: !requiresReviewSchedule || (
+        isRangeFilled(values.self_eval_range)
         && isRangeFilled(values.manager_eval_range)
-        && isRangeFilled(values.result_confirm_range),
+        && (!requiresResultConfirmSchedule || isRangeFilled(values.result_confirm_range))
+      ),
     },
   ]
   const doneCount = requiredChecks.filter(item => item.done).length
@@ -349,6 +413,11 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                   <Form.Item name="cycle_type" label="周期类型" rules={[{ required: true, message: '请选择周期类型' }]}>
                     <Select
                       placeholder="选择周期类型"
+                      onChange={() => {
+                        form.setFieldValue('indicator_library_id', undefined)
+                        form.setFieldValue('previous_review_activity_id', undefined)
+                        forceFormRerender(version => version + 1)
+                      }}
                       options={[
                         { value: 'monthly', label: '月度' },
                         { value: 'quarterly', label: '季度' },
@@ -379,10 +448,13 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                         const template = performanceTemplates.find(item => String(item.id) === String(value))
                         if (template?.flow_type) {
                           form.setFieldValue('flow_type', template.flow_type)
+                          form.setFieldValue('activity_kind', String(template.flow_type).trim() === 'new' ? 'goal_setting' : undefined)
                         } else {
                           form.setFieldValue('flow_type', undefined)
+                          form.setFieldValue('activity_kind', undefined)
                         }
                         form.setFieldValue('indicator_library_id', undefined)
+                        form.setFieldValue('previous_review_activity_id', undefined)
                         forceFormRerender(version => version + 1)
                       }}
                     />
@@ -408,6 +480,43 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                     </Text>
                   )}
                 </Col>
+                {isMutengTemplate && (
+                  <Col xs={24} md={8}>
+                    {isHistoricalMutengActivity ? (
+                      <Form.Item label="活动类型">
+                        <Space size={8} wrap>
+                          <Tag color="default" style={{ marginInlineEnd: 0 }}>{getMutengActivityKindLabel(selectedActivityKind)}</Tag>
+                          <Text type="secondary" style={{ fontSize: 12 }}>历史已有活动不迁移</Text>
+                        </Space>
+                      </Form.Item>
+                    ) : (
+                      <Form.Item
+                        name="activity_kind"
+                        label="活动类型"
+                        rules={[{ required: true, message: '请选择活动类型' }]}
+                        extra={
+                          <Text type="secondary">
+                            目标设定活动只填写下季度目标；评分活动承接上一目标后进入自评评分。
+                          </Text>
+                        }
+                      >
+                        <Segmented
+                          block
+                          options={[
+                            { label: '目标设定', value: 'goal_setting' },
+                            { label: '评分', value: 'review_scoring' },
+                          ]}
+                          onChange={(value) => {
+                            if (value !== 'review_scoring') {
+                              form.setFieldValue('previous_review_activity_id', undefined)
+                            }
+                            forceFormRerender(version => version + 1)
+                          }}
+                        />
+                      </Form.Item>
+                    )}
+                  </Col>
+                )}
                 <Col xs={24} md={8}>
                   <Form.Item
                     name="indicator_library_id"
@@ -472,6 +581,48 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                     />
                   </Form.Item>
                 </Col>
+                {isMutengReviewScoringActivity && (
+                  <Col xs={24} md={8}>
+                    <Form.Item
+                      name="previous_review_activity_id"
+                      label="评分活动承接目标活动"
+                      rules={[
+                        {
+                          validator: (_, value) => {
+                            if (!value) return Promise.reject(new Error('请选择上一目标设定活动'))
+                            if (previousReviewActivityOptions.some(option => String(option.value) === String(value))) {
+                              return Promise.resolve()
+                            }
+                            return Promise.reject(new Error('请选择已完成的沐腾科技目标设定活动'))
+                          },
+                        },
+                      ]}
+                      extra={
+                        <Text type="secondary">
+                          创建评分活动时选择上一期目标设定活动；只创建下季度目标设定活动时可留空。
+                        </Text>
+                      }
+                    >
+                      <Select
+                        data-testid="performance-editor-previous-review-activity"
+                        placeholder="选择上一目标设定活动（可选）"
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        filterOption={filterSelectOption}
+                        options={previousReviewActivityOptions}
+                        disabled={!normalizedCycleType}
+                        notFoundContent={normalizedCycleType ? '暂无已完成的沐腾科技目标设定活动' : '请先选择周期类型'}
+                        onChange={() => forceFormRerender(version => version + 1)}
+                      />
+                    </Form.Item>
+                    {selectedPreviousReviewActivityId && previousReviewActivityOptions.length === 0 && (
+                      <Text type="warning" style={{ display: 'block', marginTop: -12, marginBottom: 12, fontSize: 12 }}>
+                        当前承接活动不符合已完成沐腾科技流程条件，请重新选择。
+                      </Text>
+                    )}
+                  </Col>
+                )}
               </Row>
             </section>
 
@@ -509,21 +660,35 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                 </Tag>
               </div>
               <Row gutter={[16, 12]}>
-                <Col xs={24} lg={8}>
-                  <Form.Item name="self_eval_range" label="自评时间" rules={[{ required: true, message: '请选择自评时间' }]}>
-                    <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} lg={8}>
-                  <Form.Item name="manager_eval_range" label="主管评分时间" rules={[{ required: true, message: '请选择主管评分时间' }]}>
-                    <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} lg={8}>
-                  <Form.Item name="result_confirm_range" label="结果确认时间" rules={[{ required: true, message: '请选择结果确认时间' }]}>
-                    <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
+                {requiresReviewSchedule ? (
+                  <>
+                    <Col xs={24} lg={8}>
+                      <Form.Item name="self_eval_range" label="自评时间" rules={[{ required: true, message: '请选择自评时间' }]}>
+                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} lg={8}>
+                      <Form.Item name="manager_eval_range" label="主管评分时间" rules={[{ required: true, message: '请选择主管评分时间' }]}>
+                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                    {requiresResultConfirmSchedule && (
+                      <Col xs={24} lg={8}>
+                        <Form.Item
+                          name="result_confirm_range"
+                          label={isMutengTemplate ? 'HR/员工确认时间' : '结果确认时间'}
+                          rules={[{ required: true, message: isMutengTemplate ? '请选择HR/员工确认时间' : '请选择结果确认时间' }]}
+                        >
+                          <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Col>
+                    )}
+                  </>
+                ) : (
+                  <Col span={24}>
+                    <Text type="secondary">目标设定活动只包含目标拟定、目标审核和锁定归档，不需要配置自评、主管评分或结果确认时间。</Text>
+                  </Col>
+                )}
               </Row>
             </section>
 
@@ -633,26 +798,30 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                     <Switch checkedChildren="开启" unCheckedChildren="关闭" />
                   </Form.Item>
                 </Col>
-                <Col xs={24} md={12}>
-                  <Form.Item name="hr_confirm_deadline" label="HR确认截止日">
-                    <DatePicker placeholder="请选择截止日" style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} lg={8}>
-                  <Form.Item name="employee_confirm_range" label="员工确认时间">
-                    <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} lg={8}>
-                  <Form.Item name="manager_confirm_range" label="主管确认时间">
-                    <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} lg={8}>
-                  <Form.Item name="hr_confirm_range" label="HR确认时间">
-                    <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
+                {!isMutengTemplate && (
+                  <>
+                    <Col xs={24} md={12}>
+                      <Form.Item name="hr_confirm_deadline" label="HR确认截止日">
+                        <DatePicker placeholder="请选择截止日" style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} lg={8}>
+                      <Form.Item name="employee_confirm_range" label="员工确认时间">
+                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} lg={8}>
+                      <Form.Item name="manager_confirm_range" label="主管确认时间">
+                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} lg={8}>
+                      <Form.Item name="hr_confirm_range" label="HR确认时间">
+                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                  </>
+                )}
                 <Col xs={24}>
                   <Form.Item name="description" label="描述">
                     <TextArea rows={3} placeholder="补充活动说明" />

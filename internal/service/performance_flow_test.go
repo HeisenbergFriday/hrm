@@ -236,6 +236,37 @@ func TestOpenConfirmationStagesRequireEvidence(t *testing.T) {
 	}
 }
 
+func TestMutengReviewScoringUsesHRReviewInsteadOfLegacyConfirmation(t *testing.T) {
+	now := time.Now()
+	hrReviewSvc := newStubPerformanceService(t,
+		mutengReviewScoringActivityResponse("department_evaluation", ""),
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: append(performanceParticipantStubColumns(), "department_adjusted_at"),
+			rows: [][]driver.Value{
+				append(performanceParticipantStubRow(1, "manager_confirmed", "", 0, 90, "A", false, nil, nil, nil), now),
+			},
+		},
+	)
+	if err := hrReviewSvc.OpenHRReview("activity-1", "operator-1"); err != nil {
+		t.Fatalf("OpenHRReview(muteng review scoring) error = %v", err)
+	}
+
+	hrConfirmationSvc := newStubPerformanceService(t,
+		mutengReviewScoringActivityResponse("department_evaluation", ""),
+	)
+	if err := hrConfirmationSvc.OpenHRConfirmation("activity-1", "operator-1"); err == nil || !strings.Contains(err.Error(), "不包含HR确认节点") {
+		t.Fatalf("OpenHRConfirmation(muteng review scoring) error = %v, want HR confirmation blocked", err)
+	}
+
+	employeeConfirmationSvc := newStubPerformanceService(t,
+		mutengReviewScoringActivityResponse("hr_review", ""),
+	)
+	if err := employeeConfirmationSvc.OpenEmployeeConfirmation("activity-1", "operator-1"); err == nil || !strings.Contains(err.Error(), "不包含员工确认节点") {
+		t.Fatalf("OpenEmployeeConfirmation(muteng review scoring) error = %v, want employee confirmation blocked", err)
+	}
+}
+
 func TestPublishCloseArchiveAndLockActivityFlows(t *testing.T) {
 	publishSvc := newStubPerformanceService(t,
 		performanceActivityResponse("target_setting", ""),
@@ -279,7 +310,7 @@ func TestPublishCloseArchiveAndLockActivityFlows(t *testing.T) {
 
 func TestOpenSelfEvaluationRejectsNewFlowWithoutReviewRecords(t *testing.T) {
 	svc := newStubPerformanceService(t,
-		newFlowPerformanceActivityResponse("target_setting", ""),
+		newFlowPerformanceActivityResponse("target_approval", ""),
 		stubQueryResponse{
 			match:   stubTableMatcher("performance_participants"),
 			columns: performanceParticipantStubColumns(),
@@ -293,6 +324,87 @@ func TestOpenSelfEvaluationRejectsNewFlowWithoutReviewRecords(t *testing.T) {
 	err := svc.OpenSelfEvaluation("activity-1", "operator-1")
 	if err == nil || !strings.Contains(err.Error(), "缺少上一季度绩效考核指标") {
 		t.Fatalf("OpenSelfEvaluation(new flow without review records) expected missing review records error, got = %v", err)
+	}
+}
+
+func TestNormalizePreviousReviewActivityIDRequiresCompletedMutengActivity(t *testing.T) {
+	previousID := uint(2)
+	tests := []struct {
+		name      string
+		response  stubQueryResponse
+		wantError string
+	}{
+		{
+			name:      "rejects old flow previous activity",
+			response:  performanceActivityCandidateResponse(2, "locked", PerformanceFlowOld, "quarterly"),
+			wantError: "沐腾科技流程模版",
+		},
+		{
+			name:      "rejects unfinished muteng previous activity",
+			response:  performanceActivityCandidateResponse(2, "target_setting", PerformanceFlowNew, "quarterly"),
+			wantError: "必须已完成",
+		},
+		{
+			name:      "rejects cycle mismatch",
+			response:  performanceActivityCandidateResponse(2, "archived", PerformanceFlowNew, "monthly"),
+			wantError: "周期类型",
+		},
+		{
+			name:      "accepts completed muteng previous activity",
+			response:  performanceActivityCandidateResponse(2, "archived", PerformanceFlowNew, "quarterly"),
+			wantError: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newStubPerformanceService(t, tt.response)
+			got, err := svc.normalizePreviousReviewActivityID(1, PerformanceFlowNew, PerformanceActivityKindReviewScoring, "quarterly", &previousID)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("normalizePreviousReviewActivityID() error = %v, want contains %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizePreviousReviewActivityID() error = %v", err)
+			}
+			if got == nil || *got != previousID {
+				t.Fatalf("normalizePreviousReviewActivityID() = %v, want %d", got, previousID)
+			}
+		})
+	}
+}
+
+func TestFindPreviousPlanActivityFiltersCompletedMutengActivities(t *testing.T) {
+	queriedCompletedStatus := false
+	svc := newStubPerformanceService(t, stubQueryResponse{
+		match: func(query string, _ []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			if strings.Contains(lower, "performance_activities") && strings.Contains(lower, "status in") {
+				queriedCompletedStatus = true
+				return true
+			}
+			return false
+		},
+		columns: []string{"id", "name", "cycle_type", "status", "flow_type", "created_by"},
+		rows:    nil,
+	})
+
+	previous, err := svc.findPreviousPlanActivity(&database.PerformanceActivity{
+		ID:        3,
+		FlowType:  PerformanceFlowNew,
+		CycleType: "quarterly",
+		StartDate: "2026-04-01",
+	})
+	if err != nil {
+		t.Fatalf("findPreviousPlanActivity() error = %v", err)
+	}
+	if previous != nil {
+		t.Fatalf("findPreviousPlanActivity() previous = %#v, want nil", previous)
+	}
+	if !queriedCompletedStatus {
+		t.Fatalf("findPreviousPlanActivity() did not filter completed activity statuses")
 	}
 }
 
@@ -311,7 +423,7 @@ func TestBatchSaveReviewGoalRecordsAllowsNewFlowTargetSetParticipant(t *testing.
 
 	if _, err := svc.BatchSaveReviewGoalRecords(1, []GoalRecordRequest{
 		{SectionType: "quantitative", GoalPhase: PerformanceGoalPhaseReview, GoalType: "kpi", ItemName: "Revenue", ItemDefinition: "Revenue target", Weight: 0.5, TargetValue: "100"},
-		{SectionType: "key_action", GoalPhase: PerformanceGoalPhaseReview, GoalType: "okr", ItemName: "Launch", ItemDefinition: "Launch plan", Weight: 0.2, TargetValue: "Delivered"},
+		{SectionType: "key_action", GoalPhase: PerformanceGoalPhaseReview, GoalType: "okr", ItemName: "Launch", ItemDefinition: "Launch plan", Weight: 0.5, TargetValue: "Delivered"},
 	}, "operator-1"); err != nil {
 		t.Fatalf("BatchSaveReviewGoalRecords(new flow target_set) error = %v", err)
 	}
@@ -395,6 +507,27 @@ func TestConfirmManagerAndGoalEvaluationFlows(t *testing.T) {
 		{RecordID: 11, ActualResult: "done", SelfScore: 90},
 	}, nil, "good", "improve", "employee-1"); err != nil {
 		t.Fatalf("SubmitGoalSelfEvaluation() error = %v", err)
+	}
+
+	reopenedSelfEvalSvc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "target_set", "", 0, 0, "", false, nil, nil, nil),
+			},
+		},
+		newFlowPerformanceActivityResponse("result_publish", ""),
+		performanceGoalRecordResponse(
+			performanceGoalRecordRow(10, "quantitative", "Revenue", 0.5),
+			performanceGoalRecordRow(11, "key_action", "Launch", 0.5),
+		),
+	)
+	if err := reopenedSelfEvalSvc.SubmitGoalSelfEvaluation(1, []GoalSelfEvaluationItem{
+		{RecordID: 10, ActualResult: "reopened done", SelfScore: 8},
+		{RecordID: 11, ActualResult: "reopened done", SelfScore: 9},
+	}, nil, "reopened good", "reopened improve", "employee-1"); err != nil {
+		t.Fatalf("SubmitGoalSelfEvaluation() reopened in result_publish error = %v", err)
 	}
 
 	managerEvalSvc := newStubPerformanceService(t,
@@ -538,6 +671,26 @@ func newFlowPerformanceActivityResponse(status, deadline string) stubQueryRespon
 		columns: []string{"id", "name", "cycle_type", "status", "flow_type", "hr_confirm_deadline", "created_by"},
 		rows: [][]driver.Value{
 			{int64(1), "Q2", "quarterly", status, PerformanceFlowNew, deadline, "creator-1"},
+		},
+	}
+}
+
+func mutengReviewScoringActivityResponse(status, deadline string) stubQueryResponse {
+	return stubQueryResponse{
+		match:   stubTableMatcher("performance_activities"),
+		columns: []string{"id", "name", "cycle_type", "status", "flow_type", "activity_kind", "hr_confirm_deadline", "created_by"},
+		rows: [][]driver.Value{
+			{int64(1), "Q2", "quarterly", status, PerformanceFlowNew, PerformanceActivityKindReviewScoring, deadline, "creator-1"},
+		},
+	}
+}
+
+func performanceActivityCandidateResponse(id int64, status, flowType, cycleType string) stubQueryResponse {
+	return stubQueryResponse{
+		match:   stubTableMatcher("performance_activities"),
+		columns: []string{"id", "name", "cycle_type", "status", "flow_type", "created_by"},
+		rows: [][]driver.Value{
+			{id, "Previous", cycleType, status, flowType, "creator-1"},
 		},
 	}
 }

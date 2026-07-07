@@ -12,6 +12,7 @@ const requestInfoKey contextKey = "peopleops_request_info"
 type RequestInfo struct {
 	RequestID string
 	Route     string
+	OrgID     string
 	SQLCount  atomic.Int64
 }
 
@@ -25,4 +26,10 @@ func FromContext(ctx context.Context) *RequestInfo {
 	}
 	info, _ := ctx.Value(requestInfoKey).(*RequestInfo)
 	return info
+}
+
+func SetOrgID(ctx context.Context, orgID string) {
+	if info := FromContext(ctx); info != nil {
+		info.OrgID = orgID
+	}
 }

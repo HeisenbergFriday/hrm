@@ -2,7 +2,7 @@ import { useEffect, useState, lazy, Suspense } from 'react'
 import { Layout, Menu, ConfigProvider, Spin, message, Button, Drawer, Grid } from 'antd'
 import type { MenuProps } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import { Link, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import {
   LoadingOutlined,
   MenuFoldOutlined,
@@ -15,7 +15,15 @@ import { authAPI, refreshMenuKeys } from './services/api'
 import RouteGuard from './components/RouteGuard'
 import ErrorBoundary from './components/ErrorBoundary'
 import MobileTableEnhancer from './components/MobileTableEnhancer'
-import { authRedirectTargetFromLocation, loginPathWithRedirect, rememberAuthRedirect } from './utils/authRedirect'
+import {
+  authOrgIDFromSearchParamsOrStorage,
+  authRedirectTargetFromLocation,
+  loginPathWithRedirectAndOrg,
+  loginPathWithRedirect,
+  normalizeAuthOrgID,
+  rememberAuthOrgID,
+  rememberAuthRedirect,
+} from './utils/authRedirect'
 import { resolveMobileLayout, useMobileRuntime } from './utils/responsive'
 
 const Login = lazy(() => import('./pages/Login'))
@@ -33,6 +41,7 @@ const SyncLog = lazy(() => import('./pages/SyncLog'))
 const Attendance = lazy(() => import('./pages/Attendance'))
 const AttendanceStats = lazy(() => import('./pages/AttendanceStats'))
 const AttendanceExport = lazy(() => import('./pages/AttendanceExport'))
+const AttendanceToolbox = lazy(() => import('./pages/AttendanceToolbox'))
 const WeekSchedule = lazy(() => import('./pages/WeekSchedule'))
 const EmployeeShiftConfig = lazy(() => import('./pages/EmployeeShiftConfig'))
 const LeaveOvertime = lazy(() => import('./pages/LeaveOvertime'))
@@ -54,7 +63,6 @@ const PerformanceSelfEval = lazy(() => import('./pages/PerformanceSelfEval'))
 const PerformanceManagerEval = lazy(() => import('./pages/PerformanceManagerEval'))
 const PerformanceGoalSetting = lazy(() => import('./pages/PerformanceGoalSetting'))
 const Permission = lazy(() => import('./pages/Permission'))
-const Log = lazy(() => import('./pages/Log'))
 const Setting = lazy(() => import('./pages/Setting'))
 
 import { useAuthStore } from './store/authStore'
@@ -92,6 +100,7 @@ const routeMenuKeys: Record<string, string> = {
   '/attendance': menuPermissionKey('attendance'),
   '/attendance-stats': menuPermissionKey('attendance-stats'),
   '/attendance-export': menuPermissionKey('attendance-export'),
+  '/attendance-toolbox': menuPermissionKey('attendance-toolbox'),
   '/week-schedule': menuPermissionKey('week-schedule'),
   '/employee-shift-config': menuPermissionKey('employee-shift-config'),
   '/approval': menuPermissionKey('approval-templates'),
@@ -241,8 +250,10 @@ function App() {
     } catch (err) {
       console.warn('[logout] request failed', err)
     } finally {
+      const orgID = typeof user?.org_id === 'string' ? user.org_id.trim() : ''
+      if (orgID) rememberAuthOrgID(orgID)
       logout()
-      navigate('/login?mode=scan', { replace: true })
+      navigate(orgID ? `/login?mode=scan&org_id=${encodeURIComponent(orgID)}` : '/login?mode=scan', { replace: true })
     }
   }
   const filteredMenuItems = filterMenuByKeys(menuConfig, menuKeys)
@@ -293,6 +304,42 @@ function App() {
     if (!isMobile) setMobileMenuOpen(false)
   }, [isMobile])
 
+  useEffect(() => {
+    if (!isLoggedIn) return
+
+    const requestedOrgID = authOrgIDFromSearchParamsOrStorage(new URLSearchParams(location.search))
+    if (!requestedOrgID) return
+
+    const currentOrgID = normalizeAuthOrgID(user?.org_id)
+    if (currentOrgID === requestedOrgID) {
+      rememberAuthOrgID(requestedOrgID)
+      return
+    }
+
+    let cancelled = false
+    const redirectTarget = authRedirectTargetFromLocation(location)
+
+    setAutoLogging(false)
+    setSessionChecking(true)
+    rememberAuthOrgID(requestedOrgID)
+    rememberAuthRedirect(redirectTarget)
+
+    authAPI.logout()
+      .catch((err) => {
+        console.warn('[auth-org-switch] logout current org session failed', err)
+      })
+      .finally(() => {
+        if (cancelled) return
+        logout()
+        setSessionChecking(false)
+        navigate(loginPathWithRedirectAndOrg(redirectTarget, requestedOrgID), { replace: true })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [isLoggedIn, location, logout, navigate, user?.org_id])
+
   // 刷新菜单权限（启动时 + 页面获焦时）
   useEffect(() => {
     if (!isLoggedIn) return
@@ -313,6 +360,9 @@ function App() {
 
     setAutoLogging(true)
     const redirectTarget = authRedirectTargetFromLocation(location)
+    const orgSearchParams = new URLSearchParams(location.search)
+    const orgID = authOrgIDFromSearchParamsOrStorage(orgSearchParams)
+    const orgParams = orgID ? { org_id: orgID } : undefined
     const navigateToLogin = () => {
       rememberAuthRedirect(redirectTarget)
       navigate(loginPathWithRedirect(redirectTarget), { replace: true })
@@ -320,7 +370,7 @@ function App() {
 
     const doAutoLogin = async () => {
       try {
-        const configRes = await axios.get('/api/v1/auth/dingtalk/config', { withCredentials: true })
+        const configRes = await axios.get('/api/v1/auth/dingtalk/config', { params: orgParams, withCredentials: true })
         const { corp_id: corpId, missing } = configRes.data.data
         const dd = (window as any).dd
 
@@ -344,9 +394,11 @@ function App() {
             try {
               const response = await axios.post('/api/v1/auth/dingtalk/in-app', {
                 code: result.code,
+                org_id: orgID || undefined,
               }, { withCredentials: true })
               const { user } = response.data.data
               login(user)
+              rememberAuthOrgID(user?.org_id || orgID)
               message.success('登录成功', 0.6)
               setAutoLogging(false)
             } catch (err) {
@@ -500,6 +552,7 @@ function App() {
                 <Route path="/attendance" element={<RouteGuard menuKey="menu:attendance"><Attendance /></RouteGuard>} />
                 <Route path="/attendance-stats" element={<RouteGuard menuKey="menu:attendance-stats"><AttendanceStats /></RouteGuard>} />
                 <Route path="/attendance-export" element={<RouteGuard menuKey="menu:attendance-export"><AttendanceExport /></RouteGuard>} />
+                <Route path="/attendance-toolbox" element={<RouteGuard menuKey="menu:attendance-toolbox"><AttendanceToolbox /></RouteGuard>} />
                 <Route path="/week-schedule" element={<RouteGuard menuKey="menu:week-schedule"><WeekSchedule /></RouteGuard>} />
                 <Route path="/employee-shift-config" element={<RouteGuard menuKey="menu:employee-shift-config"><EmployeeShiftConfig /></RouteGuard>} />
                 <Route path="/approval" element={<RouteGuard menuKey="menu:approval-templates"><Approval /></RouteGuard>} />
@@ -509,7 +562,7 @@ function App() {
                 <Route path="/approval-stats" element={<RouteGuard menuKey="menu:approval-stats"><ApprovalStats /></RouteGuard>} />
                 <Route path="/role-management" element={<RouteGuard menuKey="menu:permission"><RoleManagement /></RouteGuard>} />
                 <Route path="/sync-jobs" element={<RouteGuard menuKey="menu:sync-jobs"><SyncJobs /></RouteGuard>} />
-                <Route path="/audit-logs" element={<RouteGuard menuKey="menu:audit-logs"><AuditLogs /></RouteGuard>} />
+                <Route path="/audit-logs" element={<RouteGuard menuKey="menu:audit-logs" permissionCode="audit_log:read"><AuditLogs /></RouteGuard>} />
                 <Route path="/employee-profile" element={<RouteGuard menuKey="menu:employee-profile"><EmployeeProfile /></RouteGuard>} />
                 <Route path="/employee-flow" element={<RouteGuard menuKey="menu:employee-flow"><EmployeeFlow /></RouteGuard>} />
                 <Route path="/talent-analysis" element={<RouteGuard menuKey="menu:talent-analysis"><TalentAnalysis /></RouteGuard>} />
@@ -539,7 +592,7 @@ function App() {
                 <Route path="/performance-manager-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:manager_eval:submit"><PerformanceManagerEval /></RouteGuard>} />
                 <Route path="/performance-goal-setting/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:goal:manage"><PerformanceGoalSetting /></RouteGuard>} />
                 <Route path="/permission" element={<RouteGuard menuKey="menu:permission"><Permission /></RouteGuard>} />
-                <Route path="/log" element={<Log />} />
+                <Route path="/log" element={<Navigate to="/audit-logs" replace />} />
                 <Route path="/setting" element={<RouteGuard menuKey="menu:setting"><Setting /></RouteGuard>} />
               </Routes>
             </Suspense>

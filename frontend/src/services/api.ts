@@ -171,6 +171,7 @@ export const orgAPI = {
   getEmployee: (id: string) => api.get(`/org/employees/${id}`),
   getEmployeePositionDiagnostic: (id: string) => api.get(`/org/employees/${id}/position-sync-diagnostic`),
   syncOrg: () => api.post('/org/sync'),
+  getOrganizations: () => api.get('/auth/orgs'),
 }
 
 export const attendanceAPI = {
@@ -200,6 +201,60 @@ export const attendanceAPI = {
 
   getExports: (params: { page?: number; page_size?: number }) => api.get('/attendance/exports', { params }),
   getLastSyncTime: () => api.get('/attendance/last-sync'),
+}
+
+export const attendanceToolboxAPI = {
+  getDefaults: () => api.get('/attendance/toolbox/defaults'),
+  run: (module: string, data: FormData) => api.post(`/attendance/toolbox/${module}/run`, data, {
+    responseType: 'blob',
+    timeout: 10 * 60 * 1000,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  }),
+  runDingtalkSync: (data: {
+    start_date: string
+    end_date: string
+    flow_keys?: string[]
+    max_instances?: number
+    padding_days?: number
+    process_leave?: string
+    process_overtime?: string
+    process_attendance_correction?: string
+    process_position_transfer?: string
+  }) => api.post('/attendance/toolbox/dingtalk-sync', data, {
+    responseType: 'blob',
+    timeout: 10 * 60 * 1000,
+  }),
+  exportRules: () => api.post('/attendance/toolbox/rules/export', {}, {
+    responseType: 'blob',
+    timeout: 60 * 1000,
+  }),
+  importRulesPreview: (data: FormData) => api.post('/attendance/toolbox/rules/import-preview', data, {
+    timeout: 60 * 1000,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  }),
+  validate: (module: string, data: FormData) => api.post(`/attendance/toolbox/${module}/validate`, data, {
+    timeout: 60 * 1000,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  }),
+  exportTemplates: (templateId?: string) => api.post('/attendance/toolbox/templates', { template_id: templateId }, {
+    responseType: 'blob',
+    timeout: 60 * 1000,
+  }),
+  listTemplates: () => api.post('/attendance/toolbox/templates', {}, {
+    timeout: 60 * 1000,
+  }),
+  auditUploads: (data: FormData) => api.post('/attendance/toolbox/audit', data, {
+    timeout: 60 * 1000,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  }),
 }
 
 export const approvalAPI = {
