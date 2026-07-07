@@ -47,3 +47,6 @@ test_dingtalk_dept.go
 # OS
 .DS_Store
 Thumbs.db
+peopleops-hr-test.tar
+uploads/*.xlsx
+uploads/*.jpg
