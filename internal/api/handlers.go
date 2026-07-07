@@ -1141,33 +1141,36 @@ func DingTalkCallback(c *gin.Context) {
 
 	userInfo, err := dingtalk.GetUserInfoByCode(code)
 	if err != nil {
+		log.Printf("[dingtalk/callback] GetUserInfoByCode failed: %v", err)
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "get dingtalk user info failed: " + err.Error(),
 		})
 		return
 	}
+	// 记录钉钉返回的完整用户信息（用于诊断）
+	if userInfoJSON, err := json.Marshal(userInfo); err == nil {
+		log.Printf("[dingtalk/callback] user_info_raw: %s", string(userInfoJSON))
+	}
 	associatedUserID := getStringByKeys(userInfo, "associated_user_id", "associatedUserId", "userid", "userId")
 	unionID := getStringByKeys(userInfo, "unionId", "unionid", "union_id")
 	openID := getStringByKeys(userInfo, "openId", "openid", "open_id")
-	log.Printf("[dingtalk/callback] user_info_received associated_user_id=%t unionid=%t", associatedUserID != "", unionID != "")
+	log.Printf("[dingtalk/callback] parsed: associated_user_id=%s, unionid=%s, openid=%s", associatedUserID, unionID, openID)
 
 	dtUserID := associatedUserID
 	if dtUserID == "" && unionID != "" {
 		resolvedUserID, resolveErr := dingtalk.GetUserIDByUnionID(unionID)
 		if resolveErr == nil {
 			dtUserID = resolvedUserID
+			log.Printf("[dingtalk/callback] resolved userid from unionid: %s", dtUserID)
 		} else {
 			log.Printf("[dingtalk/callback] resolve unionid failed: union_id=%s err=%v", unionID, resolveErr)
 		}
 	}
 
+	// 如果既没有 dtUserID 也没有 openID，但有 email 或 mobile，仍然继续尝试匹配
 	if dtUserID == "" && openID == "" {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "missing dingtalk user identity",
-		})
-		return
+		log.Printf("[dingtalk/callback] no userid/openid, will try to match by email/mobile")
 	}
 
 	var name, email, mobile, avatar, position string
@@ -1200,10 +1203,13 @@ func DingTalkCallback(c *gin.Context) {
 		avatar, _ = userInfo["avatarUrl"].(string)
 	}
 
+	log.Printf("[dingtalk/callback] extracted info: name=%s, email=%s, mobile=%s", name, email, mobile)
+
 	userService := service.NewUserService(database.DB)
 	user, err := findLocalUserByDingTalkIdentity(userService, dtUserID, associatedUserID)
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("[dingtalk/callback] findLocalUserByDingTalkIdentity error: %v", err)
 			c.JSON(http.StatusInternalServerError, Response{
 				Code:    http.StatusInternalServerError,
 				Message: "query local user failed: " + err.Error(),
@@ -1211,6 +1217,7 @@ func DingTalkCallback(c *gin.Context) {
 			return
 		}
 
+		log.Printf("[dingtalk/callback] user not found by userid, trying email/mobile")
 		user, err = findLocalUserByContact(userService, email, mobile)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1221,15 +1228,24 @@ func DingTalkCallback(c *gin.Context) {
 				if identityForLog == "" {
 					identityForLog = unionID
 				}
+				if identityForLog == "" {
+					identityForLog = email
+				}
+				log.Printf("[dingtalk/callback] user not found: identity=%s, name=%s, email=%s, mobile=%s",
+					identityForLog, name, email, mobile)
 				respondDingTalkUserNotSynced(c, "dingtalk_qr", identityForLog, name)
 				return
 			}
+			log.Printf("[dingtalk/callback] findLocalUserByContact error: %v", err)
 			c.JSON(http.StatusInternalServerError, Response{
 				Code:    http.StatusInternalServerError,
 				Message: "query local user failed: " + err.Error(),
 			})
 			return
 		}
+		log.Printf("[dingtalk/callback] user found by email/mobile: user_id=%s", user.UserID)
+	} else {
+		log.Printf("[dingtalk/callback] user found by userid: user_id=%s", user.UserID)
 	}
 
 	user.Name = name
