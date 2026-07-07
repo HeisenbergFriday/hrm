@@ -111,6 +111,7 @@ func Init() error {
 	migratePermissions()
 	migratePerformanceIndicatorRolePresets()
 	migrateMenuPermissions()
+	migrateAttendanceToolboxMenuPermissions()
 
 	// 绩效表已随主库 migrate() 一并迁移，无需独立数据源
 	log.Println("绩效模块使用主库")
@@ -1258,4 +1259,24 @@ func deriveLegacyMenuKeysForRole(roleID uint) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func migrateAttendanceToolboxMenuPermissions() {
+	var attendancePermission Permission
+	if err := DB.Where("code = ? AND deleted_at IS NULL", "attendance_manage").First(&attendancePermission).Error; err != nil {
+		return
+	}
+
+	var rolePermissions []RolePermission
+	if err := DB.Where("permission_id = ? AND deleted_at IS NULL", attendancePermission.ID).Find(&rolePermissions).Error; err != nil {
+		log.Printf("migrate attendance toolbox menu permissions: read role permissions failed: %v", err)
+		return
+	}
+
+	menuKeys := append([]string{"menu:home"}, legacyMenuKeysByPermission["attendance_manage"]...)
+	for _, rolePermission := range rolePermissions {
+		if err := ensureRoleMenuPermission(rolePermission.RoleID, menuKeys); err != nil {
+			log.Printf("migrate attendance toolbox menu permissions: role %d update menu failed: %v", rolePermission.RoleID, err)
+		}
+	}
 }
