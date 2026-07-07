@@ -23,7 +23,7 @@ func currentOperatorID(c *gin.Context) string {
 		return "system"
 	}
 	if database.DB != nil {
-		if user, err := loadUserByAuthID(userID); err == nil && strings.TrimSpace(user.UserID) != "" {
+		if user, err := loadUserByAuthIDInOrg(c.GetString("orgID"), userID); err == nil && strings.TrimSpace(user.UserID) != "" {
 			return user.UserID
 		}
 	}
@@ -111,7 +111,7 @@ func logPerformanceNotifyError(action, userID string, err error) {
 func resolvePerformanceScope(c *gin.Context) (*service.OrgDataScope, error) {
 	userID := currentOperatorID(c)
 	svc := service.NewPermissionService(database.DB)
-	return svc.GetUserPerformanceScope(userID)
+	return svc.GetUserPerformanceScopeInOrg(c.GetString("orgID"), userID)
 }
 
 // requirePermission 检查当前用户是否具有指定权限码，不满足则返回 403 并中止
@@ -121,7 +121,7 @@ func requirePermission(c *gin.Context, codes ...string) bool {
 		return true
 	}
 	svc := service.NewPermissionService(database.DB)
-	ok, err := svc.HasAnyPermission(userID, codes...)
+	ok, err := svc.HasAnyPermissionInOrg(c.GetString("orgID"), userID, codes...)
 	if err != nil || !ok {
 		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "权限不足", Data: nil})
 		return false
@@ -138,7 +138,7 @@ func hasPerformancePermission(c *gin.Context, codes ...string) (bool, error) {
 		return true, nil
 	}
 	svc := service.NewPermissionService(database.DB)
-	return svc.HasAnyPermission(userID, codes...)
+	return svc.HasAnyPermissionInOrg(c.GetString("orgID"), userID, codes...)
 }
 
 // resolveAndVerifyScope 获取 scope 并验证指定部门是否在可见范围内

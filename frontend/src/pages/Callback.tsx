@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
 import { consumeAuthRedirect } from '../utils/authRedirect'
+import { resolveOrgId } from '../utils/org'
 
 function isDingTalkEnv(): boolean {
   return /DingTalk/i.test(navigator.userAgent)
@@ -32,6 +33,7 @@ const Callback: React.FC = () => {
     const handleCallback = async () => {
       const code = searchParams.get('code')
       const state = searchParams.get('state')
+      const orgId = resolveOrgId()
 
       if (!code) {
         if (isDingTalkEnv()) {
@@ -45,7 +47,7 @@ const Callback: React.FC = () => {
 
       try {
         const response = await axios.get('/api/v1/auth/dingtalk/callback', {
-          params: { code, state },
+          params: orgId ? { code, state, org_id: orgId } : { code, state },
         })
 
         if (response.data.code === 200) {

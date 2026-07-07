@@ -33,8 +33,23 @@ func (s *UserService) GetUserByUserID(userID string) (*database.User, error) {
 	return s.userRepo.FindByUserID(userID)
 }
 
+// GetUserByOrgAndUserID 根据组织ID和用户ID获取用户（多租户）
+func (s *UserService) GetUserByOrgAndUserID(orgID, userID string) (*database.User, error) {
+	return s.userRepo.FindByOrgAndUserID(orgID, userID)
+}
+
 func (s *UserService) GetUserByEmail(email string) (*database.User, error) {
 	return s.userRepo.FindByEmail(email)
+}
+
+// GetUserByOrgAndEmail 根据组织ID和邮箱获取用户（多租户）
+func (s *UserService) GetUserByOrgAndEmail(orgID, email string) (*database.User, error) {
+	return s.userRepo.FindByOrgAndEmail(orgID, email)
+}
+
+// GetUserByOrgAndMobile 根据组织ID和手机号获取用户（多租户）
+func (s *UserService) GetUserByOrgAndMobile(orgID, mobile string) (*database.User, error) {
+	return s.userRepo.FindByOrgAndMobile(orgID, mobile)
 }
 
 func (s *UserService) GetUserByMobile(mobile string) (*database.User, error) {

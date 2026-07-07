@@ -559,11 +559,10 @@ test.describe('performance module', () => {
       })
     await expect(page.getByTestId('performance-editor-activity-name')).toHaveValue('Imported Performance Cycle')
 
-    const refreshResponse = page.waitForResponse(response =>
-      response.url().includes('/performance/activities/101/refresh-participants') && response.request().method() === 'POST',
-    )
-    await page.getByTestId('performance-activity-refresh-101').click()
-    await refreshResponse
+    await page.getByTestId('performance-editor-cancel').click()
+    await expect(page.getByTestId('performance-activity-editor')).toBeHidden()
+
+    await page.getByTestId('performance-activity-view-101').click()
     await expect(page.getByTestId('performance-detail-content')).toBeVisible()
     await page.locator('.ant-drawer-close').click()
     await expect(page.locator('.ant-drawer-content-wrapper')).toBeHidden()

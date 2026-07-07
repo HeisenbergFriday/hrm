@@ -64,7 +64,7 @@ const MenuPermission: React.FC = () => {
       ],
     },
     {
-      title: '考勤工具箱',
+      title: '考勤管理',
       key: 'attendance',
       children: [
         { title: '考勤查询', key: 'attendance' },

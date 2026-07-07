@@ -16,6 +16,7 @@ const authContextKey = "authContext"
 type AuthContext struct {
 	RawUserID        string
 	UserID           string
+	OrgID            string
 	User             *database.User
 	Roles            []database.Role
 	PermissionSet    map[string]struct{}
@@ -82,9 +83,14 @@ func UserDataScope(c *gin.Context) (*service.OrgDataScope, error) {
 
 func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 	rawUserID := strings.TrimSpace(c.GetString("userID"))
+	orgID := strings.TrimSpace(c.GetString("orgID"))
+	if orgID == "" {
+		orgID = "default"
+	}
 	authCtx := &AuthContext{
 		RawUserID:     rawUserID,
 		UserID:        rawUserID,
+		OrgID:         orgID,
 		PermissionSet: make(map[string]struct{}),
 		MenuKeySet:    make(map[string]struct{}),
 	}
@@ -93,14 +99,17 @@ func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 	}
 
 	db := RequestDB(c)
-	user, normalizedUserID, err := loadCurrentUser(db, rawUserID)
+	user, normalizedUserID, err := loadCurrentUser(db, orgID, rawUserID)
 	if err != nil {
 		return nil, err
 	}
 	authCtx.User = user
 	authCtx.UserID = normalizedUserID
+	if user != nil && strings.TrimSpace(user.OrgID) != "" {
+		authCtx.OrgID = user.OrgID
+	}
 
-	roles, err := loadCurrentRoles(db, normalizedUserID)
+	roles, err := loadCurrentRoles(db, authCtx.OrgID, normalizedUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -124,9 +133,9 @@ func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 	return authCtx, nil
 }
 
-func loadCurrentUser(db *gorm.DB, rawUserID string) (*database.User, string, error) {
+func loadCurrentUser(db *gorm.DB, orgID, rawUserID string) (*database.User, string, error) {
 	var user database.User
-	err := db.Where("user_id = ? AND deleted_at IS NULL", rawUserID).First(&user).Error
+	err := db.Where("org_id = ? AND user_id = ? AND deleted_at IS NULL", orgID, rawUserID).First(&user).Error
 	if err == nil {
 		return &user, user.UserID, nil
 	}
@@ -134,7 +143,7 @@ func loadCurrentUser(db *gorm.DB, rawUserID string) (*database.User, string, err
 		return nil, rawUserID, err
 	}
 	if looksNumericID(rawUserID) {
-		err = db.Where("id = ? AND deleted_at IS NULL", rawUserID).First(&user).Error
+		err = db.Where("org_id = ? AND id = ? AND deleted_at IS NULL", orgID, rawUserID).First(&user).Error
 		if err == nil {
 			return &user, user.UserID, nil
 		}
@@ -145,11 +154,11 @@ func loadCurrentUser(db *gorm.DB, rawUserID string) (*database.User, string, err
 	return nil, rawUserID, nil
 }
 
-func loadCurrentRoles(db *gorm.DB, userID string) ([]database.Role, error) {
+func loadCurrentRoles(db *gorm.DB, orgID, userID string) ([]database.Role, error) {
 	var roles []database.Role
 	err := db.
 		Joins("JOIN user_roles ON user_roles.role_id = roles.id AND user_roles.deleted_at IS NULL").
-		Where("user_roles.user_id = ? AND roles.deleted_at IS NULL", userID).
+		Where("user_roles.org_id = ? AND user_roles.user_id = ? AND roles.deleted_at IS NULL", orgID, userID).
 		Find(&roles).Error
 	return roles, err
 }

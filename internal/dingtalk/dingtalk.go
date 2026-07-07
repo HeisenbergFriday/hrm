@@ -29,6 +29,25 @@ var (
 	tokenMu   sync.Mutex
 )
 
+type AppConfig struct {
+	OrgID       string `json:"org_id"`
+	Name        string `json:"name"`
+	CorpID      string `json:"corp_id"`
+	AppKey      string `json:"app_key"`
+	AppSecret   string `json:"app_secret"`
+	AgentID     string `json:"agent_id"`
+	AppHomeURL  string `json:"app_home_url"`
+	RedirectURI string `json:"redirect_uri"`
+	Status      string `json:"status"`
+}
+
+type cachedAccessToken struct {
+	token string
+	exp   time.Time
+}
+
+var accessTokenCache = make(map[string]cachedAccessToken)
+
 var ErrUserNotNotifiable = errors.New("dingtalk user is not active/notifiable")
 
 func IsUserNotNotifiableError(err error) bool {
@@ -76,6 +95,72 @@ func Init() error {
 // GetCorpID 杩斿洖浼佷笟 CorpId锛屼緵鍓嶇 JS-SDK 浣跨敤
 func GetCorpID() string {
 	return corpID
+}
+
+func DefaultAppConfig() AppConfig {
+	return AppConfig{
+		OrgID:       "default",
+		Name:        strings.TrimSpace(os.Getenv("DINGTALK_ORG_NAME")),
+		CorpID:      corpID,
+		AppKey:      appKey,
+		AppSecret:   appSecret,
+		AgentID:     strings.TrimSpace(os.Getenv("DINGTALK_AGENT_ID")),
+		AppHomeURL:  strings.TrimSpace(os.Getenv("DINGTALK_APP_HOME_URL")),
+		RedirectURI: strings.TrimSpace(os.Getenv("DINGTALK_REDIRECT_URI")),
+		Status:      "active",
+	}
+}
+
+func ActiveAppConfigs() []AppConfig {
+	configs := []AppConfig{DefaultAppConfig()}
+	for _, cfg := range organizationConfigsFromEnv() {
+		status := strings.TrimSpace(strings.ToLower(cfg.Status))
+		if status != "" && status != "active" {
+			continue
+		}
+		cfg.OrgID = strings.TrimSpace(cfg.OrgID)
+		if cfg.OrgID == "" {
+			continue
+		}
+		configs = append(configs, cfg)
+	}
+	return configs
+}
+
+func GetAppConfigForOrg(orgID string) (AppConfig, bool) {
+	requested := strings.TrimSpace(orgID)
+	if requested == "" {
+		requested = strings.TrimSpace(os.Getenv("DINGTALK_QR_DEFAULT_ORG_ID"))
+	}
+	if requested == "" || strings.EqualFold(requested, "default") {
+		return DefaultAppConfig(), true
+	}
+	for _, cfg := range organizationConfigsFromEnv() {
+		status := strings.TrimSpace(strings.ToLower(cfg.Status))
+		if status != "" && status != "active" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(cfg.OrgID), requested) {
+			cfg.OrgID = strings.TrimSpace(cfg.OrgID)
+			return cfg, true
+		}
+	}
+	return DefaultAppConfig(), false
+}
+
+func organizationConfigsFromEnv() []AppConfig {
+	raw := strings.TrimSpace(os.Getenv("DINGTALK_ORGANIZATIONS"))
+	raw = strings.Trim(raw, "'")
+	if raw == "" {
+		return nil
+	}
+
+	var configs []AppConfig
+	if err := json.Unmarshal([]byte(raw), &configs); err != nil {
+		logrus.Warnf("parse DINGTALK_ORGANIZATIONS failed: %v", err)
+		return nil
+	}
+	return configs
 }
 
 func GetConfiguredAppHomeURL() string {
@@ -136,27 +221,33 @@ func GetRedirectURI() string {
 // ===================== Access Token =====================
 
 // GetAccessToken 鑾峰彇浼佷笟鍐呴儴搴旂敤鐨?access_token锛堝甫缂撳瓨锛?
-func GetAccessToken() (string, error) {
+func getAccessTokenForCredential(credentialAppKey, credentialAppSecret string) (string, error) {
+	credentialAppKey = strings.TrimSpace(credentialAppKey)
+	credentialAppSecret = strings.TrimSpace(credentialAppSecret)
+	if credentialAppKey == "" || credentialAppSecret == "" {
+		return "", fmt.Errorf("missing dingtalk app key or app secret")
+	}
+
+	cacheKey := credentialAppKey + "|" + credentialAppSecret
 	tokenMu.Lock()
 	defer tokenMu.Unlock()
 
-	// 缂撳瓨鏈夋晥
-	if token != "" && time.Now().Before(tokenExp) {
-		return token, nil
+	if cached, ok := accessTokenCache[cacheKey]; ok && cached.token != "" && time.Now().Before(cached.exp) {
+		return cached.token, nil
 	}
 
 	body := map[string]string{
-		"appKey":    appKey,
-		"appSecret": appSecret,
+		"appKey":    credentialAppKey,
+		"appSecret": credentialAppSecret,
 	}
 	resp, err := postJSON("https://api.dingtalk.com/v1.0/oauth2/accessToken", body, nil)
 	if err != nil {
-		return "", fmt.Errorf("鑾峰彇 access_token 澶辫触: %w", err)
+		return "", fmt.Errorf("get access_token failed: %w", err)
 	}
 
 	accessToken, ok := resp["accessToken"].(string)
 	if !ok {
-		return "", fmt.Errorf("access_token 鍝嶅簲鏍煎紡寮傚父: %v", resp)
+		return "", fmt.Errorf("unexpected access_token response: %v", resp)
 	}
 
 	expireIn := 7200.0
@@ -164,10 +255,22 @@ func GetAccessToken() (string, error) {
 		expireIn = v
 	}
 
-	token = accessToken
-	tokenExp = time.Now().Add(time.Duration(expireIn-60) * time.Second)
+	expiresAt := time.Now().Add(time.Duration(expireIn-60) * time.Second)
+	accessTokenCache[cacheKey] = cachedAccessToken{token: accessToken, exp: expiresAt}
+	if credentialAppKey == appKey {
+		token = accessToken
+		tokenExp = expiresAt
+	}
 	logrus.Info("dingtalk access_token fetched")
-	return token, nil
+	return accessToken, nil
+}
+
+func GetAccessToken() (string, error) {
+	return getAccessTokenForCredential(appKey, appSecret)
+}
+
+func GetAccessTokenForConfig(cfg AppConfig) (string, error) {
+	return getAccessTokenForCredential(cfg.AppKey, cfg.AppSecret)
 }
 
 // ===================== OAuth 鐧诲綍 =====================
@@ -178,10 +281,18 @@ func GetQRCode(state string) (string, error) {
 }
 
 func GetQRCodeWithRedirect(state, redirectURI string) (string, error) {
+	return GetQRCodeWithConfig(state, redirectURI, DefaultAppConfig())
+}
+
+func GetQRCodeWithConfig(state, redirectURI string, cfg AppConfig) (string, error) {
+	clientID := strings.TrimSpace(cfg.AppKey)
+	if clientID == "" {
+		return "", fmt.Errorf("missing dingtalk app key")
+	}
 	loginURL := fmt.Sprintf(
 		"https://login.dingtalk.com/oauth2/auth?redirect_uri=%s&response_type=code&client_id=%s&scope=openid%%20corpid&state=%s&prompt=consent",
 		url.QueryEscape(redirectURI),
-		appKey,
+		clientID,
 		state,
 	)
 	return loginURL, nil
@@ -189,9 +300,13 @@ func GetQRCodeWithRedirect(state, redirectURI string) (string, error) {
 
 // GetUserAccessToken 鐢ㄦ巿鏉冪爜鎹㈠彇鐢ㄦ埛 token
 func GetUserAccessToken(code string) (string, error) {
+	return GetUserAccessTokenForConfig(code, DefaultAppConfig())
+}
+
+func GetUserAccessTokenForConfig(code string, cfg AppConfig) (string, error) {
 	body := map[string]string{
-		"clientId":     appKey,
-		"clientSecret": appSecret,
+		"clientId":     strings.TrimSpace(cfg.AppKey),
+		"clientSecret": strings.TrimSpace(cfg.AppSecret),
 		"code":         code,
 		"grantType":    "authorization_code",
 	}
@@ -209,13 +324,15 @@ func GetUserAccessToken(code string) (string, error) {
 
 // GetUserInfoByCode 閫氳繃鎺堟潈鐮佽幏鍙栫敤鎴蜂俊鎭紙鏂扮増 OAuth2锛岀敤浜庢壂鐮佺櫥褰曪級
 func GetUserInfoByCode(code string) (map[string]interface{}, error) {
-	// 1. 鍏堢敤 code 鎹㈠彇鐢ㄦ埛 access_token
-	userToken, err := GetUserAccessToken(code)
+	return GetUserInfoByCodeForConfig(code, DefaultAppConfig())
+}
+
+func GetUserInfoByCodeForConfig(code string, cfg AppConfig) (map[string]interface{}, error) {
+	userToken, err := GetUserAccessTokenForConfig(code, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. 鐢?user access_token 鑾峰彇鐢ㄦ埛淇℃伅
 	headers := map[string]string{
 		"x-acs-dingtalk-access-token": userToken,
 	}
@@ -229,7 +346,11 @@ func GetUserInfoByCode(code string) (map[string]interface{}, error) {
 
 // GetUserIDByInAppCode 浼佷笟鍐呴儴搴旂敤鍏嶇櫥锛氶€氳繃鍏嶇櫥鐮佽幏鍙栦紒涓氬唴 userid
 func GetUserIDByInAppCode(code string) (string, error) {
-	accessToken, err := GetAccessToken()
+	return GetUserIDByInAppCodeForConfig(code, DefaultAppConfig())
+}
+
+func GetUserIDByInAppCodeForConfig(code string, cfg AppConfig) (string, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return "", err
 	}
@@ -266,7 +387,11 @@ func GetUserIDByInAppCode(code string) (string, error) {
 
 // GetUserDetailByUserID 閫氳繃 userid 鑾峰彇鐢ㄦ埛璇︾粏淇℃伅锛圕ontact.User.Read锛?
 func GetUserDetailByUserID(userid string) (map[string]interface{}, error) {
-	accessToken, err := GetAccessToken()
+	return GetUserDetailByUserIDForConfig(userid, DefaultAppConfig())
+}
+
+func GetUserDetailByUserIDForConfig(userid string, cfg AppConfig) (map[string]interface{}, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +422,11 @@ func GetUserDetailByUserID(userid string) (map[string]interface{}, error) {
 }
 
 func GetUserIDByUnionID(unionID string) (string, error) {
-	accessToken, err := GetAccessToken()
+	return GetUserIDByUnionIDForConfig(unionID, DefaultAppConfig())
+}
+
+func GetUserIDByUnionIDForConfig(unionID string, cfg AppConfig) (string, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return "", err
 	}

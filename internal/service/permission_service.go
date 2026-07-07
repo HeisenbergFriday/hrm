@@ -192,10 +192,28 @@ func (s *PermissionService) SaveRolePermissions(roleID uint, permissionIDs []uin
 	})
 }
 
+func normalizePermissionOrgID(orgID string) string {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return "default"
+	}
+	return orgID
+}
+
 func (s *PermissionService) normalizeUserID(userID string) string {
+	return s.normalizeUserIDInOrg("", userID)
+}
+
+func (s *PermissionService) normalizeUserIDInOrg(orgID, userID string) string {
 	normalized := strings.TrimSpace(userID)
 	if normalized == "" {
 		return normalized
+	}
+	orgID = strings.TrimSpace(orgID)
+	if orgID != "" {
+		if user, err := s.userRepo.FindByOrgAndUserID(orgID, normalized); err == nil && user.UserID != "" {
+			return user.UserID
+		}
 	}
 	// 先按 user_id 字段查询（钉钉 userId 等字符串标识，即使外观像数字）
 	if user, err := s.userRepo.FindByUserID(normalized); err == nil && user.UserID != "" {
@@ -224,7 +242,11 @@ func looksNumericID(value string) bool {
 
 // GetUserPermissions 返回用户通过角色获得的所有权限码
 func (s *PermissionService) GetUserPermissions(userID string) ([]string, error) {
-	perms, err := s.rolePermissionRepo.FindByUserRole(s.normalizeUserID(userID))
+	return s.GetUserPermissionsInOrg("", userID)
+}
+
+func (s *PermissionService) GetUserPermissionsInOrg(orgID, userID string) ([]string, error) {
+	perms, err := s.rolePermissionRepo.FindByUserRole(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID))
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +259,11 @@ func (s *PermissionService) GetUserPermissions(userID string) ([]string, error) 
 
 // HasPermission 检查用户是否具有指定权限码
 func (s *PermissionService) HasPermission(userID string, permissionCode string) (bool, error) {
-	perms, err := s.GetUserPermissions(userID)
+	return s.HasPermissionInOrg("", userID, permissionCode)
+}
+
+func (s *PermissionService) HasPermissionInOrg(orgID, userID string, permissionCode string) (bool, error) {
+	perms, err := s.GetUserPermissionsInOrg(orgID, userID)
 	if err != nil {
 		return false, err
 	}
@@ -251,7 +277,11 @@ func (s *PermissionService) HasPermission(userID string, permissionCode string) 
 
 // HasAnyPermission 检查用户是否具有任一指定权限码
 func (s *PermissionService) HasAnyPermission(userID string, codes ...string) (bool, error) {
-	perms, err := s.GetUserPermissions(userID)
+	return s.HasAnyPermissionInOrg("", userID, codes...)
+}
+
+func (s *PermissionService) HasAnyPermissionInOrg(orgID, userID string, codes ...string) (bool, error) {
+	perms, err := s.GetUserPermissionsInOrg(orgID, userID)
 	if err != nil {
 		return false, err
 	}
@@ -269,22 +299,34 @@ func (s *PermissionService) HasAnyPermission(userID string, codes ...string) (bo
 
 // GetUserRoles 获取用户当前角色。数据库约束保证同一用户最多只有一个角色。
 func (s *PermissionService) GetUserRoles(userID string) ([]database.Role, error) {
-	return s.userRoleRepo.FindByUserID(s.normalizeUserID(userID))
+	return s.GetUserRolesInOrg("", userID)
+}
+
+func (s *PermissionService) GetUserRolesInOrg(orgID, userID string) ([]database.Role, error) {
+	return s.userRoleRepo.FindByUserID(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID))
 }
 
 // AssignUserRole 设置用户角色，会替换该用户原有角色。
 func (s *PermissionService) AssignUserRole(userID string, roleID uint) error {
-	return s.userRoleRepo.Assign(s.normalizeUserID(userID), roleID)
+	return s.AssignUserRoleInOrg("", userID, roleID)
+}
+
+func (s *PermissionService) AssignUserRoleInOrg(orgID, userID string, roleID uint) error {
+	return s.userRoleRepo.Assign(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID), roleID)
 }
 
 // AssignDefaultEmployeeRoleIfUnassigned assigns the default employee role only when the user has no role.
 func (s *PermissionService) AssignDefaultEmployeeRoleIfUnassigned(userID string) (bool, error) {
-	normalized := s.normalizeUserID(userID)
+	return s.AssignDefaultEmployeeRoleIfUnassignedInOrg("", userID)
+}
+
+func (s *PermissionService) AssignDefaultEmployeeRoleIfUnassignedInOrg(orgID, userID string) (bool, error) {
+	normalized := s.normalizeUserIDInOrg(orgID, userID)
 	if normalized == "" {
 		return false, nil
 	}
 
-	roles, err := s.userRoleRepo.FindByUserID(normalized)
+	roles, err := s.userRoleRepo.FindByUserID(normalizePermissionOrgID(orgID), normalized)
 	if err != nil {
 		return false, err
 	}
@@ -296,7 +338,7 @@ func (s *PermissionService) AssignDefaultEmployeeRoleIfUnassigned(userID string)
 	if err != nil {
 		return false, err
 	}
-	if err := s.userRoleRepo.Assign(normalized, role.ID); err != nil {
+	if err := s.userRoleRepo.Assign(normalizePermissionOrgID(orgID), normalized, role.ID); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -373,23 +415,39 @@ func (s *PermissionService) grantDefaultEmployeeRoleMenuPermissions(roleID uint)
 
 // RemoveUserRole removes a role from a user.
 func (s *PermissionService) RemoveUserRole(userID string, roleID uint) error {
-	return s.userRoleRepo.Remove(s.normalizeUserID(userID), roleID)
+	return s.RemoveUserRoleInOrg("", userID, roleID)
+}
+
+func (s *PermissionService) RemoveUserRoleInOrg(orgID, userID string, roleID uint) error {
+	return s.userRoleRepo.Remove(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID), roleID)
 }
 
 // GetRoleUsers 获取角色下的所有用户
 func (s *PermissionService) GetRoleUsers(roleID uint) ([]database.User, error) {
-	return s.userRoleRepo.FindByRoleID(roleID)
+	return s.GetRoleUsersInOrg("", roleID)
+}
+
+func (s *PermissionService) GetRoleUsersInOrg(orgID string, roleID uint) ([]database.User, error) {
+	return s.userRoleRepo.FindByRoleID(normalizePermissionOrgID(orgID), roleID)
 }
 
 // HasUserRole 检查用户是否有某角色
 func (s *PermissionService) HasUserRole(userID string, roleName string) (bool, error) {
-	return s.userRoleRepo.HasRole(s.normalizeUserID(userID), roleName)
+	return s.HasUserRoleInOrg("", userID, roleName)
+}
+
+func (s *PermissionService) HasUserRoleInOrg(orgID, userID string, roleName string) (bool, error) {
+	return s.userRoleRepo.HasRole(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID), roleName)
 }
 
 // GetUserPerformanceScope 根据 data_permissions 配置返回绩效数据可见范围
 // 返回 nil 表示全量权限，返回非 nil 的 OrgDataScope 表示受限范围
 func (s *PermissionService) GetUserPerformanceScope(userID string) (*OrgDataScope, error) {
-	return s.ResolveUserScope(userID)
+	return s.GetUserPerformanceScopeInOrg("", userID)
+}
+
+func (s *PermissionService) GetUserPerformanceScopeInOrg(orgID, userID string) (*OrgDataScope, error) {
+	return s.ResolveUserScopeInOrg(orgID, userID)
 }
 
 // GetMenuPermission 获取角色的菜单权限
@@ -442,7 +500,11 @@ func (s *PermissionService) SaveDataPermission(roleID uint, scope string, depart
 
 // GetUserMenuKeys 根据用户角色从 menu_permissions 表聚合菜单权限。
 func (s *PermissionService) GetUserMenuKeys(userID string) ([]string, error) {
-	records, err := s.menuPermRepo.FindByUserRole(s.normalizeUserID(userID))
+	return s.GetUserMenuKeysInOrg("", userID)
+}
+
+func (s *PermissionService) GetUserMenuKeysInOrg(orgID, userID string) ([]string, error) {
+	records, err := s.menuPermRepo.FindByUserRole(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID))
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +540,11 @@ func (s *PermissionService) GetRoleMenuKeys(roleID uint) ([]string, error) {
 
 // HasMenuPermission 检查用户是否具有指定菜单权限。
 func (s *PermissionService) HasMenuPermission(userID string, menuKey string) (bool, error) {
-	keys, err := s.GetUserMenuKeys(userID)
+	return s.HasMenuPermissionInOrg("", userID, menuKey)
+}
+
+func (s *PermissionService) HasMenuPermissionInOrg(orgID, userID string, menuKey string) (bool, error) {
+	keys, err := s.GetUserMenuKeysInOrg(orgID, userID)
 	if err != nil {
 		return false, err
 	}
@@ -495,27 +561,20 @@ func (s *PermissionService) HasMenuPermission(userID string, menuKey string) (bo
 // 数据库约束保证同一用户最多只有一个角色，保留 all > department > self 作为兼容兜底。
 // 返回 nil 表示全量权限（admin 或 all scope）。
 func (s *PermissionService) ResolveUserScope(userID string) (*OrgDataScope, error) {
+	return s.ResolveUserScopeInOrg("", userID)
+}
+
+func (s *PermissionService) ResolveUserScopeInOrg(orgID, userID string) (*OrgDataScope, error) {
 	// admin 用户全量权限
 	if userID == "admin" {
 		return nil, nil
 	}
 
-	// JWT token 存的是数字主键 ID，需要转换为 user_id 字段
-	// user_roles.user_id 和 users.user_id 存的是字符串标识
-	stringUserID := userID
-	// 先按 user_id 字段查询（钉钉 userId 等字符串标识，即使外观像数字）
-	if user, err := s.userRepo.FindByUserID(userID); err == nil && user.UserID != "" {
-		stringUserID = user.UserID
-	} else if looksNumericID(userID) {
-		// 再按主键 id 查询
-		if user, err := s.userRepo.FindByID(userID); err == nil && user.UserID != "" {
-			stringUserID = user.UserID
-		}
-	}
-	logrus.WithFields(logrus.Fields{"numericID": userID, "stringUserID": stringUserID}).Debug("ResolveUserScope: ID转换")
+	stringUserID := s.normalizeUserIDInOrg(orgID, userID)
+	logrus.WithFields(logrus.Fields{"orgID": normalizePermissionOrgID(orgID), "numericID": userID, "stringUserID": stringUserID}).Debug("ResolveUserScope: ID转换")
 
 	// 获取用户所有角色
-	roles, err := s.userRoleRepo.FindByUserID(stringUserID)
+	roles, err := s.userRoleRepo.FindByUserID(normalizePermissionOrgID(orgID), stringUserID)
 	if err != nil {
 		return nil, err
 	}

@@ -40,9 +40,42 @@ func (r *UserRepository) FindByUserID(userID string) (*database.User, error) {
 	return &user, nil
 }
 
+// FindByOrgAndUserID 根据组织ID和用户ID查找用户（多租户）
+func (r *UserRepository) FindByOrgAndUserID(orgID, userID string) (*database.User, error) {
+	var user database.User
+	tx := r.db.Where("org_id = ? AND user_id = ?", orgID, userID).Limit(1).Find(&user)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &user, nil
+}
+
 func (r *UserRepository) FindByEmail(email string) (*database.User, error) {
 	var user database.User
 	err := r.db.Where("email = ?", email).First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// FindByOrgAndEmail 根据组织ID和邮箱查找用户（多租户）
+func (r *UserRepository) FindByOrgAndEmail(orgID, email string) (*database.User, error) {
+	var user database.User
+	err := r.db.Where("org_id = ? AND email = ?", orgID, email).First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// FindByOrgAndMobile 根据组织ID和手机号查找用户（多租户）
+func (r *UserRepository) FindByOrgAndMobile(orgID, mobile string) (*database.User, error) {
+	var user database.User
+	err := r.db.Where("org_id = ? AND mobile = ?", orgID, mobile).First(&user).Error
 	if err != nil {
 		return nil, err
 	}

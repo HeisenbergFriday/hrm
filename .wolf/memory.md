@@ -2,6 +2,15 @@
 
 > Chronological action log. Hooks and AI append to this file automatically.
 > Old sessions are consolidated by the daemon weekly.
+## Session: 2026-07-07
+> Fixed multi-enterprise DingTalk login org context and role scoping
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| -- | Fixed selected enterprise propagation | frontend/src/utils/org.ts, frontend/src/store/authStore.ts, frontend/src/pages/Login.tsx, internal/api/handlers.go, internal/dingtalk/dingtalk.go | logout clears cached org_id; in-app/QR callback use selected org DingTalk credentials instead of default fallback | ~900 |
+| -- | Scoped role and permission lookup by org_id | internal/database/models.go, internal/database/database.go, internal/repository/role_repository.go, internal/service/permission_service.go, internal/middleware/auth_context.go | user_roles now migrates to unique (org_id,user_id); /auth/me and middleware permissions use JWT org_id | ~1200 |
+| -- | Verified multitenant auth changes | gofmt; go vet ./...; go test affected packages; npm --prefix frontend run lint/build | all executed verification passed; initial root-level npm run lint failed because package.json is under frontend, reran with --prefix | ~120 |
+| -- | Updated architecture docs | .ai/ARCHITECTURE.md | documented JWT OrgID and org-scoped UserRole permission model | ~80 |
+
 ## Session: 2026-06-09
 > Fixed GitHub Actions frontend CI failure and stabilized frontend test gate
 | Time | Action | File(s) | Outcome | ~Tokens |
@@ -2010,3 +2019,257 @@
 
 | Time | Action | File(s) | Outcome | ~Tokens |
 |------|--------|---------|---------|--------|
+| 10:32 | Created FINAL_DEPLOYMENT_SUMMARY.md | — | ~1516 |
+| 10:33 | Session end: 1 writes across 1 files (FINAL_DEPLOYMENT_SUMMARY.md) | 2 reads | ~1624 tok |
+
+## Session: 2026-07-07 10:35
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 12:25
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 12:25
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 12:26
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 12:26
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 12:28 | Edited internal/api/handlers.go | expanded (+9 lines) | ~283 |
+| 12:28 | Edited internal/api/handlers.go | 21→17 lines | ~226 |
+| 12:28 | Edited internal/api/handlers.go | 17→15 lines | ~154 |
+| 12:29 | Edited internal/api/handlers.go | modified Is() | ~510 |
+| 12:30 | Created docs/钉钉登录问题诊断指南.md | — | ~874 |
+| 12:31 | Session end: 5 writes across 2 files (handlers.go, 钉钉登录问题诊断指南.md) | 4 reads | ~34027 tok |
+| 12:53 | Created deploy/测试服务器部署步骤.md | — | ~1321 |
+| 12:53 | Created docs/钉钉登录问题修复总结.md | — | ~1261 |
+| 12:54 | Created 快速操作清单.md | — | ~815 |
+| 12:55 | Created deploy/deploy.sh | — | ~723 |
+| 12:56 | Session end: 9 writes across 6 files (handlers.go, 钉钉登录问题诊断指南.md, 测试服务器部署步骤.md, 钉钉登录问题修复总结.md, 快速操作清单.md) | 5 reads | ~38441 tok |
+
+## Session: 2026-07-07 12:58
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 12:58 | Created deploy/update.ps1 | — | ~1142 |
+| 12:59 | Session end: 1 writes across 1 files (update.ps1) | 0 reads | ~1224 tok |
+| 13:00 | Edited deploy/update.ps1 | 10→5 lines | ~67 |
+| 13:00 | Edited deploy/update.ps1 | 9→11 lines | ~157 |
+| 13:01 | Session end: 3 writes across 1 files (update.ps1) | 1 reads | ~2603 tok |
+| 13:02 | Created deploy/update.ps1 | — | ~1095 |
+| 13:02 | Session end: 4 writes across 1 files (update.ps1) | 1 reads | ~3790 tok |
+| 13:04 | Edited deploy/update.ps1 | 11→12 lines | ~144 |
+| 13:05 | Created deploy/update.ps1 | — | ~1137 |
+| 13:06 | Edited deploy/update.ps1 | "Target: $ServerHost:$Serv" → "Target: ${ServerHost}:${S" | ~16 |
+| 13:07 | Created deploy/deploy-via-tar.ps1 | — | ~1073 |
+| 13:09 | Edited deploy/deploy-via-tar.ps1 | 12→13 lines | ~112 |
+| 13:09 | Edited deploy/deploy-via-tar.ps1 | 3→3 lines | ~37 |
+| 13:10 | Session end: 10 writes across 2 files (update.ps1, deploy-via-tar.ps1) | 1 reads | ~6431 tok |
+| 13:16 | Created deploy/build-and-deploy.ps1 | — | ~1150 |
+| 14:02 | Session end: 11 writes across 3 files (update.ps1, deploy-via-tar.ps1, build-and-deploy.ps1) | 5 reads | ~8902 tok |
+| 14:03 | Edited deploy/build-and-deploy.ps1 | 6→6 lines | ~46 |
+| 14:03 | Session end: 12 writes across 3 files (update.ps1, deploy-via-tar.ps1, build-and-deploy.ps1) | 6 reads | ~8951 tok |
+| 14:06 | Session end: 12 writes across 3 files (update.ps1, deploy-via-tar.ps1, build-and-deploy.ps1) | 7 reads | ~8951 tok |
+| 14:21 | Session end: 12 writes across 3 files (update.ps1, deploy-via-tar.ps1, build-and-deploy.ps1) | 7 reads | ~8951 tok |
+| 14:24 | Session end: 12 writes across 3 files (update.ps1, deploy-via-tar.ps1, build-and-deploy.ps1) | 8 reads | ~8951 tok |
+| 14:29 | Session end: 12 writes across 3 files (update.ps1, deploy-via-tar.ps1, build-and-deploy.ps1) | 10 reads | ~40979 tok |
+| 14:38 | Created internal/database/organization_models.go | — | ~556 |
+| 14:38 | Edited internal/database/models.go | 19→20 lines | ~412 |
+| 14:38 | Edited internal/database/models.go | 12→13 lines | ~233 |
+| 14:39 | Created tools/migrate_multitenant/main.go | — | ~2143 |
+| 14:39 | Edited internal/middleware/jwt.go | 6→7 lines | ~56 |
+| 14:40 | Edited internal/middleware/jwt.go | 4→5 lines | ~40 |
+| 14:40 | Edited internal/api/handlers.go | 10→11 lines | ~90 |
+| 14:40 | Created internal/database/organization_service.go | — | ~278 |
+| 14:41 | Edited internal/api/handlers.go | expanded (+25 lines) | ~323 |
+| 14:41 | Edited internal/api/handlers.go | modified findLocalUserByDingTalkIdentity() | ~220 |
+| 14:42 | Edited internal/service/user_service.go | expanded (+15 lines) | ~217 |
+| 14:43 | Edited internal/repository/user_repository.go | expanded (+33 lines) | ~399 |
+| 14:43 | Edited internal/api/handlers.go | modified Is() | ~166 |
+| 14:44 | Edited internal/api/handlers.go | expanded (+22 lines) | ~180 |
+| 14:44 | Edited internal/api/handlers.go | modified Is() | ~116 |
+| 14:46 | Edited frontend/src/store/authStore.ts | expanded (+9 lines) | ~286 |
+| 14:47 | Created deploy/多企业支持实施指南.md | — | ~1235 |
+| 14:48 | Created deploy/setup-multitenant.ps1 | — | ~1389 |
+| 14:52 | Created deploy/多企业支持-实施总结.md | — | ~1161 |
+| 14:53 | Session end: 31 writes across 15 files (update.ps1, deploy-via-tar.ps1, build-and-deploy.ps1, organization_models.go, models.go) | 17 reads | ~51353 tok |
+| 15:01 | Edited internal/database/models.go | 20→20 lines | ~417 |
+| 15:01 | Edited internal/database/models.go | 13→13 lines | ~238 |
+| 15:07 | Created deploy/本地测试报告.md | — | ~1119 |
+| 15:08 | Session end: 34 writes across 16 files (update.ps1, deploy-via-tar.ps1, build-and-deploy.ps1, organization_models.go, models.go) | 19 reads | ~53253 tok |
+
+## Session: 2026-07-07 15:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 15:19 | Edited internal/api/handlers.go | modified buildAuthUserPayload() | ~134 |
+| 15:19 | Edited internal/api/handlers.go | modified DingTalkQRLoginStart() | ~534 |
+| 15:20 | Edited internal/api/handlers.go | modified GetDingTalkConfig() | ~292 |
+
+## Session: 2026-07-07 15:22
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 15:39
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 16:00 | Created frontend/src/utils/org.ts | — | ~531 |
+| 16:03 | Edited internal/api/handlers.go | modified GetDingTalkConfig() | ~235 |
+| 16:04 | Edited internal/api/handlers.go | modified DingTalkInAppLogin() | ~295 |
+| 16:05 | Edited frontend/src/pages/Login.tsx | added 1 import(s) | ~53 |
+| 16:06 | Edited frontend/src/pages/Login.tsx | CSS: params | ~48 |
+| 16:07 | Edited frontend/src/pages/Login.tsx | CSS: params | ~103 |
+| 16:09 | Session end: 6 writes across 3 files (org.ts, handlers.go, Login.tsx) | 10 reads | ~44755 tok |
+| 16:14 | Edited frontend/src/App.tsx | added 1 import(s) | ~49 |
+| 16:15 | Edited frontend/src/App.tsx | CSS: params | ~89 |
+| 16:17 | Edited frontend/src/App.tsx | CSS: org_id | ~96 |
+| 16:18 | Edited frontend/src/pages/Callback.tsx | added 1 import(s) | ~44 |
+| 16:18 | Edited frontend/src/pages/Callback.tsx | modified if() | ~42 |
+| 16:20 | Edited frontend/src/pages/Callback.tsx | CSS: org_id | ~47 |
+
+## Session: 2026-07-07 16:21
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 16:55 | Created C:/Users/吴列德/.claude/plans/toasty-dancing-simon.md | — | ~1735 |
+| 16:57 | Edited frontend/src/utils/org.ts | modified rememberOrgId() | ~95 |
+| 17:02 | Edited frontend/src/store/authStore.ts | added 1 import(s) | ~38 |
+| 17:03 | Edited frontend/src/store/authStore.ts | 4→7 lines | ~82 |
+| 17:03 | Edited frontend/src/pages/Login.tsx | orgIdParams() → resolveOrgId() | ~79 |
+| 17:03 | Edited frontend/src/pages/Login.tsx | CSS: org_id | ~45 |
+| 17:04 | Edited internal/dingtalk/dingtalk.go | modified GetAccessToken() | ~60 |
+| 17:05 | Edited internal/dingtalk/dingtalk.go | modified GetUserInfoByCode() | ~976 |
+| 17:05 | Edited internal/api/handlers.go | modified HealthCheck() | ~447 |
+| 17:06 | Edited internal/api/handlers.go | reduced (-18 lines) | ~84 |
+| 17:06 | Edited internal/api/handlers.go | reduced (-10 lines) | ~288 |
+| 17:07 | Edited internal/api/handlers.go | reduced (-12 lines) | ~261 |
+| 17:07 | Edited internal/api/handlers.go | GetUserIDByUnionID() → GetUserIDByUnionIDForConfig() | ~34 |
+| 17:07 | Edited internal/api/handlers.go | GetUserDetailByUserID() → GetUserDetailByUserIDForConfig() | ~30 |
+| 17:07 | Edited internal/api/handlers.go | GetUserByMobile() → GetUserByOrgAndMobile() | ~63 |
+| 17:08 | Edited internal/api/handlers.go | GetUserByEmail() → GetUserByOrgAndEmail() | ~81 |
+| 17:08 | Edited internal/api/handlers.go | GetUserByMobile() → GetUserByOrgAndMobile() | ~82 |
+
+## Session: 2026-07-07 17:10
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 17:11 | Edited internal/database/models.go | 9→10 lines | ~140 |
+| 17:11 | Edited internal/database/database.go | modified migrateUserRolesSingleRole() | ~579 |
+| 17:12 | Session end: 2 writes across 2 files (models.go, database.go) | 4 reads | ~770 tok |
+| 17:12 | Created internal/repository/role_repository.go | — | ~2002 |
+| 17:13 | Edited internal/service/permission_service.go | modified normalizePermissionOrgID() | ~258 |
+| 17:14 | Edited internal/service/permission_service.go | expanded (+24 lines) | ~875 |
+| 17:14 | Edited internal/service/permission_service.go | expanded (+16 lines) | ~401 |
+| 17:15 | Edited frontend/src/config/menu.tsx | 2→2 lines | ~11 |
+| 17:15 | Edited internal/service/permission_service.go | modified NormalizeMenuPermissionKeys() | ~190 |
+| 17:15 | Edited frontend/src/pages/MenuPermission.tsx | "考勤工具箱" → "考勤管理" | ~6 |
+| 17:15 | Edited internal/service/permission_service.go | 41→38 lines | ~344 |
+| 17:15 | Edited internal/middleware/auth_context.go | 13→14 lines | ~101 |
+| 17:16 | Edited internal/middleware/auth_context.go | modified loadAuthContext() | ~212 |
+| 17:16 | Edited internal/middleware/auth_context.go | modified loadCurrentUser() | ~272 |
+| 17:16 | Edited internal/api/handlers.go | modified buildUserMenuKeys() | ~139 |
+| 17:17 | Edited internal/api/handlers.go | 4→4 lines | ~43 |
+| 17:17 | Edited internal/api/handlers.go | modified loadUserByAuthID() | ~278 |
+| 17:18 | Edited internal/api/handlers.go | 9→9 lines | ~52 |
+| 17:18 | Edited internal/api/handlers.go | AssignDefaultEmployeeRoleIfUnassigned() → AssignDefaultEmployeeRoleIfUnassignedInOrg() | ~122 |
+| 17:19 | Edited internal/api/handlers.go | 3→3 lines | ~51 |
+| 17:19 | Session end: 19 writes across 8 files (models.go, database.go, role_repository.go, permission_service.go, menu.tsx) | 9 reads | ~41127 tok |
+| 17:19 | Edited internal/api/handlers.go | 4→4 lines | ~63 |
+| 17:19 | Edited internal/api/handlers.go | modified resolvePermissionTargetOrgID() | ~144 |
+| 17:20 | Edited internal/api/handlers.go | 3→4 lines | ~51 |
+| 17:20 | Edited internal/api/handlers.go | modified AssignUserRole() | ~52 |
+
+## Session: 2026-07-07 17:20
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 17:20 | Edited internal/api/handlers.go | 3→4 lines | ~85 |
+| 17:20 | Edited internal/api/handlers.go | modified RemoveUserRole() | ~52 |
+| 17:21 | Edited internal/api/handlers.go | 3→4 lines | ~85 |
+| 17:21 | Edited internal/api/handlers.go | 3→4 lines | ~50 |
+| 17:21 | Edited internal/api/handlers.go | 3→4 lines | ~54 |
+| 17:21 | Edited internal/api/performance_handlers.go | modified resolvePerformanceScope() | ~63 |
+| 17:21 | Edited internal/api/performance_handlers.go | 3→3 lines | ~41 |
+| 17:22 | Edited internal/api/performance_handlers.go | 3→3 lines | ~34 |
+| 17:23 | Edited internal/database/database.go | 5→5 lines | ~58 |
+| 17:33 | Edited .ai/ARCHITECTURE.md | 6→7 lines | ~66 |
+| 17:33 | Edited .ai/ARCHITECTURE.md | 5→6 lines | ~70 |
+| 17:34 | Created C:/Users/吴列德/.claude/plans/jazzy-napping-nova.md | — | ~2324 |
+
+## Session: 2026-07-07 17:40
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 17:41
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 17:41
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 17:42
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 17:42
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 17:43 | Edited internal/api/performance_handlers.go | 6→6 lines | ~48 |
+| 17:46 | Session end: 1 writes across 1 files (performance_handlers.go) | 1 reads | ~51 tok |
+
+## Session: 2026-07-07 17:48
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 18:14
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 18:23
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 18:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 18:27
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-07 18:27
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 18:29 | Edited frontend/src/pages/Login.tsx | expanded (+7 lines) | ~205 |
+| 18:29 | Edited frontend/src/pages/Login.tsx | 10→15 lines | ~252 |
+| 18:30 | Edited frontend/src/pages/Login.tsx | added error handling | ~1379 |
+| 18:31 | Created frontend/src/pages/Login.tsx | — | ~3044 |
+| 18:31 | Session end: 4 writes across 1 files (Login.tsx) | 5 reads | ~72649 tok |
+| 18:31 | Edited frontend/src/pages/Login.tsx | inline fix | ~17 |
+| 18:31 | Session end: 5 writes across 1 files (Login.tsx) | 5 reads | ~72666 tok |
+| 18:32 | Session end: 5 writes across 1 files (Login.tsx) | 5 reads | ~72666 tok |

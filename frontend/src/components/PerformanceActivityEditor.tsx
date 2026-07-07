@@ -245,7 +245,7 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
 
   const saveActions = (
     <Space wrap>
-      <Button icon={<CloseOutlined />} onClick={onCancel} disabled={saving}>
+      <Button data-testid="performance-editor-cancel" icon={<CloseOutlined />} onClick={onCancel} disabled={saving}>
         取消
       </Button>
       <Button data-testid="performance-editor-save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave} style={{ background: '#4338ca', borderColor: '#4338ca' }}>

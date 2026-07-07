@@ -9,10 +9,11 @@ import (
 // User 用户模型
 type User struct {
 	ID            uint                   `gorm:"primaryKey" json:"id"`
-	UserID        string                 `gorm:"type:varchar(64);unique;not null" json:"user_id"` // 钉钉用户ID
+	OrgID         string                 `gorm:"type:varchar(64);not null;default:'default';index:idx_org_user_id,unique" json:"org_id"` // 组织ID（多租户隔离）
+	UserID        string                 `gorm:"type:varchar(64);not null;index:idx_org_user_id,unique" json:"user_id"`                  // 钉钉用户ID
 	Name          string                 `gorm:"type:varchar(128);not null" json:"name"`
-	Email         string                 `gorm:"type:varchar(128);unique" json:"email"`
-	Mobile        string                 `gorm:"type:varchar(32);unique" json:"mobile"`
+	Email         string                 `gorm:"type:varchar(128);index:idx_org_email,unique" json:"email"`
+	Mobile        string                 `gorm:"type:varchar(32)" json:"mobile"`
 	Password      string                 `gorm:"type:varchar(256)" json:"-"` // 密码哈希，JSON 不输出
 	DepartmentID  string                 `gorm:"type:varchar(64);not null" json:"department_id"`
 	Position      string                 `gorm:"type:varchar(128)" json:"position"`
@@ -29,7 +30,8 @@ type User struct {
 // Department 部门模型
 type Department struct {
 	ID           uint                   `gorm:"primaryKey" json:"id"`
-	DepartmentID string                 `gorm:"type:varchar(64);unique;not null" json:"department_id"` // 钉钉部门ID
+	OrgID        string                 `gorm:"type:varchar(64);not null;default:'default';index:idx_org_dept_id,unique" json:"org_id"` // 组织ID（多租户隔离）
+	DepartmentID string                 `gorm:"type:varchar(64);not null;index:idx_org_dept_id,unique" json:"department_id"`            // 钉钉部门ID
 	Name         string                 `gorm:"type:varchar(128);not null" json:"name"`
 	ParentID     string                 `gorm:"type:varchar(64)" json:"parent_id"`
 	Order        int                    `gorm:"default:0" json:"order"`
@@ -103,7 +105,7 @@ type ApprovalTemplate struct {
 // Role 角色模型
 type Role struct {
 	ID          uint           `gorm:"primaryKey" json:"id"`
-	Name        string         `gorm:"type:varchar(64);unique;not null" json:"name"`
+	Name        string         `gorm:"type:varchar(64);not null" json:"name"`
 	Description string         `gorm:"type:text" json:"description"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
@@ -134,7 +136,8 @@ type RolePermission struct {
 // UserRole 用户角色模型
 type UserRole struct {
 	ID        uint           `gorm:"primaryKey" json:"id"`
-	UserID    string         `gorm:"type:varchar(64);uniqueIndex:idx_user_roles_user_id;not null" json:"user_id"`
+	OrgID     string         `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_user_roles_org_user" json:"org_id"`
+	UserID    string         `gorm:"type:varchar(64);not null;uniqueIndex:idx_user_roles_org_user" json:"user_id"`
 	RoleID    uint           `gorm:"not null" json:"role_id"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

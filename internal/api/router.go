@@ -15,6 +15,8 @@ import (
 func SetupRouter() *gin.Engine {
 	router := gin.Default()
 
+	router.Use(securityHeaders())
+
 	allowOrigins, allowOriginFunc := resolveCORSConfig()
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     allowOrigins,
@@ -396,6 +398,16 @@ func SetupRouter() *gin.Engine {
 	registerFrontendRoutes(router)
 
 	return router
+}
+
+func securityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		headers := c.Writer.Header()
+		headers.Set("X-Content-Type-Options", "nosniff")
+		headers.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		headers.Set("X-Frame-Options", "SAMEORIGIN")
+		c.Next()
+	}
 }
 
 func resolveCORSConfig() ([]string, func(string) bool) {

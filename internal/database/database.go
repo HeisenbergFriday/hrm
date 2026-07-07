@@ -248,6 +248,12 @@ func migrate() error {
 		return err
 	}
 
+	if err := migrateUserMobileUniqueIndex(); err != nil {
+		return err
+	}
+	if err := migrateRoleNameUniqueIndex(); err != nil {
+		return err
+	}
 	if err := migrateShiftCatalogSchema(); err != nil {
 		return err
 	}
@@ -437,6 +443,105 @@ func migrateAnnualLeaveGrantIndexes() error {
 	return DB.Exec("CREATE UNIQUE INDEX `idx_leave_grant_user_year_q_type` ON `annual_leave_grants` (`user_id`, `year`, `quarter`, `grant_type`)").Error
 }
 
+func migrateUserMobileUniqueIndex() error {
+	if !DB.Migrator().HasTable(&User{}) {
+		return nil
+	}
+
+	var indexCount int64
+	if err := DB.Raw(`
+		SELECT COUNT(*)
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'users'
+		  AND INDEX_NAME = 'uni_users_mobile'
+	`).Scan(&indexCount).Error; err != nil {
+		return err
+	}
+	if indexCount > 0 {
+		return nil
+	}
+
+	type duplicateMobile struct {
+		Mobile string
+		Count  int64
+	}
+	var duplicates []duplicateMobile
+	if err := DB.Raw(`
+		SELECT mobile, COUNT(*) AS count
+		FROM users
+		WHERE mobile IS NOT NULL
+		GROUP BY mobile
+		HAVING COUNT(*) > 1
+		LIMIT 5
+	`).Scan(&duplicates).Error; err != nil {
+		return err
+	}
+	if len(duplicates) > 0 {
+		log.Printf("[migrate] 跳过创建 uni_users_mobile，发现 %d 个重复手机号样本，请先清理历史 users.mobile 数据", len(duplicates))
+		return nil
+	}
+
+	if err := DB.Exec("CREATE UNIQUE INDEX `uni_users_mobile` ON `users` (`mobile`)").Error; err != nil {
+		lowerErr := strings.ToLower(err.Error())
+		if strings.Contains(lowerErr, "duplicate entry") || strings.Contains(lowerErr, "duplicate key name") {
+			log.Printf("[migrate] 跳过创建 uni_users_mobile: %v", err)
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func migrateRoleNameUniqueIndex() error {
+	if !DB.Migrator().HasTable(&Role{}) {
+		return nil
+	}
+
+	var indexCount int64
+	if err := DB.Raw(`
+		SELECT COUNT(*)
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'roles'
+		  AND INDEX_NAME = 'uni_roles_name'
+	`).Scan(&indexCount).Error; err != nil {
+		return err
+	}
+	if indexCount > 0 {
+		return nil
+	}
+
+	type duplicateRoleName struct {
+		Name  string
+		Count int64
+	}
+	var duplicates []duplicateRoleName
+	if err := DB.Raw(`
+		SELECT name, COUNT(*) AS count
+		FROM roles
+		GROUP BY name
+		HAVING COUNT(*) > 1
+		LIMIT 5
+	`).Scan(&duplicates).Error; err != nil {
+		return err
+	}
+	if len(duplicates) > 0 {
+		log.Printf("[migrate] 跳过创建 uni_roles_name，发现 %d 个重复角色名样本，请先清理历史 roles.name 数据", len(duplicates))
+		return nil
+	}
+
+	if err := DB.Exec("CREATE UNIQUE INDEX `uni_roles_name` ON `roles` (`name`)").Error; err != nil {
+		lowerErr := strings.ToLower(err.Error())
+		if strings.Contains(lowerErr, "duplicate entry") || strings.Contains(lowerErr, "duplicate key name") {
+			log.Printf("[migrate] 跳过创建 uni_roles_name: %v", err)
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func migrateOvertimeMatchSchema() error {
 	if !DB.Migrator().HasTable(&OvertimeMatchResult{}) || !DB.Migrator().HasTable(&CompensatoryLeaveLedger{}) {
 		return nil
@@ -544,6 +649,25 @@ func migrateUserRolesSingleRole() error {
 		return nil
 	}
 
+	if !DB.Migrator().HasColumn(&UserRole{}, "OrgID") {
+		if err := DB.Exec("ALTER TABLE `user_roles` ADD COLUMN `org_id` varchar(64) NOT NULL DEFAULT 'default'").Error; err != nil {
+			return err
+		}
+	}
+
+	if err := DB.Exec(`
+		UPDATE user_roles ur
+		LEFT JOIN (
+			SELECT user_id, MIN(org_id) AS org_id
+			FROM users
+			WHERE deleted_at IS NULL
+			GROUP BY user_id
+		) u ON u.user_id = ur.user_id
+		SET ur.org_id = COALESCE(NULLIF(ur.org_id, ''), u.org_id, 'default')
+	`).Error; err != nil {
+		return err
+	}
+
 	if err := DB.Unscoped().Where("deleted_at IS NOT NULL").Delete(&UserRole{}).Error; err != nil {
 		return err
 	}
@@ -552,12 +676,12 @@ func migrateUserRolesSingleRole() error {
 		DELETE ur
 		FROM user_roles ur
 		JOIN (
-			SELECT user_id, MAX(id) AS keep_id
+			SELECT org_id, user_id, MAX(id) AS keep_id
 			FROM user_roles
 			WHERE deleted_at IS NULL
-			GROUP BY user_id
+			GROUP BY org_id, user_id
 			HAVING COUNT(*) > 1
-		) dup ON dup.user_id = ur.user_id
+		) dup ON dup.org_id = ur.org_id AND dup.user_id = ur.user_id
 		WHERE ur.deleted_at IS NULL
 		  AND ur.id <> dup.keep_id
 	`).Error; err != nil {
@@ -565,33 +689,43 @@ func migrateUserRolesSingleRole() error {
 	}
 
 	type indexInfo struct {
-		NonUnique int
+		IndexName string
 	}
-	var indexes []indexInfo
+	var oldIndexes []indexInfo
 	if err := DB.Raw(`
-		SELECT NON_UNIQUE
+		SELECT INDEX_NAME
 		FROM information_schema.STATISTICS
 		WHERE TABLE_SCHEMA = DATABASE()
 		  AND TABLE_NAME = 'user_roles'
 		  AND INDEX_NAME = 'idx_user_roles_user_id'
-	`).Scan(&indexes).Error; err != nil {
+		GROUP BY INDEX_NAME
+	`).Scan(&oldIndexes).Error; err != nil {
 		return err
 	}
-	for _, index := range indexes {
-		if index.NonUnique == 0 {
-			return nil
-		}
-	}
-	if len(indexes) > 0 {
+	if len(oldIndexes) > 0 {
 		if err := DB.Exec("DROP INDEX `idx_user_roles_user_id` ON `user_roles`").Error; err != nil {
 			return err
 		}
 	}
-	if err := DB.Exec("CREATE UNIQUE INDEX `idx_user_roles_user_id` ON `user_roles` (`user_id`)").Error; err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "duplicate key name") {
-			return nil
-		}
+
+	var newIndexes []indexInfo
+	if err := DB.Raw(`
+		SELECT INDEX_NAME
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'user_roles'
+		  AND INDEX_NAME = 'idx_user_roles_org_user'
+		GROUP BY INDEX_NAME
+	`).Scan(&newIndexes).Error; err != nil {
 		return err
+	}
+	if len(newIndexes) == 0 {
+		if err := DB.Exec("CREATE UNIQUE INDEX `idx_user_roles_org_user` ON `user_roles` (`org_id`, `user_id`)").Error; err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate key name") {
+				return nil
+			}
+			return err
+		}
 	}
 	return nil
 }
@@ -873,7 +1007,7 @@ func seedUserRoles() {
 	if adminID, ok := roleMap["管理员"]; ok {
 		var admin User
 		if err := DB.Where("user_id = ?", getEnvOrDefault("ADMIN_USER_ID", "admin")).First(&admin).Error; err == nil {
-			DB.Create(&UserRole{UserID: admin.UserID, RoleID: adminID})
+			DB.Create(&UserRole{OrgID: admin.OrgID, UserID: admin.UserID, RoleID: adminID})
 		}
 	}
 }
@@ -1269,14 +1403,14 @@ func migrateAttendanceToolboxMenuPermissions() {
 
 	var rolePermissions []RolePermission
 	if err := DB.Where("permission_id = ? AND deleted_at IS NULL", attendancePermission.ID).Find(&rolePermissions).Error; err != nil {
-		log.Printf("migrate attendance toolbox menu permissions: read role permissions failed: %v", err)
+		log.Printf("迁移考勤工具箱菜单权限：读取角色权限失败: %v", err)
 		return
 	}
 
 	menuKeys := append([]string{"menu:home"}, legacyMenuKeysByPermission["attendance_manage"]...)
 	for _, rolePermission := range rolePermissions {
 		if err := ensureRoleMenuPermission(rolePermission.RoleID, menuKeys); err != nil {
-			log.Printf("migrate attendance toolbox menu permissions: role %d update menu failed: %v", rolePermission.RoleID, err)
+			log.Printf("迁移考勤工具箱菜单权限：角色 %d 补充菜单失败: %v", rolePermission.RoleID, err)
 		}
 	}
 }

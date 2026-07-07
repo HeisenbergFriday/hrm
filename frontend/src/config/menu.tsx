@@ -56,8 +56,8 @@ export const menuConfig: MenuItem[] = [
   },
   {
     key: menuPermissionKey('attendance-group'),
-    title: '考勤工具箱',
-    label: '考勤工具箱',
+    title: '考勤管理',
+    label: '考勤管理',
     icon: <ClockCircleOutlined />,
     children: [
       { key: menuPermissionKey('attendance'), title: '考勤查询', label: <Link to="/attendance">考勤查询</Link>, icon: <ClockCircleOutlined /> },

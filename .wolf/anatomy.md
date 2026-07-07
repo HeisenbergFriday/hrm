@@ -1,14 +1,17 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-06-09T01:35:50.287Z
-> Files: 52 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-07T10:31:32.049Z
+> Files: 88 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ./
 
 - `绩效service测试覆盖率补强报告.md` — 绩效 Service 测试覆盖率补强报告 (~1071 tok)
+- `快速操作清单.md` — 钉钉登录修复 - 快速操作清单 (~764 tok)
+- `FINAL_DEPLOYMENT_SUMMARY.md` — PeopleOps 最终部署总结 (~1421 tok)
 
 ## .ai/
 
+- `ARCHITECTURE.md` — 架构设计；JWT org_id 与 UserRole 企业隔离约定 (~1589 tok)
 - `COMMANDS.md` — 常用命令 (~690 tok)
 - `PROJECT_MAP.md` — 项目结构索引 (~3082 tok)
 
@@ -33,8 +36,10 @@
 - `cosmic-jingling-acorn.md` — 修复绩效模块 Playwright E2E 执行计划 (~1113 tok)
 - `eager-wibbling-music.md` — 计划：补强绩效 API handler 测试覆盖 (~1834 tok)
 - `humming-booping-planet.md` — 绩效 Service 覆盖率补强计划 (~1594 tok)
+- `jazzy-napping-nova.md` — 集成 D:\app Excel 工具六个 Tab 到 HR Web 系统实施计划 (~2179 tok)
 - `peppy-wibbling-liskov.md` — 补强绩效 API handler 覆盖测试计划 (~1366 tok)
 - `replicated-plotting-finch.md` — Plan: 为 PerformanceOverview 补充真实组件交互测试 (~596 tok)
+- `toasty-dancing-simon.md` — 多企业钉钉登录与权限上下文修复计划 (~1626 tok)
 - `witty-greeting-blanket.md` — 为 `performance_repository.go` 补充测试覆盖计划 (~1207 tok)
 
 ## api-docs/
@@ -42,6 +47,23 @@
 
 ## cmd/
 
+
+## deploy/
+
+- `本地测试报告.md` — 本地多企业支持测试指南 (~1049 tok)
+- `测试服务器部署步骤.md` — 测试服务器部署步骤 (~1239 tok)
+- `多企业支持-实施总结.md` — 多企业支持实施总结 (~1089 tok)
+- `多企业支持实施指南.md` — 多企业支持实施指南 (~1157 tok)
+- `build-and-deploy.ps1` — Declares Write (~1149 tok)
+- `deploy-via-tar.ps1` — Declares Write (~1081 tok)
+- `deploy.sh` — 钉钉登录修复 - 自动部署脚本 (~723 tok)
+- `setup-multitenant.ps1` — Declares Write (~1389 tok)
+- `update.ps1` — Declares Write (~1138 tok)
+
+## docs/
+
+- `钉钉登录问题修复总结.md` — 钉钉登录问题修复总结 (~1182 tok)
+- `钉钉登录问题诊断指南.md` — 钉钉登录问题诊断指南 (~819 tok)
 
 ## frontend/
 
@@ -58,7 +80,7 @@
 
 ## frontend/src/
 
-- `App.tsx` — Login (~5529 tok)
+- `App.tsx` — Login (~5525 tok)
 - `main.tsx` — queryClient (~180 tok)
 
 ## frontend/src/components/
@@ -69,9 +91,13 @@
 
 ## frontend/src/config/
 
+- `menu.tsx` — menuPermissionKey (~1742 tok)
 
 ## frontend/src/pages/
 
+- `Callback.tsx` — isDingTalkEnv (~778 tok)
+- `Login.tsx` — isDingTalkEnv — renders modal (~3040 tok)
+- `MenuPermission.tsx` — MenuPermission (~1791 tok)
 - `PerformanceGoalSetting.interaction.test.tsx` — PerformanceGoalSetting 组件交互测试 (~3720 tok)
 - `PerformanceGoalSetting.test.ts` — 测试辅助函数 (~1986 tok)
 - `PerformanceGoalSetting.tsx` — targetReadonlyParticipantStatuses (~8009 tok)
@@ -94,6 +120,7 @@
 
 ## frontend/src/store/
 
+- `authStore.ts` — Exports useAuthStore (~338 tok)
 
 ## frontend/src/test/
 
@@ -101,6 +128,7 @@
 
 ## frontend/src/utils/
 
+- `org.ts` — 解析当前应该使用的 org_id： (~560 tok)
 - `performanceHelpers.test.ts` — Declares res (~2969 tok)
 - `performanceHelpers.ts` — Exports STATUS_MAP, PARTICIPANT_STATUS_MAP, ACTIVITY_FLOW, normalizeIDArray + 23 more (~2660 tok)
 
@@ -115,8 +143,10 @@
 
 ## internal/api/
 
+- `handlers.go` — Struct: Response (~33582 tok)
 - `performance_handlers_coverage_test.go` — TestRefreshPerformanceParticipants_InvalidActivityID, TestRefreshPerformanceParticipants_Success, Te (~19426 tok)
 - `performance_handlers_test.go` — TestCreatePerformanceActivityHandlerMissingRequired, TestUpdatePerformanceActivityHandlerMissingRequ (~9419 tok)
+- `performance_handlers.go` (~35730 tok)
 
 ## internal/cache/
 
@@ -126,12 +156,19 @@
 
 ## internal/database/
 
+- `database.go` — Struct: col (~11540 tok)
+- `models.go` — Struct: User (~10924 tok)
+- `organization_models.go` — Struct: Organization (~556 tok)
+- `organization_service.go` — GetOrgIDByCorpID, GetOrganizationByOrgID, GetOrganizationByCorpID (~278 tok)
 
 ## internal/dingtalk/
 
+- `dingtalk.go` — Struct: AppConfig (~30081 tok)
 
 ## internal/middleware/
 
+- `auth_context.go` — Struct: AuthContext (~1934 tok)
+- `jwt.go` — Struct: Claims (~549 tok)
 
 ## internal/repository/
 
@@ -140,6 +177,8 @@
 - `performance_indicator_repository_test.go` — Struct: stubIndicatorQueryResponse (~6815 tok)
 - `performance_repository_coverage_test.go` — TestActivityRepo_FindAll_DateFiltersBuildExpectedQuery, TestActivityRepo_FindAll_CountError, TestAct (~12186 tok)
 - `performance_repository_test.go` — Struct: stubPerformanceQueryResponse (~22562 tok)
+- `role_repository.go` — Struct: RoleRepository (~2002 tok)
+- `user_repository.go` — Struct: UserRepository (~1288 tok)
 
 ## internal/service/
 
@@ -147,6 +186,8 @@
 - `performance_lifecycle_test.go` — TestPerformanceFullLifecycle_HappyPath (~6199 tok)
 - `performance_service_coverage_test.go` — TestUpdateActivity_NotFound, TestUpdateActivity_DraftAllowsScopeChange, TestUpdateActivity_NonDraftR (~9143 tok)
 - `performance_service_extended_test.go` — TestGetActivityReturnsActivity, TestGetActivityNotFound, TestGetParticipantReturnsParticipant, TestG (~28236 tok)
+- `permission_service.go` — Struct: PermissionService (~6424 tok)
+- `user_service.go` — Struct: UserService (~681 tok)
 
 ## scripts/
 
@@ -156,6 +197,10 @@
 
 ## tools/hooks/
 
+
+## tools/migrate_multitenant/
+
+- `main.go` (~2143 tok)
 
 ## tools/ops/resync_comp_time/
 

@@ -15,6 +15,7 @@ import { refreshMenuKeys } from './services/api'
 import RouteGuard from './components/RouteGuard'
 import ErrorBoundary from './components/ErrorBoundary'
 import { authRedirectTargetFromLocation, loginPathWithRedirect, rememberAuthRedirect } from './utils/authRedirect'
+import { orgIdParams, resolveOrgId } from './utils/org'
 
 const Login = lazy(() => import('./pages/Login'))
 const Callback = lazy(() => import('./pages/Callback'))
@@ -239,7 +240,10 @@ function App() {
 
     const doAutoLogin = async () => {
       try {
-        const configRes = await axios.get('/api/v1/auth/dingtalk/config')
+        const orgId = resolveOrgId()
+        const configRes = await axios.get('/api/v1/auth/dingtalk/config', {
+          params: orgIdParams(),
+        })
         const { corp_id: corpId, missing } = configRes.data.data
         const dd = (window as any).dd
 
@@ -263,6 +267,7 @@ function App() {
             try {
               const response = await axios.post('/api/v1/auth/dingtalk/in-app', {
                 code: result.code,
+                org_id: orgId,
               })
               const { token, user } = response.data.data
               login(user, token)

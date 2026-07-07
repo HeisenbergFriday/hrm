@@ -250,13 +250,22 @@ func loadUserByUserID(userID string) (*database.User, error) {
 }
 
 func loadUserByAuthID(authUserID string) (*database.User, error) {
+	return loadUserByAuthIDInOrg("", authUserID)
+}
+
+func loadUserByAuthIDInOrg(orgID, authUserID string) (*database.User, error) {
 	authUserID = strings.TrimSpace(authUserID)
 	if authUserID == "" {
 		return nil, gorm.ErrRecordNotFound
 	}
+	orgID = strings.TrimSpace(orgID)
 
 	var user database.User
-	tx := database.DB.Where("user_id = ? AND deleted_at IS NULL", authUserID).Limit(1).Find(&user)
+	query := database.DB.Where("user_id = ? AND deleted_at IS NULL", authUserID)
+	if orgID != "" {
+		query = query.Where("org_id = ?", orgID)
+	}
+	tx := query.Limit(1).Find(&user)
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
@@ -268,7 +277,11 @@ func loadUserByAuthID(authUserID string) (*database.User, error) {
 		return nil, gorm.ErrRecordNotFound
 	}
 	user = database.User{}
-	tx = database.DB.Where("id = ? AND deleted_at IS NULL", authUserID).Limit(1).Find(&user)
+	query = database.DB.Where("id = ? AND deleted_at IS NULL", authUserID)
+	if orgID != "" {
+		query = query.Where("org_id = ?", orgID)
+	}
+	tx = query.Limit(1).Find(&user)
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
@@ -407,14 +420,14 @@ func applyDingTalkOrgDiagnostics(user *database.User, u dingtalk.UserInfo) {
 	}
 }
 
-func assignDefaultEmployeeRoleForSyncedUser(permissionService *service.PermissionService, userID, source string) (bool, error) {
-	assigned, err := permissionService.AssignDefaultEmployeeRoleIfUnassigned(userID)
+func assignDefaultEmployeeRoleForSyncedUser(permissionService *service.PermissionService, orgID, userID, source string) (bool, error) {
+	assigned, err := permissionService.AssignDefaultEmployeeRoleIfUnassignedInOrg(orgID, userID)
 	if err != nil {
-		log.Printf("[%s] 为新增用户 %s 分配普通员工角色失败: %v", source, userID, err)
+		log.Printf("[%s] 为新增用户 %s/%s 分配普通员工角色失败: %v", source, orgID, userID, err)
 		return false, err
 	}
 	if assigned {
-		log.Printf("[%s] 已为新增用户 %s 分配普通员工角色", source, userID)
+		log.Printf("[%s] 已为新增用户 %s/%s 分配普通员工角色", source, orgID, userID)
 	}
 	return assigned, nil
 }
@@ -465,6 +478,48 @@ func HealthCheck(c *gin.Context) {
 	})
 }
 
+func fallbackDingTalkOrgID() string {
+	orgID := strings.TrimSpace(os.Getenv("DINGTALK_SHARED_OAUTH_ORG_ID"))
+	if orgID == "" {
+		orgID = "default"
+	}
+	return orgID
+}
+
+func organizationDingTalkAppConfig(org *database.Organization) dingtalk.AppConfig {
+	if org == nil {
+		return dingtalk.AppConfig{}
+	}
+	return dingtalk.AppConfig{
+		OrgID:       org.OrgID,
+		Name:        org.Name,
+		CorpID:      org.CorpID,
+		AppKey:      org.AppKey,
+		AppSecret:   org.AppSecret,
+		AgentID:     org.AgentID,
+		AppHomeURL:  org.AppHomeURL,
+		RedirectURI: org.RedirectURI,
+		Status:      org.Status,
+	}
+}
+
+func resolveDingTalkLoginConfig(orgID, source string) (*database.Organization, dingtalk.AppConfig, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		orgID = fallbackDingTalkOrgID()
+	}
+	org, err := database.GetOrganizationByOrgID(orgID)
+	if err != nil {
+		return nil, dingtalk.AppConfig{}, fmt.Errorf("组织不存在: %s", orgID)
+	}
+	cfg := organizationDingTalkAppConfig(org)
+	if strings.TrimSpace(cfg.CorpID) == "" || strings.TrimSpace(cfg.AppKey) == "" || strings.TrimSpace(cfg.AppSecret) == "" {
+		log.Printf("[%s] organization dingtalk config incomplete: org_id=%s corp_id=%t app_key=%t app_secret=%t", source, org.OrgID, strings.TrimSpace(cfg.CorpID) != "", strings.TrimSpace(cfg.AppKey) != "", strings.TrimSpace(cfg.AppSecret) != "")
+		return nil, dingtalk.AppConfig{}, fmt.Errorf("组织 %s 未配置完整的钉钉应用", orgID)
+	}
+	return org, cfg, nil
+}
+
 // generateToken issues new tokens with the business user_id as the primary identity.
 func generateToken(user *database.User) (string, time.Time, error) {
 	if user == nil {
@@ -479,6 +534,7 @@ func generateToken(user *database.User) (string, time.Time, error) {
 		UserID:   userID,
 		UserDBID: strconv.FormatUint(uint64(user.ID), 10),
 		UserName: user.Name,
+		OrgID:    user.OrgID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -494,18 +550,18 @@ func generateToken(user *database.User) (string, time.Time, error) {
 }
 
 // buildUserMenuKeys 聚合用户的菜单权限 key 列表
-func buildUserMenuKeys(userID string) []string {
+func buildUserMenuKeys(orgID, userID string) []string {
 	permService := service.NewPermissionService(database.DB)
-	keys, err := permService.GetUserMenuKeys(userID)
+	keys, err := permService.GetUserMenuKeysInOrg(orgID, userID)
 	if err != nil {
 		return []string{}
 	}
 	return keys
 }
 
-func buildUserPermissions(userID string) []string {
+func buildUserPermissions(orgID, userID string) []string {
 	permService := service.NewPermissionService(database.DB)
-	permissions, err := permService.GetUserPermissions(userID)
+	permissions, err := permService.GetUserPermissionsInOrg(orgID, userID)
 	if err != nil {
 		return []string{}
 	}
@@ -523,8 +579,9 @@ func buildAuthUserPayload(user *database.User) gin.H {
 		"position":      user.Position,
 		"avatar":        user.Avatar,
 		"status":        user.Status,
-		"menu_keys":     buildUserMenuKeys(user.UserID),
-		"permissions":   buildUserPermissions(user.UserID),
+		"org_id":        user.OrgID,
+		"menu_keys":     buildUserMenuKeys(user.OrgID, user.UserID),
+		"permissions":   buildUserPermissions(user.OrgID, user.UserID),
 	}
 }
 
@@ -851,7 +908,7 @@ func SyncUsers(c *gin.Context) {
 				log.Printf("[SyncUsers] 创建用户 %s 失败: %v", u.UserID, err)
 				continue
 			}
-			if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, u.UserID, "SyncUsers"); err == nil && assigned {
+			if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, fallbackDingTalkOrgID(), u.UserID, "SyncUsers"); err == nil && assigned {
 				defaultRoleAssignedCount++
 			}
 		} else {
@@ -935,21 +992,50 @@ func GetDingTalkConfig(c *gin.Context) {
 	corpID := dingtalk.GetCorpID()
 	appHomeURL := resolveDingTalkAppHomeURL(c)
 	redirectURI := resolveDingTalkRedirectURI(c)
+
+	// 如果前端指定了 org_id，优先返回该企业的 corp_id，
+	// 否则免登会用默认企业的 corpId，导致 corp 与 org 不匹配。
+	orgID := strings.TrimSpace(c.Query("org_id"))
+	if orgID != "" && !strings.EqualFold(orgID, "default") {
+		if org, err := database.GetOrganizationByOrgID(orgID); err == nil {
+			if strings.TrimSpace(org.CorpID) != "" {
+				corpID = org.CorpID
+			}
+			log.Printf("[dingtalk/config] resolved org corp: org_id=%s corp_id=%s", org.OrgID, org.CorpID)
+		} else {
+			log.Printf("[dingtalk/config] organization not found, fallback to default: org_id=%s err=%v", orgID, err)
+		}
+	}
+
 	missingConfig := []string{}
 	if corpID == "" {
 		missingConfig = append(missingConfig, "DINGTALK_CORP_ID")
 	}
-	log.Printf("[dingtalk/config] host=%s app_home_url=%s redirect_uri=%s missing=%v", c.Request.Host, appHomeURL, redirectURI, missingConfig)
+
+	// 获取可用的企业列表
+	activeConfigs := dingtalk.ActiveAppConfigs()
+	orgs := make([]gin.H, 0, len(activeConfigs))
+	for _, cfg := range activeConfigs {
+		orgs = append(orgs, gin.H{
+			"org_id":   cfg.OrgID,
+			"name":     cfg.Name,
+			"corp_id":  cfg.CorpID,
+			"agent_id": cfg.AgentID,
+		})
+	}
+
+	log.Printf("[dingtalk/config] host=%s app_home_url=%s redirect_uri=%s missing=%v organizations=%d", c.Request.Host, appHomeURL, redirectURI, missingConfig, len(orgs))
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
 		Message: "success",
 		Data: gin.H{
-			"corp_id":      corpID,
-			"client_id":    os.Getenv("DINGTALK_APP_KEY"),
-			"redirect_uri": redirectURI,
-			"app_home_url": appHomeURL,
-			"missing":      missingConfig,
+			"corp_id":       corpID,
+			"client_id":     os.Getenv("DINGTALK_APP_KEY"),
+			"redirect_uri":  redirectURI,
+			"app_home_url":  appHomeURL,
+			"missing":       missingConfig,
+			"organizations": orgs,
 		},
 	})
 }
@@ -958,9 +1044,36 @@ func GetDingTalkConfig(c *gin.Context) {
 func DingTalkQRLoginStart(c *gin.Context) {
 	state := generateLoginState()
 	redirectURI := resolveDingTalkRedirectURI(c)
-	log.Printf("[dingtalk/qr/start] host=%s forwarded_host=%s redirect_uri=%s ua=%s", c.Request.Host, c.GetHeader("X-Forwarded-Host"), redirectURI, c.GetHeader("User-Agent"))
 
-	qrCodeURL, err := dingtalk.GetQRCodeWithRedirect(state, redirectURI)
+	// 获取用户选择的组织ID
+	orgID := strings.TrimSpace(c.Query("org_id"))
+	if orgID == "" {
+		orgID = os.Getenv("DINGTALK_SHARED_OAUTH_ORG_ID")
+		if orgID == "" {
+			orgID = "default"
+		}
+	}
+	log.Printf("[dingtalk/qr/start] host=%s forwarded_host=%s redirect_uri=%s org_id=%s ua=%s", c.Request.Host, c.GetHeader("X-Forwarded-Host"), redirectURI, orgID, c.GetHeader("User-Agent"))
+
+	_, appConfig, err := resolveDingTalkLoginConfig(orgID, "dingtalk/qr/start")
+	if err != nil {
+		log.Printf("[dingtalk/qr/start] resolve organization config failed: org_id=%s err=%v", orgID, err)
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	// 在回调 URL 中附加 org_id 参数
+	callbackURL := redirectURI
+	if !strings.Contains(callbackURL, "?") {
+		callbackURL += "?org_id=" + orgID
+	} else {
+		callbackURL += "&org_id=" + orgID
+	}
+
+	qrCodeURL, err := dingtalk.GetQRCodeWithConfig(state, callbackURL, appConfig)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -976,7 +1089,8 @@ func DingTalkQRLoginStart(c *gin.Context) {
 		Data: gin.H{
 			"qr_code_url":  qrCodeURL,
 			"state":        state,
-			"redirect_uri": redirectURI,
+			"redirect_uri": callbackURL,
+			"org_id":       orgID,
 		},
 	})
 }
@@ -984,7 +1098,8 @@ func DingTalkQRLoginStart(c *gin.Context) {
 // DingTalkInAppLogin 閽夐拤鍐呭厤鐧?
 func DingTalkInAppLogin(c *gin.Context) {
 	var req struct {
-		Code string `json:"code" binding:"required"`
+		Code  string `json:"code" binding:"required"`
+		OrgID string `json:"org_id"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -996,7 +1111,23 @@ func DingTalkInAppLogin(c *gin.Context) {
 	}
 	log.Printf("[dingtalk/in-app] host=%s has_code=%t ua=%s", c.Request.Host, strings.TrimSpace(req.Code) != "", c.GetHeader("User-Agent"))
 
-	userid, err := dingtalk.GetUserIDByInAppCode(req.Code)
+	orgID := strings.TrimSpace(req.OrgID)
+	if orgID == "" {
+		orgID = strings.TrimSpace(c.Query("org_id"))
+	}
+	org, appConfig, err := resolveDingTalkLoginConfig(orgID, "dingtalk/in-app")
+	if err != nil {
+		log.Printf("[dingtalk/in-app] resolve organization config failed: org_id=%s err=%v", orgID, err)
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: err.Error(),
+		})
+		return
+	}
+	orgID = org.OrgID
+	log.Printf("[dingtalk/in-app] organization found: org_id=%s corp_id=%s", org.OrgID, org.CorpID)
+
+	userid, err := dingtalk.GetUserIDByInAppCodeForConfig(req.Code, appConfig)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -1006,7 +1137,7 @@ func DingTalkInAppLogin(c *gin.Context) {
 	}
 	log.Printf("[dingtalk/in-app] resolved_userid=%s", userid)
 
-	userDetail, err := dingtalk.GetUserDetailByUserID(userid)
+	userDetail, err := dingtalk.GetUserDetailByUserIDForConfig(userid, appConfig)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -1029,7 +1160,7 @@ func DingTalkInAppLogin(c *gin.Context) {
 	}
 
 	userService := service.NewUserService(database.DB)
-	user, err := findLocalUserByDingTalkIdentity(userService, userid)
+	user, err := findLocalUserByDingTalkIdentity(userService, orgID, userid)
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusInternalServerError, Response{
@@ -1039,7 +1170,7 @@ func DingTalkInAppLogin(c *gin.Context) {
 			return
 		}
 
-		user, err = findLocalUserByContact(userService, email, mobile)
+		user, err = findLocalUserByContact(userService, orgID, email, mobile)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				respondDingTalkUserNotSynced(c, "dingtalk_in_app", userid, name)
@@ -1139,7 +1270,20 @@ func DingTalkCallback(c *gin.Context) {
 		return
 	}
 
-	userInfo, err := dingtalk.GetUserInfoByCode(code)
+	orgID := strings.TrimSpace(c.Query("org_id"))
+	org, appConfig, err := resolveDingTalkLoginConfig(orgID, "dingtalk/callback")
+	if err != nil {
+		log.Printf("[dingtalk/callback] resolve organization config failed: org_id=%s err=%v", orgID, err)
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: err.Error(),
+		})
+		return
+	}
+	orgID = org.OrgID
+	log.Printf("[dingtalk/callback] organization found: org_id=%s corp_id=%s", org.OrgID, org.CorpID)
+
+	userInfo, err := dingtalk.GetUserInfoByCodeForConfig(code, appConfig)
 	if err != nil {
 		log.Printf("[dingtalk/callback] GetUserInfoByCode failed: %v", err)
 		c.JSON(http.StatusInternalServerError, Response{
@@ -1159,7 +1303,7 @@ func DingTalkCallback(c *gin.Context) {
 
 	dtUserID := associatedUserID
 	if dtUserID == "" && unionID != "" {
-		resolvedUserID, resolveErr := dingtalk.GetUserIDByUnionID(unionID)
+		resolvedUserID, resolveErr := dingtalk.GetUserIDByUnionIDForConfig(unionID, appConfig)
 		if resolveErr == nil {
 			dtUserID = resolvedUserID
 			log.Printf("[dingtalk/callback] resolved userid from unionid: %s", dtUserID)
@@ -1176,7 +1320,7 @@ func DingTalkCallback(c *gin.Context) {
 	var name, email, mobile, avatar, position string
 	deptID := "1"
 	if dtUserID != "" {
-		userDetail, detailErr := dingtalk.GetUserDetailByUserID(dtUserID)
+		userDetail, detailErr := dingtalk.GetUserDetailByUserIDForConfig(dtUserID, appConfig)
 		if detailErr == nil {
 			name, _ = userDetail["name"].(string)
 			email, _ = userDetail["email"].(string)
@@ -1206,7 +1350,7 @@ func DingTalkCallback(c *gin.Context) {
 	log.Printf("[dingtalk/callback] extracted info: name=%s, email=%s, mobile=%s", name, email, mobile)
 
 	userService := service.NewUserService(database.DB)
-	user, err := findLocalUserByDingTalkIdentity(userService, dtUserID, associatedUserID)
+	user, err := findLocalUserByDingTalkIdentity(userService, orgID, dtUserID, associatedUserID)
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			log.Printf("[dingtalk/callback] findLocalUserByDingTalkIdentity error: %v", err)
@@ -1218,7 +1362,7 @@ func DingTalkCallback(c *gin.Context) {
 		}
 
 		log.Printf("[dingtalk/callback] user not found by userid, trying email/mobile")
-		user, err = findLocalUserByContact(userService, email, mobile)
+		user, err = findLocalUserByContact(userService, orgID, email, mobile)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				identityForLog := dtUserID
@@ -1350,13 +1494,13 @@ func getStringByKeys(data map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func findLocalUserByDingTalkIdentity(userService *service.UserService, candidates ...string) (*database.User, error) {
+func findLocalUserByDingTalkIdentity(userService *service.UserService, orgID string, candidates ...string) (*database.User, error) {
 	for _, candidate := range candidates {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
 			continue
 		}
-		user, err := userService.GetUserByUserID(candidate)
+		user, err := userService.GetUserByOrgAndUserID(orgID, candidate)
 		if err == nil {
 			return user, nil
 		}
@@ -1368,10 +1512,10 @@ func findLocalUserByDingTalkIdentity(userService *service.UserService, candidate
 	return nil, gorm.ErrRecordNotFound
 }
 
-func findLocalUserByContact(userService *service.UserService, email, mobile string) (*database.User, error) {
+func findLocalUserByContact(userService *service.UserService, orgID, email, mobile string) (*database.User, error) {
 	email = strings.TrimSpace(email)
 	if email != "" {
-		user, err := userService.GetUserByEmail(email)
+		user, err := userService.GetUserByOrgAndEmail(orgID, email)
 		if err == nil {
 			return user, nil
 		}
@@ -1382,7 +1526,7 @@ func findLocalUserByContact(userService *service.UserService, email, mobile stri
 
 	mobile = strings.TrimSpace(mobile)
 	if mobile != "" {
-		user, err := userService.GetUserByMobile(mobile)
+		user, err := userService.GetUserByOrgAndMobile(orgID, mobile)
 		if err == nil {
 			return user, nil
 		}
@@ -1400,9 +1544,9 @@ func assignUserEmailSafely(userService *service.UserService, user *database.User
 		return nil
 	}
 
-	existing, err := userService.GetUserByEmail(email)
+	existing, err := userService.GetUserByOrgAndEmail(user.OrgID, email)
 	if err == nil && existing.ID != user.ID {
-		log.Printf("[dingtalk/login] skip email update for user_id=%s because email=%s already belongs to user_id=%s", user.UserID, email, existing.UserID)
+		log.Printf("[dingtalk/login] skip email update for org_id=%s user_id=%s because email=%s already belongs to user_id=%s", user.OrgID, user.UserID, email, existing.UserID)
 		return nil
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1419,9 +1563,9 @@ func assignUserMobileSafely(userService *service.UserService, user *database.Use
 		return nil
 	}
 
-	existing, err := userService.GetUserByMobile(mobile)
+	existing, err := userService.GetUserByOrgAndMobile(user.OrgID, mobile)
 	if err == nil && existing.ID != user.ID {
-		log.Printf("[dingtalk/login] skip mobile update for user_id=%s because mobile=%s already belongs to user_id=%s", user.UserID, mobile, existing.UserID)
+		log.Printf("[dingtalk/login] skip mobile update for org_id=%s user_id=%s because mobile=%s already belongs to user_id=%s", user.OrgID, user.UserID, mobile, existing.UserID)
 		return nil
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1485,7 +1629,7 @@ func GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	user, err := loadUserByAuthID(userID)
+	user, err := loadUserByAuthIDInOrg(c.GetString("orgID"), userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
 			Code:    http.StatusNotFound,
@@ -1995,7 +2139,7 @@ func SyncOrgData(c *gin.Context) {
 					userErrMsg = err.Error()
 					log.Printf("[SyncOrgData] 创建用户 %s 失败: %v", u.UserID, err)
 					continue
-				} else if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, u.UserID, "SyncOrgData"); err != nil {
+				} else if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, fallbackDingTalkOrgID(), u.UserID, "SyncOrgData"); err != nil {
 					userStatus = "failed"
 					userErrMsg = err.Error()
 				} else if assigned {
@@ -2702,6 +2846,22 @@ func GetPermissions(c *gin.Context) {
 	})
 }
 
+func resolvePermissionTargetOrgID(c *gin.Context, explicitOrgID, userID string) string {
+	if orgID := strings.TrimSpace(explicitOrgID); orgID != "" {
+		return orgID
+	}
+	if orgID := strings.TrimSpace(c.Query("org_id")); orgID != "" {
+		return orgID
+	}
+	if orgID := strings.TrimSpace(c.GetString("orgID")); orgID != "" {
+		return orgID
+	}
+	if user, err := loadUserByAuthID(userID); err == nil && strings.TrimSpace(user.OrgID) != "" {
+		return user.OrgID
+	}
+	return "default"
+}
+
 // GetUserRoles 获取指定用户的角色列表
 func GetUserRoles(c *gin.Context) {
 	userID := c.Param("user_id")
@@ -2709,8 +2869,9 @@ func GetUserRoles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 不能为空"})
 		return
 	}
+	orgID := resolvePermissionTargetOrgID(c, "", userID)
 	permService := service.NewPermissionService(database.DB)
-	roles, err := permService.GetUserRoles(userID)
+	roles, err := permService.GetUserRolesInOrg(orgID, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取用户角色失败"})
 		return
@@ -2722,6 +2883,7 @@ func GetUserRoles(c *gin.Context) {
 func AssignUserRole(c *gin.Context) {
 	var req struct {
 		UserID string `json:"user_id" binding:"required"`
+		OrgID  string `json:"org_id"`
 		RoleID uint   `json:"role_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -2732,8 +2894,9 @@ func AssignUserRole(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 和 role_id 不能为空"})
 		return
 	}
+	orgID := resolvePermissionTargetOrgID(c, req.OrgID, req.UserID)
 	permService := service.NewPermissionService(database.DB)
-	if err := permService.AssignUserRole(req.UserID, req.RoleID); err != nil {
+	if err := permService.AssignUserRoleInOrg(orgID, req.UserID, req.RoleID); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "分配角色失败"})
 		return
 	}
@@ -2744,6 +2907,7 @@ func AssignUserRole(c *gin.Context) {
 func RemoveUserRole(c *gin.Context) {
 	var req struct {
 		UserID string `json:"user_id" binding:"required"`
+		OrgID  string `json:"org_id"`
 		RoleID uint   `json:"role_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -2754,8 +2918,9 @@ func RemoveUserRole(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 和 role_id 不能为空"})
 		return
 	}
+	orgID := resolvePermissionTargetOrgID(c, req.OrgID, req.UserID)
 	permService := service.NewPermissionService(database.DB)
-	if err := permService.RemoveUserRole(req.UserID, req.RoleID); err != nil {
+	if err := permService.RemoveUserRoleInOrg(orgID, req.UserID, req.RoleID); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "移除角色失败"})
 		return
 	}
@@ -2774,8 +2939,9 @@ func GetRoleUsers(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
 		return
 	}
+	orgID := resolvePermissionTargetOrgID(c, "", "")
 	permService := service.NewPermissionService(database.DB)
-	users, err := permService.GetRoleUsers(roleID)
+	users, err := permService.GetRoleUsersInOrg(orgID, roleID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取角色用户失败"})
 		return
@@ -2790,8 +2956,9 @@ func GetUserPermissions(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 不能为空"})
 		return
 	}
+	orgID := resolvePermissionTargetOrgID(c, "", userID)
 	permService := service.NewPermissionService(database.DB)
-	permissions, err := permService.GetUserPermissions(userID)
+	permissions, err := permService.GetUserPermissionsInOrg(orgID, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取用户权限失败"})
 		return

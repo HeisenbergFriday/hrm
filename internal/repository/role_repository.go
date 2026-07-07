@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"strings"
+
 	"peopleops/internal/database"
 
 	"gorm.io/gorm"
@@ -12,6 +14,14 @@ type RoleRepository struct {
 
 func NewRoleRepository(db *gorm.DB) *RoleRepository {
 	return &RoleRepository{db: db}
+}
+
+func normalizeOrgID(orgID string) string {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return "default"
+	}
+	return orgID
 }
 
 func (r *RoleRepository) Create(role *database.Role) error {
@@ -70,43 +80,45 @@ func NewUserRoleRepository(db *gorm.DB) *UserRoleRepository {
 	return &UserRoleRepository{db: db}
 }
 
-func (r *UserRoleRepository) FindByUserID(userID string) ([]database.Role, error) {
+func (r *UserRoleRepository) FindByUserID(orgID, userID string) ([]database.Role, error) {
 	var roles []database.Role
 	err := r.db.
 		Joins("JOIN user_roles ON user_roles.role_id = roles.id AND user_roles.deleted_at IS NULL").
-		Where("user_roles.user_id = ? AND roles.deleted_at IS NULL", userID).
+		Where("user_roles.org_id = ? AND user_roles.user_id = ? AND roles.deleted_at IS NULL", normalizeOrgID(orgID), userID).
 		Find(&roles).Error
 	return roles, err
 }
 
-func (r *UserRoleRepository) Assign(userID string, roleID uint) error {
+func (r *UserRoleRepository) Assign(orgID, userID string, roleID uint) error {
+	orgID = normalizeOrgID(orgID)
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.UserRole{}).Error; err != nil {
+		if err := tx.Unscoped().Where("org_id = ? AND user_id = ?", orgID, userID).Delete(&database.UserRole{}).Error; err != nil {
 			return err
 		}
-		return tx.Create(&database.UserRole{UserID: userID, RoleID: roleID}).Error
+		return tx.Create(&database.UserRole{OrgID: orgID, UserID: userID, RoleID: roleID}).Error
 	})
 }
 
-func (r *UserRoleRepository) Remove(userID string, roleID uint) error {
-	return r.db.Unscoped().Where("user_id = ? AND role_id = ?", userID, roleID).
+func (r *UserRoleRepository) Remove(orgID, userID string, roleID uint) error {
+	return r.db.Unscoped().Where("org_id = ? AND user_id = ? AND role_id = ?", normalizeOrgID(orgID), userID, roleID).
 		Delete(&database.UserRole{}).Error
 }
 
-func (r *UserRoleRepository) HasRole(userID string, roleName string) (bool, error) {
+func (r *UserRoleRepository) HasRole(orgID, userID string, roleName string) (bool, error) {
 	var count int64
 	err := r.db.
 		Joins("JOIN roles ON roles.id = user_roles.role_id AND roles.deleted_at IS NULL").
-		Where("user_roles.user_id = ? AND roles.name = ? AND user_roles.deleted_at IS NULL", userID, roleName).
+		Where("user_roles.org_id = ? AND user_roles.user_id = ? AND roles.name = ? AND user_roles.deleted_at IS NULL", normalizeOrgID(orgID), userID, roleName).
 		Model(&database.UserRole{}).Count(&count).Error
 	return count > 0, err
 }
 
-func (r *UserRoleRepository) FindByRoleID(roleID uint) ([]database.User, error) {
+func (r *UserRoleRepository) FindByRoleID(orgID string, roleID uint) ([]database.User, error) {
 	var users []database.User
+	orgID = normalizeOrgID(orgID)
 	err := r.db.
-		Joins("JOIN user_roles ON user_roles.user_id = users.user_id AND user_roles.deleted_at IS NULL").
-		Where("user_roles.role_id = ? AND users.deleted_at IS NULL", roleID).
+		Joins("JOIN user_roles ON user_roles.user_id = users.user_id AND user_roles.org_id = users.org_id AND user_roles.deleted_at IS NULL").
+		Where("user_roles.org_id = ? AND user_roles.role_id = ? AND users.deleted_at IS NULL", orgID, roleID).
 		Find(&users).Error
 	return users, err
 }
@@ -135,12 +147,12 @@ func (r *RolePermissionRepository) Assign(roleID uint, permissionID uint) error 
 		FirstOrCreate(&rp).Error
 }
 
-func (r *RolePermissionRepository) FindByUserRole(userID string) ([]database.Permission, error) {
+func (r *RolePermissionRepository) FindByUserRole(orgID, userID string) ([]database.Permission, error) {
 	var permissions []database.Permission
 	err := r.db.
 		Joins("JOIN role_permissions ON role_permissions.permission_id = permissions.id AND role_permissions.deleted_at IS NULL").
 		Joins("JOIN user_roles ON user_roles.role_id = role_permissions.role_id AND user_roles.deleted_at IS NULL").
-		Where("user_roles.user_id = ? AND permissions.deleted_at IS NULL", userID).
+		Where("user_roles.org_id = ? AND user_roles.user_id = ? AND permissions.deleted_at IS NULL", normalizeOrgID(orgID), userID).
 		Distinct().
 		Find(&permissions).Error
 	return permissions, err
@@ -164,11 +176,11 @@ func (r *MenuPermissionRepository) FindByRoleID(roleID uint) (*database.MenuPerm
 	return &mp, nil
 }
 
-func (r *MenuPermissionRepository) FindByUserRole(userID string) ([]database.MenuPermission, error) {
+func (r *MenuPermissionRepository) FindByUserRole(orgID, userID string) ([]database.MenuPermission, error) {
 	var menuPermissions []database.MenuPermission
 	err := r.db.
 		Joins("JOIN user_roles ON user_roles.role_id = menu_permissions.role_id AND user_roles.deleted_at IS NULL").
-		Where("user_roles.user_id = ? AND menu_permissions.deleted_at IS NULL", userID).
+		Where("user_roles.org_id = ? AND user_roles.user_id = ? AND menu_permissions.deleted_at IS NULL", normalizeOrgID(orgID), userID).
 		Find(&menuPermissions).Error
 	return menuPermissions, err
 }
