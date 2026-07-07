@@ -64,12 +64,13 @@ const MenuPermission: React.FC = () => {
       ],
     },
     {
-      title: '考勤管理',
+      title: '考勤工具箱',
       key: 'attendance',
       children: [
         { title: '考勤查询', key: 'attendance' },
         { title: '异常统计', key: 'attendance-stats' },
         { title: '导出记录', key: 'attendance-export' },
+        { title: '年假与调休', key: 'leave-overtime' },
         { title: '大小周与节假日', key: 'week-schedule' },
         { title: '员工下班时间', key: 'employee-shift-config' },
       ],
@@ -100,10 +101,6 @@ const MenuPermission: React.FC = () => {
       children: [
         { title: '操作日志', key: 'audit-logs' },
       ],
-    },
-    {
-      title: '年假与调休',
-      key: 'leave-overtime',
     },
     {
       title: '绩效管理',
