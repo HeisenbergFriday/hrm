@@ -3559,6 +3559,549 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-07-07T10:30:12.756Z"
+    },
+    {
+      "id": "bug-221",
+      "timestamp": "2026-07-08T07:38:09.642Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/handlers.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 18→32 lines (3 removed) | Also: depts, deptErr := dingtalk.SyncDepartments(); deptResult, err := orgService.SyncDepartmentsWithC",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-08T07:38:42.952Z"
+    },
+    {
+      "id": "bug-222",
+      "timestamp": "2026-07-08T07:46:32.782Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/router.go",
+      "root_cause": "43 lines replaced/restructured",
+      "fix": "Rewrote 59→6 lines (43 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T07:46:32.782Z"
+    },
+    {
+      "id": "bug-223",
+      "timestamp": "2026-07-08T08:30:42.373Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/App.tsx",
+      "root_cause": "Had './pages/WeekSchedule'",
+      "fix": "Changed to './pages/AttendanceProcessing'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-07-08T08:31:20.715Z"
+    },
+    {
+      "id": "bug-224",
+      "timestamp": "2026-07-08T08:31:58.817Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/config/menu.tsx",
+      "root_cause": "Had 'leave-overtime'",
+      "fix": "Changed to 'attendance-processing'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T08:31:58.817Z"
+    },
+    {
+      "id": "bug-225",
+      "timestamp": "2026-07-08T08:34:40.490Z",
+      "error_message": "Null/undefined access in ",
+      "file": "frontend/src/pages/AttendanceProcessing.tsx",
+      "root_cause": "Property access on potentially null/undefined value",
+      "fix": "Added null safety (optional chaining or null check)",
+      "tags": [
+        "auto-detected",
+        "null-safety",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T08:34:40.490Z"
+    },
+    {
+      "id": "bug-226",
+      "timestamp": "2026-07-08T08:47:29.391Z",
+      "error_message": "Incorrect value in code",
+      "file": "internal/api/attendance_processing_handlers.go",
+      "root_cause": "Had \"runtime\"",
+      "fix": "Changed to \"strings\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T08:47:29.391Z"
+    },
+    {
+      "id": "bug-227",
+      "timestamp": "2026-07-08T08:54:17.172Z",
+      "error_message": "Significant refactor of ",
+      "file": "tools/attendance-processing/cli.py",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 20→25 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "py"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T08:54:17.172Z"
+    },
+    {
+      "id": "bug-228",
+      "timestamp": "2026-07-08T08:57:47.195Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/handlers.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 20→38 lines (2 removed) | Also: log.Printf(\"[dingtalk/callback] user not found: id; log.Printf(\"[dingtalk/callback] user found by emai",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-08T09:00:36.486Z"
+    },
+    {
+      "id": "bug-229",
+      "timestamp": "2026-07-08T09:02:11.211Z",
+      "error_message": "Incorrect value in code",
+      "file": "tools/attendance-processing/cli.py",
+      "root_cause": "Had \"请假明细表.xlsx\"",
+      "fix": "Changed to \"leave_detail.xlsx\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "py"
+      ],
+      "related_bugs": [],
+      "occurrences": 5,
+      "last_seen": "2026-07-08T09:02:55.215Z"
+    },
+    {
+      "id": "bug-230",
+      "timestamp": "2026-07-08T16:55:00.000Z",
+      "error_message": "????????? default ???????????????????? org_id:user_id ???????????????????? user not synced",
+      "file": "internal/api/handlers.go",
+      "root_cause": "???????? legacy default????????????? default ????????????? DingTalk userid?????? org_id:userid???????????????????? userid ?????????????",
+      "fix": "????????????? default ???DingTalk identity ???? org_id:userid ?????/?????????? corp userid ?????????????????????????",
+      "tags": [
+        "user-reported",
+        "dingtalk",
+        "multi-tenant",
+        "auth",
+        "org-context"
+      ],
+      "related_bugs": [
+        "bug-219"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T16:55:00.000Z"
+    },
+    {
+      "id": "bug-231",
+      "timestamp": "2026-07-08T09:13:35.080Z",
+      "error_message": "Significant refactor of ",
+      "file": "deploy/build-and-deploy.ps1",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 11→15 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "ps1"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T09:13:35.080Z"
+    },
+    {
+      "id": "bug-232",
+      "timestamp": "2026-07-08T09:26:10.512Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/Login.tsx",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 6→3 lines (3 removed) | Also: {org.corp_id && (; <Text type=\"secondary\" style={{ fontSize: 12 }}>企业",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-08T09:26:36.950Z"
+    },
+    {
+      "id": "bug-233",
+      "timestamp": "2026-07-08T09:31:50.266Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/handlers.go",
+      "root_cause": "7 lines replaced/restructured",
+      "fix": "Rewrote 18→7 lines (7 removed) | Also: // 获取可用的企业列表；多企业配置存在时，隐藏 legacy default，避免用户在系统选 d; // 到钉钉官方页再选择其他企业后形成组织上下文错位。 | Also: // 如果既没有 dtUserID 也没有 openID，但有 email 或 mobile，仍然继; if dtUserID == \"\" && openID == \"\" {",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-07-08T09:33:28.008Z"
+    },
+    {
+      "id": "bug-234",
+      "timestamp": "2026-07-08T17:35:00.000Z",
+      "error_message": "DingTalk QR login allowed selected-org mismatch via contact fallback; default org was hidden; first-join user creation failed when email was empty.",
+      "file": "internal/api/handlers.go",
+      "root_cause": "QR callback continued to local email/mobile matching even when the selected corp could not prove a DingTalk userid/detail for the scanning account; legacy default was incorrectly filtered from org list; automatic user creation inserted empty email into a unique index.",
+      "fix": "Restored default in org list; QR callback now rejects login unless the selected corp resolves a corp userid and user detail; automatic user creation uses a unique dingtalk.local placeholder email when DingTalk email is empty.",
+      "tags": [
+        "user-reported",
+        "dingtalk",
+        "multi-tenant",
+        "auth",
+        "org-context"
+      ],
+      "related_bugs": [
+        "bug-219",
+        "bug-230"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T17:35:00.000Z"
+    },
+    {
+      "id": "bug-235",
+      "timestamp": "2026-07-08T09:51:22.837Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/handlers.go",
+      "root_cause": "21 lines replaced/restructured",
+      "fix": "Rewrote 40→13 lines (21 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T09:51:22.837Z"
+    },
+    {
+      "id": "bug-236",
+      "timestamp": "2026-07-08T09:51:41.663Z",
+      "error_message": "Null/undefined access in ",
+      "file": "frontend/src/pages/Home.tsx",
+      "root_cause": "Property access on potentially null/undefined value",
+      "fix": "Added null safety (optional chaining or null check)",
+      "tags": [
+        "auto-detected",
+        "null-safety",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T09:51:41.663Z"
+    },
+    {
+      "id": "bug-237",
+      "timestamp": "2026-07-08T09:51:53.360Z",
+      "error_message": "Wrong reference: useQuery should be error",
+      "file": "frontend/src/pages/Home.tsx",
+      "root_cause": "Used \"useQuery\" instead of \"error\"",
+      "fix": "Changed useQuery → error",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 5,
+      "last_seen": "2026-07-08T09:53:20.714Z"
+    },
+    {
+      "id": "bug-238",
+      "timestamp": "2026-07-08T17:55:00.000Z",
+      "error_message": "QR login still allowed cross-org account because missing local selected-org user fell back to contact matching/auto-create; Home showed generic data load error for 403 widgets.",
+      "file": "internal/api/handlers.go; frontend/src/pages/Home.tsx",
+      "root_cause": "QR callback allowed fallback after selected-org identity lookup missed, so a non-member could be matched/created by contact; Home treated expected 403 responses as fatal page errors.",
+      "fix": "QR callback now rejects when selected-org local identity is absent; Home ignores 403 widget errors and renders unavailable counts instead of global data-load failure.",
+      "tags": [
+        "user-reported",
+        "dingtalk",
+        "multi-tenant",
+        "auth",
+        "frontend",
+        "permission"
+      ],
+      "related_bugs": [
+        "bug-219",
+        "bug-230"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T17:55:00.000Z"
+    },
+    {
+      "id": "bug-239",
+      "timestamp": "2026-07-08T10:00:56.346Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/components/PerformanceActivityEditor.tsx",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 10→29 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T10:00:56.346Z"
+    },
+    {
+      "id": "bug-240",
+      "timestamp": "2026-07-08T10:28:15.096Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T10:28:15.096Z"
+    },
+    {
+      "id": "bug-241",
+      "timestamp": "2026-07-08T10:35:05.603Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "frontend/src/pages/Login.tsx",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block | Also: // 本地密码登录; const handleLocalLogin = async (values: { username: string; ",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-08T10:35:18.859Z"
+    },
+    {
+      "id": "bug-242",
+      "timestamp": "2026-07-08T10:36:34.616Z",
+      "error_message": "CSS fix: name, description, weight",
+      "file": "frontend/src/pages/PerformanceIndicatorLibrary.tsx",
+      "root_cause": "name: item.name || '', → 'OKR/KPI 自定义目标',; description: item.description || '', → '员工可增减，OKR/KPI 二选一',; weight: item.weight || 10, → 70,",
+      "fix": "Changed name: item.name || '', → 'OKR/KPI 自定义目标',; description: item.description || '', → '员工可增减，OKR/KPI 二选一',; weight: item.weight || 10, → 70,",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T10:36:34.616Z"
+    },
+    {
+      "id": "bug-243",
+      "timestamp": "2026-07-08T10:39:49.351Z",
+      "error_message": "Incorrect value in code",
+      "file": "internal/api/handlers.go",
+      "root_cause": "Had \"department_id\"",
+      "fix": "Changed to \"orgID\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-07-08T10:41:30.284Z"
+    },
+    {
+      "id": "bug-244",
+      "timestamp": "2026-07-08T10:43:07.367Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/handlers.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 28→52 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-08T10:43:07.367Z"
+    },
+    {
+      "id": "bug-245",
+      "timestamp": "2026-07-09T05:02:59.689Z",
+      "error_message": "Wrong reference: NewUserService should be NewUserServiceWithOrgID",
+      "file": "internal/api/handlers.go",
+      "root_cause": "Used \"NewUserService\" instead of \"NewUserServiceWithOrgID\"",
+      "fix": "Changed NewUserService → NewUserServiceWithOrgID",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 4,
+      "last_seen": "2026-07-09T05:05:52.489Z"
+    },
+    {
+      "id": "bug-246",
+      "timestamp": "2026-07-09T05:13:21.375Z",
+      "error_message": "Wrong reference: NewPermissionService should be NewPermissionServiceWithOrgID",
+      "file": "internal/api/performance_handlers.go",
+      "root_cause": "Used \"NewPermissionService\" instead of \"NewPermissionServiceWithOrgID\"",
+      "fix": "Changed NewPermissionService → NewPermissionServiceWithOrgID",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-09T05:13:21.375Z"
+    },
+    {
+      "id": "bug-247",
+      "timestamp": "2026-07-09T10:00:13.081Z",
+      "error_message": "CSS fix: res",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "res: any = await performanceAPI.getTemplates({ → any = await performanceAPI.getActivities({ page: 1, page_size: 200",
+      "fix": "Changed res: any = await performanceAPI.getTemplates({ → any = await performanceAPI.getActivities({ page: 1, page_size: 200",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-09T10:00:13.081Z"
+    },
+    {
+      "id": "bug-248",
+      "timestamp": "2026-07-09T10:02:21.026Z",
+      "error_message": "Null/undefined access in ",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "Property access on potentially null/undefined value",
+      "fix": "Added null safety (optional chaining or null check) | Also: loadPreviousActivities(activity?.id)",
+      "tags": [
+        "auto-detected",
+        "null-safety",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-09T10:02:39.544Z"
+    },
+    {
+      "id": "bug-249",
+      "timestamp": "2026-07-09T10:06:38.219Z",
+      "error_message": "CSS fix: performance",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "performance: goal:manage')) { → goal:manage')",
+      "fix": "Changed performance: goal:manage')) { → goal:manage')",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-09T10:06:38.219Z"
+    },
+    {
+      "id": "bug-250",
+      "timestamp": "2026-07-09T10:10:14.206Z",
+      "error_message": "Type error",
+      "file": "frontend/src/pages/PerformanceOverview.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-09T10:10:14.206Z"
+    },
+    {
+      "id": "bug-251",
+      "timestamp": "2026-07-10T00:56:19.804Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/handlers.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 29→41 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T00:56:19.804Z"
+    },
+    {
+      "id": "bug-252",
+      "timestamp": "2026-07-10T01:01:20.462Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/org_service.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 8→11 lines (3 removed) | Also: transferQuery := s.db.Where(\"deleted_at IS NULL\").; transferQuery = transferQuery.Where(\"(old_departme | Also: resignationQuery := s.db.Where(\"deleted_at IS NULL; resignationQuery = resignationQuery.Where(\"departm | Also: q := s.db.Where(\"deleted_at IS NULL\").Where(\"statu; Where(\"resign_date >= ?\", since.Format(\"2006-01-02 | Also: q := s.db.Where(\"deleted_at IS NULL\").Where(\"statu; q = q.Where(\"department_id IN ?\", departmentIDs) | Also: onboardingQuery := s.db.Where(\"deleted_at IS NULL\"; onboardingQuery = onboardingQuery.Where(\"employee_ | Also: transferQuery := s.db.Where(\"deleted_at IS NULL\"); transferQuery = transferQuery.Where(\"(old_departme",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 7,
+      "last_seen": "2026-07-10T01:04:06.230Z"
+    },
+    {
+      "id": "bug-253",
+      "timestamp": "2026-07-10T01:09:06.373Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/attendance_repository.go",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 19→32 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T01:09:06.373Z"
     }
   ]
 }
