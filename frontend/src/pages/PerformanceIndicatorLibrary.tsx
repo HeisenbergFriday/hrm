@@ -434,6 +434,47 @@ export default function PerformanceIndicatorLibrary() {
     })
   }
 
+  const handleTemplateChange = async (templateId: number) => {
+    if (!templateId) return
+    const template = templates.find(t => t.id === templateId)
+    if (!template) return
+
+    if (template.flow_type === 'new') {
+      // 沐腾科技流程模版：固定 30% 关键行动 + 70% 量化指标
+      setActionItems([
+        {
+          name: '上级安排事项完成情况',
+          description: '上级安排的所有事项需在规定时间内完成，工作结果得到领导认可',
+          weight: 15,
+          target_value: '按固定说明执行',
+        },
+        {
+          name: '价值观及工作纪律',
+          description: '拥抱公司价值观，不得违反公司管理制度、规范等',
+          weight: 15,
+          target_value: '按固定说明执行',
+        },
+      ])
+      setQuantItems([
+        {
+          name: 'OKR/KPI 自定义目标',
+          description: '员工可增减，OKR/KPI 二选一',
+          weight: 70,
+          red_line_value: '',
+          target_value: '',
+          challenge_value: '',
+          scoring_rule: '',
+        },
+      ])
+      message.success('已加载沐腾科技流程指标模板')
+    } else {
+      // 小铁文娱流程模版：清空，用户手动填写
+      setQuantItems([newQuantItem()])
+      setActionItems([newActionItem()])
+      message.info('小铁文娱流程需手动填写指标项')
+    }
+  }
+
   const columns = [
     {
       title: '指标库名称', dataIndex: 'name', key: 'name', width: 180,
@@ -753,6 +794,7 @@ export default function PerformanceIndicatorLibrary() {
                       label: getTemplateDisplayName(template),
                       value: template.id,
                     }))}
+                    onChange={handleTemplateChange}
                   />
                 </Form.Item>
               </Col>

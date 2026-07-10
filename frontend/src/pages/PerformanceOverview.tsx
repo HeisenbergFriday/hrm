@@ -1,8 +1,8 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert, Card, Col, Row, Space, Table, Tag, Typography, Button, Modal, Form, Input, InputNumber,
-  Select, message, Spin, Drawer, Tooltip, Divider, Descriptions, Steps
+  Select, message, Spin, Drawer, Tooltip, Divider, Descriptions, Steps, Segmented, Progress
 } from 'antd'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -27,9 +27,19 @@ import {
   userAPI,
 } from '../services/api'
 import PerformanceActivityEditor from '../components/PerformanceActivityEditor'
-import { BarChartOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import {
+  BarChartOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SafetyCertificateOutlined,
+  TeamOutlined,
+  UserOutlined,
+} from '@ant-design/icons'
 import { getCycleLabel, formatDateTime } from '../utils/format'
 import { hasPermission } from '../utils/permission'
+import { useAuthStore } from '../store/authStore'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -45,6 +55,41 @@ type SelectOption = {
 
 type AssessmentManagerSelectOption = SelectOption & {
   searchText: string
+}
+
+type PerformanceView = 'employee' | 'manager' | 'hr'
+
+const PERFORMANCE_VIEW_OPTIONS: Array<{ label: string; value: PerformanceView }> = [
+  { label: '我的绩效', value: 'employee' },
+  { label: '团队绩效', value: 'manager' },
+  { label: 'HR 管理', value: 'hr' },
+]
+
+const PERFORMANCE_VIEW_META: Record<PerformanceView, { title: string; description: string; detailTitle: string; icon: React.ReactNode; accent: string; softBg: string }> = {
+  employee: {
+    title: '我的绩效',
+    description: '聚焦我参与的活动、当前待办和结果确认',
+    detailTitle: '我的事项',
+    icon: <UserOutlined />,
+    accent: '#1677ff',
+    softBg: '#eff6ff',
+  },
+  manager: {
+    title: '团队绩效',
+    description: '聚焦团队待处理事项、评分与复核进度',
+    detailTitle: '团队处理',
+    icon: <TeamOutlined />,
+    accent: '#0891b2',
+    softBg: '#ecfeff',
+  },
+  hr: {
+    title: 'HR 管理',
+    description: '维护活动配置、阶段推进和全员进度',
+    detailTitle: 'HR 管控',
+    icon: <SafetyCertificateOutlined />,
+    accent: '#4f46e5',
+    softBg: '#eef2ff',
+  },
 }
 
 function normalizeIDArray(value?: string[] | string): string[] {
@@ -286,6 +331,25 @@ function userIdentityValues(user: any) {
   ])
 }
 
+function currentUserIdentityValues(user: any) {
+  return normalizedIdentityValues([
+    user?.user_id,
+    user?.employee_id,
+    user?.employee_no,
+    user?.id,
+    user?.dingtalk_user_id,
+  ])
+}
+
+function participantMatchesCurrentUser(participant: PerformanceParticipant | null | undefined, user: any) {
+  return identitiesIntersect(participantIdentityValues(participant), currentUserIdentityValues(user))
+}
+
+function participantManagedByCurrentUser(participant: PerformanceParticipant | null | undefined, user: any) {
+  if (!participant) return false
+  return identitiesIntersect([participant.manager_id, (participant as any).manager_user_id], currentUserIdentityValues(user))
+}
+
 function valueMatchesParticipant(value: unknown, participant?: PerformanceParticipant | null) {
   return identitiesIntersect([value], participantIdentityValues(participant))
 }
@@ -493,6 +557,8 @@ const PERFORMANCE_PERMISSION_LABELS: Record<string, string> = {
 
 const PerformanceOverview: React.FC = () => {
   const navigate = useNavigate()
+  const currentUser = useAuthStore(state => state.user)
+  const [activeView, setActiveView] = useState<PerformanceView>('employee')
   const activityListRef = React.useRef<HTMLDivElement | null>(null)
   const [, forceRender] = React.useState(0)
   const forceUpdate = () => forceRender(n => n + 1)
@@ -517,6 +583,8 @@ const PerformanceOverview: React.FC = () => {
     () => new Map(performanceTemplates.map(template => [String(template.id), template])),
     [performanceTemplates],
   )
+  const [previousActivityOptions, setPreviousActivityOptions] = useState<SelectOption[]>([])
+  const [previousActivityLoading, setPreviousActivityLoading] = useState(false)
 
   // 活动详情抽屉
   const [detailDrawerVisible, setDetailDrawerVisible] = useState(false)
@@ -561,6 +629,29 @@ const PerformanceOverview: React.FC = () => {
   // 活动列表筛选
   const [activitySearchText, setActivitySearchText] = useState('')
   const [activityStatusFilter, setActivityStatusFilter] = useState<string | undefined>(undefined)
+
+  const canUseManagerView = hasPermission('performance:manager_eval:submit') ||
+    hasPermission('performance:goal:manage') ||
+    hasPermission('performance:manager_confirm:submit')
+  const canUseHRView = hasPermission('performance:activity:manage') ||
+    hasPermission('performance:distribution:manage') ||
+    hasPermission('performance:hr_confirm:submit') ||
+    hasPermission('performance:assessment_manager:batch_update')
+  const performanceViewOptions = React.useMemo(
+    () => PERFORMANCE_VIEW_OPTIONS.filter(option => {
+      if (option.value === 'manager') return canUseManagerView
+      if (option.value === 'hr') return canUseHRView
+      return true
+    }),
+    [canUseHRView, canUseManagerView],
+  )
+
+  useEffect(() => {
+    if (performanceViewOptions.some(option => option.value === activeView)) return
+    setActiveView(performanceViewOptions[0]?.value || 'employee')
+    setActivityStatusFilter(undefined)
+    setSelectedParticipantIds([])
+  }, [activeView, performanceViewOptions])
 
   const departmentOptions = React.useMemo(
     () => departments.flatMap(department => {
@@ -697,6 +788,23 @@ const PerformanceOverview: React.FC = () => {
       message.error('流程模板选项加载失败')
     } finally {
       setPerformanceTemplatesLoading(false)
+    }
+  }, [])
+
+  const loadPreviousActivities = useCallback(async (excludeId?: number) => {
+    setPreviousActivityLoading(true)
+    try {
+      const res: any = await performanceAPI.getActivities({ page: 1, page_size: 200 })
+      const list = getListFromResponse(res, ['items', 'activities']) as PerformanceActivity[]
+      const options: SelectOption[] = list
+        .filter(a => a.flow_type === 'new' && (excludeId ? a.id !== excludeId : true))
+        .sort((a, b) => (a.start_date > b.start_date ? -1 : 1))
+        .map(a => ({ value: a.id, label: a.name }))
+      setPreviousActivityOptions(options)
+    } catch {
+      setPreviousActivityOptions([])
+    } finally {
+      setPreviousActivityLoading(false)
     }
   }, [])
 
@@ -891,6 +999,7 @@ const PerformanceOverview: React.FC = () => {
         description: values.description,
         enable_bonus_score: values.enable_bonus_score || false,
         strict_time_mode: values.strict_time_mode || false,
+        previous_review_activity_id: flowType === 'new' ? values.previous_review_activity_id : undefined,
       }
       if (editingActivity) {
         await performanceAPI.updateActivity(editingActivity.id, data)
@@ -1218,6 +1327,7 @@ const PerformanceOverview: React.FC = () => {
     loadScopeOptions()
     loadIndicatorLibraries()
     loadPerformanceTemplates()
+    loadPreviousActivities(activity?.id)
     if (activity) {
       const targetEmployeeIDs = normalizeIDArray(activity.target_employee_ids)
       setImportedManagerAssignments(normalizeImportedManagerAssignments(
@@ -1249,6 +1359,7 @@ const PerformanceOverview: React.FC = () => {
         description: activity.description,
         enable_bonus_score: activity.enable_bonus_score || false,
         strict_time_mode: activity.strict_time_mode || false,
+        previous_review_activity_id: activity.previous_review_activity_id,
       })
     } else {
       setImportedUserOptions([])
@@ -1393,7 +1504,29 @@ const PerformanceOverview: React.FC = () => {
   }
 
   // 活动列表 columns
-  const activityColumns: ColumnsType<PerformanceActivity> = [
+  const getViewActionButtons = (record: PerformanceActivity) => {
+    if (activeView === 'employee') {
+      const personalActionButton = renderMyParticipantActionButton(record)
+      return (
+        <Space size={2} wrap>
+          {personalActionButton}
+          <Button size="small" type="link" data-testid={`performance-activity-view-${record.id}`} onClick={() => loadActivityDetail(record)}>详情</Button>
+        </Space>
+      )
+    }
+
+    if (activeView === 'manager') {
+      return (
+        <Space size={2} wrap>
+          <Button size="small" type="link" data-testid={`performance-activity-team-${record.id}`} onClick={() => loadActivityDetail(record)}>查看团队</Button>
+        </Space>
+      )
+    }
+
+    return <Space size={2} wrap>{getActionButtons(record)}</Space>
+  }
+
+  const hrActivityColumns: ColumnsType<PerformanceActivity> = [
     { title: '活动名称', dataIndex: 'name', key: 'name', width: 180, ellipsis: true },
     { title: '周期', dataIndex: 'cycle_type', key: 'cycle_type', width: 80, render: (v: string) => getCycleLabel(v) },
     {
@@ -1427,7 +1560,158 @@ const PerformanceOverview: React.FC = () => {
   ]
 
   // 参与人 columns
-  const participantColumns: ColumnsType<PerformanceParticipant> = [
+  const employeeActivityColumns: ColumnsType<PerformanceActivity> = [
+    { title: '绩效活动', dataIndex: 'name', key: 'name', width: 220, ellipsis: true },
+    {
+      title: '当前阶段', dataIndex: 'status', key: 'status', width: 120,
+      render: (status: string) => {
+        const s = STATUS_MAP[status] || { label: status, color: 'default' }
+        return <StatusTag color={s.color}>{s.label}</StatusTag>
+      }
+    },
+    {
+      title: '我的状态',
+      key: 'my_status',
+      width: 130,
+      render: (_, record) => {
+        const participant = record.my_participant
+        if (!participant) return <Text type="secondary">未参与</Text>
+        const s = PARTICIPANT_STATUS_MAP[participant.status] || { label: participant.status, color: 'default' }
+        return <StatusTag color={s.color}>{s.label}</StatusTag>
+      },
+    },
+    {
+      title: '关键时间',
+      key: 'deadline',
+      width: 220,
+      render: (_, record) => {
+        if (record.status === 'target_setting') return `${formatDateTime(record.target_set_start_at)} ~ ${formatDateTime(record.target_set_end_at)}`
+        if (record.status === 'self_evaluation') return `${formatDateTime(record.self_eval_start_at)} ~ ${formatDateTime(record.self_eval_end_at)}`
+        if (record.status === 'employee_confirmation') return `${formatDateTime(record.employee_confirm_start_at)} ~ ${formatDateTime(record.employee_confirm_end_at)}`
+        return `${formatDateTime(record.start_date)} ~ ${formatDateTime(record.end_date)}`
+      },
+    },
+    { title: '操作', key: 'actions', fixed: 'right', width: 160, render: (_, record) => getViewActionButtons(record) },
+  ]
+
+  const managerActivityColumns: ColumnsType<PerformanceActivity> = [
+    { title: '绩效活动', dataIndex: 'name', key: 'name', width: 220, ellipsis: true },
+    {
+      title: '阶段', dataIndex: 'status', key: 'status', width: 120,
+      render: (status: string) => {
+        const s = STATUS_MAP[status] || { label: status, color: 'default' }
+        return <StatusTag color={s.color}>{s.label}</StatusTag>
+      }
+    },
+    {
+      title: '团队处理重点',
+      key: 'manager_focus',
+      width: 180,
+      render: (_, record) => {
+        const focusMap: Record<string, { label: string; color: string }> = {
+          target_setting: { label: '目标审核/跟进', color: 'cyan' },
+          manager_evaluation: { label: '主管评分', color: 'orange' },
+          manager_confirmation: { label: '主管确认/复核', color: 'gold' },
+          employee_confirmation: { label: '等待员工确认', color: 'blue' },
+        }
+        const item = focusMap[record.status] || { label: '查看团队进度', color: 'default' }
+        return <Tag color={item.color}>{item.label}</Tag>
+      },
+    },
+    { title: '评分时间', key: 'mgr_eval', width: 220, render: (_, r) => `${formatDateTime(r.manager_eval_start_at)} ~ ${formatDateTime(r.manager_eval_end_at)}` },
+    { title: '操作', key: 'actions', fixed: 'right', width: 150, render: (_, record) => getViewActionButtons(record) },
+  ]
+
+  const activityColumns =
+    activeView === 'employee' ? employeeActivityColumns :
+    activeView === 'manager' ? managerActivityColumns :
+    hrActivityColumns
+
+  const renderEmployeeParticipantActions = (record: PerformanceParticipant) => {
+    if (!currentActivity || !participantMatchesCurrentUser(record, currentUser)) return null
+    return renderMyParticipantActionButton({
+      ...currentActivity,
+      my_participant: record,
+    })
+  }
+
+  const renderManagerParticipantActions = (record: PerformanceParticipant) => {
+    const activityId = currentActivity?.id
+    const activityStatus = currentActivity?.status
+    if (!activityId || !participantManagedByCurrentUser(record, currentUser)) return null
+
+    const links: React.ReactNode[] = []
+    const linkStyle = { fontSize: 'var(--font-size-sm)', padding: '0 2px' }
+
+    if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status)) {
+      links.push(renderPermissionButton(
+        'performance:goal:manage',
+        <Button key="target" size="small" type="link" style={linkStyle} onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}`)}>目标</Button>,
+      ))
+    }
+
+    if (record.status === 'target_pending_approval') {
+      links.push(renderPermissionButton(
+        'performance:goal:manage',
+        <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }} onClick={async () => {
+          try {
+            await performanceAPI.approveGoalRecords(record.id)
+            message.success('目标已通过')
+            if (currentActivity) loadActivityDetail(currentActivity)
+          } catch (err: any) {
+            message.error(err?.response?.data?.message || '审批失败')
+          }
+        }}>通过</Button>,
+      ))
+      links.push(renderPermissionButton(
+        'performance:goal:manage',
+        <Button key="reject" size="small" type="link" danger style={linkStyle} onClick={() => handleRejectGoalRecords(record)}>驳回</Button>,
+      ))
+    }
+
+    if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status)) {
+      const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
+      links.push(renderPermissionButton(
+        'performance:manager_eval:submit',
+        managerEvalBlockedReason ? (
+          <Tooltip key="mgr" title={managerEvalBlockedReason}>
+            <span>
+              <Button size="small" type="link" disabled style={linkStyle}>评分</Button>
+            </span>
+          </Tooltip>
+        ) : (
+          <Button key="mgr" size="small" type="link" style={linkStyle} onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}>评分</Button>
+        ),
+      ))
+    }
+
+    if (['manager_confirmation', 'hr_confirmation'].includes(activityStatus || '') && record.status === 'manager_recheck') {
+      const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
+      links.push(renderPermissionButton(
+        'performance:manager_confirm:submit',
+        managerEvalBlockedReason ? (
+          <Tooltip key="manager-recheck" title={managerEvalBlockedReason}>
+            <span>
+              <Button size="small" type="link" disabled style={linkStyle}>复核</Button>
+            </span>
+          </Tooltip>
+        ) : (
+          <Button key="manager-recheck" size="small" type="link" style={linkStyle} onClick={() => navigate(`/performance-manager-eval/${activityId}/${record.id}`)}>复核</Button>
+        ),
+      ))
+    }
+
+    if (PERSONAL_RESULT_STATUSES.includes(record.status)) {
+      links.push(renderPermissionButton(
+        'performance:result:view',
+        <Button key="result" size="small" type="link" style={linkStyle} onClick={() => navigate(`/performance-result/${activityId}/${record.id}`)}>结果</Button>,
+      ))
+    }
+
+    return links.length ? <Space size={0}>{links}</Space> : <Text type="secondary">暂无操作</Text>
+  }
+
+  const hrParticipantColumns: ColumnsType<PerformanceParticipant> = [
     { title: '员工', dataIndex: 'employee_name', key: 'employee_name', width: 80 },
     { title: '部门', dataIndex: 'department_name', key: 'department_name', width: 110, ellipsis: true },
     { title: '岗位', dataIndex: 'position', key: 'position', width: 90, ellipsis: true },
@@ -1565,13 +1849,19 @@ const PerformanceOverview: React.FC = () => {
               onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}`)}
             >目标</Button>
           )
-          if (currentActivity?.flow_type === 'new') {
-            links.push(
-              <Button key="review-supplement" size="small" type="link" style={linkStyle} data-testid={`performance-participant-review-supplement-${record.id}`}
-                onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}?phase=review`)}
-              >补录</Button>
-            )
-          }
+        }
+        // 新流程"补录"按钮：允许 HR 在活动进入自评/评分/确认后仍补录上一期 review 目标
+        // 只要活动是新流程、参与人尚未进入锁定/归档终态，且有目标管理权限，就一直显示
+        if (
+          currentActivity?.flow_type === 'new'
+          && !['locked', 'result_confirmed', 'archived'].includes(record.status)
+          && hasPermission('performance:goal:manage')
+        ) {
+          links.push(
+            <Button key="review-supplement" size="small" type="link" style={linkStyle} data-testid={`performance-participant-review-supplement-${record.id}`}
+              onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}?phase=review`)}
+            >补录</Button>
+          )
         }
         // 自评：HR确认前可修改自评，主管确认后提交会进入待领导复核
         if (canSelfEvaluateRecord && hasPermission('performance:self_eval:submit')) {
@@ -1667,17 +1957,110 @@ const PerformanceOverview: React.FC = () => {
   ]
 
   // 统计数据
+  const employeeParticipantColumns: ColumnsType<PerformanceParticipant> = [
+    { title: '员工', dataIndex: 'employee_name', key: 'employee_name', width: 120 },
+    {
+      title: '我的状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 120,
+      render: (status: string) => {
+        const s = PARTICIPANT_STATUS_MAP[status] || { label: status, color: 'default' }
+        return <StatusTag color={s.color}>{s.label}</StatusTag>
+      },
+    },
+    {
+      title: '自评分',
+      dataIndex: 'self_score',
+      key: 'self_score',
+      width: 90,
+      render: (score: any) => score === null || score === undefined || score === '' ? <Text type="secondary">-</Text> : <Text strong>{String(score)}</Text>,
+    },
+    {
+      title: '主管分',
+      dataIndex: 'manager_score',
+      key: 'manager_score',
+      width: 90,
+      render: (score: any) => score === null || score === undefined || score === '' ? <Text type="secondary">-</Text> : <Text strong>{String(score)}</Text>,
+    },
+    {
+      title: '等级',
+      dataIndex: 'final_level',
+      key: 'final_level',
+      width: 80,
+      render: (v: string) => v ? <StatusTag color={({ S: '#f50', A: '#1677ff', B: '#52c41a', C: '#faad14', D: '#ff4d4f' } as Record<string, string>)[v] || 'default'}>{v}</StatusTag> : <Text type="secondary">-</Text>,
+    },
+    { title: '操作', key: 'actions', fixed: 'right', width: 130, render: (_, record) => renderEmployeeParticipantActions(record) || <Text type="secondary">暂无操作</Text> },
+  ]
+
+  const managerParticipantColumns: ColumnsType<PerformanceParticipant> = [
+    { title: '员工', dataIndex: 'employee_name', key: 'employee_name', width: 100 },
+    { title: '部门', dataIndex: 'department_name', key: 'department_name', width: 130, ellipsis: true },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 120,
+      render: (status: string) => {
+        const s = PARTICIPANT_STATUS_MAP[status] || { label: status, color: 'default' }
+        return <StatusTag color={s.color}>{s.label}</StatusTag>
+      },
+    },
+    {
+      title: '处理重点',
+      key: 'manager_focus',
+      width: 130,
+      render: (_, record) => {
+        if (record.status === 'target_pending_approval') return <Tag color="cyan">目标审核</Tag>
+        if (['self_submitted', 'manager_submitted'].includes(record.status)) return <Tag color="orange">评分</Tag>
+        if (record.status === 'manager_recheck') return <Tag color="gold">复核</Tag>
+        if (PERSONAL_RESULT_STATUSES.includes(record.status)) return <Tag color="blue">结果</Tag>
+        return <Tag>跟进</Tag>
+      },
+    },
+    {
+      title: '主管分',
+      dataIndex: 'manager_score',
+      key: 'manager_score',
+      width: 90,
+      render: (score: any) => score === null || score === undefined || score === '' ? <Text type="secondary">-</Text> : <Text strong>{String(score)}</Text>,
+    },
+    {
+      title: '等级',
+      dataIndex: 'final_level',
+      key: 'final_level',
+      width: 80,
+      render: (v: string) => v ? <StatusTag color={({ S: '#f50', A: '#1677ff', B: '#52c41a', C: '#faad14', D: '#ff4d4f' } as Record<string, string>)[v] || 'default'}>{v}</StatusTag> : <Text type="secondary">-</Text>,
+    },
+    { title: '操作', key: 'actions', fixed: 'right', width: 160, render: (_, record) => renderManagerParticipantActions(record) },
+  ]
+
+  const participantColumns =
+    activeView === 'employee' ? employeeParticipantColumns :
+    activeView === 'manager' ? managerParticipantColumns :
+    hrParticipantColumns
+
   const selectedActivityStatuses = React.useMemo(
     () => resolveActivityStatusFilter(activityStatusFilter),
     [activityStatusFilter],
   )
-  const filteredActivities = React.useMemo(
+  const viewActivities = React.useMemo(
     () => activities.filter(item => {
+      if (activeView === 'employee') return Boolean(item.my_participant)
+      if (activeView === 'manager') {
+        return canUseManagerView && IN_PROGRESS_ACTIVITY_STATUSES.includes(item.status)
+      }
+      return canUseHRView
+    }),
+    [activities, activeView, canUseHRView, canUseManagerView],
+  )
+  const filteredActivities = React.useMemo(
+    () => viewActivities.filter(item => {
       const matchName = !activitySearchText || item.name?.toLowerCase().includes(activitySearchText.toLowerCase())
       const matchStatus = !selectedActivityStatuses || selectedActivityStatuses.includes(item.status)
       return matchName && matchStatus
     }),
-    [activities, activitySearchText, selectedActivityStatuses],
+    [viewActivities, activitySearchText, selectedActivityStatuses],
   )
   const handleActivityStatClick = useCallback((statusFilter?: string) => {
     setActivityStatusFilter(statusFilter)
@@ -1685,18 +2068,116 @@ const PerformanceOverview: React.FC = () => {
       activityListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }, [])
-  const inProgressCount = activities.filter(a => IN_PROGRESS_ACTIVITY_STATUSES.includes(a.status)).length
-  const confirmedCount = activities.filter(a => CONFIRMED_ACTIVITY_STATUSES.includes(a.status)).length
-  const archivedCount = activities.filter(a => a.status === 'archived').length
+  const inProgressCount = viewActivities.filter(a => IN_PROGRESS_ACTIVITY_STATUSES.includes(a.status)).length
+  const confirmedCount = viewActivities.filter(a => CONFIRMED_ACTIVITY_STATUSES.includes(a.status)).length
+  const archivedCount = viewActivities.filter(a => a.status === 'archived').length
+  const employeeTodoCount = viewActivities.filter(a => Boolean(a.my_participant && renderMyParticipantActionButton(a))).length
+  const managerTodoCount = viewActivities.filter(a => ['target_setting', 'manager_evaluation', 'manager_confirmation'].includes(a.status)).length
   const activityStatCards = [
     { title: '绩效活动总数', value: activitiesTotal, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
     { title: '进行中活动', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe', filter: ACTIVITY_STATUS_FILTER_IN_PROGRESS },
     { title: '已确认结果', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
     { title: '已归档活动', value: archivedCount, color: 'var(--color-text-secondary)', bg: 'var(--color-bg-hover)', filter: 'archived' },
   ]
+  const roleActivityStatCards = activeView === 'employee' ? [
+    { title: '我的绩效活动', value: viewActivities.length, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
+    { title: '待我处理', value: employeeTodoCount, color: '#b45309', bg: '#fef3c7', filter: undefined },
+    { title: '进行中', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe', filter: ACTIVITY_STATUS_FILTER_IN_PROGRESS },
+    { title: '已完成', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
+  ] : activeView === 'manager' ? [
+    { title: '团队绩效活动', value: viewActivities.length, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
+    { title: '待团队处理', value: managerTodoCount, color: '#b45309', bg: '#fef3c7', filter: undefined },
+    { title: '评分阶段', value: viewActivities.filter(a => a.status === 'manager_evaluation').length, color: '#0369a1', bg: '#e0f2fe', filter: 'manager_evaluation' },
+    { title: '已完成', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
+  ] : [
+    { title: '绩效活动总数', value: activitiesTotal, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
+    { title: '进行中活动', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe', filter: ACTIVITY_STATUS_FILTER_IN_PROGRESS },
+    { title: '已确认结果', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
+    { title: '已归档活动', value: archivedCount, color: 'var(--color-text-secondary)', bg: 'var(--color-bg-hover)', filter: 'archived' },
+  ]
+  const viewMeta = PERFORMANCE_VIEW_META[activeView]
+  const primaryTodoCount = activeView === 'employee'
+    ? employeeTodoCount
+    : activeView === 'manager'
+      ? managerTodoCount
+      : inProgressCount
+  const primaryTodoLabel = activeView === 'employee'
+    ? '待我处理'
+    : activeView === 'manager'
+      ? '待团队处理'
+      : '进行中活动'
+  const latestActivity = filteredActivities[0] || viewActivities[0]
+  const completionPercent = viewActivities.length > 0 ? Math.round((confirmedCount / viewActivities.length) * 100) : 0
+  const workbenchInsights = [
+    {
+      label: primaryTodoLabel,
+      value: primaryTodoCount,
+      hint: activeView === 'hr' ? '需要关注阶段推进' : '优先处理这些事项',
+      icon: <ClockCircleOutlined />,
+      color: '#b45309',
+      bg: '#fffbeb',
+    },
+    {
+      label: '最近活动',
+      value: latestActivity?.name || '暂无活动',
+      hint: latestActivity ? STATUS_MAP[latestActivity.status]?.label || latestActivity.status : '当前视角暂无数据',
+      icon: <BarChartOutlined />,
+      color: viewMeta.accent,
+      bg: viewMeta.softBg,
+    },
+    {
+      label: '完成率',
+      value: `${completionPercent}%`,
+      hint: `${confirmedCount}/${viewActivities.length || 0} 已完成`,
+      icon: <CheckCircleOutlined />,
+      color: 'var(--color-success)',
+      bg: '#f0fdf4',
+    },
+  ]
+  const detailParticipants = React.useMemo(() => {
+    if (activeView === 'employee') {
+      const mine = participants.filter(participant => participantMatchesCurrentUser(participant, currentUser))
+      if (mine.length > 0) return mine
+      return currentActivity?.my_participant ? [currentActivity.my_participant] : []
+    }
+    if (activeView === 'manager') {
+      return participants.filter(participant => participantManagedByCurrentUser(participant, currentUser))
+    }
+    return participants
+  }, [activeView, currentActivity, currentUser, participants])
+  const detailSummaryCards = React.useMemo(() => {
+    if (activeView === 'hr' && summary) {
+      return [
+        { title: '参与人数', value: summary.total_participants, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
+        { title: '已自评', value: summary.self_submitted_count, color: '#0369a1', bg: '#e0f2fe' },
+        {
+          title: '已评分',
+          value: summary.manager_submitted_count + participants.filter(record =>
+            record.status === 'self_submitted' && isSelfFinalAssessmentRecord(record)
+          ).length,
+          color: '#b45309',
+          bg: '#fef3c7',
+        },
+        { title: '已确认', value: summary.result_confirmed_count, color: 'var(--color-success)', bg: '#dcfce7' },
+      ]
+    }
+
+    return [
+      { title: activeView === 'employee' ? '我的记录' : '负责员工', value: detailParticipants.length, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
+      { title: '待目标', value: detailParticipants.filter(record => ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status)).length, color: '#0891b2', bg: '#cffafe' },
+      { title: '待评分', value: detailParticipants.filter(record => ['self_submitted', 'manager_submitted', 'manager_recheck'].includes(record.status)).length, color: '#b45309', bg: '#fef3c7' },
+      { title: '已确认', value: detailParticipants.filter(record => ['employee_confirmed', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status)).length, color: 'var(--color-success)', bg: '#dcfce7' },
+    ]
+  }, [activeView, detailParticipants, participants, summary])
+  const detailActions = activeView === 'hr' && currentActivity
+    ? renderDetailActionButtons(currentActivity)
+    : null
+
   const activityListActions = (
     <Space>
-      <Button type="primary" data-testid="performance-create-activity" icon={<PlusOutlined />} onClick={() => openActivityModal()}>新建活动</Button>
+      {activeView === 'hr' && (
+        <Button type="primary" data-testid="performance-create-activity" icon={<PlusOutlined />} onClick={() => openActivityModal()}>新建活动</Button>
+      )}
       <Button data-testid="performance-refresh-activities" icon={<ReloadOutlined />} onClick={() => loadActivities()} disabled={activitiesLoading}>刷新</Button>
     </Space>
   )
@@ -1714,44 +2195,148 @@ const PerformanceOverview: React.FC = () => {
         style={{ borderRadius: 'var(--radius-xl)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)' }}
         styles={{ header: { background: 'var(--color-bg-card-header)', borderBottom: '1px solid var(--color-border-light)' } }}
       >
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            {activityStatCards.map((item) => {
-              const active = item.filter !== undefined && activityStatusFilter === item.filter
-              return (
+        <div
+          style={{
+            margin: '-8px -8px 18px',
+            padding: '22px 24px',
+            borderRadius: 'var(--radius-lg)',
+            background: `linear-gradient(135deg, ${viewMeta.softBg} 0%, #ffffff 58%, #f8fafc 100%)`,
+            border: '1px solid var(--color-border-light)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: 16,
+              flexWrap: 'wrap',
+              marginBottom: 18,
+            }}
+          >
+            <Space align="start" size={12}>
+              <div
+                style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: 'var(--radius-md)',
+                  background: viewMeta.accent,
+                  color: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 22,
+                  flexShrink: 0,
+                }}
+              >
+                {viewMeta.icon}
+              </div>
+              <div>
+                <Text strong style={{ fontSize: 22, color: 'var(--color-text-title)' }}>
+                  {viewMeta.title}工作台
+                </Text>
+                <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', marginTop: 6 }}>
+                  {viewMeta.description}
+                </div>
+              </div>
+            </Space>
+            <Segmented
+              value={activeView}
+              options={performanceViewOptions}
+              onChange={(value) => {
+                setActiveView(value as PerformanceView)
+                setActivityStatusFilter(undefined)
+                setSelectedParticipantIds([])
+              }}
+            />
+          </div>
+
+          <Row gutter={[12, 12]}>
+            {workbenchInsights.map((item) => (
+              <Col xs={24} md={8} key={item.label}>
+                <div
+                  style={{
+                    minHeight: 92,
+                    padding: '14px 16px',
+                    background: '#fff',
+                    border: '1px solid var(--color-border-light)',
+                    borderRadius: 'var(--radius-md)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: 'var(--radius-md)',
+                      background: item.bg,
+                      color: item.color,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 18,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {item.icon}
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)' }}>{item.label}</div>
+                    <div style={{ color: 'var(--color-text-title)', fontSize: 20, fontWeight: 'var(--font-weight-bold)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {item.value}
+                    </div>
+                    <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>{item.hint}</div>
+                  </div>
+                  {item.label === '完成率' && (
+                    <Progress type="circle" percent={completionPercent} size={46} strokeColor={String(item.color)} />
+                  )}
+                </div>
+              </Col>
+            ))}
+          </Row>
+        </div>
+
+        <Row gutter={[12, 12]} style={{ marginBottom: 18 }}>
+          {roleActivityStatCards.map((item) => {
+            const active = item.filter !== undefined && activityStatusFilter === item.filter
+            return (
               <Col xs={24} sm={12} lg={6} key={item.title}>
                 <button
                   type="button"
                   aria-label={`查看${item.title}`}
                   onClick={() => handleActivityStatClick(item.filter)}
                   style={{
-                  background: 'var(--color-bg-card)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '18px 20px',
-                  boxShadow: active ? '0 0 0 2px var(--color-primary-bg), var(--shadow-card)' : 'var(--shadow-card)',
-                  border: active ? '1px solid var(--color-primary)' : '1px solid var(--color-border)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  width: '100%',
-                  font: 'inherit',
-                  textAlign: 'left',
-                  cursor: 'pointer',
-                  transition: 'border-color 0.2s, box-shadow 0.2s, transform 0.2s',
-                }}
+                    background: active ? item.bg : 'var(--color-bg-card)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '14px 16px',
+                    border: active ? `1px solid ${item.color}` : '1px solid var(--color-border-light)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    width: '100%',
+                    minHeight: 104,
+                    font: 'inherit',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    transition: 'border-color 0.2s, background 0.2s, transform 0.2s',
+                  }}
                 >
                   <div style={{
-                    width: 44, height: 44, borderRadius: 'var(--radius-md)', background: item.bg,
+                    width: 34, height: 34, borderRadius: 'var(--radius-md)', background: item.bg,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 22, color: item.color, fontWeight: 'var(--font-weight-bold)', flexShrink: 0,
+                    fontSize: 18, color: item.color, fontWeight: 'var(--font-weight-bold)', flexShrink: 0,
                   }}>
                     {item.value}
                   </div>
                   <Text style={{ color: 'var(--color-text)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.title}</Text>
                 </button>
               </Col>
-              )
-            })}
-          </Row>
+            )
+          })}
+        </Row>
 
           <div
             style={{
@@ -1764,7 +2349,7 @@ const PerformanceOverview: React.FC = () => {
             }}
           >
             <Text strong style={{ fontSize: 16, color: 'var(--color-text-title)' }}>
-              绩效活动
+              待办与活动
             </Text>
             {activityListActions}
           </div>
@@ -1782,6 +2367,8 @@ const PerformanceOverview: React.FC = () => {
             userOptions={userOptions}
             scopeOptionsLoading={scopeOptionsLoading}
             importingParticipants={participantImporting}
+            previousActivityOptions={previousActivityOptions}
+            previousActivityLoading={previousActivityLoading}
             onImportParticipants={handleImportParticipants}
             onSave={handleSaveActivity}
             onCancel={closeActivityEditor}
@@ -1793,23 +2380,44 @@ const PerformanceOverview: React.FC = () => {
             data-testid="performance-activity-list"
             style={{ marginBottom: 16 }}
           >
-            <Space style={{ marginBottom: 16 }} wrap>
-              <Input.Search
-                placeholder="搜索活动名称"
-                allowClear
-                onSearch={setActivitySearchText}
-                onChange={e => { if (!e.target.value) setActivitySearchText('') }}
-                style={{ width: 220 }}
-              />
-              <Select
-                placeholder="筛选状态"
-                allowClear
-                style={{ width: 140 }}
-                value={activityStatusFilter}
-                onChange={setActivityStatusFilter}
-                options={ACTIVITY_STATUS_FILTER_OPTIONS}
-              />
-            </Space>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'wrap',
+                padding: '10px 12px',
+                marginBottom: 14,
+                borderRadius: 'var(--radius-md)',
+                background: '#f8fafc',
+                border: '1px solid var(--color-border-light)',
+              }}
+            >
+              <div>
+                <Text strong style={{ color: 'var(--color-text-title)' }}>{viewMeta.title}列表</Text>
+                <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>
+                  共 {filteredActivities.length} 条，按当前角色显示最相关字段
+                </div>
+              </div>
+              <Space wrap>
+                <Input.Search
+                  placeholder="搜索活动名称"
+                  allowClear
+                  onSearch={setActivitySearchText}
+                  onChange={e => { if (!e.target.value) setActivitySearchText('') }}
+                  style={{ width: 220 }}
+                />
+                <Select
+                  placeholder="筛选状态"
+                  allowClear
+                  style={{ width: 140 }}
+                  value={activityStatusFilter}
+                  onChange={setActivityStatusFilter}
+                  options={ACTIVITY_STATUS_FILTER_OPTIONS}
+                />
+              </Space>
+            </div>
             <Spin spinning={activitiesLoading}>
               <Table
                 columns={activityColumns}
@@ -1836,6 +2444,47 @@ const PerformanceOverview: React.FC = () => {
       >
         {currentActivity && (
           <div data-testid="performance-detail-content">
+            <div
+              style={{
+                padding: '16px 18px',
+                marginBottom: 16,
+                borderRadius: 'var(--radius-lg)',
+                background: viewMeta.softBg,
+                border: '1px solid var(--color-border-light)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <Space size={12}>
+                  <div
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: 'var(--radius-md)',
+                      background: viewMeta.accent,
+                      color: '#fff',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 20,
+                    }}
+                  >
+                    {viewMeta.icon}
+                  </div>
+                  <div>
+                    <Text strong style={{ fontSize: 18, color: 'var(--color-text-title)' }}>{currentActivity.name}</Text>
+                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', marginTop: 4 }}>
+                      {viewMeta.detailTitle} · {formatDateTime(currentActivity.start_date)} ~ {formatDateTime(currentActivity.end_date)}
+                    </div>
+                  </div>
+                </Space>
+                <Space>
+                  <StatusTag color={STATUS_MAP[currentActivity.status]?.color}>{STATUS_MAP[currentActivity.status]?.label}</StatusTag>
+                  <Tag color={currentActivity.flow_type === 'new' ? 'purple' : 'default'}>
+                    {currentActivity.flow_type === 'new' ? '新流程' : '旧流程'}
+                  </Tag>
+                </Space>
+              </div>
+            </div>
             <Steps
               current={getActivityStepIndex(currentActivity.status)}
               items={ACTIVITY_FLOW.map(item => ({
@@ -1863,8 +2512,9 @@ const PerformanceOverview: React.FC = () => {
             </Descriptions>
 
             {/* 操作按钮 - 紧凑布局 */}
+            {detailActions && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-              {renderDetailActionButtons(currentActivity)}
+              {detailActions}
               {false && (
                 <>
               {currentActivity.status === 'draft' && (
@@ -1914,9 +2564,10 @@ const PerformanceOverview: React.FC = () => {
                 </>
               )}
             </div>
+            )}
 
             <Divider style={{ margin: '8px 0 10px' }} orientationMargin={0}>统计摘要</Divider>
-            {currentActivity.status === 'hr_confirmation' && hrDeadlineStatus && (
+            {activeView === 'hr' && currentActivity.status === 'hr_confirmation' && hrDeadlineStatus && (
               <Alert
                 type={hrDeadlineStatus.overdue ? 'warning' : 'info'}
                 showIcon
@@ -1926,34 +2577,27 @@ const PerformanceOverview: React.FC = () => {
             )}
 
             <Spin spinning={summaryLoading}>
-              {summary ? (
-                <div style={{ display: 'flex', gap: 0, marginBottom: 10, borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)', overflow: 'hidden' }}>
-                  {[
-                    { title: '参与人数', value: summary.total_participants, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
-                    { title: '已自评', value: summary.self_submitted_count, color: '#0369a1', bg: '#e0f2fe' },
-                    {
-                      title: '已评分',
-                      value: summary.manager_submitted_count + participants.filter(record =>
-                        record.status === 'self_submitted' && isSelfFinalAssessmentRecord(record)
-                      ).length,
-                      color: '#b45309',
-                      bg: '#fef3c7',
-                    },
-                    { title: '已确认', value: summary.result_confirmed_count, color: 'var(--color-success)', bg: '#dcfce7' },
-                  ].map((item, idx) => (
-                    <div key={item.title} style={{
-                      flex: 1, padding: '10px 14px', textAlign: 'center',
-                      background: item.bg, borderRight: idx < 3 ? '1px solid var(--color-border)' : 'none',
-                    }}>
-                      <div style={{ fontSize: 22, fontWeight: 'var(--font-weight-bold)', color: item.color, lineHeight: 1.2 }}>{item.value}</div>
-                      <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', marginTop: 2 }}>{item.title}</div>
-                    </div>
+              {detailSummaryCards.length > 0 ? (
+                <Row gutter={[10, 10]} style={{ marginBottom: 10 }}>
+                  {detailSummaryCards.map((item, idx) => (
+                    <Col xs={12} md={6} key={item.title}>
+                      <div style={{
+                        minHeight: 78,
+                        padding: '12px 14px',
+                        borderRadius: 'var(--radius-md)',
+                        background: item.bg,
+                        border: `1px solid ${idx === 0 ? viewMeta.accent : 'var(--color-border-light)'}`,
+                      }}>
+                        <div style={{ fontSize: 24, fontWeight: 'var(--font-weight-bold)', color: item.color, lineHeight: 1.2 }}>{item.value}</div>
+                        <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', marginTop: 6 }}>{item.title}</div>
+                      </div>
+                    </Col>
                   ))}
-                </div>
+                </Row>
               ) : <Text type="secondary">暂无数据</Text>}
             </Spin>
 
-            {distributionCheck && (
+            {activeView === 'hr' && distributionCheck && (
               <Card size="small" style={{ marginBottom: 10 }}>
                 <Row gutter={[6, 6]}>
                   {['S', 'A', 'B', 'C', 'D'].map(level => {
@@ -2004,19 +2648,19 @@ const PerformanceOverview: React.FC = () => {
               </Card>
             )}
 
-            <Divider style={{ margin: '12px 0' }}>参与人列表</Divider>
+            <Divider style={{ margin: '12px 0' }}>{PERFORMANCE_VIEW_META[activeView].detailTitle}</Divider>
             <Spin spinning={participantsLoading}>
               <Table
                 columns={participantColumns}
-                dataSource={participants}
+                dataSource={detailParticipants}
                 rowKey="id"
-                rowSelection={hasPermission('performance:assessment_manager:batch_update') ? {
+                rowSelection={activeView === 'hr' && hasPermission('performance:assessment_manager:batch_update') ? {
                   selectedRowKeys: selectedParticipantIds,
                   onChange: setSelectedParticipantIds,
                 } : undefined}
                 pagination={{ pageSize: 10, size: 'small' }}
                 size="small"
-                scroll={{ x: 1250 }}
+                scroll={{ x: activeView === 'hr' ? 1250 : 720 }}
               />
             </Spin>
           </div>
