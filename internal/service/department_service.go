@@ -17,6 +17,13 @@ func NewDepartmentService(db *gorm.DB) *DepartmentService {
 	}
 }
 
+// NewDepartmentServiceWithOrgID 多租户构造：所有仓储调用自动追加 org 过滤。
+func NewDepartmentServiceWithOrgID(db *gorm.DB, orgID string) *DepartmentService {
+	return &DepartmentService{
+		departmentRepo: repository.NewDepartmentRepositoryWithOrgID(db, orgID),
+	}
+}
+
 func (s *DepartmentService) CreateDepartment(department *database.Department) error {
 	return s.departmentRepo.Create(department)
 }

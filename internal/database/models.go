@@ -9,10 +9,10 @@ import (
 // User 用户模型
 type User struct {
 	ID            uint                   `gorm:"primaryKey" json:"id"`
-	OrgID         string                 `gorm:"type:varchar(64);not null;default:'default';index:idx_org_user_id,unique" json:"org_id"` // 组织ID（多租户隔离）
-	UserID        string                 `gorm:"type:varchar(64);not null;index:idx_org_user_id,unique" json:"user_id"`                  // 钉钉用户ID
+	OrgID         string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_org_user_id;uniqueIndex:idx_org_email" json:"org_id"` // 组织ID（多租户隔离）
+	UserID        string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_org_user_id" json:"user_id"`                                            // 钉钉用户ID
 	Name          string                 `gorm:"type:varchar(128);not null" json:"name"`
-	Email         string                 `gorm:"type:varchar(128);index:idx_org_email,unique" json:"email"`
+	Email         string                 `gorm:"type:varchar(128);uniqueIndex:idx_org_email" json:"email"`
 	Mobile        string                 `gorm:"type:varchar(32)" json:"mobile"`
 	Password      string                 `gorm:"type:varchar(256)" json:"-"` // 密码哈希，JSON 不输出
 	DepartmentID  string                 `gorm:"type:varchar(64);not null" json:"department_id"`
@@ -44,6 +44,7 @@ type Department struct {
 // DepartmentChangeLog 部门变更日志
 type DepartmentChangeLog struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
+	OrgID          string    `gorm:"type:varchar(64);not null;default:'default';index" json:"org_id"`
 	DepartmentID   string    `gorm:"type:varchar(64);not null;index" json:"department_id"`
 	DepartmentName string    `gorm:"type:varchar(128);not null" json:"department_name"`
 	ChangeType     string    `gorm:"type:varchar(32);not null;index" json:"change_type"` // created, updated
@@ -58,10 +59,11 @@ type DepartmentChangeLog struct {
 // Attendance 考勤模型
 type Attendance struct {
 	ID        uint                   `gorm:"primaryKey" json:"id"`
-	UserID    string                 `gorm:"type:varchar(64);not null;index:idx_user_time_type,unique" json:"user_id"`
+	OrgID     string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_org_user_time_type" json:"org_id"` // 组织ID（多租户隔离）
+	UserID    string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_org_user_time_type" json:"user_id"`
 	UserName  string                 `gorm:"type:varchar(128);not null" json:"user_name"`
-	CheckTime time.Time              `gorm:"not null;index:idx_user_time_type,unique" json:"check_time"`
-	CheckType string                 `gorm:"type:varchar(32);not null;index:idx_user_time_type,unique" json:"check_type"` // 上班/下班
+	CheckTime time.Time              `gorm:"not null;uniqueIndex:idx_org_user_time_type" json:"check_time"`
+	CheckType string                 `gorm:"type:varchar(32);not null;uniqueIndex:idx_org_user_time_type" json:"check_type"` // 上班/下班
 	Location  string                 `gorm:"type:varchar(256)" json:"location"`
 	Extension map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
 	CreatedAt time.Time              `json:"created_at"`
@@ -246,13 +248,14 @@ type AttendanceExport struct {
 // EmployeeProfile 员工档案模型（本地业务字段）
 type EmployeeProfile struct {
 	ID     uint   `gorm:"primaryKey" json:"id"`
-	UserID string `gorm:"type:varchar(64);unique;not null" json:"user_id"` // 关联钉钉用户ID
+	OrgID  string `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_employee_profiles_org_user;uniqueIndex:idx_employee_profiles_org_employee;index" json:"org_id"`
+	UserID string `gorm:"type:varchar(64);not null;uniqueIndex:idx_employee_profiles_org_user" json:"user_id"` // 关联钉钉用户ID
 	// 基本信息（本地业务字段）
-	EmployeeID   string `gorm:"type:varchar(64);unique;not null" json:"employee_id"` // 员工工号
-	Gender       string `gorm:"type:varchar(16)" json:"gender"`                      // 性别
-	BirthDate    string `gorm:"type:varchar(32)" json:"birth_date"`                  // 出生日期
-	Nationality  string `gorm:"type:varchar(64)" json:"nationality"`                 // 国籍
-	IDCardNumber string `gorm:"type:varchar(32)" json:"id_card_number"`              // 身份证号
+	EmployeeID   string `gorm:"type:varchar(64);not null;uniqueIndex:idx_employee_profiles_org_employee" json:"employee_id"` // 员工工号
+	Gender       string `gorm:"type:varchar(16)" json:"gender"`                                                              // 性别
+	BirthDate    string `gorm:"type:varchar(32)" json:"birth_date"`                                                          // 出生日期
+	Nationality  string `gorm:"type:varchar(64)" json:"nationality"`                                                         // 国籍
+	IDCardNumber string `gorm:"type:varchar(32)" json:"id_card_number"`                                                      // 身份证号
 	// 工作信息（本地业务字段）
 	EmploymentType     string `gorm:"type:varchar(32)" json:"employment_type"`      // 雇佣类型：全职、兼职、实习
 	EntryDate          string `gorm:"type:varchar(32)" json:"entry_date"`           // 入职日期

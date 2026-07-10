@@ -516,6 +516,30 @@ func SyncDepartments() ([]DeptInfo, error) {
 	return allDepts, nil
 }
 
+// SyncDepartmentsForConfig 使用指定组织的钉钉应用凭证同步部门（多租户）
+func SyncDepartmentsForConfig(cfg AppConfig) ([]DeptInfo, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var allDepts []DeptInfo
+
+	// Recursively fetch all departments starting from root department 1.
+	if err := fetchDeptTree(accessToken, 1, &allDepts); err != nil {
+		return nil, err
+	}
+
+	// Also include the root department itself.
+	rootDept, err := fetchDeptDetail(accessToken, 1)
+	if err == nil && rootDept != nil {
+		allDepts = append([]DeptInfo{*rootDept}, allDepts...)
+	}
+
+	logrus.Infof("dingtalk sync departments complete for org=%s: %d", cfg.OrgID, len(allDepts))
+	return allDepts, nil
+}
+
 func fetchDeptTree(accessToken string, parentID int64, result *[]DeptInfo) error {
 	body := map[string]interface{}{
 		"dept_id": parentID,
@@ -657,6 +681,44 @@ func SyncUsersWithDepts(depts []DeptInfo) ([]UserInfo, error) {
 	}
 
 	logrus.Infof("dingtalk sync users complete: %d", len(allUsers))
+	return allUsers, nil
+}
+
+// SyncUsersWithDeptsForConfig 使用指定组织的钉钉应用凭证同步用户（多租户）
+func SyncUsersWithDeptsForConfig(cfg AppConfig, depts []DeptInfo) ([]UserInfo, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	userMap := make(map[string]UserInfo) // 去重
+
+	for _, dept := range depts {
+		users, err := fetchDeptUsers(accessToken, dept.DeptID)
+		if err != nil {
+			logrus.Warnf("获取部门 %d(%s) 用户失败: %v", dept.DeptID, dept.Name, err)
+			continue
+		}
+		for _, u := range users {
+			userMap[u.UserID] = u
+		}
+	}
+
+	if err := enrichUsersWithUserDetails(accessToken, userMap); err != nil {
+		logrus.Warnf("dingtalk user detail sync skipped partially: %v", err)
+	}
+	resolveManagerNames(userMap)
+	if err := enrichUsersWithHRMFields(accessToken, userMap); err != nil {
+		logrus.Warnf("dingtalk hrm field sync skipped: %v", err)
+	}
+	resolveManagerNames(userMap)
+
+	var allUsers []UserInfo
+	for _, u := range userMap {
+		allUsers = append(allUsers, u)
+	}
+
+	logrus.Infof("dingtalk sync users complete for org=%s: %d", cfg.OrgID, len(allUsers))
 	return allUsers, nil
 }
 

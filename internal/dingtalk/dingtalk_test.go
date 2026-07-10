@@ -1,6 +1,7 @@
 package dingtalk
 
 import (
+	"strings"
 	"testing"
 
 	"peopleops/internal/database"

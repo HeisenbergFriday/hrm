@@ -416,7 +416,7 @@ func SyncAndMatch(c *gin.Context) {
 			return
 		}
 		attendanceSvc := service.NewAttendanceService(database.DB)
-		attendanceCount, err = attendanceSvc.SyncRecords(records, userNameMap)
+		attendanceCount, err = attendanceSvc.SyncRecords(c.GetString("orgID"), records, userNameMap)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"step": "sync_attendance", "error": "写入打卡记录失败: " + err.Error()})
 			return

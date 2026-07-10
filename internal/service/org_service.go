@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strconv"
@@ -267,12 +268,22 @@ type orgEmployeeSnapshot struct {
 
 type OrgService struct {
 	db    *gorm.DB
+	orgID string // 组织ID，用于数据隔离
 	nowFn func() time.Time
 }
 
 func NewOrgService(db *gorm.DB) *OrgService {
 	return &OrgService{
 		db:    db,
+		nowFn: func() time.Time { return time.Now() },
+	}
+}
+
+// NewOrgServiceWithOrgID 创建带组织ID的OrgService
+func NewOrgServiceWithOrgID(db *gorm.DB, orgID string) *OrgService {
+	return &OrgService{
+		db:    db,
+		orgID: strings.TrimSpace(orgID),
 		nowFn: func() time.Time { return time.Now() },
 	}
 }
@@ -284,7 +295,11 @@ func (s *OrgService) findUserByAuthID(authUserID string) (*database.User, error)
 	}
 
 	var user database.User
-	tx := s.db.Where("user_id = ? AND deleted_at IS NULL", authUserID).Limit(1).Find(&user)
+	tx := s.db.Where("user_id = ? AND deleted_at IS NULL", authUserID)
+	if s.orgID != "" {
+		tx = tx.Where("org_id = ?", s.orgID)
+	}
+	tx = tx.Limit(1).Find(&user)
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
@@ -296,7 +311,11 @@ func (s *OrgService) findUserByAuthID(authUserID string) (*database.User, error)
 		return nil, gorm.ErrRecordNotFound
 	}
 	user = database.User{}
-	tx = s.db.Where("id = ? AND deleted_at IS NULL", authUserID).Limit(1).Find(&user)
+	tx = s.db.Where("id = ? AND deleted_at IS NULL", authUserID)
+	if s.orgID != "" {
+		tx = tx.Where("org_id = ?", s.orgID)
+	}
+	tx = tx.Limit(1).Find(&user)
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
@@ -314,8 +333,8 @@ func (s *OrgService) ResolveScopeForUser(currentUserID string) (*OrgDataScope, e
 	}
 
 	// 优先从 data_permissions 表读取统一配置
-	permService := NewPermissionService(s.db)
-	scope, err := permService.ResolveUserScope(currentUserID)
+	permService := NewPermissionServiceWithOrgID(s.db, s.orgID)
+	scope, err := permService.ResolveUserScopeInOrg(s.orgID, currentUserID)
 	if err == nil && scope != nil {
 		// ResolveUserScope 返回了受限范围（department 或 self），直接使用
 		if scope.Mode == "self" || scope.Mode == "department" {
@@ -456,7 +475,11 @@ func (s *OrgService) GetVisibleDepartments(scope *OrgDataScope) ([]database.Depa
 	return visible, nil
 }
 
-func (s *OrgService) SyncDepartmentsWithChangeLog(items []OrgDepartmentSyncItem, source string) (OrgDepartmentSyncResult, error) {
+func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepartmentSyncItem, source string) (OrgDepartmentSyncResult, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		orgID = "default"
+	}
 	source = strings.TrimSpace(source)
 	if source == "" {
 		source = "dingtalk_sync"
@@ -474,9 +497,10 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(items []OrgDepartmentSyncItem,
 
 			result.Count++
 			var existing database.Department
-			err := tx.Where("department_id = ?", item.DepartmentID).First(&existing).Error
+			err := tx.Where("org_id = ? AND department_id = ?", orgID, item.DepartmentID).First(&existing).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				department := database.Department{
+					OrgID:        orgID,
 					DepartmentID: item.DepartmentID,
 					Name:         item.Name,
 					ParentID:     item.ParentID,
@@ -486,7 +510,7 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(items []OrgDepartmentSyncItem,
 				if err := tx.Create(&department).Error; err != nil {
 					return err
 				}
-				if err := createDepartmentChangeLog(tx, item.DepartmentID, item.Name, "created", "department", "", item.Name, source, s.nowFn()); err != nil {
+				if err := createDepartmentChangeLog(tx, orgID, item.DepartmentID, item.Name, "created", "department", "", item.Name, source, s.nowFn()); err != nil {
 					return err
 				}
 				result.ChangeLogCount++
@@ -498,20 +522,20 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(items []OrgDepartmentSyncItem,
 
 			logs := make([]database.DepartmentChangeLog, 0, 3)
 			if existing.Name != item.Name {
-				logs = append(logs, newDepartmentChangeLog(item.DepartmentID, item.Name, "updated", "name", existing.Name, item.Name, source, s.nowFn()))
+				logs = append(logs, newDepartmentChangeLog(orgID, item.DepartmentID, item.Name, "updated", "name", existing.Name, item.Name, source, s.nowFn()))
 				existing.Name = item.Name
 			}
 			if existing.ParentID != item.ParentID {
-				logs = append(logs, newDepartmentChangeLog(item.DepartmentID, item.Name, "updated", "parent_id", existing.ParentID, item.ParentID, source, s.nowFn()))
+				logs = append(logs, newDepartmentChangeLog(orgID, item.DepartmentID, item.Name, "updated", "parent_id", existing.ParentID, item.ParentID, source, s.nowFn()))
 				existing.ParentID = item.ParentID
 			}
 			if existing.Order != item.Order {
-				logs = append(logs, newDepartmentChangeLog(item.DepartmentID, item.Name, "updated", "order", strconv.Itoa(existing.Order), strconv.Itoa(item.Order), source, s.nowFn()))
+				logs = append(logs, newDepartmentChangeLog(orgID, item.DepartmentID, item.Name, "updated", "order", strconv.Itoa(existing.Order), strconv.Itoa(item.Order), source, s.nowFn()))
 				existing.Order = item.Order
 			}
 			nextExtension := departmentSyncExtension(existing.Extension, item)
 			if !reflect.DeepEqual(existing.Extension, nextExtension) {
-				logs = append(logs, newDepartmentChangeLog(item.DepartmentID, item.Name, "updated", "extension", "", "dingtalk_department_head_sync", source, s.nowFn()))
+				logs = append(logs, newDepartmentChangeLog(orgID, item.DepartmentID, item.Name, "updated", "extension", "", "dingtalk_department_head_sync", source, s.nowFn()))
 				existing.Extension = nextExtension
 			}
 			if len(logs) == 0 {
@@ -575,8 +599,13 @@ func (s *OrgService) GetDepartmentHistory(scope *OrgDataScope, departmentID stri
 		limit = 200
 	}
 
+	query := s.db.Where("department_id = ?", departmentID)
+	if s.orgID != "" {
+		query = query.Where("org_id = ?", s.orgID)
+	}
+
 	var logs []database.DepartmentChangeLog
-	if err := s.db.Where("department_id = ?", departmentID).
+	if err := query.
 		Order("changed_at DESC, id DESC").
 		Limit(limit).
 		Find(&logs).Error; err != nil {
@@ -647,7 +676,11 @@ func (s *OrgService) GetOverview(scope *OrgDataScope, departmentID string) (*Org
 	// self 模式：只返回当前用户的概览
 	if scope != nil && scope.IsSelf() && len(scope.UserIDs) > 0 {
 		var user database.User
-		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", scope.UserIDs[0]).First(&user).Error; err != nil {
+		selfQuery := s.db.Where("user_id = ? AND deleted_at IS NULL", scope.UserIDs[0])
+		if s.orgID != "" {
+			selfQuery = selfQuery.Where("org_id = ?", s.orgID)
+		}
+		if err := selfQuery.First(&user).Error; err != nil {
 			return &OrgOverview{Scope: scope, Summary: OrgOverviewSummary{}, Warnings: []OrgWarningItem{}, Trends: []OrgTrendPoint{}, DepartmentStats: []OrgDepartmentStat{}, EmployeeTypeDistribution: []OrgDistributionItem{}, JobLevelDistribution: []OrgDistributionItem{}, JobFamilyDistribution: []OrgDistributionItem{}}, nil
 		}
 		snapshots, err := s.listEmployeeSnapshots([]string{user.DepartmentID})
@@ -837,7 +870,11 @@ func (s *OrgService) GetDepartmentTree(scope *OrgDataScope) ([]*OrgDepartmentTre
 
 func (s *OrgService) GetEmployeeAggregate(scope *OrgDataScope, id string) (*EmployeeAggregate, error) {
 	var user database.User
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", id).First(&user).Error; err != nil {
+	userQuery := s.db.Where("id = ? AND deleted_at IS NULL", id)
+	if s.orgID != "" {
+		userQuery = userQuery.Where("org_id = ?", s.orgID)
+	}
+	if err := userQuery.First(&user).Error; err != nil {
 		return nil, err
 	}
 	if scope != nil && !scope.IsAll() {
@@ -852,7 +889,11 @@ func (s *OrgService) GetEmployeeAggregate(scope *OrgDataScope, id string) (*Empl
 	}
 
 	var profile database.EmployeeProfile
-	profileErr := s.db.Where("user_id = ? AND deleted_at IS NULL", user.UserID).First(&profile).Error
+	profileQuery := s.db.Where("user_id = ? AND deleted_at IS NULL", user.UserID)
+	if s.orgID != "" {
+		profileQuery = profileQuery.Where("org_id = ?", s.orgID)
+	}
+	profileErr := profileQuery.First(&profile).Error
 	if profileErr != nil && !errors.Is(profileErr, gorm.ErrRecordNotFound) {
 		return nil, profileErr
 	}
@@ -894,13 +935,32 @@ func (s *OrgService) GetEmployeeAggregate(scope *OrgDataScope, id string) (*Empl
 
 func (s *OrgService) baseEmployeeQuery(departmentIDs []string) *gorm.DB {
 	query := s.db.Model(&database.User{}).
-		Joins("JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Joins("JOIN employee_profiles ON employee_profiles.org_id = users.org_id AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin")
+	if s.orgID != "" {
+		query = query.Where("users.org_id = ?", s.orgID)
+	}
 	if len(departmentIDs) > 0 {
 		query = query.Where("users.department_id IN ?", departmentIDs)
 	}
 	return query
+}
+
+// applyOnboardingOrg 通过 department 反查 org 归属，用于 employee_onboardings 相关查询。
+func (s *OrgService) applyOnboardingOrg(query *gorm.DB) *gorm.DB {
+	if s.orgID == "" {
+		return query
+	}
+	return query.Where("EXISTS (SELECT 1 FROM departments d WHERE d.department_id = employee_onboardings.department_id AND d.org_id = ? AND d.deleted_at IS NULL)", s.orgID)
+}
+
+// applyUserBackedOrg 通过 users 反查 org 归属，适用于所有 X.user_id 与 users.user_id 关联的表。
+func (s *OrgService) applyUserBackedOrg(query *gorm.DB, table string) *gorm.DB {
+	if s.orgID == "" {
+		return query
+	}
+	return query.Where(fmt.Sprintf("EXISTS (SELECT 1 FROM users u WHERE u.user_id = %s.user_id AND u.org_id = ? AND u.deleted_at IS NULL)", table), s.orgID)
 }
 
 func (s *OrgService) listEmployeeSnapshots(departmentIDs []string) ([]orgEmployeeSnapshot, error) {
@@ -971,8 +1031,11 @@ func (s *OrgService) resolveDepartmentFilter(scope *OrgDataScope, requestedDepar
 
 func (s *OrgService) loadDepartmentGraph() ([]database.Department, map[string]database.Department, map[string][]string, error) {
 	var departments []database.Department
-	if err := s.db.Where("deleted_at IS NULL").
-		Order("parent_id ASC, `order` ASC, name ASC").
+	query := s.db.Where("deleted_at IS NULL")
+	if s.orgID != "" {
+		query = query.Where("org_id = ?", s.orgID)
+	}
+	if err := query.Order("parent_id ASC, `order` ASC, name ASC").
 		Find(&departments).Error; err != nil {
 		return nil, nil, nil, err
 	}
@@ -1089,11 +1152,14 @@ func (s *OrgService) collectPendingFlowWarnings(departmentIDs []string, departme
 	warnings := make([]OrgWarningItem, 0)
 
 	var onboardings []database.EmployeeOnboarding
-	onboardingQuery := s.db.Where("deleted_at IS NULL").Where("status IN ?", []string{"pending", "processing"})
+	onboardingQuery := s.db.Model(&database.EmployeeOnboarding{}).
+		Where("employee_onboardings.deleted_at IS NULL").
+		Where("employee_onboardings.status IN ?", []string{"pending", "processing"})
 	if len(departmentIDs) > 0 {
-		onboardingQuery = onboardingQuery.Where("department_id IN ?", departmentIDs)
+		onboardingQuery = onboardingQuery.Where("employee_onboardings.department_id IN ?", departmentIDs)
 	}
-	if err := onboardingQuery.Order("entry_date ASC, created_at ASC").Find(&onboardings).Error; err != nil {
+	onboardingQuery = s.applyOnboardingOrg(onboardingQuery)
+	if err := onboardingQuery.Order("employee_onboardings.entry_date ASC, employee_onboardings.created_at ASC").Find(&onboardings).Error; err != nil {
 		return nil, nil, err
 	}
 	counts["onboarding"] = len(onboardings)
@@ -1111,11 +1177,14 @@ func (s *OrgService) collectPendingFlowWarnings(departmentIDs []string, departme
 	}
 
 	var transfers []database.EmployeeTransfer
-	transferQuery := s.db.Where("deleted_at IS NULL").Where("status = ?", "pending")
+	transferQuery := s.db.Model(&database.EmployeeTransfer{}).
+		Where("employee_transfers.deleted_at IS NULL").
+		Where("employee_transfers.status = ?", "pending")
 	if len(departmentIDs) > 0 {
-		transferQuery = transferQuery.Where("(old_department_id IN ? OR new_department_id IN ?)", departmentIDs, departmentIDs)
+		transferQuery = transferQuery.Where("(employee_transfers.old_department_id IN ? OR employee_transfers.new_department_id IN ?)", departmentIDs, departmentIDs)
 	}
-	if err := transferQuery.Order("transfer_date ASC, created_at ASC").Find(&transfers).Error; err != nil {
+	transferQuery = s.applyUserBackedOrg(transferQuery, "employee_transfers")
+	if err := transferQuery.Order("employee_transfers.transfer_date ASC, employee_transfers.created_at ASC").Find(&transfers).Error; err != nil {
 		return nil, nil, err
 	}
 	counts["transfer"] = len(transfers)
@@ -1134,11 +1203,14 @@ func (s *OrgService) collectPendingFlowWarnings(departmentIDs []string, departme
 	}
 
 	var resignations []database.EmployeeResignation
-	resignationQuery := s.db.Where("deleted_at IS NULL").Where("status = ?", "pending")
+	resignationQuery := s.db.Model(&database.EmployeeResignation{}).
+		Where("employee_resignations.deleted_at IS NULL").
+		Where("employee_resignations.status = ?", "pending")
 	if len(departmentIDs) > 0 {
-		resignationQuery = resignationQuery.Where("department_id IN ?", departmentIDs)
+		resignationQuery = resignationQuery.Where("employee_resignations.department_id IN ?", departmentIDs)
 	}
-	if err := resignationQuery.Order("resign_date ASC, created_at ASC").Find(&resignations).Error; err != nil {
+	resignationQuery = s.applyUserBackedOrg(resignationQuery, "employee_resignations")
+	if err := resignationQuery.Order("employee_resignations.resign_date ASC, employee_resignations.created_at ASC").Find(&resignations).Error; err != nil {
 		return nil, nil, err
 	}
 	counts["resignation"] = len(resignations)
@@ -1163,11 +1235,14 @@ func (s *OrgService) collectPendingFlowWarnings(departmentIDs []string, departme
 func (s *OrgService) collectConsecutiveResignationWarnings(departmentIDs []string, departmentMap map[string]database.Department) ([]OrgWarningItem, int, error) {
 	since := s.nowFn().AddDate(0, 0, -30)
 	var resignations []database.EmployeeResignation
-	q := s.db.Where("deleted_at IS NULL").Where("status IN ?", []string{"pending", "approved", "completed"}).
-		Where("resign_date >= ?", since.Format("2006-01-02"))
+	q := s.db.Model(&database.EmployeeResignation{}).
+		Where("employee_resignations.deleted_at IS NULL").
+		Where("employee_resignations.status IN ?", []string{"pending", "approved", "completed"}).
+		Where("employee_resignations.resign_date >= ?", since.Format("2006-01-02"))
 	if len(departmentIDs) > 0 {
-		q = q.Where("department_id IN ?", departmentIDs)
+		q = q.Where("employee_resignations.department_id IN ?", departmentIDs)
 	}
+	q = s.applyUserBackedOrg(q, "employee_resignations")
 	if err := q.Find(&resignations).Error; err != nil {
 		return nil, 0, err
 	}
@@ -1199,9 +1274,14 @@ func (s *OrgService) collectConsecutiveResignationWarnings(departmentIDs []strin
 // collectOverspanManagerWarnings 检测直接下属 >= 10 人的管理者
 func (s *OrgService) collectOverspanManagerWarnings(departmentIDs []string, departmentMap map[string]database.Department) ([]OrgWarningItem, int, error) {
 	var users []database.User
-	q := s.db.Where("deleted_at IS NULL").Where("status = ?", "active")
+	q := s.db.Model(&database.User{}).
+		Where("users.deleted_at IS NULL").
+		Where("users.status = ?", "active")
+	if s.orgID != "" {
+		q = q.Where("users.org_id = ?", s.orgID)
+	}
 	if len(departmentIDs) > 0 {
-		q = q.Where("department_id IN ?", departmentIDs)
+		q = q.Where("users.department_id IN ?", departmentIDs)
 	}
 	if err := q.Select("user_id, name, department_id, extension").Find(&users).Error; err != nil {
 		return nil, 0, err
@@ -1266,10 +1346,12 @@ func (s *OrgService) buildTrendPoints(departmentIDs []string, snapshots []orgEmp
 	}
 
 	var transfers []database.EmployeeTransfer
-	transferQuery := s.db.Where("deleted_at IS NULL")
+	transferQuery := s.db.Model(&database.EmployeeTransfer{}).
+		Where("employee_transfers.deleted_at IS NULL")
 	if len(departmentIDs) > 0 {
-		transferQuery = transferQuery.Where("(old_department_id IN ? OR new_department_id IN ?)", departmentIDs, departmentIDs)
+		transferQuery = transferQuery.Where("(employee_transfers.old_department_id IN ? OR employee_transfers.new_department_id IN ?)", departmentIDs, departmentIDs)
 	}
+	transferQuery = s.applyUserBackedOrg(transferQuery, "employee_transfers")
 	if err := transferQuery.Find(&transfers).Error; err != nil {
 		return nil, err
 	}
@@ -1280,10 +1362,12 @@ func (s *OrgService) buildTrendPoints(departmentIDs []string, snapshots []orgEmp
 	}
 
 	var resignations []database.EmployeeResignation
-	resignationQuery := s.db.Where("deleted_at IS NULL")
+	resignationQuery := s.db.Model(&database.EmployeeResignation{}).
+		Where("employee_resignations.deleted_at IS NULL")
 	if len(departmentIDs) > 0 {
-		resignationQuery = resignationQuery.Where("department_id IN ?", departmentIDs)
+		resignationQuery = resignationQuery.Where("employee_resignations.department_id IN ?", departmentIDs)
 	}
+	resignationQuery = s.applyUserBackedOrg(resignationQuery, "employee_resignations")
 	if err := resignationQuery.Find(&resignations).Error; err != nil {
 		return nil, err
 	}
@@ -1375,7 +1459,11 @@ func (s *OrgService) buildOrgRelation(scope *OrgDataScope, user *database.User, 
 	managerUserID, _ := resolveManagerInfo(*user)
 	if managerUserID != "" {
 		var manager database.User
-		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", managerUserID).First(&manager).Error; err == nil {
+		managerQuery := s.db.Where("user_id = ? AND deleted_at IS NULL", managerUserID)
+		if s.orgID != "" {
+			managerQuery = managerQuery.Where("org_id = ?", s.orgID)
+		}
+		if err := managerQuery.First(&manager).Error; err == nil {
 			if scope == nil || scope.IsAll() || scope.AllowsDepartment(manager.DepartmentID) {
 				relation.Manager = &EmployeeMemberRef{
 					ID:             uintToString(manager.ID),
@@ -1458,12 +1546,14 @@ func (s *OrgService) buildEmployeeTimeline(user *database.User, profile *databas
 	}
 
 	var onboardings []database.EmployeeOnboarding
-	onboardingQuery := s.db.Where("deleted_at IS NULL")
+	onboardingQuery := s.db.Model(&database.EmployeeOnboarding{}).
+		Where("employee_onboardings.deleted_at IS NULL")
 	if profile != nil && strings.TrimSpace(profile.EmployeeID) != "" {
-		onboardingQuery = onboardingQuery.Where("employee_id = ? OR employee_id = ?", profile.EmployeeID, user.UserID)
+		onboardingQuery = onboardingQuery.Where("employee_onboardings.employee_id = ? OR employee_onboardings.employee_id = ?", profile.EmployeeID, user.UserID)
 	} else {
-		onboardingQuery = onboardingQuery.Where("employee_id = ?", user.UserID)
+		onboardingQuery = onboardingQuery.Where("employee_onboardings.employee_id = ?", user.UserID)
 	}
+	onboardingQuery = s.applyOnboardingOrg(onboardingQuery)
 	if err := onboardingQuery.Find(&onboardings).Error; err != nil {
 		return nil, err
 	}
@@ -1472,7 +1562,11 @@ func (s *OrgService) buildEmployeeTimeline(user *database.User, profile *databas
 	}
 
 	var transfers []database.EmployeeTransfer
-	if err := s.db.Where("deleted_at IS NULL").Where("user_id = ?", user.UserID).Find(&transfers).Error; err != nil {
+	transferTimelineQuery := s.db.Model(&database.EmployeeTransfer{}).
+		Where("employee_transfers.deleted_at IS NULL").
+		Where("employee_transfers.user_id = ?", user.UserID)
+	transferTimelineQuery = s.applyUserBackedOrg(transferTimelineQuery, "employee_transfers")
+	if err := transferTimelineQuery.Find(&transfers).Error; err != nil {
 		return nil, err
 	}
 	for _, transfer := range transfers {
@@ -1508,7 +1602,11 @@ func (s *OrgService) buildEmployeeTimeline(user *database.User, profile *databas
 	}
 
 	var resignations []database.EmployeeResignation
-	if err := s.db.Where("deleted_at IS NULL").Where("user_id = ?", user.UserID).Find(&resignations).Error; err != nil {
+	resignationTimelineQuery := s.db.Model(&database.EmployeeResignation{}).
+		Where("employee_resignations.deleted_at IS NULL").
+		Where("employee_resignations.user_id = ?", user.UserID)
+	resignationTimelineQuery = s.applyUserBackedOrg(resignationTimelineQuery, "employee_resignations")
+	if err := resignationTimelineQuery.Find(&resignations).Error; err != nil {
 		return nil, err
 	}
 	for _, resignation := range resignations {
@@ -1592,8 +1690,13 @@ func sortDepartmentTree(nodes []*OrgDepartmentTreeNode) {
 	}
 }
 
-func newDepartmentChangeLog(departmentID, departmentName, changeType, fieldName, oldValue, newValue, source string, changedAt time.Time) database.DepartmentChangeLog {
+func newDepartmentChangeLog(orgID, departmentID, departmentName, changeType, fieldName, oldValue, newValue, source string, changedAt time.Time) database.DepartmentChangeLog {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		orgID = "default"
+	}
 	return database.DepartmentChangeLog{
+		OrgID:          orgID,
 		DepartmentID:   departmentID,
 		DepartmentName: departmentName,
 		ChangeType:     changeType,
@@ -1605,8 +1708,8 @@ func newDepartmentChangeLog(departmentID, departmentName, changeType, fieldName,
 	}
 }
 
-func createDepartmentChangeLog(tx *gorm.DB, departmentID, departmentName, changeType, fieldName, oldValue, newValue, source string, changedAt time.Time) error {
-	logItem := newDepartmentChangeLog(departmentID, departmentName, changeType, fieldName, oldValue, newValue, source, changedAt)
+func createDepartmentChangeLog(tx *gorm.DB, orgID, departmentID, departmentName, changeType, fieldName, oldValue, newValue, source string, changedAt time.Time) error {
+	logItem := newDepartmentChangeLog(orgID, departmentID, departmentName, changeType, fieldName, oldValue, newValue, source, changedAt)
 	return tx.Create(&logItem).Error
 }
 

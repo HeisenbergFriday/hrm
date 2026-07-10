@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -100,6 +101,10 @@ func Init() error {
 		log.Printf("迁移表结构失败: %v", err)
 		return err
 	}
+	if err := migrateMultitenantUniqueIndexes(); err != nil {
+		log.Printf("迁移多租户唯一索引失败: %v", err)
+		return err
+	}
 	log.Println("表结构迁移成功")
 
 	// 种子数据
@@ -112,6 +117,7 @@ func Init() error {
 	migratePerformanceIndicatorRolePresets()
 	migrateMenuPermissions()
 	migrateAttendanceToolboxMenuPermissions()
+	migrateLiedeOrganizationAdminRoles()
 
 	// 绩效表已随主库 migrate() 一并迁移，无需独立数据源
 	log.Println("绩效模块使用主库")
@@ -198,6 +204,8 @@ func migrate() error {
 	}
 
 	if err := DB.AutoMigrate(
+		&Organization{},
+		&OrganizationUser{},
 		&User{},
 		&Department{},
 		&DepartmentChangeLog{},
@@ -374,6 +382,113 @@ func migrateUserManagerColumns() {
 			log.Printf("[migrate] 成功添加索引 idx_users_manager_user_id")
 		}
 	}
+}
+
+func migrateMultitenantUniqueIndexes() error {
+	if DB == nil {
+		return nil
+	}
+
+	if DB.Migrator().HasTable(&EmployeeProfile{}) {
+		if err := DB.Exec(`
+			UPDATE employee_profiles ep
+			JOIN (
+				SELECT user_id, MIN(org_id) AS org_id
+				FROM users
+				WHERE deleted_at IS NULL
+				GROUP BY user_id
+				HAVING COUNT(*) = 1
+			) u ON u.user_id = ep.user_id
+			SET ep.org_id = u.org_id
+			WHERE ep.org_id IS NULL OR ep.org_id = '' OR ep.org_id = 'default'
+		`).Error; err != nil {
+			return err
+		}
+	}
+
+	// 考勤表补齐 org_id：钉钉 UserID 在不同企业可能重号，唯一索引和过滤都必须带上 org_id。
+	// 回填规则：对同一 user_id 只在一个组织出现的考勤记录，直接采用该组织；否则保持 default 兜底。
+	if DB.Migrator().HasTable(&Attendance{}) {
+		if err := DB.Exec(`
+			UPDATE attendances a
+			JOIN (
+				SELECT user_id, MIN(org_id) AS org_id
+				FROM users
+				WHERE deleted_at IS NULL
+				GROUP BY user_id
+				HAVING COUNT(*) = 1
+			) u ON u.user_id = a.user_id
+			SET a.org_id = u.org_id
+			WHERE a.org_id IS NULL OR a.org_id = '' OR a.org_id = 'default'
+		`).Error; err != nil {
+			return err
+		}
+	}
+
+	for _, idx := range []struct {
+		table string
+		name  string
+	}{
+		{"users", "uni_users_mobile"},
+		{"users", "uni_users_email"},
+		{"users", "idx_org_email"},
+		{"employee_profiles", "uni_employee_profiles_user_id"},
+		{"employee_profiles", "uni_employee_profiles_employee_id"},
+		{"attendances", "idx_user_time_type"},
+	} {
+		if err := dropIndexIfExists(idx.table, idx.name); err != nil {
+			return err
+		}
+	}
+
+	if err := createIndexIfMissing("employee_profiles", "idx_employee_profiles_org_user", true, "org_id", "user_id"); err != nil {
+		return err
+	}
+	if err := createIndexIfMissing("employee_profiles", "idx_employee_profiles_org_employee", true, "org_id", "employee_id"); err != nil {
+		return err
+	}
+	if err := createIndexIfMissing("users", "idx_org_email", true, "org_id", "email"); err != nil {
+		return err
+	}
+	if err := createIndexIfMissing("users", "idx_users_org_mobile", false, "org_id", "mobile"); err != nil {
+		return err
+	}
+	if err := createIndexIfMissing("attendances", "idx_org_user_time_type", true, "org_id", "user_id", "check_time", "check_type"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func dropIndexIfExists(table, indexName string) error {
+	var count int64
+	if err := DB.Raw("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?", table, indexName).Scan(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
+	return DB.Exec(fmt.Sprintf("ALTER TABLE `%s` DROP INDEX `%s`", table, indexName)).Error
+}
+
+func createIndexIfMissing(table, indexName string, unique bool, columns ...string) error {
+	var count int64
+	if err := DB.Raw("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?", table, indexName).Scan(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	quotedColumns := make([]string, 0, len(columns))
+	for _, column := range columns {
+		quotedColumns = append(quotedColumns, fmt.Sprintf("`%s`", column))
+	}
+	uniqueSQL := ""
+	if unique {
+		uniqueSQL = "UNIQUE "
+	}
+	return DB.Exec(fmt.Sprintf("CREATE %sINDEX `%s` ON `%s` (%s)", uniqueSQL, indexName, table, strings.Join(quotedColumns, ", "))).Error
 }
 
 func migrateAnnualLeaveConsumeLogSchema() error {
@@ -810,7 +925,136 @@ func CheckPassword(password, hash string) bool {
 	return err == nil
 }
 
+type organizationSeedConfig struct {
+	OrgID       string `json:"org_id"`
+	Name        string `json:"name"`
+	CorpID      string `json:"corp_id"`
+	AppKey      string `json:"app_key"`
+	AppSecret   string `json:"app_secret"`
+	AgentID     string `json:"agent_id"`
+	AppHomeURL  string `json:"app_home_url"`
+	RedirectURI string `json:"redirect_uri"`
+	Status      string `json:"status"`
+}
+
+func seedOrganizationConfigsFromEnv() []organizationSeedConfig {
+	configs := make([]organizationSeedConfig, 0)
+	indexByOrgID := make(map[string]int)
+	add := func(cfg organizationSeedConfig) {
+		cfg.OrgID = strings.TrimSpace(cfg.OrgID)
+		cfg.Name = strings.TrimSpace(cfg.Name)
+		cfg.CorpID = strings.TrimSpace(cfg.CorpID)
+		cfg.AppKey = strings.TrimSpace(cfg.AppKey)
+		cfg.AppSecret = strings.TrimSpace(cfg.AppSecret)
+		cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+		cfg.AppHomeURL = strings.TrimSpace(cfg.AppHomeURL)
+		cfg.RedirectURI = strings.TrimSpace(cfg.RedirectURI)
+		cfg.Status = strings.TrimSpace(cfg.Status)
+		if cfg.OrgID == "" || cfg.CorpID == "" {
+			return
+		}
+		if cfg.Name == "" {
+			cfg.Name = cfg.OrgID
+		}
+		if cfg.Status == "" {
+			cfg.Status = "active"
+		}
+		if idx, ok := indexByOrgID[cfg.OrgID]; ok {
+			configs[idx] = cfg
+			return
+		}
+		indexByOrgID[cfg.OrgID] = len(configs)
+		configs = append(configs, cfg)
+	}
+
+	defaultOrgID := strings.TrimSpace(os.Getenv("DINGTALK_SHARED_OAUTH_ORG_ID"))
+	if defaultOrgID == "" {
+		defaultOrgID = strings.TrimSpace(os.Getenv("DEFAULT_ORG_ID"))
+	}
+	if defaultOrgID == "" {
+		defaultOrgID = strings.TrimSpace(os.Getenv("DINGTALK_QR_DEFAULT_ORG_ID"))
+	}
+	if defaultOrgID == "" {
+		defaultOrgID = "default"
+	}
+	add(organizationSeedConfig{
+		OrgID:       defaultOrgID,
+		Name:        strings.TrimSpace(os.Getenv("DINGTALK_ORG_NAME")),
+		CorpID:      strings.TrimSpace(os.Getenv("DINGTALK_CORP_ID")),
+		AppKey:      strings.TrimSpace(os.Getenv("DINGTALK_APP_KEY")),
+		AppSecret:   strings.TrimSpace(os.Getenv("DINGTALK_APP_SECRET")),
+		AgentID:     strings.TrimSpace(os.Getenv("DINGTALK_AGENT_ID")),
+		AppHomeURL:  strings.TrimSpace(os.Getenv("DINGTALK_APP_HOME_URL")),
+		RedirectURI: strings.TrimSpace(os.Getenv("DINGTALK_REDIRECT_URI")),
+		Status:      "active",
+	})
+
+	raw := strings.Trim(strings.TrimSpace(os.Getenv("DINGTALK_ORGANIZATIONS")), "'")
+	if raw != "" {
+		var envConfigs []organizationSeedConfig
+		if err := json.Unmarshal([]byte(raw), &envConfigs); err != nil {
+			log.Printf("[seed] parse DINGTALK_ORGANIZATIONS failed: %v", err)
+		} else {
+			for _, cfg := range envConfigs {
+				add(cfg)
+			}
+		}
+	}
+
+	return configs
+}
+
+func seedOrganizationsFromEnv() {
+	for _, cfg := range seedOrganizationConfigsFromEnv() {
+		var org Organization
+		err := DB.Where("org_id = ?", cfg.OrgID).First(&org).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			org = Organization{
+				OrgID:       cfg.OrgID,
+				Name:        cfg.Name,
+				CorpID:      cfg.CorpID,
+				Status:      cfg.Status,
+				AppKey:      cfg.AppKey,
+				AppSecret:   cfg.AppSecret,
+				AgentID:     cfg.AgentID,
+				AppHomeURL:  cfg.AppHomeURL,
+				RedirectURI: cfg.RedirectURI,
+			}
+			if err := DB.Create(&org).Error; err != nil {
+				log.Printf("[seed] create organization %s failed: %v", cfg.OrgID, err)
+			}
+			continue
+		}
+		if err != nil {
+			log.Printf("[seed] query organization %s failed: %v", cfg.OrgID, err)
+			continue
+		}
+
+		updates := map[string]interface{}{
+			"name":         cfg.Name,
+			"corp_id":      cfg.CorpID,
+			"status":       cfg.Status,
+			"app_home_url": cfg.AppHomeURL,
+			"redirect_uri": cfg.RedirectURI,
+		}
+		if strings.TrimSpace(org.AgentID) == "" && cfg.AgentID != "" {
+			updates["agent_id"] = cfg.AgentID
+		}
+		if strings.TrimSpace(org.AppKey) == "" && cfg.AppKey != "" {
+			updates["app_key"] = cfg.AppKey
+		}
+		if strings.TrimSpace(org.AppSecret) == "" && cfg.AppSecret != "" {
+			updates["app_secret"] = cfg.AppSecret
+		}
+		if err := DB.Model(&org).Updates(updates).Error; err != nil {
+			log.Printf("[seed] update organization %s failed: %v", cfg.OrgID, err)
+		}
+	}
+}
+
 func seed() {
+	seedOrganizationsFromEnv()
+
 	// 创建默认管理员（如果不存在）
 	adminUserID := getEnvOrDefault("ADMIN_USER_ID", "admin")
 	var count int64
@@ -1010,6 +1254,156 @@ func seedUserRoles() {
 			DB.Create(&UserRole{OrgID: admin.OrgID, UserID: admin.UserID, RoleID: adminID})
 		}
 	}
+}
+
+var liedeAdminOrgIDs = []string{"default", "xiaotie", "muteng"}
+
+func migrateLiedeOrganizationAdminRoles() {
+	adminRole, err := ensureRolePreset("管理员", "系统管理员")
+	if err != nil {
+		log.Printf("[migrate] 确保管理员角色失败: %v", err)
+		return
+	}
+	if err := ensureAdminRoleFullAccess(adminRole.ID); err != nil {
+		log.Printf("[migrate] 确保管理员角色权限失败: %v", err)
+		return
+	}
+
+	users, err := findLiedeAdminUsers()
+	if err != nil {
+		log.Printf("[migrate] 查找列德用户失败: %v", err)
+		return
+	}
+	if len(users) == 0 {
+		log.Printf("[migrate] 未找到姓名包含“列德”的本地用户，跳过三组织管理员授权")
+		return
+	}
+
+	usersByOrg := make(map[string][]User, len(users))
+	for _, user := range users {
+		if strings.TrimSpace(user.OrgID) != "" {
+			usersByOrg[user.OrgID] = append(usersByOrg[user.OrgID], user)
+		}
+	}
+
+	for _, orgID := range liedeAdminOrgIDs {
+		orgUsers := usersByOrg[orgID]
+		if len(orgUsers) == 0 {
+			log.Printf("[migrate] 未找到列德在组织内的本地用户，跳过授权: org_id=%s", orgID)
+			continue
+		}
+		for _, user := range orgUsers {
+			if strings.TrimSpace(user.UserID) == "" {
+				continue
+			}
+			if err := EnsureOrganizationUser(orgID, user.UserID, "active"); err != nil {
+				log.Printf("[migrate] 维护列德组织成员缓存失败: org_id=%s user_id=%s err=%v", orgID, user.UserID, err)
+			}
+			if err := ensureUserRoleInOrg(orgID, user.UserID, adminRole.ID); err != nil {
+				log.Printf("[migrate] 授权列德为组织管理员失败: org_id=%s user_id=%s err=%v", orgID, user.UserID, err)
+				continue
+			}
+			log.Printf("[migrate] 已确保列德为组织管理员: org_id=%s user_id=%s", orgID, user.UserID)
+		}
+	}
+}
+
+func findLiedeAdminUsers() ([]User, error) {
+	users := make([]User, 0)
+	seen := make(map[uint]struct{})
+	appendUsers := func(candidates []User) {
+		for _, user := range candidates {
+			if user.ID == 0 {
+				continue
+			}
+			if _, ok := seen[user.ID]; ok {
+				continue
+			}
+			seen[user.ID] = struct{}{}
+			users = append(users, user)
+		}
+	}
+
+	var nameMatches []User
+	if err := DB.Where("deleted_at IS NULL AND name LIKE ?", "%列德%").
+		Order("FIELD(org_id, 'default', 'xiaotie', 'muteng') DESC, id ASC").
+		Find(&nameMatches).Error; err != nil {
+		return nil, err
+	}
+	appendUsers(nameMatches)
+
+	if adminUserID := strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID")); adminUserID != "" {
+		var envMatches []User
+		if err := DB.Where("deleted_at IS NULL AND user_id = ?", adminUserID).
+			Order("FIELD(org_id, 'default', 'xiaotie', 'muteng') DESC, id ASC").
+			Find(&envMatches).Error; err != nil {
+			return nil, err
+		}
+		appendUsers(envMatches)
+	}
+
+	return users, nil
+}
+
+func ensureAdminRoleFullAccess(roleID uint) error {
+	var permissions []Permission
+	if err := DB.Where("deleted_at IS NULL").Find(&permissions).Error; err != nil {
+		return err
+	}
+
+	permMap := make(map[string]uint, len(permissions))
+	menuKeys := []string{"menu:home"}
+	for _, permission := range permissions {
+		if strings.TrimSpace(permission.Code) == "" {
+			continue
+		}
+		permMap[permission.Code] = permission.ID
+		menuKeys = append(menuKeys, legacyMenuKeysByPermission[permission.Code]...)
+	}
+	for code := range permMap {
+		if err := ensureRolePermission(roleID, code, permMap); err != nil {
+			return err
+		}
+	}
+	if err := ensureRoleMenuPermission(roleID, menuKeys); err != nil {
+		return err
+	}
+	return ensureRoleDataPermission(roleID, "all", "[]")
+}
+
+func ensureUserRoleInOrg(orgID, userID string, roleID uint) error {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		orgID = "default"
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" || roleID == 0 {
+		return nil
+	}
+
+	var existing UserRole
+	err := DB.Unscoped().
+		Where("org_id = ? AND user_id = ?", orgID, userID).
+		Order("deleted_at IS NULL DESC, id ASC").
+		First(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		return DB.Create(&UserRole{OrgID: orgID, UserID: userID, RoleID: roleID}).Error
+	}
+	if err != nil {
+		return err
+	}
+
+	updates := map[string]interface{}{}
+	if existing.RoleID != roleID {
+		updates["role_id"] = roleID
+	}
+	if existing.DeletedAt.Valid {
+		updates["deleted_at"] = nil
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return DB.Unscoped().Model(&existing).Updates(updates).Error
 }
 
 // migratePermissions 幂等迁移：为已有部署补充新权限码和角色关联

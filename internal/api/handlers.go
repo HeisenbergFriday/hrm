@@ -237,13 +237,23 @@ func canAccessUserByScope(scope *service.OrgDataScope, user *database.User) bool
 }
 
 func loadUserByUserID(userID string) (*database.User, error) {
+	return loadUserByUserIDInOrg("", userID)
+}
+
+// loadUserByUserIDInOrg 在指定组织范围内按 user_id 查询用户。orgID 为空时退化为跨组织查询，
+// 仅供无 auth 上下文的老代码兜底使用；有 gin.Context 的调用点必须传 c.GetString("orgID")。
+func loadUserByUserIDInOrg(orgID, userID string) (*database.User, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return nil, gorm.ErrRecordNotFound
 	}
 
 	var user database.User
-	if err := database.DB.Where("user_id = ? AND deleted_at IS NULL", userID).First(&user).Error; err != nil {
+	query := database.DB.Where("user_id = ? AND deleted_at IS NULL", userID)
+	if orgID = strings.TrimSpace(orgID); orgID != "" {
+		query = query.Where("org_id = ?", orgID)
+	}
+	if err := query.First(&user).Error; err != nil {
 		return nil, err
 	}
 	return &user, nil
@@ -304,7 +314,7 @@ func isNumericString(value string) bool {
 }
 
 func ensureCanAccessAttendanceUser(c *gin.Context, userID string) (*database.User, bool) {
-	user, err := loadUserByUserID(userID)
+	user, err := loadUserByUserIDInOrg(c.GetString("orgID"), userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			respondOrgAccessDenied(c)
@@ -551,7 +561,7 @@ func generateToken(user *database.User) (string, time.Time, error) {
 
 // buildUserMenuKeys 聚合用户的菜单权限 key 列表
 func buildUserMenuKeys(orgID, userID string) []string {
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	keys, err := permService.GetUserMenuKeysInOrg(orgID, userID)
 	if err != nil {
 		return []string{}
@@ -560,7 +570,7 @@ func buildUserMenuKeys(orgID, userID string) []string {
 }
 
 func buildUserPermissions(orgID, userID string) []string {
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	permissions, err := permService.GetUserPermissionsInOrg(orgID, userID)
 	if err != nil {
 		return []string{}
@@ -590,6 +600,7 @@ func Login(c *gin.Context) {
 	var req struct {
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required"`
+		OrgID    string `json:"org_id"` // 可选，指定组织
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -601,8 +612,20 @@ func Login(c *gin.Context) {
 	}
 
 	// 用 user_id 或 email 查找用户
-	userService := service.NewUserService(database.DB)
-	user, err := userService.GetUserByUserID(req.Username)
+	orgID := strings.TrimSpace(req.OrgID)
+	userService := service.NewUserServiceWithOrgID(database.DB, orgID)
+
+	var user *database.User
+	var err error
+
+	if orgID != "" {
+		// 指定了组织，按组织查找
+		user, err = userService.GetUserByOrgAndUserID(orgID, req.Username)
+	} else {
+		// 未指定组织，向后兼容（查找任意组织的用户）
+		user, err = userService.GetUserByUserID(req.Username)
+	}
+
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, Response{
 			Code:    http.StatusUnauthorized,
@@ -666,7 +689,7 @@ func GetUsers(c *gin.Context) {
 			})
 			return
 		}
-		orgService := service.NewOrgService(database.DB)
+		orgService := service.NewOrgServiceWithOrgID(database.DB, c.GetString("orgID"))
 		users, total, err := orgService.ListEmployees(scope, page, pageSize, service.OrgEmployeeFilters{
 			DepartmentID: c.Query("department_id"),
 			Search:       c.Query("search"),
@@ -692,7 +715,7 @@ func GetUsers(c *gin.Context) {
 		return
 	}
 
-	userService := service.NewUserService(database.DB)
+	userService := service.NewUserServiceWithOrgID(database.DB, c.GetString("orgID"))
 	users, total, err := userService.GetUsers(page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -714,7 +737,7 @@ func GetUsers(c *gin.Context) {
 func GetUser(c *gin.Context) {
 	id := c.Param("id")
 
-	userService := service.NewUserService(database.DB)
+	userService := service.NewUserServiceWithOrgID(database.DB, c.GetString("orgID"))
 	user, err := userService.GetUserByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -766,7 +789,7 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
-	userService := service.NewUserService(database.DB)
+	userService := service.NewUserServiceWithOrgID(database.DB, c.GetString("orgID"))
 	user, err := userService.GetUserByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -827,7 +850,7 @@ func UpdateUser(c *gin.Context) {
 
 // GetDepartments 获取部门列表
 func GetDepartments(c *gin.Context) {
-	departmentService := service.NewDepartmentService(database.DB)
+	departmentService := service.NewDepartmentServiceWithOrgID(database.DB, c.GetString("orgID"))
 	departments, err := departmentService.GetAllDepartments()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -849,7 +872,7 @@ func GetDepartments(c *gin.Context) {
 func GetDepartment(c *gin.Context) {
 	id := c.Param("id")
 
-	departmentService := service.NewDepartmentService(database.DB)
+	departmentService := service.NewDepartmentServiceWithOrgID(database.DB, c.GetString("orgID"))
 	department, err := departmentService.GetDepartmentByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -871,8 +894,32 @@ func GetDepartment(c *gin.Context) {
 func SyncUsers(c *gin.Context) {
 	syncService := service.NewSyncService(database.DB)
 
-	// 从钉钉拉取用户
-	users, err := dingtalk.SyncUsers()
+	orgID := strings.TrimSpace(c.GetString("orgID"))
+	if orgID == "" {
+		orgID = fallbackDingTalkOrgID()
+	}
+	_, appConfig, cfgErr := resolveDingTalkLoginConfig(orgID, "SyncUsers")
+	if cfgErr != nil {
+		updateSyncStatus(syncService, "users", "failed", cfgErr.Error())
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "组织钉钉应用配置不完整: " + cfgErr.Error(),
+		})
+		return
+	}
+
+	depts, deptErr := dingtalk.SyncDepartmentsForConfig(appConfig)
+	if deptErr != nil {
+		updateSyncStatus(syncService, "users", "failed", deptErr.Error())
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "同步用户前获取部门失败: " + deptErr.Error(),
+		})
+		return
+	}
+
+	// 从当前组织自己的钉钉应用拉取用户，避免多组织同步落到默认组织。
+	users, err := dingtalk.SyncUsersWithDeptsForConfig(appConfig, depts)
 	if err != nil {
 		updateSyncStatus(syncService, "users", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
@@ -883,9 +930,9 @@ func SyncUsers(c *gin.Context) {
 	}
 
 	// 写入数据库
-	userService := service.NewUserService(database.DB)
-	employeeService := service.NewEmployeeService(database.DB)
-	permissionService := service.NewPermissionService(database.DB)
+	userService := service.NewUserServiceWithOrgID(database.DB, orgID)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, orgID)
+	permissionService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	count := 0
 	positionMissingCount := 0
 	defaultRoleAssignedCount := 0
@@ -900,15 +947,16 @@ func SyncUsers(c *gin.Context) {
 			status = "inactive"
 		}
 
-		existing, err := userService.GetUserByUserID(u.UserID)
+		existing, err := userService.GetUserByOrgAndUserID(orgID, u.UserID)
 		if err != nil {
 			// 新建
 			newUser := newLocalUserFromDingTalk(u, deptID, status)
+			newUser.OrgID = orgID
 			if err := userService.CreateUser(newUser); err != nil {
 				log.Printf("[SyncUsers] 创建用户 %s 失败: %v", u.UserID, err)
 				continue
 			}
-			if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, fallbackDingTalkOrgID(), u.UserID, "SyncUsers"); err == nil && assigned {
+			if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, orgID, u.UserID, "SyncUsers"); err == nil && assigned {
 				defaultRoleAssignedCount++
 			}
 		} else {
@@ -942,6 +990,11 @@ func SyncUsers(c *gin.Context) {
 			}
 		}
 		count++
+
+		// 维护 OrganizationUser 表
+		if err := database.EnsureOrganizationUser(orgID, u.UserID, status); err != nil {
+			log.Printf("[SyncUsers] 维护组织用户关系 %s 失败: %v", u.UserID, err)
+		}
 	}
 
 	updateSyncStatus(syncService, "users", "success", fmt.Sprintf("同步 %d 个用户", count))
@@ -957,8 +1010,22 @@ func SyncUsers(c *gin.Context) {
 func SyncDepartments(c *gin.Context) {
 	syncService := service.NewSyncService(database.DB)
 
-	// 从钉钉拉取部门
-	depts, err := dingtalk.SyncDepartments()
+	orgID := strings.TrimSpace(c.GetString("orgID"))
+	if orgID == "" {
+		orgID = fallbackDingTalkOrgID()
+	}
+	_, appConfig, cfgErr := resolveDingTalkLoginConfig(orgID, "SyncDepartments")
+	if cfgErr != nil {
+		updateSyncStatus(syncService, "departments", "failed", cfgErr.Error())
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "组织钉钉应用配置不完整: " + cfgErr.Error(),
+		})
+		return
+	}
+
+	// 从钉钉拉取部门（使用当前组织的钉钉应用凭证）
+	depts, err := dingtalk.SyncDepartmentsForConfig(appConfig)
 	if err != nil {
 		updateSyncStatus(syncService, "departments", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
@@ -968,8 +1035,8 @@ func SyncDepartments(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(database.DB)
-	result, err := orgService.SyncDepartmentsWithChangeLog(dingtalkDepartmentsToOrgSyncItems(depts), "dingtalk_sync")
+	orgService := service.NewOrgServiceWithOrgID(database.DB, orgID)
+	result, err := orgService.SyncDepartmentsWithChangeLog(orgID, dingtalkDepartmentsToOrgSyncItems(depts), "dingtalk_sync")
 	if err != nil {
 		updateSyncStatus(syncService, "departments", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
@@ -990,16 +1057,20 @@ func SyncDepartments(c *gin.Context) {
 // GetDingTalkConfig 返回钉钉前端配置（corpId 等），供 JS-SDK 初始化
 func GetDingTalkConfig(c *gin.Context) {
 	corpID := dingtalk.GetCorpID()
+	clientID := os.Getenv("DINGTALK_APP_KEY")
 	appHomeURL := resolveDingTalkAppHomeURL(c)
 	redirectURI := resolveDingTalkRedirectURI(c)
 
 	// 如果前端指定了 org_id，优先返回该企业的 corp_id，
 	// 否则免登会用默认企业的 corpId，导致 corp 与 org 不匹配。
 	orgID := strings.TrimSpace(c.Query("org_id"))
-	if orgID != "" && !strings.EqualFold(orgID, "default") {
+	if orgID != "" {
 		if org, err := database.GetOrganizationByOrgID(orgID); err == nil {
 			if strings.TrimSpace(org.CorpID) != "" {
 				corpID = org.CorpID
+			}
+			if strings.TrimSpace(org.AppKey) != "" {
+				clientID = org.AppKey
 			}
 			log.Printf("[dingtalk/config] resolved org corp: org_id=%s corp_id=%s", org.OrgID, org.CorpID)
 		} else {
@@ -1013,15 +1084,22 @@ func GetDingTalkConfig(c *gin.Context) {
 	}
 
 	// 获取可用的企业列表
-	activeConfigs := dingtalk.ActiveAppConfigs()
-	orgs := make([]gin.H, 0, len(activeConfigs))
-	for _, cfg := range activeConfigs {
-		orgs = append(orgs, gin.H{
-			"org_id":   cfg.OrgID,
-			"name":     cfg.Name,
-			"corp_id":  cfg.CorpID,
-			"agent_id": cfg.AgentID,
-		})
+	orgs := make([]gin.H, 0)
+	if activeOrgs, err := database.ListActiveOrganizations(); err == nil && len(activeOrgs) > 0 {
+		for _, org := range activeOrgs {
+			orgs = append(orgs, organizationOptionFromModel(org))
+		}
+	} else {
+		activeConfigs := dingtalk.ActiveAppConfigs()
+		orgs = make([]gin.H, 0, len(activeConfigs))
+		for _, cfg := range activeConfigs {
+			orgs = append(orgs, gin.H{
+				"org_id":   cfg.OrgID,
+				"name":     cfg.Name,
+				"corp_id":  cfg.CorpID,
+				"agent_id": cfg.AgentID,
+			})
+		}
 	}
 
 	log.Printf("[dingtalk/config] host=%s app_home_url=%s redirect_uri=%s missing=%v organizations=%d", c.Request.Host, appHomeURL, redirectURI, missingConfig, len(orgs))
@@ -1031,7 +1109,7 @@ func GetDingTalkConfig(c *gin.Context) {
 		Message: "success",
 		Data: gin.H{
 			"corp_id":       corpID,
-			"client_id":     os.Getenv("DINGTALK_APP_KEY"),
+			"client_id":     clientID,
 			"redirect_uri":  redirectURI,
 			"app_home_url":  appHomeURL,
 			"missing":       missingConfig,
@@ -1147,6 +1225,8 @@ func DingTalkInAppLogin(c *gin.Context) {
 	}
 	log.Printf("[dingtalk/in-app] user_detail=%v", userDetail)
 
+	cacheDingTalkRosterMembership("dingtalk/in-app", orgID, userid)
+
 	name, _ := userDetail["name"].(string)
 	email, _ := userDetail["email"].(string)
 	mobile, _ := userDetail["mobile"].(string)
@@ -1159,7 +1239,7 @@ func DingTalkInAppLogin(c *gin.Context) {
 		}
 	}
 
-	userService := service.NewUserService(database.DB)
+	userService := service.NewUserServiceWithOrgID(database.DB, orgID)
 	user, err := findLocalUserByDingTalkIdentity(userService, orgID, userid)
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1170,18 +1250,8 @@ func DingTalkInAppLogin(c *gin.Context) {
 			return
 		}
 
-		user, err = findLocalUserByContact(userService, orgID, email, mobile)
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				respondDingTalkUserNotSynced(c, "dingtalk_in_app", userid, name)
-				return
-			}
-			c.JSON(http.StatusInternalServerError, Response{
-				Code:    http.StatusInternalServerError,
-				Message: "query local user failed: " + err.Error(),
-			})
-			return
-		}
+		respondDingTalkUserNotSynced(c, "dingtalk_in_app", userid, name)
+		return
 	}
 
 	user.Name = name
@@ -1299,7 +1369,13 @@ func DingTalkCallback(c *gin.Context) {
 	associatedUserID := getStringByKeys(userInfo, "associated_user_id", "associatedUserId", "userid", "userId")
 	unionID := getStringByKeys(userInfo, "unionId", "unionid", "union_id")
 	openID := getStringByKeys(userInfo, "openId", "openid", "open_id")
-	log.Printf("[dingtalk/callback] parsed: associated_user_id=%s, unionid=%s, openid=%s", associatedUserID, unionID, openID)
+	authorizedCorpID := getStringByKeys(userInfo, "corpId", "corpID", "corp_id", "corpid")
+	if authorizedCorpID != "" && org.CorpID != "" && !strings.EqualFold(authorizedCorpID, org.CorpID) {
+		log.Printf("[dingtalk/callback] reject login because authorized corp mismatches selected org: org_id=%s selected_corp_id=%s authorized_corp_id=%s", orgID, org.CorpID, authorizedCorpID)
+		respondDingTalkUserNotInSelectedOrg(c, "dingtalk_qr", openID, "", nil)
+		return
+	}
+	log.Printf("[dingtalk/callback] parsed: associated_user_id=%s, unionid=%s, openid=%s, authorized_corp_id=%s", associatedUserID, unionID, openID, authorizedCorpID)
 
 	dtUserID := associatedUserID
 	if dtUserID == "" && unionID != "" {
@@ -1312,26 +1388,34 @@ func DingTalkCallback(c *gin.Context) {
 		}
 	}
 
-	// 如果既没有 dtUserID 也没有 openID，但有 email 或 mobile，仍然继续尝试匹配
-	if dtUserID == "" && openID == "" {
-		log.Printf("[dingtalk/callback] no userid/openid, will try to match by email/mobile")
+	// 扫码登录必须能解析到所选企业下的 userid，否则不能仅凭手机号/邮箱兜底，
+	// 避免“系统选小铁，钉钉页使用非小铁账号”跨组织登录。
+	if dtUserID == "" {
+		identityForLog := openID
+		if identityForLog == "" {
+			identityForLog = unionID
+		}
+		log.Printf("[dingtalk/callback] reject login because user is not resolved in selected org: org_id=%s identity=%s", orgID, identityForLog)
+		respondDingTalkUserNotInSelectedOrg(c, "dingtalk_qr", identityForLog, "", nil)
+		return
 	}
 
 	var name, email, mobile, avatar, position string
 	deptID := "1"
-	if dtUserID != "" {
-		userDetail, detailErr := dingtalk.GetUserDetailByUserIDForConfig(dtUserID, appConfig)
-		if detailErr == nil {
-			name, _ = userDetail["name"].(string)
-			email, _ = userDetail["email"].(string)
-			mobile, _ = userDetail["mobile"].(string)
-			avatar, _ = userDetail["avatar"].(string)
-			position, _ = userDetail["title"].(string)
-			if deptList, ok := userDetail["dept_id_list"].([]interface{}); ok && len(deptList) > 0 {
-				if id, ok := deptList[0].(float64); ok {
-					deptID = fmt.Sprintf("%d", int64(id))
-				}
-			}
+	userDetail, detailErr := dingtalk.GetUserDetailByUserIDForConfig(dtUserID, appConfig)
+	if detailErr != nil {
+		log.Printf("[dingtalk/callback] reject login because user detail is unavailable in selected org: org_id=%s userid=%s err=%v", orgID, dtUserID, detailErr)
+		respondDingTalkUserNotInSelectedOrg(c, "dingtalk_qr", dtUserID, "", nil)
+		return
+	}
+	name, _ = userDetail["name"].(string)
+	email, _ = userDetail["email"].(string)
+	mobile, _ = userDetail["mobile"].(string)
+	avatar, _ = userDetail["avatar"].(string)
+	position, _ = userDetail["title"].(string)
+	if deptList, ok := userDetail["dept_id_list"].([]interface{}); ok && len(deptList) > 0 {
+		if id, ok := deptList[0].(float64); ok {
+			deptID = fmt.Sprintf("%d", int64(id))
 		}
 	}
 	if name == "" {
@@ -1349,7 +1433,9 @@ func DingTalkCallback(c *gin.Context) {
 
 	log.Printf("[dingtalk/callback] extracted info: name=%s, email=%s, mobile=%s", name, email, mobile)
 
-	userService := service.NewUserService(database.DB)
+	cacheDingTalkRosterMembership("dingtalk/callback", orgID, dtUserID)
+
+	userService := service.NewUserServiceWithOrgID(database.DB, orgID)
 	user, err := findLocalUserByDingTalkIdentity(userService, orgID, dtUserID, associatedUserID)
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1361,33 +1447,8 @@ func DingTalkCallback(c *gin.Context) {
 			return
 		}
 
-		log.Printf("[dingtalk/callback] user not found by userid, trying email/mobile")
-		user, err = findLocalUserByContact(userService, orgID, email, mobile)
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				identityForLog := dtUserID
-				if identityForLog == "" {
-					identityForLog = openID
-				}
-				if identityForLog == "" {
-					identityForLog = unionID
-				}
-				if identityForLog == "" {
-					identityForLog = email
-				}
-				log.Printf("[dingtalk/callback] user not found: identity=%s, name=%s, email=%s, mobile=%s",
-					identityForLog, name, email, mobile)
-				respondDingTalkUserNotSynced(c, "dingtalk_qr", identityForLog, name)
-				return
-			}
-			log.Printf("[dingtalk/callback] findLocalUserByContact error: %v", err)
-			c.JSON(http.StatusInternalServerError, Response{
-				Code:    http.StatusInternalServerError,
-				Message: "query local user failed: " + err.Error(),
-			})
-			return
-		}
-		log.Printf("[dingtalk/callback] user found by email/mobile: user_id=%s", user.UserID)
+		respondDingTalkUserNotSynced(c, "dingtalk_qr", dtUserID, name)
+		return
 	} else {
 		log.Printf("[dingtalk/callback] user found by userid: user_id=%s", user.UserID)
 	}
@@ -1448,6 +1509,40 @@ func DingTalkCallback(c *gin.Context) {
 	})
 }
 
+func cacheDingTalkRosterMembership(source, orgID, userID string) {
+	orgID = strings.TrimSpace(orgID)
+	userID = strings.TrimSpace(userID)
+	if orgID == "" || userID == "" {
+		return
+	}
+	if err := database.EnsureOrganizationUser(orgID, userID, "active"); err != nil {
+		log.Printf("[%s] cache dingtalk roster membership failed: org_id=%s user_id=%s err=%v", source, orgID, userID, err)
+	}
+}
+
+func respondDingTalkUserNotInSelectedOrg(c *gin.Context, loginType, userID, userName string, availableOrganizations []gin.H) {
+	database.DB.Create(&database.LoginLog{
+		UserID:      userID,
+		UserName:    userName,
+		LoginType:   loginType,
+		LoginStatus: "failed",
+		IP:          c.ClientIP(),
+		UserAgent:   c.GetHeader("User-Agent"),
+		ErrorMsg:    "user not in selected organization",
+	})
+
+	var data interface{}
+	if len(availableOrganizations) > 0 {
+		data = gin.H{"available_organizations": availableOrganizations}
+	}
+
+	c.JSON(http.StatusForbidden, Response{
+		Code:    http.StatusForbidden,
+		Data:    data,
+		Message: "当前钉钉账号不属于所选组织，请返回后选择正确组织登录",
+	})
+}
+
 func respondDingTalkUserNotSynced(c *gin.Context, loginType, userID, userName string) {
 	database.DB.Create(&database.LoginLog{
 		UserID:      userID,
@@ -1460,8 +1555,13 @@ func respondDingTalkUserNotSynced(c *gin.Context, loginType, userID, userName st
 	})
 
 	c.JSON(http.StatusForbidden, Response{
-		Code:    http.StatusForbidden,
-		Message: "dingtalk user not synced, please sync org data first",
+		Code: http.StatusForbidden,
+		Data: gin.H{
+			"reason":  "local_user_missing",
+			"action":  "sync_org_data",
+			"user_id": userID,
+		},
+		Message: "当前钉钉账号已匹配通讯录，但系统尚未同步本地用户，请联系管理员执行组织同步后再登录",
 	})
 }
 
@@ -1494,12 +1594,54 @@ func getStringByKeys(data map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func findLocalUserByDingTalkIdentity(userService *service.UserService, orgID string, candidates ...string) (*database.User, error) {
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
+func organizationOptionFromModel(org database.Organization) gin.H {
+	return gin.H{
+		"org_id":   org.OrgID,
+		"name":     org.Name,
+		"corp_id":  org.CorpID,
+		"agent_id": org.AgentID,
+	}
+}
+
+func dingTalkUserInSelectedOrganization(orgID string, candidates ...string) (bool, error) {
+	for _, candidate := range dingtalkIdentityCandidates(orgID, candidates...) {
+		ok, err := database.IsUserInOrganization(orgID, candidate)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func availableOrganizationsForDingTalkUser(candidates ...string) ([]gin.H, error) {
+	seenCandidates := make(map[string]bool)
+	seenOrgs := make(map[string]bool)
+	options := make([]gin.H, 0)
+	for _, candidate := range dingtalkIdentityCandidates("", candidates...) {
+		if seenCandidates[candidate] {
 			continue
 		}
+		seenCandidates[candidate] = true
+		orgs, err := database.ListActiveOrganizationsForUser(candidate)
+		if err != nil {
+			return nil, err
+		}
+		for _, org := range orgs {
+			if seenOrgs[org.OrgID] {
+				continue
+			}
+			seenOrgs[org.OrgID] = true
+			options = append(options, organizationOptionFromModel(org))
+		}
+	}
+	return options, nil
+}
+
+func findLocalUserByDingTalkIdentity(userService *service.UserService, orgID string, candidates ...string) (*database.User, error) {
+	for _, candidate := range dingtalkIdentityCandidates(orgID, candidates...) {
 		user, err := userService.GetUserByOrgAndUserID(orgID, candidate)
 		if err == nil {
 			return user, nil
@@ -1512,30 +1654,22 @@ func findLocalUserByDingTalkIdentity(userService *service.UserService, orgID str
 	return nil, gorm.ErrRecordNotFound
 }
 
-func findLocalUserByContact(userService *service.UserService, orgID, email, mobile string) (*database.User, error) {
-	email = strings.TrimSpace(email)
-	if email != "" {
-		user, err := userService.GetUserByOrgAndEmail(orgID, email)
-		if err == nil {
-			return user, nil
+func dingtalkIdentityCandidates(orgID string, candidates ...string) []string {
+	orgID = strings.TrimSpace(orgID)
+	seen := make(map[string]bool, len(candidates)*2)
+	result := make([]string, 0, len(candidates)*2)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			return
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
-		}
+		seen[value] = true
+		result = append(result, value)
 	}
-
-	mobile = strings.TrimSpace(mobile)
-	if mobile != "" {
-		user, err := userService.GetUserByOrgAndMobile(orgID, mobile)
-		if err == nil {
-			return user, nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
-		}
+	for _, candidate := range candidates {
+		add(candidate)
 	}
-
-	return nil, gorm.ErrRecordNotFound
+	return result
 }
 
 func assignUserEmailSafely(userService *service.UserService, user *database.User, email string) error {
@@ -1547,6 +1681,14 @@ func assignUserEmailSafely(userService *service.UserService, user *database.User
 	existing, err := userService.GetUserByOrgAndEmail(user.OrgID, email)
 	if err == nil && existing.ID != user.ID {
 		log.Printf("[dingtalk/login] skip email update for org_id=%s user_id=%s because email=%s already belongs to user_id=%s", user.OrgID, user.UserID, email, existing.UserID)
+		return nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	existing, err = userService.GetUserByEmail(email)
+	if err == nil && existing.ID != user.ID {
+		log.Printf("[dingtalk/login] skip email update for org_id=%s user_id=%s because email=%s already belongs to %s/%s", user.OrgID, user.UserID, email, existing.OrgID, existing.UserID)
 		return nil
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1566,6 +1708,14 @@ func assignUserMobileSafely(userService *service.UserService, user *database.Use
 	existing, err := userService.GetUserByOrgAndMobile(user.OrgID, mobile)
 	if err == nil && existing.ID != user.ID {
 		log.Printf("[dingtalk/login] skip mobile update for org_id=%s user_id=%s because mobile=%s already belongs to user_id=%s", user.OrgID, user.UserID, mobile, existing.UserID)
+		return nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	existing, err = userService.GetUserByMobile(mobile)
+	if err == nil && existing.ID != user.ID {
+		log.Printf("[dingtalk/login] skip mobile update for org_id=%s user_id=%s because mobile=%s already belongs to %s/%s", user.OrgID, user.UserID, mobile, existing.OrgID, existing.UserID)
 		return nil
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1700,7 +1850,7 @@ func GetOrgOverview(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(database.DB)
+	orgService := service.NewOrgServiceWithOrgID(database.DB, c.GetString("orgID"))
 	overview, err := orgService.GetOverview(scope, c.Query("department_id"))
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
@@ -1733,7 +1883,7 @@ func GetScopedDepartments(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(database.DB)
+	orgService := service.NewOrgServiceWithOrgID(database.DB, c.GetString("orgID"))
 	departments, err := orgService.GetVisibleDepartments(scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -1761,7 +1911,7 @@ func GetOrgDepartmentTree(c *gin.Context) {
 			respondOrgAccessDenied(c)
 			return
 		}
-		orgService := service.NewOrgService(database.DB)
+		orgService := service.NewOrgServiceWithOrgID(database.DB, c.GetString("orgID"))
 		tree, err := orgService.GetDepartmentTree(nil)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, Response{
@@ -1789,7 +1939,7 @@ func GetOrgDepartmentTree(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(database.DB)
+	orgService := service.NewOrgServiceWithOrgID(database.DB, c.GetString("orgID"))
 	tree, err := orgService.GetDepartmentTree(scope)
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
@@ -1826,7 +1976,7 @@ func GetOrgDepartmentHistory(c *gin.Context) {
 	}
 
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	orgService := service.NewOrgService(database.DB)
+	orgService := service.NewOrgServiceWithOrgID(database.DB, c.GetString("orgID"))
 	logs, err := orgService.GetDepartmentHistory(scope, c.Param("id"), limit)
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
@@ -1865,7 +2015,7 @@ func GetOrgEmployees(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(database.DB)
+	orgService := service.NewOrgServiceWithOrgID(database.DB, c.GetString("orgID"))
 	users, total, err := orgService.ListEmployees(scope, page, pageSize, service.OrgEmployeeFilters{
 		DepartmentID: c.Query("department_id"),
 		Search:       c.Query("search"),
@@ -1906,7 +2056,7 @@ func GetOrgEmployeeDetail(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(database.DB)
+	orgService := service.NewOrgServiceWithOrgID(database.DB, c.GetString("orgID"))
 	detail, err := orgService.GetEmployeeAggregate(scope, c.Param("id"))
 	if err != nil {
 		switch {
@@ -1945,7 +2095,11 @@ func GetOrgEmployeePositionSyncDiagnostic(c *gin.Context) {
 		return
 	}
 	var user database.User
-	if err := database.DB.Where("id = ? AND deleted_at IS NULL", c.Param("id")).First(&user).Error; err != nil {
+	userQuery := database.DB.Where("id = ? AND deleted_at IS NULL", c.Param("id"))
+	if orgID := strings.TrimSpace(c.GetString("orgID")); orgID != "" {
+		userQuery = userQuery.Where("org_id = ?", orgID)
+	}
+	if err := userQuery.First(&user).Error; err != nil {
 		c.JSON(http.StatusNotFound, Response{
 			Code:    http.StatusNotFound,
 			Message: "员工不存在",
@@ -1974,7 +2128,7 @@ func GetOrgEmployeePositionSyncDiagnostic(c *gin.Context) {
 
 // GetDepartmentTree 获取部门树
 func GetDepartmentTree(c *gin.Context) {
-	departmentService := service.NewDepartmentService(database.DB)
+	departmentService := service.NewDepartmentServiceWithOrgID(database.DB, c.GetString("orgID"))
 	departments, err := departmentService.GetAllDepartments()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -2026,7 +2180,7 @@ func GetEmployees(c *gin.Context) {
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 	departmentID := c.Query("department_id")
 
-	userService := service.NewUserService(database.DB)
+	userService := service.NewUserServiceWithOrgID(database.DB, c.GetString("orgID"))
 
 	var users []database.User
 	var total int64
@@ -2060,7 +2214,7 @@ func GetEmployees(c *gin.Context) {
 func GetEmployee(c *gin.Context) {
 	id := c.Param("id")
 
-	userService := service.NewUserService(database.DB)
+	userService := service.NewUserServiceWithOrgID(database.DB, c.GetString("orgID"))
 	user, err := userService.GetUserByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -2071,7 +2225,7 @@ func GetEmployee(c *gin.Context) {
 	}
 
 	// 一并返回员工档案（按 user_id 查），避免前端再发请求
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	profile, _ := employeeService.GetProfileByUserID(user.UserID)
 
 	c.JSON(http.StatusOK, Response{
@@ -2085,8 +2239,48 @@ func GetEmployee(c *gin.Context) {
 func SyncOrgData(c *gin.Context) {
 	syncService := service.NewSyncService(database.DB)
 
+	orgID := strings.TrimSpace(firstNonEmptyQuery(c, "org_id", "target_org_id"))
+	if orgID == "" {
+		orgID = strings.TrimSpace(c.GetString("orgID"))
+	}
+	if orgID == "" {
+		orgID = fallbackDingTalkOrgID()
+	}
+	if orgID != strings.TrimSpace(c.GetString("orgID")) {
+		userID := strings.TrimSpace(c.GetString("userID"))
+		permissionService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
+		allowed, err := permissionService.HasAnyPermissionInOrg(orgID, userID, "attendance_manage", "permission_manage")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "检查目标组织同步权限失败: " + err.Error(),
+			})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, Response{
+				Code:    http.StatusForbidden,
+				Message: "无目标组织同步权限",
+			})
+			return
+		}
+	}
+	log.Printf("[SyncOrgData] 开始同步组织数据: org_id=%s", orgID)
+
+	// 使用当前登录组织自己的钉钉应用凭证（多租户隔离）
+	_, appConfig, cfgErr := resolveDingTalkLoginConfig(orgID, "SyncOrgData")
+	if cfgErr != nil {
+		log.Printf("[SyncOrgData] 组织钉钉配置不完整: org_id=%s err=%v", orgID, cfgErr)
+		updateSyncStatus(syncService, "departments", "failed", cfgErr.Error())
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "组织钉钉应用配置不完整: " + cfgErr.Error(),
+		})
+		return
+	}
+
 	// 同步部门
-	depts, deptErr := dingtalk.SyncDepartments()
+	depts, deptErr := dingtalk.SyncDepartmentsForConfig(appConfig)
 	deptCount := 0
 	deptStatus := "success"
 	deptErrMsg := ""
@@ -2094,9 +2288,10 @@ func SyncOrgData(c *gin.Context) {
 		deptStatus = "failed"
 		deptErrMsg = deptErr.Error()
 		log.Printf("[SyncOrgData] 部门同步失败: %v", deptErr)
+		updateSyncStatus(syncService, "departments", "failed", deptErrMsg)
 	} else {
-		orgService := service.NewOrgService(database.DB)
-		deptResult, err := orgService.SyncDepartmentsWithChangeLog(dingtalkDepartmentsToOrgSyncItems(depts), "dingtalk_sync")
+		orgService := service.NewOrgServiceWithOrgID(database.DB, orgID)
+		deptResult, err := orgService.SyncDepartmentsWithChangeLog(orgID, dingtalkDepartmentsToOrgSyncItems(depts), "dingtalk_sync")
 		if err != nil {
 			deptStatus = "failed"
 			deptErrMsg = err.Error()
@@ -2108,21 +2303,29 @@ func SyncOrgData(c *gin.Context) {
 	}
 
 	// 同步用户（复用已有部门列表，避免重复调用 SyncDepartments）
-	users, userErr := dingtalk.SyncUsersWithDepts(depts)
+	var users []dingtalk.UserInfo
+	var userErr error
+	if deptErr == nil {
+		users, userErr = dingtalk.SyncUsersWithDeptsForConfig(appConfig, depts)
+	}
 	userCount := 0
 	positionMissingCount := 0
 	userStatus := "success"
 	userErrMsg := ""
 	defaultRoleAssignedCount := 0
 	overwriteEmpty := shouldOverwriteEmptyDingTalkOrgFields(c)
-	if userErr != nil {
+	if deptErr != nil {
+		userStatus = "failed"
+		userErrMsg = "部门同步失败，已跳过用户同步: " + deptErrMsg
+		updateSyncStatus(syncService, "users", userStatus, userErrMsg)
+	} else if userErr != nil {
 		userStatus = "failed"
 		userErrMsg = userErr.Error()
 		log.Printf("[SyncOrgData] 用户同步失败: %v", userErr)
 	} else {
-		userService := service.NewUserService(database.DB)
-		employeeService := service.NewEmployeeService(database.DB)
-		permissionService := service.NewPermissionService(database.DB)
+		userService := service.NewUserServiceWithOrgID(database.DB, orgID)
+		employeeService := service.NewEmployeeServiceWithOrgID(database.DB, orgID)
+		permissionService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 		for _, u := range users {
 			deptID := ""
 			if len(u.DeptIDList) > 0 {
@@ -2132,14 +2335,16 @@ func SyncOrgData(c *gin.Context) {
 			if !u.Active {
 				status = "inactive"
 			}
-			existing, err := userService.GetUserByUserID(u.UserID)
+			existing, err := userService.GetUserByOrgAndUserID(orgID, u.UserID)
 			if err != nil {
-				if err := userService.CreateUser(newLocalUserFromDingTalk(u, deptID, status)); err != nil {
+				newUser := newLocalUserFromDingTalk(u, deptID, status)
+				newUser.OrgID = orgID
+				if err := userService.CreateUser(newUser); err != nil {
 					userStatus = "failed"
 					userErrMsg = err.Error()
 					log.Printf("[SyncOrgData] 创建用户 %s 失败: %v", u.UserID, err)
 					continue
-				} else if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, fallbackDingTalkOrgID(), u.UserID, "SyncOrgData"); err != nil {
+				} else if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, orgID, u.UserID, "SyncOrgData"); err != nil {
 					userStatus = "failed"
 					userErrMsg = err.Error()
 				} else if assigned {
@@ -2194,6 +2399,12 @@ func SyncOrgData(c *gin.Context) {
 			if strings.TrimSpace(u.Position) == "" {
 				positionMissingCount++
 			}
+			if err := database.EnsureOrganizationUser(orgID, u.UserID, status); err != nil {
+				userStatus = "failed"
+				userErrMsg = err.Error()
+				log.Printf("[SyncOrgData] 维护组织用户关系失败: org_id=%s user_id=%s err=%v", orgID, u.UserID, err)
+				continue
+			}
 			userCount++
 		}
 		userSyncMessage := fmt.Sprintf("同步 %d 个用户", userCount)
@@ -2222,6 +2433,7 @@ func GetAttendanceRecords(c *gin.Context) {
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 
 	filters := map[string]string{
+		"org_id":        strings.TrimSpace(c.GetString("orgID")),
 		"user_id":       c.Query("user_id"),
 		"department_id": c.Query("department_id"),
 		"start_date":    c.Query("start_date"),
@@ -2256,6 +2468,7 @@ func GetAttendanceRecords(c *gin.Context) {
 // GetAttendanceStats 获取考勤统计
 func GetAttendanceStats(c *gin.Context) {
 	filters := map[string]string{
+		"org_id":        strings.TrimSpace(c.GetString("orgID")),
 		"start_date":    c.Query("start_date"),
 		"end_date":      c.Query("end_date"),
 		"department_id": c.Query("department_id"),
@@ -2299,6 +2512,8 @@ func SyncAttendance(c *gin.Context) {
 		req.EndDate = time.Now().Format("2006-01-02")
 	}
 
+	orgID := strings.TrimSpace(c.GetString("orgID"))
+
 	if req.Force {
 		cst := time.FixedZone("CST", 8*3600)
 		start, err1 := time.ParseInLocation("2006-01-02", req.StartDate, cst)
@@ -2308,7 +2523,13 @@ func SyncAttendance(c *gin.Context) {
 			return
 		}
 		end = end.AddDate(0, 0, 1) // 包含 end 当天
-		if err := database.DB.Where("check_time >= ? AND check_time < ?", start, end).Delete(&database.Attendance{}).Error; err != nil {
+		// Attendance 表本身没有 org_id 列，按当前组织的 user_id 集合限定删除范围，
+		// 避免跨企业删掉其他组织的考勤。
+		deleteQuery := database.DB.Where("check_time >= ? AND check_time < ?", start, end)
+		if orgID != "" {
+			deleteQuery = deleteQuery.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND deleted_at IS NULL)", orgID)
+		}
+		if err := deleteQuery.Delete(&database.Attendance{}).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "清理旧记录失败: " + err.Error()})
 			return
 		}
@@ -2316,9 +2537,13 @@ func SyncAttendance(c *gin.Context) {
 
 	syncService := service.NewSyncService(database.DB)
 
-	// 获取所有用户的钉钉 UserID
+	// 获取当前组织下所有用户的钉钉 UserID
 	var users []database.User
-	database.DB.Select("user_id, name").Find(&users)
+	usersQuery := database.DB.Select("user_id, name")
+	if orgID != "" {
+		usersQuery = usersQuery.Where("org_id = ?", orgID)
+	}
+	usersQuery.Find(&users)
 
 	var userIDs []string
 	userNameMap := make(map[string]string)
@@ -2361,6 +2586,7 @@ func SyncAttendance(c *gin.Context) {
 		checkTime, _ := time.ParseInLocation("2006-01-02 15:04:05", r.UserCheckTime, time.FixedZone("CST", 8*3600))
 
 		record := &database.Attendance{
+			OrgID:     orgID,
 			UserID:    r.UserID,
 			UserName:  userNameMap[r.UserID],
 			CheckTime: checkTime,
@@ -2516,6 +2742,10 @@ func GetLastSyncTime(c *gin.Context) {
 
 	var count int64
 	countQuery := database.DB.Model(&database.Attendance{})
+	orgID := strings.TrimSpace(c.GetString("orgID"))
+	if orgID != "" {
+		countQuery = countQuery.Where("org_id = ?", orgID)
+	}
 	if !currentUserHasAnyPermission(c, "attendance_manage") {
 		filters := map[string]string{}
 		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
@@ -2524,9 +2754,17 @@ func GetLastSyncTime(c *gin.Context) {
 		if userID := strings.TrimSpace(filters["user_id"]); userID != "" {
 			countQuery = countQuery.Where("user_id = ?", userID)
 		} else if departmentID := strings.TrimSpace(filters["department_id"]); departmentID != "" {
-			countQuery = countQuery.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", departmentID)
+			if orgID != "" {
+				countQuery = countQuery.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id = ? AND deleted_at IS NULL)", orgID, departmentID)
+			} else {
+				countQuery = countQuery.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", departmentID)
+			}
 		} else if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
-			countQuery = countQuery.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+			if orgID != "" {
+				countQuery = countQuery.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)", orgID, departmentIDs)
+			} else {
+				countQuery = countQuery.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+			}
 		}
 	}
 	countQuery.Count(&count)
@@ -2725,7 +2963,7 @@ func SyncApproval(c *gin.Context) {
 
 // GetRoles 获取角色列表
 func GetRoles(c *gin.Context) {
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	roles, total, err := permService.GetRoles()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -2765,7 +3003,7 @@ func CreateRole(c *gin.Context) {
 		Description: req.Description,
 	}
 
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := permService.CreateRole(role); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -2808,7 +3046,7 @@ func UpdateRole(c *gin.Context) {
 	}
 	role.ID = uint(id)
 
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := permService.UpdateRole(role); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -2826,7 +3064,7 @@ func UpdateRole(c *gin.Context) {
 
 // GetPermissions 获取权限列表
 func GetPermissions(c *gin.Context) {
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	permissions, total, err := permService.GetPermissions()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -2870,7 +3108,7 @@ func GetUserRoles(c *gin.Context) {
 		return
 	}
 	orgID := resolvePermissionTargetOrgID(c, "", userID)
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	roles, err := permService.GetUserRolesInOrg(orgID, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取用户角色失败"})
@@ -2895,7 +3133,7 @@ func AssignUserRole(c *gin.Context) {
 		return
 	}
 	orgID := resolvePermissionTargetOrgID(c, req.OrgID, req.UserID)
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	if err := permService.AssignUserRoleInOrg(orgID, req.UserID, req.RoleID); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "分配角色失败"})
 		return
@@ -2919,7 +3157,7 @@ func RemoveUserRole(c *gin.Context) {
 		return
 	}
 	orgID := resolvePermissionTargetOrgID(c, req.OrgID, req.UserID)
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	if err := permService.RemoveUserRoleInOrg(orgID, req.UserID, req.RoleID); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "移除角色失败"})
 		return
@@ -2940,7 +3178,7 @@ func GetRoleUsers(c *gin.Context) {
 		return
 	}
 	orgID := resolvePermissionTargetOrgID(c, "", "")
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	users, err := permService.GetRoleUsersInOrg(orgID, roleID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取角色用户失败"})
@@ -2957,7 +3195,7 @@ func GetUserPermissions(c *gin.Context) {
 		return
 	}
 	orgID := resolvePermissionTargetOrgID(c, "", userID)
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	permissions, err := permService.GetUserPermissionsInOrg(orgID, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取用户权限失败"})
@@ -2974,7 +3212,7 @@ func GetMenuPermission(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
 		return
 	}
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	// 从功能权限码派生菜单 keys（不再读 menu_permissions 旧表）
 	menuKeys, err := permService.GetRoleMenuKeys(uint(roleID))
 	if err != nil {
@@ -2991,7 +3229,7 @@ func GetRolePermissions(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
 		return
 	}
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	permissions, err := permService.GetRolePermissions(uint(roleID))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取角色功能权限失败"})
@@ -3014,7 +3252,7 @@ func SaveRolePermissions(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
 		return
 	}
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := permService.SaveRolePermissions(uint(roleID), req.PermissionIDs); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "保存功能权限失败"})
 		return
@@ -3055,7 +3293,7 @@ func SaveMenuPermission(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "menu_keys 必须是 JSON 数组"})
 		return
 	}
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := permService.SaveMenuPermissionKeys(uint(roleID), menuKeys); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "保存菜单权限失败"})
 		return
@@ -3071,7 +3309,7 @@ func GetDataPermission(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
 		return
 	}
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	scope, departmentKeys, err := permService.GetDataPermission(uint(roleID))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据权限失败"})
@@ -3106,7 +3344,7 @@ func SaveDataPermission(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "scope 值无效，仅支持 all、department 或 self"})
 		return
 	}
-	permService := service.NewPermissionService(database.DB)
+	permService := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := permService.SaveDataPermission(uint(roleID), req.Scope, req.DepartmentKeys); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "保存数据权限失败"})
 		return
@@ -3222,7 +3460,7 @@ func GetEmployeeProfiles(c *gin.Context) {
 		}
 	}
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	profiles, total, err := employeeService.GetProfiles(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3246,7 +3484,7 @@ func GetEmployeeProfiles(c *gin.Context) {
 func GetEmployeeProfile(c *gin.Context) {
 	id := c.Param("id")
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	profile, err := employeeService.GetProfileByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -3265,8 +3503,8 @@ func GetEmployeeProfile(c *gin.Context) {
 			})
 			return
 		}
-		var user database.User
-		if err := database.DB.Where("user_id = ? AND deleted_at IS NULL", profile.UserID).First(&user).Error; err != nil || !canAccessUserByScope(scope, &user) {
+		user, err := loadUserByUserIDInOrg(c.GetString("orgID"), profile.UserID)
+		if err != nil || !canAccessUserByScope(scope, user) {
 			respondOrgAccessDenied(c)
 			return
 		}
@@ -3295,7 +3533,7 @@ func CreateEmployeeProfile(c *gin.Context) {
 		profile.ProfileStatus = "active"
 	}
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := employeeService.CreateProfile(&profile); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -3315,7 +3553,7 @@ func CreateEmployeeProfile(c *gin.Context) {
 func UpdateEmployeeProfile(c *gin.Context) {
 	id := c.Param("id")
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	profile, err := employeeService.GetProfileByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -3364,7 +3602,7 @@ func GetEmployeeLifecycleLedger(c *gin.Context) {
 		}
 	}
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	items, total, err := employeeService.GetLifecycleLedger(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3392,7 +3630,7 @@ func GetTransfers(c *gin.Context) {
 		}
 	}
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	transfers, total, err := employeeService.GetTransfers(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3424,7 +3662,7 @@ func CreateTransfer(c *gin.Context) {
 		transfer.Status = "pending"
 	}
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := employeeService.CreateTransfer(&transfer); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -3451,7 +3689,7 @@ func GetResignations(c *gin.Context) {
 		}
 	}
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	resignations, total, err := employeeService.GetResignations(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3483,7 +3721,7 @@ func CreateResignation(c *gin.Context) {
 		resignation.Status = "pending"
 	}
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := employeeService.CreateResignation(&resignation); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -3510,7 +3748,7 @@ func GetOnboardings(c *gin.Context) {
 		}
 	}
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	onboardings, total, err := employeeService.GetOnboardings(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3542,7 +3780,7 @@ func CreateOnboarding(c *gin.Context) {
 		onboarding.Status = "pending"
 	}
 
-	employeeService := service.NewEmployeeService(database.DB)
+	employeeService := service.NewEmployeeServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := employeeService.CreateOnboarding(&onboarding); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -3805,7 +4043,11 @@ func BatchSetWeekScheduleRules(c *gin.Context) {
 	}
 
 	var users []database.User
-	if err := database.DB.Where("user_id IN ?", input.UserIDs).Find(&users).Error; err != nil {
+	usersQuery := database.DB.Where("user_id IN ?", input.UserIDs)
+	if orgID := strings.TrimSpace(c.GetString("orgID")); orgID != "" {
+		usersQuery = usersQuery.Where("org_id = ?", orgID)
+	}
+	if err := usersQuery.Find(&users).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "查询用户信息失败",
@@ -4037,7 +4279,7 @@ func GetWeekCalendar(c *gin.Context) {
 			}
 		} else if scope.IsSelf() && len(scope.UserIDs) > 0 {
 			userID = scope.UserIDs[0]
-			if user, err := loadUserByUserID(userID); err == nil {
+			if user, err := loadUserByUserIDInOrg(c.GetString("orgID"), userID); err == nil {
 				departmentID = user.DepartmentID
 			}
 		} else if !scope.IsAll() {

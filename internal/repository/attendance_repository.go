@@ -20,9 +20,12 @@ func (r *AttendanceRepository) Create(record *database.Attendance) error {
 }
 
 func (r *AttendanceRepository) Upsert(record *database.Attendance) error {
+	if record.OrgID == "" {
+		record.OrgID = "default"
+	}
 	var existing database.Attendance
 	err := r.db.
-		Where("user_id = ? AND check_time = ? AND check_type = ?", record.UserID, record.CheckTime, record.CheckType).
+		Where("org_id = ? AND user_id = ? AND check_time = ? AND check_type = ?", record.OrgID, record.UserID, record.CheckTime, record.CheckType).
 		First(&existing).Error
 	if err == nil {
 		existing.UserName = record.UserName
@@ -51,18 +54,31 @@ func (r *AttendanceRepository) FindAll(page, pageSize int, filters map[string]st
 
 	query := r.db.Model(&database.Attendance{})
 
+	orgID := ""
+	if v, ok := filters["org_id"]; ok && v != "" {
+		orgID = v
+		query = query.Where("attendances.org_id = ?", v)
+	}
+
 	if v, ok := filters["user_id"]; ok && v != "" {
-		query = query.Where("user_id = ?", v)
+		query = query.Where("attendances.user_id = ?", v)
 	}
 	if userIDs := csvFilterValues(filters["user_ids"]); len(userIDs) > 0 {
-		query = query.Where("user_id IN ?", userIDs)
+		query = query.Where("attendances.user_id IN ?", userIDs)
 	}
 	if v, ok := filters["department_id"]; ok && v != "" {
-		// 通过子查询找到该部门下所有用户的 user_id
-		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
+		if orgID != "" {
+			query = query.Where("attendances.user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id = ? AND deleted_at IS NULL)", orgID, v)
+		} else {
+			query = query.Where("attendances.user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
+		}
 	}
 	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
-		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+		if orgID != "" {
+			query = query.Where("attendances.user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)", orgID, departmentIDs)
+		} else {
+			query = query.Where("attendances.user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+		}
 	}
 	if v, ok := filters["start_date"]; ok && v != "" {
 		t, err := time.Parse("2006-01-02", v)

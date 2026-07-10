@@ -17,6 +17,13 @@ func NewUserService(db *gorm.DB) *UserService {
 	}
 }
 
+// NewUserServiceWithOrgID 多租户构造：所有仓储调用自动追加 org 过滤。
+func NewUserServiceWithOrgID(db *gorm.DB, orgID string) *UserService {
+	return &UserService{
+		userRepo: repository.NewUserRepositoryWithOrgID(db, orgID),
+	}
+}
+
 func (s *UserService) CreateUser(user *database.User) error {
 	return s.userRepo.Create(user)
 }

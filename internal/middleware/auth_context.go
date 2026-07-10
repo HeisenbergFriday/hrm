@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -85,7 +86,9 @@ func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 	rawUserID := strings.TrimSpace(c.GetString("userID"))
 	orgID := strings.TrimSpace(c.GetString("orgID"))
 	if orgID == "" {
-		orgID = "default"
+		// JWT 中间件已经拒绝了缺 org_id 的 token；能走到这里说明调用方（非 JWTAuth 链路）没设 orgID，
+		// 属于配置问题而非兼容问题，直接报错让上层暴露 500。
+		return nil, errors.New("auth_context: orgID not present in gin.Context; ensure JWT middleware runs first")
 	}
 	authCtx := &AuthContext{
 		RawUserID:     rawUserID,

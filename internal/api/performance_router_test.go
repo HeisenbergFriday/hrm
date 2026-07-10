@@ -187,7 +187,7 @@ func performanceRouterTestToken(t *testing.T) string {
 	t.Helper()
 
 	t.Setenv("JWT_SECRET", "performance-router-test-secret-32chars")
-	token, _, err := generateToken(&database.User{ID: 1, UserID: "tester", Name: "Tester"})
+	token, _, err := generateToken(&database.User{ID: 1, UserID: "tester", Name: "Tester", OrgID: "default"})
 	if err != nil {
 		t.Fatalf("generate token: %v", err)
 	}

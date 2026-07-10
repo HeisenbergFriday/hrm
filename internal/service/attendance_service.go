@@ -226,7 +226,11 @@ func (s *AttendanceService) SaveRecord(record *database.Attendance) error {
 	return s.attendanceRepo.Upsert(record)
 }
 
-func (s *AttendanceService) SyncRecords(records []dingtalk.AttendanceRecord, userNameMap map[string]string) (int, error) {
+func (s *AttendanceService) SyncRecords(orgID string, records []dingtalk.AttendanceRecord, userNameMap map[string]string) (int, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		orgID = "default"
+	}
 	count := 0
 	for _, r := range records {
 		if r.UserCheckTime == "" {
@@ -247,6 +251,7 @@ func (s *AttendanceService) SyncRecords(records []dingtalk.AttendanceRecord, use
 		}
 
 		record := &database.Attendance{
+			OrgID:     orgID,
 			UserID:    r.UserID,
 			UserName:  userNameMap[r.UserID],
 			CheckTime: checkTime,

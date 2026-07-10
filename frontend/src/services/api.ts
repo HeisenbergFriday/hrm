@@ -87,7 +87,7 @@ export const orgAPI = {
     api.get('/org/employees', { params }),
   getEmployee: (id: string) => api.get(`/org/employees/${id}`),
   getEmployeePositionDiagnostic: (id: string) => api.get(`/org/employees/${id}/position-sync-diagnostic`),
-  syncOrg: () => api.post('/org/sync'),
+  syncOrg: (params?: { org_id?: string; target_org_id?: string }) => api.post('/org/sync', undefined, { params }),
 }
 
 export const attendanceAPI = {

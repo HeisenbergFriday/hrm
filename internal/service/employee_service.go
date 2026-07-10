@@ -17,6 +17,13 @@ func NewEmployeeService(db *gorm.DB) *EmployeeService {
 	}
 }
 
+// NewEmployeeServiceWithOrgID 构造带 org 隔离的员工服务；orgID 为空时行为等同旧构造。
+func NewEmployeeServiceWithOrgID(db *gorm.DB, orgID string) *EmployeeService {
+	return &EmployeeService{
+		employeeRepo: repository.NewEmployeeRepositoryWithOrgID(db, orgID),
+	}
+}
+
 // Profile
 
 func (s *EmployeeService) GetProfiles(page, pageSize int, filters map[string]string) ([]database.EmployeeProfile, int64, error) {

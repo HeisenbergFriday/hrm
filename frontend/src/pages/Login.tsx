@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import axios from 'axios'
-import { Alert, Button, Card, Modal, Radio, Space, Spin, Typography, message } from 'antd'
-import { LoadingOutlined, MobileOutlined, QrcodeOutlined } from '@ant-design/icons'
+import { Alert, Button, Card, Divider, Form, Input, Modal, Radio, Select, Space, Spin, Typography, message } from 'antd'
+import { LoadingOutlined, LockOutlined, MobileOutlined, QrcodeOutlined, UserOutlined } from '@ant-design/icons'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 import {
@@ -35,16 +35,36 @@ function getAxiosErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
+function getAvailableOrganizations(error: unknown): OrganizationOption[] {
+  if (!axios.isAxiosError(error)) {
+    return []
+  }
+
+  const orgs = error.response?.data?.data?.available_organizations
+  if (!Array.isArray(orgs)) {
+    return []
+  }
+
+  return orgs.filter((org): org is OrganizationOption => (
+    org &&
+    typeof org.org_id === 'string' &&
+    typeof org.name === 'string' &&
+    typeof org.corp_id === 'string'
+  ))
+}
+
 const Login: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [autoLogging, setAutoLogging] = useState(false)
-  const [redirectUri, setRedirectUri] = useState('')
   const [inAppStatus, setInAppStatus] = useState('')
   const [orgModalVisible, setOrgModalVisible] = useState(false)
   const [orgList, setOrgList] = useState<OrganizationOption[]>([])
   const [selectedOrgId, setSelectedOrgId] = useState<string>('')
   const [orgSelectLoading, setOrgSelectLoading] = useState(false)
   const [pendingLoginMode, setPendingLoginMode] = useState<'qr' | 'inapp'>('qr')
+  const [localLoginLoading, setLocalLoginLoading] = useState(false)
+  const [localOrgList, setLocalOrgList] = useState<OrganizationOption[]>([])
+  const [form] = Form.useForm()
   const location = useLocation()
   const [searchParams] = useSearchParams()
   const { login } = useAuthStore()
@@ -57,6 +77,23 @@ const Login: React.FC = () => {
       message.error(decodeURIComponent(error))
     }
   }, [searchParams])
+
+  // 获取组织列表用于本地登录
+  useEffect(() => {
+    const fetchOrgs = async () => {
+      try {
+        const response = await axios.get('/api/v1/auth/dingtalk/config')
+        const orgs: OrganizationOption[] = response.data.data.organizations || []
+        setLocalOrgList(orgs)
+        if (orgs.length > 0) {
+          form.setFieldsValue({ org_id: orgs[0].org_id })
+        }
+      } catch (err) {
+        console.error('获取组织列表失败', err)
+      }
+    }
+    void fetchOrgs()
+  }, [form])
 
   // 钉钉内自动免登：也需要先选择组织
   useEffect(() => {
@@ -121,11 +158,8 @@ const Login: React.FC = () => {
       const response = await axios.get('/api/v1/auth/dingtalk/qr/start', {
         params: { org_id: orgId },
       })
-      const nextRedirectUri = response.data.data.redirect_uri || ''
       const loginUrl = response.data.data.qr_code_url
 
-      setRedirectUri(nextRedirectUri)
-      console.info('[DingTalk QR] redirect_uri =', nextRedirectUri)
       console.info('[DingTalk QR] qr_code_url =', loginUrl)
 
       if (!loginUrl) {
@@ -191,8 +225,15 @@ const Login: React.FC = () => {
           } catch (err) {
             const text = getAxiosErrorMessage(err, '钉钉内免登失败')
             console.error('[DingTalk InApp] login failed', err)
+            const availableOrgs = getAvailableOrganizations(err)
             setInAppStatus(text)
             message.error(text)
+            if (availableOrgs.length > 0) {
+              setPendingLoginMode('inapp')
+              setOrgList(availableOrgs)
+              setSelectedOrgId(availableOrgs[0].org_id)
+              setOrgModalVisible(true)
+            }
             setAutoLogging(false)
           }
         },
@@ -219,6 +260,26 @@ const Login: React.FC = () => {
 
   const handleDingTalkInAppLogin = async () => {
     await fetchOrganizationsAndSelect('inapp')
+  }
+
+  // 本地密码登录
+  const handleLocalLogin = async (values: { username: string; password: string; org_id: string }) => {
+    setLocalLoginLoading(true)
+    try {
+      const response = await axios.post('/api/v1/auth/login', {
+        username: values.username,
+        password: values.password,
+        org_id: values.org_id,
+      })
+      const { token, user } = response.data.data
+      login(user, token)
+      message.success('登录成功', 0.6)
+      window.location.replace(redirectTarget || '/')
+    } catch (err) {
+      message.error(getAxiosErrorMessage(err, '登录失败，请检查用户名和密码'))
+    } finally {
+      setLocalLoginLoading(false)
+    }
   }
 
   if (autoLogging) {
@@ -270,12 +331,6 @@ const Login: React.FC = () => {
             </Button>
           )}
 
-          {redirectUri ? (
-            <Paragraph copyable style={{ marginBottom: 0 }}>
-              当前回调地址: {redirectUri}
-            </Paragraph>
-          ) : null}
-
           {inDingTalk && inAppStatus ? (
             <Alert
               type="warning"
@@ -284,6 +339,51 @@ const Login: React.FC = () => {
               description={inAppStatus}
             />
           ) : null}
+
+          <Divider plain>或使用账号密码登录</Divider>
+
+          <Form
+            form={form}
+            onFinish={(values) => void handleLocalLogin(values)}
+            layout="vertical"
+            style={{ width: '100%' }}
+          >
+            <Form.Item
+              name="org_id"
+              label="选择组织"
+              rules={[{ required: true, message: '请选择组织' }]}
+            >
+              <Select
+                placeholder="请选择组织"
+                options={localOrgList.map((org) => ({
+                  value: org.org_id,
+                  label: org.name || org.org_id,
+                }))}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="username"
+              label="用户名"
+              rules={[{ required: true, message: '请输入用户名' }]}
+            >
+              <Input prefix={<UserOutlined />} placeholder="请输入用户名" />
+            </Form.Item>
+
+            <Form.Item
+              name="password"
+              label="密码"
+              rules={[{ required: true, message: '请输入密码' }]}
+            >
+              <Input.Password prefix={<LockOutlined />} placeholder="请输入密码" />
+            </Form.Item>
+
+            <Form.Item style={{ marginBottom: 0 }}>
+              <Button type="primary" htmlType="submit" block loading={localLoginLoading}>
+                登录
+              </Button>
+            </Form.Item>
+          </Form>
         </Space>
       </Card>
 
@@ -310,11 +410,6 @@ const Login: React.FC = () => {
                 <Radio key={org.org_id} value={org.org_id} style={{ width: '100%', padding: '8px 12px', border: '1px solid #d9d9d9', borderRadius: 6 }}>
                   <div>
                     <Text strong>{org.name || org.org_id}</Text>
-                    {org.corp_id && (
-                      <div>
-                        <Text type="secondary" style={{ fontSize: 12 }}>企业 ID: {org.corp_id}</Text>
-                      </div>
-                    )}
                   </div>
                 </Radio>
               ))}

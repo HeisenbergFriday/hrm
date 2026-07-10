@@ -110,7 +110,7 @@ func logPerformanceNotifyError(action, userID string, err error) {
 // resolvePerformanceScope 获取用户的数据范围（绩效模块专用）
 func resolvePerformanceScope(c *gin.Context) (*service.OrgDataScope, error) {
 	userID := currentOperatorID(c)
-	svc := service.NewPermissionService(database.DB)
+	svc := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	return svc.GetUserPerformanceScopeInOrg(c.GetString("orgID"), userID)
 }
 
@@ -120,7 +120,7 @@ func requirePermission(c *gin.Context, codes ...string) bool {
 	if userID == "admin" || userID == "system" {
 		return true
 	}
-	svc := service.NewPermissionService(database.DB)
+	svc := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	ok, err := svc.HasAnyPermissionInOrg(c.GetString("orgID"), userID, codes...)
 	if err != nil || !ok {
 		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "权限不足", Data: nil})
@@ -137,7 +137,7 @@ func hasPerformancePermission(c *gin.Context, codes ...string) (bool, error) {
 	if userID == "admin" || userID == "system" {
 		return true, nil
 	}
-	svc := service.NewPermissionService(database.DB)
+	svc := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
 	return svc.HasAnyPermissionInOrg(c.GetString("orgID"), userID, codes...)
 }
 

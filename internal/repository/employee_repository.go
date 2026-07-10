@@ -7,7 +7,8 @@ import (
 )
 
 type EmployeeRepository struct {
-	db *gorm.DB
+	db    *gorm.DB
+	orgID string
 }
 
 type EmployeeLifecycleLedgerItem struct {
@@ -45,19 +46,75 @@ func NewEmployeeRepository(db *gorm.DB) *EmployeeRepository {
 	return &EmployeeRepository{db: db}
 }
 
+// NewEmployeeRepositoryWithOrgID 多租户构造：所有查询自动追加 org 过滤。
+// employee_profiles/transfers/resignations/onboardings 表本身无 org_id，
+// 通过 users 或 departments 表间接过滤。orgID 为空时行为等同旧构造（不过滤）。
+func NewEmployeeRepositoryWithOrgID(db *gorm.DB, orgID string) *EmployeeRepository {
+	return &EmployeeRepository{db: db, orgID: orgID}
+}
+
+// applyProfileOrgFilter 通过 employee_profiles.user_id 关联 users.org_id 做过滤。
+func (r *EmployeeRepository) applyProfileOrgFilter(query *gorm.DB) *gorm.DB {
+	if r.orgID == "" {
+		return query
+	}
+	return query.Where("employee_profiles.org_id = ?", r.orgID)
+}
+
+// applyUsersOrgFilter 用于以 users 为主表的查询。
+func (r *EmployeeRepository) applyUsersOrgFilter(query *gorm.DB) *gorm.DB {
+	if r.orgID == "" {
+		return query
+	}
+	return query.Where("users.org_id = ?", r.orgID)
+}
+
+// applyTransferOrgFilter 通过 employee_transfers.user_id 关联 users.org_id 做过滤。
+func (r *EmployeeRepository) applyTransferOrgFilter(query *gorm.DB) *gorm.DB {
+	if r.orgID == "" {
+		return query
+	}
+	return query.Where("EXISTS (SELECT 1 FROM users u WHERE u.user_id = employee_transfers.user_id AND u.org_id = ? AND u.deleted_at IS NULL)", r.orgID)
+}
+
+// applyResignationOrgFilter 通过 employee_resignations.user_id 关联 users.org_id 做过滤。
+func (r *EmployeeRepository) applyResignationOrgFilter(query *gorm.DB) *gorm.DB {
+	if r.orgID == "" {
+		return query
+	}
+	return query.Where("EXISTS (SELECT 1 FROM users u WHERE u.user_id = employee_resignations.user_id AND u.org_id = ? AND u.deleted_at IS NULL)", r.orgID)
+}
+
+// applyOnboardingOrgFilter 通过 employee_onboardings.department_id 关联 departments.org_id 做过滤。
+// candidate onboarding 未必有 users 对应，只能靠 department 判断组织归属。
+func (r *EmployeeRepository) applyOnboardingOrgFilter(query *gorm.DB) *gorm.DB {
+	if r.orgID == "" {
+		return query
+	}
+	return query.Where("EXISTS (SELECT 1 FROM departments d WHERE d.department_id = employee_onboardings.department_id AND d.org_id = ? AND d.deleted_at IS NULL)", r.orgID)
+}
+
 // EmployeeProfile
 
 func (r *EmployeeRepository) CreateProfile(profile *database.EmployeeProfile) error {
+	if r.orgID != "" {
+		profile.OrgID = r.orgID
+	}
 	return r.db.Create(profile).Error
 }
 
 func (r *EmployeeRepository) UpdateProfile(profile *database.EmployeeProfile) error {
+	if r.orgID != "" {
+		profile.OrgID = r.orgID
+	}
 	return r.db.Save(profile).Error
 }
 
 func (r *EmployeeRepository) FindProfileByID(id string) (*database.EmployeeProfile, error) {
 	var profile database.EmployeeProfile
-	err := r.db.First(&profile, "id = ?", id).Error
+	query := r.db.Model(&database.EmployeeProfile{}).Where("id = ?", id)
+	query = r.applyProfileOrgFilter(query)
+	err := query.First(&profile).Error
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +123,9 @@ func (r *EmployeeRepository) FindProfileByID(id string) (*database.EmployeeProfi
 
 func (r *EmployeeRepository) FindProfileByUserID(userID string) (*database.EmployeeProfile, error) {
 	var profile database.EmployeeProfile
-	err := r.db.Where("user_id = ?", userID).First(&profile).Error
+	query := r.db.Model(&database.EmployeeProfile{}).Where("user_id = ?", userID)
+	query = r.applyProfileOrgFilter(query)
+	err := query.First(&profile).Error
 	if err != nil {
 		return nil, err
 	}
@@ -78,12 +137,21 @@ func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[str
 	var total int64
 
 	query := r.db.Model(&database.EmployeeProfile{})
+	query = r.applyProfileOrgFilter(query)
 
 	if v, ok := filters["department_id"]; ok && v != "" {
-		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
+		if r.orgID != "" {
+			query = query.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id = ? AND deleted_at IS NULL)", r.orgID, v)
+		} else {
+			query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
+		}
 	}
 	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
-		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+		if r.orgID != "" {
+			query = query.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)", r.orgID, departmentIDs)
+		} else {
+			query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+		}
 	}
 	if v, ok := filters["user_id"]; ok && v != "" {
 		query = query.Where("user_id = ?", v)
@@ -106,8 +174,8 @@ func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[str
 
 func (r *EmployeeRepository) buildLifecycleLedgerQuery(filters map[string]string) *gorm.DB {
 	query := r.db.Table("users").
-		Joins("LEFT JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
-		Joins("LEFT JOIN departments current_departments ON current_departments.department_id = users.department_id AND current_departments.deleted_at IS NULL").
+		Joins("LEFT JOIN employee_profiles ON employee_profiles.org_id = users.org_id AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Joins("LEFT JOIN departments current_departments ON current_departments.org_id = users.org_id AND current_departments.department_id = users.department_id AND current_departments.deleted_at IS NULL").
 		Joins(`LEFT JOIN employee_onboardings latest_onboarding ON latest_onboarding.id = (
 			SELECT eo.id
 			FROM employee_onboardings eo
@@ -134,6 +202,8 @@ func (r *EmployeeRepository) buildLifecycleLedgerQuery(filters map[string]string
 		)`).
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin")
+
+	query = r.applyUsersOrgFilter(query)
 
 	if v, ok := filters["department_id"]; ok && v != "" {
 		query = query.Where("users.department_id = ?", v)
@@ -186,6 +256,8 @@ func (r *EmployeeRepository) FindCandidateOnboardings(filters map[string]string)
 			WHERE ep.employee_id = employee_onboardings.employee_id
 			  AND ep.deleted_at IS NULL
 		)`)
+
+	query = r.applyOnboardingOrgFilter(query)
 
 	// 应用筛选条件
 	if v, ok := filters["department_id"]; ok && v != "" {
@@ -399,6 +471,7 @@ func (r *EmployeeRepository) FindAllTransfers(page, pageSize int, filters map[st
 	var total int64
 
 	query := r.db.Model(&database.EmployeeTransfer{})
+	query = r.applyTransferOrgFilter(query)
 	if status := filters["status"]; status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -435,6 +508,7 @@ func (r *EmployeeRepository) FindAllResignations(page, pageSize int, filters map
 	var total int64
 
 	query := r.db.Model(&database.EmployeeResignation{})
+	query = r.applyResignationOrgFilter(query)
 	if status := filters["status"]; status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -471,6 +545,7 @@ func (r *EmployeeRepository) FindAllOnboardings(page, pageSize int, filters map[
 	var total int64
 
 	query := r.db.Model(&database.EmployeeOnboarding{})
+	query = r.applyOnboardingOrgFilter(query)
 	if status := filters["status"]; status != "" {
 		query = query.Where("status = ?", status)
 	}

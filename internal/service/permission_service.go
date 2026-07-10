@@ -13,6 +13,7 @@ import (
 
 type PermissionService struct {
 	db                 *gorm.DB
+	orgID              string
 	roleRepo           *repository.RoleRepository
 	permissionRepo     *repository.PermissionRepository
 	userRoleRepo       *repository.UserRoleRepository
@@ -34,6 +35,25 @@ func NewPermissionService(db *gorm.DB) *PermissionService {
 		dataPermRepo:       repository.NewDataPermissionRepository(db),
 		deptRepo:           repository.NewDepartmentRepository(db),
 		userRepo:           repository.NewUserRepository(db),
+	}
+}
+
+// NewPermissionServiceWithOrgID 多租户构造：deptRepo/userRepo 携带 orgID 过滤。
+// 用于 handler 层将当前请求的组织隔离下推到权限相关查询，
+// 避免 resolveManagedDepartmentScope 拉全库部门造成跨企业串权限。
+// orgID 为空时行为等同旧构造（不加过滤）。
+func NewPermissionServiceWithOrgID(db *gorm.DB, orgID string) *PermissionService {
+	return &PermissionService{
+		db:                 db,
+		orgID:              orgID,
+		roleRepo:           repository.NewRoleRepository(db),
+		permissionRepo:     repository.NewPermissionRepository(db),
+		userRoleRepo:       repository.NewUserRoleRepository(db),
+		rolePermissionRepo: repository.NewRolePermissionRepository(db),
+		menuPermRepo:       repository.NewMenuPermissionRepository(db),
+		dataPermRepo:       repository.NewDataPermissionRepository(db),
+		deptRepo:           repository.NewDepartmentRepositoryWithOrgID(db, orgID),
+		userRepo:           repository.NewUserRepositoryWithOrgID(db, orgID),
 	}
 }
 

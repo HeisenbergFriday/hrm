@@ -7,13 +7,40 @@ import (
 )
 
 type UserRepository struct {
-	db *gorm.DB
+	db    *gorm.DB
+	orgID string
 }
 
 func NewUserRepository(db *gorm.DB) *UserRepository {
 	return &UserRepository{
 		db: db,
 	}
+}
+
+// NewUserRepositoryWithOrgID 构造带 org 隔离的用户仓储；orgID 为空时行为等同旧构造（不加过滤）。
+func NewUserRepositoryWithOrgID(db *gorm.DB, orgID string) *UserRepository {
+	return &UserRepository{
+		db:    db,
+		orgID: orgID,
+	}
+}
+
+// scoped 返回一个已应用 orgID 过滤（如果非空）的查询构造器，基于 users 表。
+func (r *UserRepository) scoped() *gorm.DB {
+	tx := r.db
+	if r.orgID != "" {
+		tx = tx.Where("org_id = ?", r.orgID)
+	}
+	return tx
+}
+
+// scopedTable 返回一个已应用 users.org_id 过滤的查询构造器，供 join 场景使用。
+func (r *UserRepository) scopedTable() *gorm.DB {
+	tx := r.db.Model(&database.User{})
+	if r.orgID != "" {
+		tx = tx.Where("users.org_id = ?", r.orgID)
+	}
+	return tx
 }
 
 func (r *UserRepository) Create(user *database.User) error {
@@ -25,12 +52,16 @@ func (r *UserRepository) Update(user *database.User) error {
 }
 
 func (r *UserRepository) Delete(userID string) error {
-	return r.db.Delete(&database.User{}, "user_id = ?", userID).Error
+	tx := r.db
+	if r.orgID != "" {
+		tx = tx.Where("org_id = ?", r.orgID)
+	}
+	return tx.Delete(&database.User{}, "user_id = ?", userID).Error
 }
 
 func (r *UserRepository) FindByUserID(userID string) (*database.User, error) {
 	var user database.User
-	tx := r.db.Where("user_id = ?", userID).Limit(1).Find(&user)
+	tx := r.scoped().Where("user_id = ?", userID).Limit(1).Find(&user)
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
@@ -55,7 +86,7 @@ func (r *UserRepository) FindByOrgAndUserID(orgID, userID string) (*database.Use
 
 func (r *UserRepository) FindByEmail(email string) (*database.User, error) {
 	var user database.User
-	err := r.db.Where("email = ?", email).First(&user).Error
+	err := r.scoped().Where("email = ?", email).First(&user).Error
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +115,7 @@ func (r *UserRepository) FindByOrgAndMobile(orgID, mobile string) (*database.Use
 
 func (r *UserRepository) FindByMobile(mobile string) (*database.User, error) {
 	var user database.User
-	err := r.db.Where("mobile = ?", mobile).First(&user).Error
+	err := r.scoped().Where("mobile = ?", mobile).First(&user).Error
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +124,7 @@ func (r *UserRepository) FindByMobile(mobile string) (*database.User, error) {
 
 func (r *UserRepository) FindByID(id string) (*database.User, error) {
 	var user database.User
-	err := r.db.First(&user, "id = ?", id).Error
+	err := r.scoped().First(&user, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -107,13 +138,13 @@ func (r *UserRepository) FindAll(page, pageSize int) ([]database.User, int64, er
 	offset := (page - 1) * pageSize
 
 	// 计算总数
-	err := r.db.Model(&database.User{}).Count(&total).Error
+	err := r.scopedTable().Count(&total).Error
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// 查询数据
-	err = r.db.Offset(offset).Limit(pageSize).Find(&users).Error
+	err = r.scoped().Offset(offset).Limit(pageSize).Find(&users).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -127,9 +158,12 @@ func (r *UserRepository) FindSyncedEmployees(page, pageSize int) ([]database.Use
 
 	offset := (page - 1) * pageSize
 	query := r.db.Model(&database.User{}).
-		Joins("JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Joins("JOIN employee_profiles ON employee_profiles.org_id = users.org_id AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin")
+	if r.orgID != "" {
+		query = query.Where("users.org_id = ?", r.orgID)
+	}
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -149,13 +183,13 @@ func (r *UserRepository) FindByDepartment(departmentID string, page, pageSize in
 	offset := (page - 1) * pageSize
 
 	// 计算总数
-	err := r.db.Model(&database.User{}).Where("department_id = ?", departmentID).Count(&total).Error
+	err := r.scopedTable().Where("department_id = ?", departmentID).Count(&total).Error
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// 查询数据
-	err = r.db.Where("department_id = ?", departmentID).Offset(offset).Limit(pageSize).Find(&users).Error
+	err = r.scoped().Where("department_id = ?", departmentID).Offset(offset).Limit(pageSize).Find(&users).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -169,10 +203,13 @@ func (r *UserRepository) FindSyncedEmployeesByDepartment(departmentID string, pa
 
 	offset := (page - 1) * pageSize
 	query := r.db.Model(&database.User{}).
-		Joins("JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Joins("JOIN employee_profiles ON employee_profiles.org_id = users.org_id AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin").
 		Where("users.department_id = ?", departmentID)
+	if r.orgID != "" {
+		query = query.Where("users.org_id = ?", r.orgID)
+	}
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
