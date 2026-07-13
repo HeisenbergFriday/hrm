@@ -158,14 +158,24 @@ func migrate() error {
 	DB.Exec("SET FOREIGN_KEY_CHECKS = 0")
 	defer DB.Exec("SET FOREIGN_KEY_CHECKS = 1")
 
-	// statutory_holidays 手动建表，避免 GORM AutoMigrate 的索引 DROP FOREIGN KEY 问题
-	if err := DB.Exec("CREATE TABLE IF NOT EXISTS `statutory_holidays` (`id` bigint unsigned AUTO_INCREMENT PRIMARY KEY, `date` varchar(32) NOT NULL, `name` varchar(128) NOT NULL, `type` varchar(32) NOT NULL, `year` int NOT NULL, `created_at` datetime(3), `updated_at` datetime(3), UNIQUE INDEX `uni_statutory_holidays_date` (`date`))").Error; err != nil {
+	// statutory_holidays 手动建表，避免 GORM AutoMigrate 的索引 DROP FOREIGN KEY 问题。
+	// Phase 3B 只做 nullable org_id expand；唯一索引收口留到 contract 阶段。
+	if err := DB.Exec("CREATE TABLE IF NOT EXISTS `statutory_holidays` (`id` bigint unsigned AUTO_INCREMENT PRIMARY KEY, `org_id` varchar(64) NULL, `date` varchar(32) NOT NULL, `name` varchar(128) NOT NULL, `type` varchar(32) NOT NULL, `year` int NOT NULL, `created_at` datetime(3), `updated_at` datetime(3), UNIQUE INDEX `uni_statutory_holidays_date` (`date`), INDEX `idx_statutory_holidays_org_id` (`org_id`))").Error; err != nil {
 		return err
 	}
-	if err := DB.Exec("CREATE TABLE IF NOT EXISTS `employee_shift_configs` (`id` bigint unsigned AUTO_INCREMENT PRIMARY KEY, `created_at` datetime(3), `updated_at` datetime(3), `deleted_at` datetime(3), `user_id` varchar(64) NOT NULL, `user_name` varchar(128), `shift_id` bigint NOT NULL, `end_time` varchar(16), `note` varchar(256), UNIQUE INDEX `idx_employee_shift_configs_user_id` (`user_id`), INDEX `idx_employee_shift_configs_deleted_at` (`deleted_at`))").Error; err != nil {
+	if err := DB.Exec("CREATE TABLE IF NOT EXISTS `employee_shift_configs` (`id` bigint unsigned AUTO_INCREMENT PRIMARY KEY, `created_at` datetime(3), `updated_at` datetime(3), `deleted_at` datetime(3), `org_id` varchar(64) NULL, `user_id` varchar(64) NOT NULL, `user_name` varchar(128), `shift_id` bigint NOT NULL, `end_time` varchar(16), `note` varchar(256), UNIQUE INDEX `idx_employee_shift_configs_user_id` (`user_id`), INDEX `idx_employee_shift_configs_deleted_at` (`deleted_at`), INDEX `idx_employee_shift_configs_org_id` (`org_id`))").Error; err != nil {
 		return err
 	}
-	if err := DB.Exec("CREATE TABLE IF NOT EXISTS `dingtalk_shift_catalogs` (`id` bigint unsigned AUTO_INCREMENT PRIMARY KEY, `name` varchar(128) NOT NULL, `shift_key` varchar(256) NOT NULL, `shift_id` bigint NOT NULL, `check_in` varchar(16), `check_out` varchar(16), `created_at` datetime(3), `updated_at` datetime(3), UNIQUE INDEX `idx_dingtalk_shift_catalogs_shift_key` (`shift_key`), INDEX `idx_dingtalk_shift_catalogs_name` (`name`))").Error; err != nil {
+	if err := DB.Exec("CREATE TABLE IF NOT EXISTS `dingtalk_shift_catalogs` (`id` bigint unsigned AUTO_INCREMENT PRIMARY KEY, `org_id` varchar(64) NULL, `name` varchar(128) NOT NULL, `shift_key` varchar(256) NOT NULL, `shift_id` bigint NOT NULL, `check_in` varchar(16), `check_out` varchar(16), `created_at` datetime(3), `updated_at` datetime(3), UNIQUE INDEX `idx_dingtalk_shift_catalogs_shift_key` (`shift_key`), INDEX `idx_dingtalk_shift_catalogs_name` (`name`), INDEX `idx_dingtalk_shift_catalogs_org_id` (`org_id`))").Error; err != nil {
+		return err
+	}
+	if err := ensureNullableOrgIDColumn("statutory_holidays"); err != nil {
+		return err
+	}
+	if err := ensureNullableOrgIDColumn("employee_shift_configs"); err != nil {
+		return err
+	}
+	if err := ensureNullableOrgIDColumn("dingtalk_shift_catalogs"); err != nil {
 		return err
 	}
 
@@ -273,6 +283,29 @@ func migrate() error {
 	}
 
 	return cleanupDeletedWeekScheduleRules()
+}
+
+func ensureNullableOrgIDColumn(table string) error {
+	var count int64
+	if err := DB.Raw("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME='org_id'", table).Scan(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		if err := DB.Exec(fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `org_id` varchar(64) NULL AFTER `id`", table)).Error; err != nil {
+			return err
+		}
+	}
+	indexName := fmt.Sprintf("idx_%s_org_id", table)
+	var indexCount int64
+	if err := DB.Raw("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?", table, indexName).Scan(&indexCount).Error; err != nil {
+		return err
+	}
+	if indexCount == 0 {
+		if err := DB.Exec(fmt.Sprintf("CREATE INDEX `%s` ON `%s` (`org_id`)", indexName, table)).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func migrateAnnualLeaveGrantColumns() {
@@ -425,6 +458,19 @@ func migrateMultitenantUniqueIndexes() error {
 		}
 	}
 
+	if DB.Migrator().HasTable(&SyncStatus{}) {
+		if err := DB.Exec(`
+			UPDATE sync_statuses
+			SET org_id = 'default'
+			WHERE org_id IS NULL OR org_id = ''
+		`).Error; err != nil {
+			return err
+		}
+		if err := DB.Exec("ALTER TABLE sync_statuses MODIFY COLUMN org_id varchar(64) NOT NULL DEFAULT 'default'").Error; err != nil {
+			return err
+		}
+	}
+
 	for _, idx := range []struct {
 		table string
 		name  string
@@ -435,6 +481,8 @@ func migrateMultitenantUniqueIndexes() error {
 		{"employee_profiles", "uni_employee_profiles_user_id"},
 		{"employee_profiles", "uni_employee_profiles_employee_id"},
 		{"attendances", "idx_user_time_type"},
+		{"sync_statuses", "uni_sync_statuses_type"},
+		{"sync_statuses", "idx_sync_statuses_type"},
 	} {
 		if err := dropIndexIfExists(idx.table, idx.name); err != nil {
 			return err
@@ -454,6 +502,9 @@ func migrateMultitenantUniqueIndexes() error {
 		return err
 	}
 	if err := createIndexIfMissing("attendances", "idx_org_user_time_type", true, "org_id", "user_id", "check_time", "check_type"); err != nil {
+		return err
+	}
+	if err := createIndexIfMissing("sync_statuses", "idx_org_sync_type", true, "org_id", "type"); err != nil {
 		return err
 	}
 

@@ -4102,6 +4102,151 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-07-10T01:09:06.373Z"
+    },
+    {
+      "id": "bug-254",
+      "timestamp": "2026-07-10T03:37:19.982Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/handlers.go",
+      "root_cause": "19 lines replaced/restructured",
+      "fix": "Rewrote 31→14 lines (19 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T03:37:19.982Z"
+    },
+    {
+      "id": "bug-255",
+      "timestamp": "2026-07-10T04:15:00.000Z",
+      "error_message": "多租户越权：Login/权限/组织同步接口允许通过请求参数切换目标组织",
+      "file": "internal/api/handlers.go",
+      "root_cause": "Login 未强制 org_id，缺失时用 GetUserByUserID 做跨组织回退查找；resolvePermissionTargetOrgID 优先接受 body/query org_id，缺失时静默落 default；SyncOrgData 允许 query org_id/target_org_id 切换目标组织，只用目标组织同名 user_id 权限授权",
+      "fix": "Login 的 org_id 改为 binding:required 并先校验 GetOrganizationByOrgID；移除 resolvePermissionTargetOrgID，引入 currentOrgIDOrAbort/rejectCrossOrgParam，权限接口只用 JWT 组织；SyncOrgData 拒绝 query org_id/target_org_id，跨组织同步迁至受控运维入口；补 11 项 multi_org_security_test.go 回归测试",
+      "tags": [
+        "multi-tenant",
+        "security",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T04:15:00.000Z"
+    },
+    {
+      "id": "bug-256",
+      "timestamp": "2026-07-10T04:37:03.354Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/user_repository.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 15→34 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T04:37:03.354Z"
+    },
+    {
+      "id": "bug-257",
+      "timestamp": "2026-07-10T04:39:51.135Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/tenant_test.go",
+      "root_cause": "21 lines replaced/restructured",
+      "fix": "Rewrote 35→3 lines (21 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T04:39:51.135Z"
+    },
+    {
+      "id": "bug-258",
+      "timestamp": "2026-07-10T04:41:28.514Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/user_repository_isolation_test.go",
+      "root_cause": "16 lines replaced/restructured",
+      "fix": "Rewrote 50→63 lines (16 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T04:41:28.514Z"
+    },
+    {
+      "id": "bug-259",
+      "timestamp": "2026-07-10T04:46:11.645Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/department_repository.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 15→32 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T04:46:11.645Z"
+    },
+    {
+      "id": "bug-260",
+      "timestamp": "2026-07-10T04:46:49.459Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/employee_repository.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 13→27 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T04:46:49.459Z"
+    },
+    {
+      "id": "bug-261",
+      "timestamp": "2026-07-10T04:47:22.388Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/repository/attendance_repository.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 31→59 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T04:47:22.388Z"
+    },
+    {
+      "id": "bug-262",
+      "timestamp": "2026-07-10T05:30:00.000Z",
+      "error_message": "多租户迁移工具默认执行 UPDATE ... SET org_id = default 全表回填，掩盖未知历史归属",
+      "file": "tools/migrate_multitenant/main.go",
+      "root_cause": "旧 main() 无条件遍历 tablesToMigrate（含伪造的 performance_activity_manager_assignments），将所有 org_id IS NULL 的行改为 DEFAULT_ORG_ID，随后立刻改为 NOT NULL。这会把'无法推导'伪装成'已确定'，跨组织数据会被误归 default，之后严格 org 过滤又让真正组织看不到自己的数据",
+      "fix": "重写为分子命令 CLI：默认只读；新增 internal/tenant/registry 单一表清单；新增 discover/report 从 information_schema 采集实际状态；infer/apply/verify/contract 显式占位报错并禁止 default 回填；补 registry 与 discover 的单元测试",
+      "tags": [
+        "multi-tenant",
+        "migration",
+        "safety",
+        "go"
+      ],
+      "related_bugs": ["bug-255"],
+      "occurrences": 1,
+      "last_seen": "2026-07-10T05:30:00.000Z"
     }
   ]
 }

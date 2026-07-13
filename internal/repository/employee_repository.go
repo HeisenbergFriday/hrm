@@ -97,15 +97,29 @@ func (r *EmployeeRepository) applyOnboardingOrgFilter(query *gorm.DB) *gorm.DB {
 // EmployeeProfile
 
 func (r *EmployeeRepository) CreateProfile(profile *database.EmployeeProfile) error {
+	if profile == nil {
+		return gorm.ErrInvalidData
+	}
 	if r.orgID != "" {
-		profile.OrgID = r.orgID
+		merged, err := EnsureSameOrg(r.orgID, profile.OrgID)
+		if err != nil {
+			return err
+		}
+		profile.OrgID = merged
 	}
 	return r.db.Create(profile).Error
 }
 
 func (r *EmployeeRepository) UpdateProfile(profile *database.EmployeeProfile) error {
+	if profile == nil {
+		return gorm.ErrInvalidData
+	}
 	if r.orgID != "" {
-		profile.OrgID = r.orgID
+		merged, err := EnsureSameOrg(r.orgID, profile.OrgID)
+		if err != nil {
+			return err
+		}
+		profile.OrgID = merged
 	}
 	return r.db.Save(profile).Error
 }

@@ -8,19 +8,55 @@ import (
 )
 
 type AttendanceRepository struct {
-	db *gorm.DB
+	db    *gorm.DB
+	orgID string
 }
 
 func NewAttendanceRepository(db *gorm.DB) *AttendanceRepository {
 	return &AttendanceRepository{db: db}
 }
 
+// NewAttendanceRepositoryWithOrgID 构造带 org 隔离的考勤仓储；Upsert/Create 会强制
+// record.OrgID 与仓储绑定组织一致，禁止落 "default" 或跨组织写入。
+func NewAttendanceRepositoryWithOrgID(db *gorm.DB, orgID string) *AttendanceRepository {
+	return &AttendanceRepository{db: db, orgID: orgID}
+}
+
+func (r *AttendanceRepository) scoped() *gorm.DB {
+	tx := r.db
+	if r.orgID != "" {
+		tx = tx.Where("org_id = ?", r.orgID)
+	}
+	return tx
+}
+
 func (r *AttendanceRepository) Create(record *database.Attendance) error {
+	if record == nil {
+		return gorm.ErrInvalidData
+	}
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, record.OrgID)
+		if err != nil {
+			return err
+		}
+		record.OrgID = merged
+	}
 	return r.db.Create(record).Error
 }
 
 func (r *AttendanceRepository) Upsert(record *database.Attendance) error {
-	if record.OrgID == "" {
+	if record == nil {
+		return gorm.ErrInvalidData
+	}
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, record.OrgID)
+		if err != nil {
+			return err
+		}
+		record.OrgID = merged
+	} else if record.OrgID == "" {
+		// 迁移期兼容：无租户上下文构造的旧调用会继续使用 default 占位。
+		// 新代码请使用 NewAttendanceRepositoryWithOrgID。
 		record.OrgID = "default"
 	}
 	var existing database.Attendance
@@ -41,7 +77,7 @@ func (r *AttendanceRepository) Upsert(record *database.Attendance) error {
 
 func (r *AttendanceRepository) FindByID(id string) (*database.Attendance, error) {
 	var record database.Attendance
-	err := r.db.First(&record, "id = ?", id).Error
+	err := r.scoped().First(&record, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}

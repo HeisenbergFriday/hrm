@@ -1,19 +1,5 @@
 package main
 
-// 用法（在项目根目录执行）：
-//
-//	# 预览：列出将要同步的记录，不实际调用钉钉
-//	go run ./tools/resync_overtime_to_dingtalk/ -dry-run
-//
-//	# 正式重放（高风险；需显式关闭 dry-run，并至少传入 user 或日期范围）
-//	go run ./tools/resync_overtime_to_dingtalk/ -dry-run=false -user example-user-id
-//
-//	# 仅重放某个员工
-//	go run ./tools/resync_overtime_to_dingtalk/ -user example-user-id
-//
-//	# 仅重放某段日期
-//	go run ./tools/resync_overtime_to_dingtalk/ -start 2025-01-01 -end 2025-12-31
-
 import (
 	"flag"
 	"fmt"
@@ -29,89 +15,101 @@ import (
 )
 
 func main() {
-	// 高风险重放工具：默认 dry-run，正式执行前必须显式关闭 dry-run 并确认筛选条件。
-	userID := flag.String("user", "", "只同步该员工（留空=全员）")
-	start := flag.String("start", "", "工作日起始 YYYY-MM-DD（留空=不限）")
-	end := flag.String("end", "", "工作日截止 YYYY-MM-DD（留空=不限）")
-	dryRun := flag.Bool("dry-run", true, "仅打印计划，不实际写入钉钉")
+	orgIDFlag := flag.String("org-id", "", "required organization id; all queried records must belong to this org")
+	userID := flag.String("user", "", "only sync this employee user_id")
+	start := flag.String("start", "", "work date start, YYYY-MM-DD")
+	end := flag.String("end", "", "work date end, YYYY-MM-DD")
+	dryRun := flag.Bool("dry-run", true, "print the planned replay without writing to DingTalk or database")
 	flag.Parse()
 
+	orgID := strings.TrimSpace(*orgIDFlag)
+	if orgID == "" {
+		log.Fatal("missing -org-id")
+	}
 	if !*dryRun && strings.TrimSpace(*userID) == "" && strings.TrimSpace(*start) == "" && strings.TrimSpace(*end) == "" {
 		log.Fatal("refuse to run without filter when -dry-run=false; pass -user or -start/-end")
 	}
 
 	if err := config.Load(); err != nil {
-		log.Fatalf("加载配置失败: %v", err)
+		log.Fatalf("load config failed: %v", err)
 	}
 	if err := database.Init(); err != nil {
-		log.Fatalf("数据库初始化失败: %v", err)
+		log.Fatalf("database init failed: %v", err)
 	}
-	if err := dingtalk.Init(); err != nil {
-		log.Fatalf("钉钉初始化失败: %v", err)
+	dingCfg, ok := dingtalk.GetAppConfigForOrg(orgID)
+	if !ok {
+		log.Fatalf("dingtalk app config not found for org_id=%s", orgID)
+	}
+	if err := dingtalk.InitWithConfig(dingCfg); err != nil {
+		log.Fatalf("dingtalk init failed for org_id=%s: %v", orgID, err)
 	}
 
 	if strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID")) == "" {
-		log.Fatal("DINGTALK_ADMIN_USER_ID 未配置")
+		log.Fatal("DINGTALK_ADMIN_USER_ID is not configured")
 	}
 
+	statuses := []string{"matched", "synced", "dingtalk_sync_failed", "local_balance_failed"}
 	db := database.DB
-	query := db.Where("effective_overtime_minutes > 0 AND match_status IN ?",
-		[]string{"matched", "synced", "dingtalk_sync_failed", "local_balance_failed"})
-	if *userID != "" {
-		query = query.Where("user_id = ?", *userID)
+	query := db.Where("org_id = ? AND effective_overtime_minutes > 0 AND match_status IN ?", orgID, statuses)
+	if strings.TrimSpace(*userID) != "" {
+		query = query.Where("user_id = ?", strings.TrimSpace(*userID))
 	}
-	if *start != "" {
-		query = query.Where("work_date >= ?", *start)
+	if strings.TrimSpace(*start) != "" {
+		query = query.Where("work_date >= ?", strings.TrimSpace(*start))
 	}
-	if *end != "" {
-		query = query.Where("work_date <= ?", *end)
+	if strings.TrimSpace(*end) != "" {
+		query = query.Where("work_date <= ?", strings.TrimSpace(*end))
 	}
 
 	var records []database.OvertimeMatchResult
 	if err := query.Order("user_id asc, work_date asc").Find(&records).Error; err != nil {
-		log.Fatalf("查询匹配记录失败: %v", err)
+		log.Fatalf("query overtime match records failed: %v", err)
 	}
 
-	log.Printf("共找到 %d 条需要重放的加班记录", len(records))
+	log.Printf("found %d overtime records to replay for org=%s", len(records), orgID)
 
 	if *dryRun {
 		for _, r := range records {
-			fmt.Printf("  [dry-run] userID=%-20s  date=%s  minutes=%d  prev_status=%s\n",
-				r.UserID, r.WorkDate, r.EffectiveOvertimeMinutes, r.DingtalkSyncStatus)
+			fmt.Printf("  [dry-run] org=%-12s  userID=%-20s  date=%s  minutes=%d  prev_status=%s\n",
+				r.OrgID, r.UserID, r.WorkDate, r.EffectiveOvertimeMinutes, r.DingtalkSyncStatus)
 		}
-		log.Println("dry-run 结束，未实际写入")
+		log.Println("dry-run finished without writes")
 		return
 	}
 
 	success, failed := 0, 0
 	for _, r := range records {
-		// 重置同步状态为 pending，确保钉钉侧 "already success" 跳过逻辑不生效
-		if err := db.Model(&database.OvertimeMatchResult{}).Where("id = ?", r.ID).
+		if err := db.Model(&database.OvertimeMatchResult{}).
+			Where("org_id = ? AND id = ?", orgID, r.ID).
 			Update("dingtalk_sync_status", "pending").Error; err != nil {
-			log.Printf("  FAIL  reset status id=%d: %v", r.ID, err)
+			log.Printf("  FAIL  reset status org=%s id=%d: %v", orgID, r.ID, err)
 			failed++
 			continue
 		}
 
-		if err := pushToDingTalk(db, r); err != nil {
-			log.Printf("  FAIL  userID=%s  date=%s  err=%v", r.UserID, r.WorkDate, err)
+		if err := pushToDingTalk(db, dingCfg, orgID, r); err != nil {
+			log.Printf("  FAIL  org=%s userID=%s date=%s err=%v", orgID, r.UserID, r.WorkDate, err)
 			failed++
 		} else {
-			log.Printf("  OK    userID=%s  date=%s  minutes=%d", r.UserID, r.WorkDate, r.EffectiveOvertimeMinutes)
+			log.Printf("  OK    org=%s userID=%s date=%s minutes=%d", orgID, r.UserID, r.WorkDate, r.EffectiveOvertimeMinutes)
 			success++
 		}
 	}
 
-	log.Printf("完成：成功 %d，失败 %d，合计 %d", success, failed, success+failed)
+	log.Printf("done: success=%d failed=%d total=%d", success, failed, success+failed)
 	if failed > 0 {
 		os.Exit(1)
 	}
 }
 
-func pushToDingTalk(db *gorm.DB, r database.OvertimeMatchResult) error {
+func pushToDingTalk(db *gorm.DB, dingCfg dingtalk.AppConfig, orgID string, r database.OvertimeMatchResult) error {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return fmt.Errorf("org id is required")
+	}
 	reason := fmt.Sprintf("休息日加班调休 %s %d分钟", r.WorkDate, r.EffectiveOvertimeMinutes)
-	if err := dingtalk.UpdateCompensatoryLeaveQuota(r.UserID, r.EffectiveOvertimeMinutes, r.WorkDate, reason); err != nil {
-		_ = db.Model(&database.OvertimeMatchResult{}).Where("id = ?", r.ID).Updates(map[string]interface{}{
+	if err := dingtalk.UpdateCompensatoryLeaveQuotaForConfig(dingCfg, r.UserID, r.EffectiveOvertimeMinutes, r.WorkDate, reason); err != nil {
+		_ = db.Model(&database.OvertimeMatchResult{}).Where("org_id = ? AND id = ?", orgID, r.ID).Updates(map[string]interface{}{
 			"dingtalk_sync_status": "failed",
 			"dingtalk_sync_error":  err.Error(),
 		})
@@ -119,7 +117,7 @@ func pushToDingTalk(db *gorm.DB, r database.OvertimeMatchResult) error {
 	}
 
 	requestID := fmt.Sprintf("resync:%s:%s:%d", r.UserID, r.WorkDate, r.ID)
-	_ = db.Model(&database.OvertimeMatchResult{}).Where("id = ?", r.ID).Updates(map[string]interface{}{
+	_ = db.Model(&database.OvertimeMatchResult{}).Where("org_id = ? AND id = ?", orgID, r.ID).Updates(map[string]interface{}{
 		"dingtalk_sync_status":     "success",
 		"dingtalk_sync_request_id": requestID,
 		"dingtalk_sync_error":      "",

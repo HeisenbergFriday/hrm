@@ -34,18 +34,35 @@ func (r *DepartmentRepository) scoped() *gorm.DB {
 }
 
 func (r *DepartmentRepository) Create(department *database.Department) error {
+	if department == nil {
+		return gorm.ErrInvalidData
+	}
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, department.OrgID)
+		if err != nil {
+			return err
+		}
+		department.OrgID = merged
+	}
 	return r.db.Create(department).Error
 }
 
 func (r *DepartmentRepository) Update(department *database.Department) error {
+	if department == nil {
+		return gorm.ErrInvalidData
+	}
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, department.OrgID)
+		if err != nil {
+			return err
+		}
+		department.OrgID = merged
+	}
 	return r.db.Save(department).Error
 }
 
 func (r *DepartmentRepository) Delete(departmentID string) error {
-	tx := r.db
-	if r.orgID != "" {
-		tx = tx.Where("org_id = ?", r.orgID)
-	}
+	tx := r.db.Scopes(ScopeOrg(r.orgID, "org_id"))
 	return tx.Delete(&database.Department{}, "department_id = ?", departmentID).Error
 }
 

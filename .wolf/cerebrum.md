@@ -10,6 +10,8 @@
 
 ## Key Learnings
 
+- 多租户普通接口一律以 JWT `orgID` 为唯一权威租户上下文；handler 不得从 body/query/header 读取 `org_id`/`target_org_id` 切换组织。跨组织操作必须走独立的受控运维入口。可复用 `internal/api/handlers.go` 中的 `currentOrgIDOrAbort` 与 `rejectCrossOrgParam` helper。
+- 登录 handler 必须 fail-closed：`org_id` 使用 `binding:"required"`，先 `database.GetOrganizationByOrgID` 校验组织存在且 active，再按 `(org_id,user_id)` 精准查询；禁止用不带 org 的 `GetUserByUserID` 做全局兜底或退化为 `default`。
 - 前端样式统一使用 CSS 变量（Design Token），定义在 `frontend/src/index.css` 的 `:root` 中。禁止在 TSX 中硬编码颜色值、像素值、圆角值等。必须引用 `var(--xxx)` 令牌。
 - Ant Design 的 ConfigProvider theme 中的颜色值需要与 CSS 变量保持同步，但因为是 JS 对象不能直接引用 CSS 变量，所以手动保持一致。
 - 页面背景色：`--color-bg-page: #e4e8ee`，卡片背景：`--color-bg-card: #fff`，表头背景：`--color-bg-card-header: #fafbfc`
@@ -36,6 +38,10 @@
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
 <!-- Format: [YYYY-MM-DD] Description of what went wrong and what to do instead. -->
+- [2026-07-10] 多租户 handler 不允许出现“若目标组织不同于 JWT 组织，则用目标组织的同名 user_id 权限授权”的模式；这不是平台级授权，会造成跨组织越权。要么只用 JWT 组织，要么把入口迁到独立运维/平台层并使用不同的身份模型。
+- [2026-07-10] 权限相关 service 构造器（例如 `NewPermissionServiceWithOrgID`）不能被业务 handler 用作“允许空 org 静默落 default”的通道；调用方必须先经过 `currentOrgIDOrAbort` 保证 JWT 有非空 orgID。
+- [2026-07-10] 历史多租户迁移禁止 `UPDATE ... SET org_id = default WHERE org_id IS NULL` 全表回填。未能唯一推导的记录必须进入 unresolved 清单，由人工确认；`tools/migrate_multitenant` 已改为 discover/report 只读默认，`infer/apply/verify/contract` 显式占位报错，任何"填 default"实现都不得再次引入。
+- [2026-07-13] D:\app→HR 迁移方向纠正：D:\app 的 Excel 解析"脏活"（单元格颜色识别、表头模糊匹配、名字规范化等）是**要保留的功能**，不是要丢弃的外壳；业务计算逻辑更不能改。迁移目标是"原样搬过来（含 Excel 解析 + 计算规则），结果逐字段一致"，而不是"只抽计算内核、丢解析层、重构规则"。之前方案 §3.1 主张丢弃解析层的判断是错的。
 
 ## Decision Log
 

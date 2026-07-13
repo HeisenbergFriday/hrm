@@ -162,13 +162,17 @@ Write-Success "Frontend built"
 Write-Host ""
 Write-Step "[3/8] Creating Dockerfile..."
 $dockerfile = @"
-FROM alpine:latest
-RUN apk add --no-cache ca-certificates tzdata
+FROM python:3.12-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY peopleops /app/peopleops
 COPY frontend/dist /app/frontend/dist
 COPY internal/config/holidays.json /app/internal/config/holidays.json
-RUN chmod +x /app/peopleops
+COPY tools/attendance-processing /app/tools/attendance-processing
+RUN python -m pip install --no-cache-dir -r /app/tools/attendance-processing/requirements.txt \
+    && chmod +x /app/peopleops
 EXPOSE 8080
 CMD ["/app/peopleops"]
 "@
@@ -183,6 +187,9 @@ $dockerignore = @"
 !internal
 !internal/config
 !internal/config/holidays.json
+!tools
+!tools/attendance-processing
+!tools/attendance-processing/**
 !Dockerfile.deploy
 "@
 Set-Content -Path "Dockerfile.deploy.dockerignore" -Value $dockerignore -Encoding UTF8

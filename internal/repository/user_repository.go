@@ -44,18 +44,37 @@ func (r *UserRepository) scopedTable() *gorm.DB {
 }
 
 func (r *UserRepository) Create(user *database.User) error {
+	if user == nil {
+		return gorm.ErrInvalidData
+	}
+	if r.orgID != "" {
+		// 严格 tenant 仓储：写入时强制 org 一致。允许调用方留空以继承仓储 org，
+		// 但不允许传入其它组织的 org_id，从而防止越权写入。
+		merged, err := EnsureSameOrg(r.orgID, user.OrgID)
+		if err != nil {
+			return err
+		}
+		user.OrgID = merged
+	}
 	return r.db.Create(user).Error
 }
 
 func (r *UserRepository) Update(user *database.User) error {
+	if user == nil {
+		return gorm.ErrInvalidData
+	}
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, user.OrgID)
+		if err != nil {
+			return err
+		}
+		user.OrgID = merged
+	}
 	return r.db.Save(user).Error
 }
 
 func (r *UserRepository) Delete(userID string) error {
-	tx := r.db
-	if r.orgID != "" {
-		tx = tx.Where("org_id = ?", r.orgID)
-	}
+	tx := r.db.Scopes(ScopeOrg(r.orgID, "org_id"))
 	return tx.Delete(&database.User{}, "user_id = ?", userID).Error
 }
 

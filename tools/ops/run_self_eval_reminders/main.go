@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -10,10 +11,12 @@ import (
 	"peopleops/internal/config"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
+	"peopleops/internal/requestmeta"
 	"peopleops/internal/service"
 )
 
 func main() {
+	orgIDFlag := flag.String("org-id", "", "required organization id; reminders are scoped to this org")
 	activityIDFlag := flag.String("activity", "", "performance activity id")
 	activityNameFlag := flag.String("activity-name", "", "performance activity name, used only when -activity is empty")
 	nowFlag := flag.String("now", "", "run date in YYYY-MM-DD; defaults to today")
@@ -24,6 +27,10 @@ func main() {
 
 	if !*confirmSend {
 		log.Fatal("missing -confirm-send; refuse to send DingTalk reminders without explicit confirmation")
+	}
+	orgID := strings.TrimSpace(*orgIDFlag)
+	if orgID == "" {
+		log.Fatal("missing -org-id")
 	}
 	if strings.TrimSpace(*activityIDFlag) == "" && strings.TrimSpace(*activityNameFlag) == "" {
 		log.Fatal("missing -activity or -activity-name")
@@ -39,16 +46,20 @@ func main() {
 	if err := database.Init(); err != nil {
 		log.Fatalf("database init failed: %v", err)
 	}
-	if err := dingtalk.Init(); err != nil {
-		log.Fatalf("dingtalk init failed: %v", err)
+	dingCfg, ok := dingtalk.GetAppConfigForOrg(orgID)
+	if !ok {
+		log.Fatalf("dingtalk app config not found for org_id=%s", orgID)
+	}
+	if err := dingtalk.InitWithConfig(dingCfg); err != nil {
+		log.Fatalf("dingtalk init failed for org_id=%s: %v", orgID, err)
 	}
 
-	activity, err := resolveActivity(strings.TrimSpace(*activityIDFlag), strings.TrimSpace(*activityNameFlag))
+	activity, err := resolveActivity(orgID, strings.TrimSpace(*activityIDFlag), strings.TrimSpace(*activityNameFlag))
 	if err != nil {
 		log.Fatal(err)
 	}
 	activityID := fmt.Sprintf("%d", activity.ID)
-	recipientCount, err := countActiveParticipants(activityID)
+	recipientCount, err := countActiveParticipants(orgID, activityID)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -56,14 +67,17 @@ func main() {
 		log.Fatalf("activity %s has %d active participants, above -max-recipients=%d", activityID, recipientCount, *maxRecipients)
 	}
 
-	result, err := service.NewPerformanceService(database.DB).SendDueSelfEvalAutoReminderForActivity(activityID, now, service.SelfEvalAutoReminderRunOptions{
+	tenantDB := database.DB.WithContext(requestmeta.WithTenant(context.Background(), orgID))
+	result, err := service.NewPerformanceService(tenantDB).SendDueSelfEvalAutoReminderForActivity(activityID, now, service.SelfEvalAutoReminderRunOptions{
 		IncludeCurrentDay: *includeCurrentDay,
+		OrgID:             orgID,
 	})
 	if err != nil {
 		log.Fatalf("run self eval auto reminder failed: %v", err)
 	}
 	log.Printf(
-		"self eval auto reminder result: activity_id=%s activity_name=%q date=%s scanned=%d matched=%d candidates=%d sent=%d skipped=%d already_sent=%d failed=%d",
+		"self eval auto reminder result: org_id=%s activity_id=%s activity_name=%q date=%s scanned=%d matched=%d candidates=%d sent=%d skipped=%d already_sent=%d failed=%d",
+		orgID,
 		activityID,
 		activity.Name,
 		now.Format("2006-01-02"),
@@ -89,9 +103,9 @@ func parseRunDate(raw string) (time.Time, error) {
 	return parsed, nil
 }
 
-func resolveActivity(activityID string, activityName string) (*database.PerformanceActivity, error) {
+func resolveActivity(orgID string, activityID string, activityName string) (*database.PerformanceActivity, error) {
 	var activity database.PerformanceActivity
-	query := database.DB.Where("deleted_at IS NULL")
+	query := database.DB.Where("org_id = ? AND deleted_at IS NULL", strings.TrimSpace(orgID))
 	if activityID != "" {
 		query = query.Where("id = ?", activityID)
 	} else {
@@ -103,10 +117,10 @@ func resolveActivity(activityID string, activityName string) (*database.Performa
 	return &activity, nil
 }
 
-func countActiveParticipants(activityID string) (int64, error) {
+func countActiveParticipants(orgID string, activityID string) (int64, error) {
 	var count int64
 	err := database.DB.Model(&database.PerformanceParticipant{}).
-		Where("activity_id = ? AND deleted_at IS NULL", activityID).
+		Where("org_id = ? AND activity_id = ? AND deleted_at IS NULL", strings.TrimSpace(orgID), activityID).
 		Count(&count).Error
 	return count, err
 }

@@ -31,12 +31,12 @@ var (
 	dingtalkStateTTL = 5 * time.Minute
 )
 
-func updateSyncStatus(syncService *service.SyncService, syncType, status, message string) {
+func updateSyncStatus(syncService *service.SyncService, orgID, syncType, status, message string) {
 	if syncService == nil {
 		return
 	}
-	if err := syncService.UpdateSyncStatus(syncType, status, message); err != nil {
-		log.Printf("[sync-status] update %s=%s failed: %v", syncType, status, err)
+	if err := syncService.UpdateSyncStatus(orgID, syncType, status, message); err != nil {
+		log.Printf("[sync-status] update %s/%s=%s failed: %v", orgID, syncType, status, err)
 	}
 }
 
@@ -600,32 +600,36 @@ func Login(c *gin.Context) {
 	var req struct {
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required"`
-		OrgID    string `json:"org_id"` // 可选，指定组织
+		OrgID    string `json:"org_id" binding:"required"` // 多租户：必须指定组织
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
-			Message: "用户名和密码不能为空",
+			Message: "用户名、密码和组织都不能为空",
 		})
 		return
 	}
 
-	// 用 user_id 或 email 查找用户
+	// 多租户强绑定：拒绝无 org_id 登录，禁止跨组织 fallback 查找同名 user_id。
 	orgID := strings.TrimSpace(req.OrgID)
-	userService := service.NewUserServiceWithOrgID(database.DB, orgID)
-
-	var user *database.User
-	var err error
-
-	if orgID != "" {
-		// 指定了组织，按组织查找
-		user, err = userService.GetUserByOrgAndUserID(orgID, req.Username)
-	} else {
-		// 未指定组织，向后兼容（查找任意组织的用户）
-		user, err = userService.GetUserByUserID(req.Username)
+	if orgID == "" {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "请选择要登录的组织",
+		})
+		return
+	}
+	if _, err := database.GetOrganizationByOrgID(orgID); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "组织不存在或未激活",
+		})
+		return
 	}
 
+	userService := service.NewUserServiceWithOrgID(database.DB, orgID)
+	user, err := userService.GetUserByOrgAndUserID(orgID, req.Username)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, Response{
 			Code:    http.StatusUnauthorized,
@@ -894,13 +898,13 @@ func GetDepartment(c *gin.Context) {
 func SyncUsers(c *gin.Context) {
 	syncService := service.NewSyncService(database.DB)
 
-	orgID := strings.TrimSpace(c.GetString("orgID"))
-	if orgID == "" {
-		orgID = fallbackDingTalkOrgID()
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
 	}
 	_, appConfig, cfgErr := resolveDingTalkLoginConfig(orgID, "SyncUsers")
 	if cfgErr != nil {
-		updateSyncStatus(syncService, "users", "failed", cfgErr.Error())
+		updateSyncStatus(syncService, orgID, "users", "failed", cfgErr.Error())
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
 			Message: "组织钉钉应用配置不完整: " + cfgErr.Error(),
@@ -910,7 +914,7 @@ func SyncUsers(c *gin.Context) {
 
 	depts, deptErr := dingtalk.SyncDepartmentsForConfig(appConfig)
 	if deptErr != nil {
-		updateSyncStatus(syncService, "users", "failed", deptErr.Error())
+		updateSyncStatus(syncService, orgID, "users", "failed", deptErr.Error())
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "同步用户前获取部门失败: " + deptErr.Error(),
@@ -921,7 +925,7 @@ func SyncUsers(c *gin.Context) {
 	// 从当前组织自己的钉钉应用拉取用户，避免多组织同步落到默认组织。
 	users, err := dingtalk.SyncUsersWithDeptsForConfig(appConfig, depts)
 	if err != nil {
-		updateSyncStatus(syncService, "users", "failed", err.Error())
+		updateSyncStatus(syncService, orgID, "users", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "同步用户失败: " + err.Error(),
@@ -997,7 +1001,7 @@ func SyncUsers(c *gin.Context) {
 		}
 	}
 
-	updateSyncStatus(syncService, "users", "success", fmt.Sprintf("同步 %d 个用户", count))
+	updateSyncStatus(syncService, orgID, "users", "success", fmt.Sprintf("同步 %d 个用户", count))
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
@@ -1010,13 +1014,13 @@ func SyncUsers(c *gin.Context) {
 func SyncDepartments(c *gin.Context) {
 	syncService := service.NewSyncService(database.DB)
 
-	orgID := strings.TrimSpace(c.GetString("orgID"))
-	if orgID == "" {
-		orgID = fallbackDingTalkOrgID()
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
 	}
 	_, appConfig, cfgErr := resolveDingTalkLoginConfig(orgID, "SyncDepartments")
 	if cfgErr != nil {
-		updateSyncStatus(syncService, "departments", "failed", cfgErr.Error())
+		updateSyncStatus(syncService, orgID, "departments", "failed", cfgErr.Error())
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
 			Message: "组织钉钉应用配置不完整: " + cfgErr.Error(),
@@ -1027,7 +1031,7 @@ func SyncDepartments(c *gin.Context) {
 	// 从钉钉拉取部门（使用当前组织的钉钉应用凭证）
 	depts, err := dingtalk.SyncDepartmentsForConfig(appConfig)
 	if err != nil {
-		updateSyncStatus(syncService, "departments", "failed", err.Error())
+		updateSyncStatus(syncService, orgID, "departments", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "同步部门失败: " + err.Error(),
@@ -1038,14 +1042,14 @@ func SyncDepartments(c *gin.Context) {
 	orgService := service.NewOrgServiceWithOrgID(database.DB, orgID)
 	result, err := orgService.SyncDepartmentsWithChangeLog(orgID, dingtalkDepartmentsToOrgSyncItems(depts), "dingtalk_sync")
 	if err != nil {
-		updateSyncStatus(syncService, "departments", "failed", err.Error())
+		updateSyncStatus(syncService, orgID, "departments", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "同步部门失败: " + err.Error(),
 		})
 		return
 	}
-	updateSyncStatus(syncService, "departments", "success", fmt.Sprintf("同步 %d 个部门", result.Count))
+	updateSyncStatus(syncService, orgID, "departments", "success", fmt.Sprintf("同步 %d 个部门", result.Count))
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
@@ -1800,7 +1804,11 @@ func GetCurrentUser(c *gin.Context) {
 // GetSyncStatus 获取同步状态
 func GetSyncStatus(c *gin.Context) {
 	syncService := service.NewSyncService(database.DB)
-	statuses, err := syncService.GetAllSyncStatus()
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	statuses, err := syncService.GetAllSyncStatus(orgID)
 	if err != nil {
 		// 没有同步记录时返回空状态
 		c.JSON(200, Response{
@@ -2236,34 +2244,17 @@ func GetEmployee(c *gin.Context) {
 }
 
 // SyncOrgData 同步组织数据
+// 多租户：普通接口只能同步 JWT 当前组织；请求参数中的 org_id/target_org_id 若与 JWT 组织不一致，
+// 一律拒绝，不再复用“目标组织同名用户权限”作为跨组织授权。跨组织同步须走受控的运维入口。
 func SyncOrgData(c *gin.Context) {
 	syncService := service.NewSyncService(database.DB)
 
-	orgID := strings.TrimSpace(firstNonEmptyQuery(c, "org_id", "target_org_id"))
-	if orgID == "" {
-		orgID = strings.TrimSpace(c.GetString("orgID"))
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
 	}
-	if orgID == "" {
-		orgID = fallbackDingTalkOrgID()
-	}
-	if orgID != strings.TrimSpace(c.GetString("orgID")) {
-		userID := strings.TrimSpace(c.GetString("userID"))
-		permissionService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
-		allowed, err := permissionService.HasAnyPermissionInOrg(orgID, userID, "attendance_manage", "permission_manage")
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, Response{
-				Code:    http.StatusInternalServerError,
-				Message: "检查目标组织同步权限失败: " + err.Error(),
-			})
-			return
-		}
-		if !allowed {
-			c.JSON(http.StatusForbidden, Response{
-				Code:    http.StatusForbidden,
-				Message: "无目标组织同步权限",
-			})
-			return
-		}
+	if !rejectCrossOrgParam(c, orgID, c.Query("org_id"), c.Query("target_org_id")) {
+		return
 	}
 	log.Printf("[SyncOrgData] 开始同步组织数据: org_id=%s", orgID)
 
@@ -2271,7 +2262,7 @@ func SyncOrgData(c *gin.Context) {
 	_, appConfig, cfgErr := resolveDingTalkLoginConfig(orgID, "SyncOrgData")
 	if cfgErr != nil {
 		log.Printf("[SyncOrgData] 组织钉钉配置不完整: org_id=%s err=%v", orgID, cfgErr)
-		updateSyncStatus(syncService, "departments", "failed", cfgErr.Error())
+		updateSyncStatus(syncService, orgID, "departments", "failed", cfgErr.Error())
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
 			Message: "组织钉钉应用配置不完整: " + cfgErr.Error(),
@@ -2288,7 +2279,7 @@ func SyncOrgData(c *gin.Context) {
 		deptStatus = "failed"
 		deptErrMsg = deptErr.Error()
 		log.Printf("[SyncOrgData] 部门同步失败: %v", deptErr)
-		updateSyncStatus(syncService, "departments", "failed", deptErrMsg)
+		updateSyncStatus(syncService, orgID, "departments", "failed", deptErrMsg)
 	} else {
 		orgService := service.NewOrgServiceWithOrgID(database.DB, orgID)
 		deptResult, err := orgService.SyncDepartmentsWithChangeLog(orgID, dingtalkDepartmentsToOrgSyncItems(depts), "dingtalk_sync")
@@ -2298,7 +2289,7 @@ func SyncOrgData(c *gin.Context) {
 			log.Printf("[SyncOrgData] 部门落库失败: %v", err)
 		} else {
 			deptCount = deptResult.Count
-			updateSyncStatus(syncService, "departments", "success", fmt.Sprintf("同步 %d 个部门", deptCount))
+			updateSyncStatus(syncService, orgID, "departments", "success", fmt.Sprintf("同步 %d 个部门", deptCount))
 		}
 	}
 
@@ -2317,7 +2308,7 @@ func SyncOrgData(c *gin.Context) {
 	if deptErr != nil {
 		userStatus = "failed"
 		userErrMsg = "部门同步失败，已跳过用户同步: " + deptErrMsg
-		updateSyncStatus(syncService, "users", userStatus, userErrMsg)
+		updateSyncStatus(syncService, orgID, "users", userStatus, userErrMsg)
 	} else if userErr != nil {
 		userStatus = "failed"
 		userErrMsg = userErr.Error()
@@ -2411,7 +2402,7 @@ func SyncOrgData(c *gin.Context) {
 		if userStatus == "failed" && userErrMsg != "" {
 			userSyncMessage = fmt.Sprintf("同步 %d 个用户，部分失败: %s", userCount, userErrMsg)
 		}
-		updateSyncStatus(syncService, "users", userStatus, userSyncMessage)
+		updateSyncStatus(syncService, orgID, "users", userStatus, userSyncMessage)
 	}
 
 	c.JSON(http.StatusOK, Response{
@@ -2512,7 +2503,10 @@ func SyncAttendance(c *gin.Context) {
 		req.EndDate = time.Now().Format("2006-01-02")
 	}
 
-	orgID := strings.TrimSpace(c.GetString("orgID"))
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 
 	if req.Force {
 		cst := time.FixedZone("CST", 8*3600)
@@ -2555,7 +2549,7 @@ func SyncAttendance(c *gin.Context) {
 	}
 
 	if len(userIDs) == 0 {
-		updateSyncStatus(syncService, "attendance", "success", "没有需要同步的用户")
+		updateSyncStatus(syncService, orgID, "attendance", "success", "没有需要同步的用户")
 		c.JSON(http.StatusOK, Response{
 			Code:    http.StatusOK,
 			Message: "success",
@@ -2568,7 +2562,7 @@ func SyncAttendance(c *gin.Context) {
 
 	records, err := dingtalk.GetAttendance(userIDs, req.StartDate, req.EndDate)
 	if err != nil {
-		updateSyncStatus(syncService, "attendance", "failed", err.Error())
+		updateSyncStatus(syncService, orgID, "attendance", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "同步考勤失败: " + err.Error(),
@@ -2608,7 +2602,7 @@ func SyncAttendance(c *gin.Context) {
 		}
 
 		if err := service.NewAttendanceService(database.DB).SaveRecord(record); err != nil {
-			updateSyncStatus(syncService, "attendance", "failed", err.Error())
+			updateSyncStatus(syncService, orgID, "attendance", "failed", err.Error())
 			c.JSON(http.StatusInternalServerError, Response{
 				Code:    http.StatusInternalServerError,
 				Message: "鍚屾鑰冨嫟澶辫触: " + err.Error(),
@@ -2618,7 +2612,7 @@ func SyncAttendance(c *gin.Context) {
 		count++
 	}
 
-	updateSyncStatus(syncService, "attendance", "success", fmt.Sprintf("同步 %d 条考勤记录", count))
+	updateSyncStatus(syncService, orgID, "attendance", "success", fmt.Sprintf("同步 %d 条考勤记录", count))
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
@@ -2723,8 +2717,12 @@ func GetAttendanceExports(c *gin.Context) {
 
 // GetLastSyncTime 获取最近同步时间
 func GetLastSyncTime(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	attendanceService := service.NewAttendanceService(database.DB)
-	status, err := attendanceService.GetLastSyncTime()
+	status, err := attendanceService.GetLastSyncTime(orgID)
 	if err != nil {
 		c.JSON(http.StatusOK, Response{
 			Code:    http.StatusOK,
@@ -2742,7 +2740,6 @@ func GetLastSyncTime(c *gin.Context) {
 
 	var count int64
 	countQuery := database.DB.Model(&database.Attendance{})
-	orgID := strings.TrimSpace(c.GetString("orgID"))
 	if orgID != "" {
 		countQuery = countQuery.Where("org_id = ?", orgID)
 	}
@@ -2784,7 +2781,7 @@ func GetLastSyncTime(c *gin.Context) {
 
 // GetApprovalTemplates 获取审批模板列表
 func GetApprovalTemplates(c *gin.Context) {
-	approvalService := service.NewApprovalService(database.DB)
+	approvalService := service.NewApprovalServiceWithOrgID(database.DB, c.GetString("orgID"))
 	templates, total, err := approvalService.GetTemplates()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -2817,7 +2814,7 @@ func GetApprovalInstances(c *gin.Context) {
 		"end_date":     c.Query("end_date"),
 	}
 
-	approvalService := service.NewApprovalService(database.DB)
+	approvalService := service.NewApprovalServiceWithOrgID(database.DB, c.GetString("orgID"))
 	instances, total, err := approvalService.GetInstances(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -2841,7 +2838,7 @@ func GetApprovalInstances(c *gin.Context) {
 func GetApproval(c *gin.Context) {
 	id := c.Param("id")
 
-	approvalService := service.NewApprovalService(database.DB)
+	approvalService := service.NewApprovalServiceWithOrgID(database.DB, c.GetString("orgID"))
 	approval, err := approvalService.GetByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -2875,10 +2872,14 @@ func SyncApproval(c *gin.Context) {
 	}
 
 	syncService := service.NewSyncService(database.DB)
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 
 	req.ProcessCode = strings.TrimSpace(req.ProcessCode)
 	if req.ProcessCode == "" {
-		updateSyncStatus(syncService, "approvals", "failed", "缺少 process_code，未执行审批同步")
+		updateSyncStatus(syncService, orgID, "approvals", "failed", "缺少 process_code，未执行审批同步")
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
 			Message: "请在请求中提供 process_code 参数",
@@ -2888,7 +2889,7 @@ func SyncApproval(c *gin.Context) {
 
 	instances, err := dingtalk.GetApprovals(req.ProcessCode, req.StartDate, req.EndDate)
 	if err != nil {
-		updateSyncStatus(syncService, "approvals", "failed", err.Error())
+		updateSyncStatus(syncService, orgID, "approvals", "failed", err.Error())
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "同步审批失败: " + err.Error(),
@@ -2913,6 +2914,7 @@ func SyncApproval(c *gin.Context) {
 		}
 
 		approval := &database.Approval{
+			OrgID:         orgID,
 			ProcessID:     inst.ProcessInstanceID,
 			Title:         inst.Title,
 			ApplicantID:   inst.OriginatorUserID,
@@ -2929,9 +2931,10 @@ func SyncApproval(c *gin.Context) {
 
 		// Upsert by process_id
 		var existing database.Approval
-		if err := database.DB.Where("process_id = ?", inst.ProcessInstanceID).First(&existing).Error; err != nil {
+		if err := database.DB.Where("org_id = ? AND process_id = ?", orgID, inst.ProcessInstanceID).First(&existing).Error; err != nil {
 			database.DB.Create(approval)
 		} else {
+			existing.OrgID = orgID
 			existing.Status = inst.Status
 			existing.FinishTime = finishTime
 			existing.Content = content
@@ -2944,7 +2947,7 @@ func SyncApproval(c *gin.Context) {
 		count++
 	}
 
-	updateSyncStatus(syncService, "approvals", "success", fmt.Sprintf("同步 %d 个审批实例", count))
+	updateSyncStatus(syncService, orgID, "approvals", "success", fmt.Sprintf("同步 %d 个审批实例", count))
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
@@ -3084,20 +3087,35 @@ func GetPermissions(c *gin.Context) {
 	})
 }
 
-func resolvePermissionTargetOrgID(c *gin.Context, explicitOrgID, userID string) string {
-	if orgID := strings.TrimSpace(explicitOrgID); orgID != "" {
-		return orgID
+// currentOrgIDOrAbort 返回 JWT 携带的当前组织；缺失时直接 401 中断，禁止兜底到其它组织。
+func currentOrgIDOrAbort(c *gin.Context) (string, bool) {
+	orgID := strings.TrimSpace(c.GetString("orgID"))
+	if orgID == "" {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    http.StatusUnauthorized,
+			Message: "缺少组织上下文，请重新登录",
+		})
+		return "", false
 	}
-	if orgID := strings.TrimSpace(c.Query("org_id")); orgID != "" {
-		return orgID
+	return orgID, true
+}
+
+// rejectCrossOrgParam 检查请求参数中携带的目标组织是否与 JWT 组织不一致；不一致时拒绝，防止跨组织越权。
+func rejectCrossOrgParam(c *gin.Context, currentOrgID string, candidates ...string) bool {
+	for _, raw := range candidates {
+		target := strings.TrimSpace(raw)
+		if target == "" {
+			continue
+		}
+		if target != currentOrgID {
+			c.JSON(http.StatusForbidden, Response{
+				Code:    http.StatusForbidden,
+				Message: "不允许通过参数切换到其它组织",
+			})
+			return false
+		}
 	}
-	if orgID := strings.TrimSpace(c.GetString("orgID")); orgID != "" {
-		return orgID
-	}
-	if user, err := loadUserByAuthID(userID); err == nil && strings.TrimSpace(user.OrgID) != "" {
-		return user.OrgID
-	}
-	return "default"
+	return true
 }
 
 // GetUserRoles 获取指定用户的角色列表
@@ -3107,7 +3125,13 @@ func GetUserRoles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 不能为空"})
 		return
 	}
-	orgID := resolvePermissionTargetOrgID(c, "", userID)
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	if !rejectCrossOrgParam(c, orgID, c.Query("org_id")) {
+		return
+	}
 	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	roles, err := permService.GetUserRolesInOrg(orgID, userID)
 	if err != nil {
@@ -3132,7 +3156,13 @@ func AssignUserRole(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 和 role_id 不能为空"})
 		return
 	}
-	orgID := resolvePermissionTargetOrgID(c, req.OrgID, req.UserID)
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	if !rejectCrossOrgParam(c, orgID, req.OrgID, c.Query("org_id")) {
+		return
+	}
 	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	if err := permService.AssignUserRoleInOrg(orgID, req.UserID, req.RoleID); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "分配角色失败"})
@@ -3156,7 +3186,13 @@ func RemoveUserRole(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 和 role_id 不能为空"})
 		return
 	}
-	orgID := resolvePermissionTargetOrgID(c, req.OrgID, req.UserID)
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	if !rejectCrossOrgParam(c, orgID, req.OrgID, c.Query("org_id")) {
+		return
+	}
 	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	if err := permService.RemoveUserRoleInOrg(orgID, req.UserID, req.RoleID); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "移除角色失败"})
@@ -3177,7 +3213,13 @@ func GetRoleUsers(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "role_id 格式错误"})
 		return
 	}
-	orgID := resolvePermissionTargetOrgID(c, "", "")
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	if !rejectCrossOrgParam(c, orgID, c.Query("org_id")) {
+		return
+	}
 	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	users, err := permService.GetRoleUsersInOrg(orgID, roleID)
 	if err != nil {
@@ -3194,7 +3236,13 @@ func GetUserPermissions(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "user_id 不能为空"})
 		return
 	}
-	orgID := resolvePermissionTargetOrgID(c, "", userID)
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	if !rejectCrossOrgParam(c, orgID, c.Query("org_id")) {
+		return
+	}
 	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	permissions, err := permService.GetUserPermissionsInOrg(orgID, userID)
 	if err != nil {
@@ -3387,6 +3435,10 @@ func GetAuditLogs(c *gin.Context) {
 func GetJobs(c *gin.Context) {
 	// 任务列表基于同步状态表动态生成
 	syncService := service.NewSyncService(database.DB)
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 
 	jobs := []gin.H{
 		{"id": "1", "name": "同步用户数据", "description": "从钉钉同步用户数据", "type": "sync_users", "status": "idle"},
@@ -3397,7 +3449,7 @@ func GetJobs(c *gin.Context) {
 	typeMap := map[string]string{"1": "users", "2": "departments", "3": "attendance"}
 	for i, job := range jobs {
 		syncType := typeMap[job["id"].(string)]
-		if status, err := syncService.GetSyncStatus(syncType); err == nil {
+		if status, err := syncService.GetSyncStatus(orgID, syncType); err == nil {
 			jobs[i]["last_run_time"] = status.LastSyncTime
 			jobs[i]["status"] = status.Status
 		}
@@ -3416,6 +3468,10 @@ func GetJobs(c *gin.Context) {
 // RunJob 运行任务
 func RunJob(c *gin.Context) {
 	id := c.Param("id")
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 
 	typeMap := map[string]string{"1": "users", "2": "departments", "3": "attendance"}
 	syncType, ok := typeMap[id]
@@ -3428,7 +3484,7 @@ func RunJob(c *gin.Context) {
 	}
 
 	syncService := service.NewSyncService(database.DB)
-	updateSyncStatus(syncService, syncType, "success", "手动执行任务")
+	updateSyncStatus(syncService, orgID, syncType, "success", "手动执行任务")
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,

@@ -18,16 +18,17 @@ func NewSyncService(db *gorm.DB) *SyncService {
 	}
 }
 
-func (s *SyncService) GetSyncStatus(syncType string) (*database.SyncStatus, error) {
-	return s.syncRepo.FindByType(syncType)
+func (s *SyncService) GetSyncStatus(orgID, syncType string) (*database.SyncStatus, error) {
+	return s.syncRepo.FindByOrgAndType(orgID, syncType)
 }
 
-func (s *SyncService) GetAllSyncStatus() ([]database.SyncStatus, error) {
-	return s.syncRepo.FindAll()
+func (s *SyncService) GetAllSyncStatus(orgID string) ([]database.SyncStatus, error) {
+	return s.syncRepo.FindAllByOrg(orgID)
 }
 
-func (s *SyncService) UpdateSyncStatus(syncType, status, message string) error {
+func (s *SyncService) UpdateSyncStatus(orgID, syncType, status, message string) error {
 	return s.syncRepo.Upsert(&database.SyncStatus{
+		OrgID:        orgID,
 		Type:         syncType,
 		LastSyncTime: time.Now(),
 		Status:       status,

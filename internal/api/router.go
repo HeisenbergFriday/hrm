@@ -14,6 +14,7 @@ import (
 
 func SetupRouter() *gin.Engine {
 	router := gin.Default()
+	router.MaxMultipartMemory = 128 << 20 // 128 MiB，考勤数据处理需要上传多份 Excel
 
 	router.Use(securityHeaders())
 
@@ -48,7 +49,7 @@ func SetupRouter() *gin.Engine {
 		}
 
 		authRequired := v1.Group("/")
-		authRequired.Use(middleware.JWTAuth())
+		authRequired.Use(middleware.JWTAuth(), middleware.TenantContext())
 		{
 			orgReadMenus := []string{
 				"menu:organization-dashboard",
@@ -67,6 +68,7 @@ func SetupRouter() *gin.Engine {
 				"menu:attendance",
 				"menu:attendance-stats",
 				"menu:attendance-export",
+				"menu:attendance-processing",
 			}
 			employeeReadMenus := []string{
 				"menu:employee-profile",
@@ -124,6 +126,17 @@ func SetupRouter() *gin.Engine {
 				attendance.POST("/export", middleware.RequirePermission("attendance_manage"), ExportAttendance)
 				attendance.GET("/exports", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-export"}), GetAttendanceExports)
 				attendance.GET("/last-sync", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, attendanceReadMenus), GetLastSyncTime)
+
+				// 考勤数据处理
+				processing := attendance.Group("/processing")
+				processing.Use(middleware.RequirePermission("attendance_manage"))
+				{
+					processing.POST("/leave", ProcessLeaveDetail)
+					processing.POST("/overtime", ProcessOvertimeDetailFull)
+					processing.POST("/subsidy", ProcessSubsidyCheck)
+					processing.POST("/final", ProcessFinalTable)
+					processing.POST("/parttime", ProcessParttimeSummary)
+				}
 			}
 
 			// 閻庡厜鍓濇竟鎺懳熼垾铏仴

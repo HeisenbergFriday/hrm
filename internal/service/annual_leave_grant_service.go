@@ -17,6 +17,7 @@ import (
 
 type AnnualLeaveGrantService struct {
 	db              *gorm.DB
+	orgID           string
 	grantRepo       *repository.AnnualLeaveGrantRepository
 	eligibilityRepo *repository.AnnualLeaveEligibilityRepository
 	ruleRepo        *repository.LeaveRuleConfigRepository
@@ -29,6 +30,17 @@ func NewAnnualLeaveGrantService(db *gorm.DB) *AnnualLeaveGrantService {
 		grantRepo:       repository.NewAnnualLeaveGrantRepository(db),
 		eligibilityRepo: repository.NewAnnualLeaveEligibilityRepository(db),
 		ruleRepo:        repository.NewLeaveRuleConfigRepository(db),
+		nowFn:           time.Now,
+	}
+}
+
+func NewAnnualLeaveGrantServiceWithOrgID(db *gorm.DB, orgID string) *AnnualLeaveGrantService {
+	return &AnnualLeaveGrantService{
+		db:              db,
+		orgID:           orgID,
+		grantRepo:       repository.NewAnnualLeaveGrantRepositoryWithOrgID(db, orgID),
+		eligibilityRepo: repository.NewAnnualLeaveEligibilityRepositoryWithOrgID(db, orgID),
+		ruleRepo:        repository.NewLeaveRuleConfigRepositoryWithOrgID(db, orgID),
 		nowFn:           time.Now,
 	}
 }
@@ -146,7 +158,7 @@ func (s *AnnualLeaveGrantService) RegrantForEligibilityChange(userID string, yea
 
 func (s *AnnualLeaveGrantService) RegrantForEligibilityChangeWithResult(userID string, year int) (*GrantOperationResult, error) {
 	result := &GrantOperationResult{}
-	if err := NewAnnualLeaveService(s.db).RecalculateEligibility(userID, year); err != nil {
+	if err := NewAnnualLeaveServiceWithOrgID(s.db, s.orgID).RecalculateEligibility(userID, year); err != nil {
 		return result, err
 	}
 
@@ -496,7 +508,11 @@ func (s *AnnualLeaveGrantService) ConsumeAnnualLeave(userID string, days float64
 // GetConsumeLog 查询用户的年假消费记录
 func (s *AnnualLeaveGrantService) GetConsumeLog(userID string) ([]database.AnnualLeaveConsumeLog, error) {
 	var logs []database.AnnualLeaveConsumeLog
-	err := s.db.Where("user_id = ?", userID).Order("created_at desc").Find(&logs).Error
+	query := s.db.Where("user_id = ?", userID)
+	if s.orgID != "" {
+		query = query.Where("org_id = ?", s.orgID)
+	}
+	err := query.Order("created_at desc").Find(&logs).Error
 	return logs, err
 }
 

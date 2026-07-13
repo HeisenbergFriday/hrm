@@ -40,8 +40,14 @@ func SubmitSupplementaryClockIn(c *gin.Context) {
 		return
 	}
 
-	var match database.OvertimeMatchResult
-	if err := database.DB.First(&match, req.MatchResultID).Error; err != nil {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+
+	matchRepo := repository.NewOvertimeMatchResultRepositoryWithOrgID(database.DB, orgID)
+	match, err := matchRepo.FindByID(req.MatchResultID)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "匹配记录不存在"})
 		return
 	}
@@ -53,7 +59,7 @@ func SubmitSupplementaryClockIn(c *gin.Context) {
 		return
 	}
 
-	suppRepo := repository.NewSupplementaryRequestRepository(database.DB)
+	suppRepo := repository.NewSupplementaryRequestRepositoryWithOrgID(database.DB, orgID)
 	existing, _ := suppRepo.FindPendingByMatchResultID(match.ID)
 	if existing != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "该记录已有待审批的补卡申请"})
@@ -88,9 +94,13 @@ func ApproveSupplementaryClockIn(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewOvertimeMatchingService(database.DB)
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	svc := service.NewOvertimeMatchingServiceWithOrgID(database.DB, orgID)
 	if req.Approved {
-		suppRepo := repository.NewSupplementaryRequestRepository(database.DB)
+		suppRepo := repository.NewSupplementaryRequestRepositoryWithOrgID(database.DB, orgID)
 		suppReq, err := suppRepo.FindByID(req.RequestID)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "补卡申请不存在"})
@@ -134,7 +144,11 @@ func GetSupplementaryRequests(c *gin.Context) {
 		}
 	}
 
-	svc := service.NewOvertimeMatchingService(database.DB)
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	svc := service.NewOvertimeMatchingServiceWithOrgID(database.DB, orgID)
 	results, err := svc.GetSupplementaryRequests(userID, startDate, endDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

@@ -2,6 +2,35 @@
 
 > Chronological action log. Hooks and AI append to this file automatically.
 > Old sessions are consolidated by the daemon weekly.
+## Session: 2026-07-10 (Phase 3 A)
+> 建立 tenant 表清单 + 重写多租户迁移工具为分子命令（去除 default 全表回填）
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| -- | 建立单一权威 tenant 表清单 | internal/tenant/registry/registry.go | 58 张表分类为 KindTenant(51)/KindMembership(1)/KindPlatform(6)；标注 Priority、HasOrgID 基线、ParentTable、备注 | ~700 |
+| -- | 重写迁移工具为分阶段子命令 CLI | tools/migrate_multitenant/main.go | 移除 UPDATE ... SET org_id = default 全表回填；新增 discover/report 只读子命令读 information_schema 输出表存在/列/索引/行数/NULL org 数；infer/apply/verify/contract 显式占位报错 | ~1200 |
+| -- | 补测试 | internal/tenant/registry/registry_test.go, tools/migrate_multitenant/main_test.go | 清单唯一性、平台表禁 org_id、关键表分类、缺列表快照、父表指向合法条目；Discover 通过 stub driver 验证行数/nullable/index/summary；占位子命令 fail-fast | ~600 |
+| -- | 验证 | go vet ./..., go test ./internal/... ./tools/migrate_multitenant/... | 全部通过；dingtalk 既有失败与本次改动无关 | ~40 |
+
+## Session: 2026-07-10 (Phase 2 A/B)
+> 建立严格 tenant 数据访问边界 + user/department/employee/attendance 写路径 org 一致性
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| -- | 新增 tenant 上下文与 fail-closed helper | internal/requestmeta/tenant.go, internal/middleware/tenant_db.go, internal/repository/tenant.go | 新增 WithTenant/TenantID、CurrentOrgID/TenantDB、RequireOrgID/ScopeOrg/EnsureSameOrg、ErrMissingOrgID/ErrOrgMismatch/ErrMissingOrgContext | ~450 |
+| -- | 收紧核心仓储写路径 | internal/repository/user_repository.go, department_repository.go, employee_repository.go, attendance_repository.go | Create/Update/Upsert 用 EnsureSameOrg 校验组织一致，跨组织写入返回 ErrOrgMismatch；空 OrgID 补齐为仓储 org；Delete 用 ScopeOrg 附加过滤；Attendance.Upsert 只在无租户上下文时保留 default 兼容 | ~700 |
+| -- | 补三组织（default/xiaotie/muteng）隔离测试 | internal/repository/tenant_test.go, user_repository_isolation_test.go, multi_org_write_test.go, internal/middleware/tenant_db_test.go | User 只读查询携带 org 参数、Create/Update 拒绝跨组织写入、legacy 构造兼容；Department/Employee/Attendance 写路径同样验证；CurrentOrgID/TenantDB fail-closed | ~700 |
+| -- | 验证 | go vet ./..., go test ./internal/middleware ./internal/repository ./internal/service ./internal/api | 全部通过，包含新增 40+ 项 tenant 隔离测试 | ~80 |
+
+## Session: 2026-07-10
+> P0 多组织越权入口封堵（登录必选组织 + 权限/同步 JWT-only）
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| -- | 强制登录选择组织并移除跨组织 fallback | internal/api/handlers.go | Login 请求 org_id 改为 binding:required，校验 GetOrganizationByOrgID，取消 GetUserByUserID 全局兜底 | ~600 |
+| -- | 权限接口 JWT-only：拒绝 body/query 中的目标组织 | internal/api/handlers.go | 引入 currentOrgIDOrAbort/rejectCrossOrgParam；GetUserRoles/AssignUserRole/RemoveUserRole/GetUserPermissions/GetRoleUsers 只用 JWT 当前组织，target org 不一致直接 403 | ~700 |
+| -- | 组织同步只允许当前 org | internal/api/handlers.go | SyncOrgData 不再从 query 读 org_id/target_org_id，跨组织入口迁至受控运维 CLI | ~250 |
+| -- | 前端 Setting/API 收紧 | frontend/src/pages/Setting.tsx, frontend/src/services/api.ts | 系统设置页恢复为“同步当前组织花名册”单入口；orgAPI.syncOrg() 不再接受目标组织参数 | ~300 |
+| -- | 补 P0 安全回归测试 | internal/api/multi_org_security_test.go | 11 项 handler 级测试全部通过：登录缺 org/未知 org/跨组织回退失败、权限接口拒 body/query 目标组织、SyncOrgData 拒 target_org_id、缺 orgID 401 | ~450 |
+| -- | 验证 | go build/vet ./..., go test ./internal/api ./internal/repository ./internal/service ./internal/middleware, npm --prefix frontend run lint/build | 全部通过；PerformanceOverview.interaction.test.tsx 与 dingtalk_test.go 的既有失败与本次改动无关（stash 后基线上同样失败） | ~120 |
+
 ## Session: 2026-07-08
 > Fixed multi-enterprise DingTalk login default-org mismatch and first-join handling
 | Time | Action | File(s) | Outcome | ~Tokens |
@@ -2680,3 +2709,446 @@
 | 09:54 | Session end: 2 writes across 2 files (org-name-mu-teng.md, .gitignore) | 6 reads | ~116 tok |
 | 09:58 | Session end: 2 writes across 2 files (org-name-mu-teng.md, .gitignore) | 6 reads | ~116 tok |
 | 10:00 | Session end: 2 writes across 2 files (org-name-mu-teng.md, .gitignore) | 6 reads | ~116 tok |
+| 10:17 | Edited CLAUDE.md | 1→2 lines | ~275 |
+
+## Session: 2026-07-10 10:19
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 10:21 | Edited CLAUDE.md | 1→2 lines | ~102 |
+
+## Session: 2026-07-10 10:21
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:21
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:22
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:22
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:23
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:23
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:26
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:27
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:27
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:27
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 10:31
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:08
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 11:09 | Created C:/Users/吴列德/.claude/plans/generic-growing-bear.md | — | ~2848 |
+
+## Session: 2026-07-10 11:12
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:13
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:13
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:13
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:17
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:19
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:20
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:20
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:20
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:22
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:24
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:25
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:25
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:32
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 11:32
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 11:36 | Edited internal/api/handlers.go | GetUserByUserID() → GetOrganizationByOrgID() | ~295 |
+| 11:36 | Edited internal/api/handlers.go | modified currentOrgIDOrAbort() | ~1402 |
+| 11:37 | Edited internal/api/handlers.go | modified SyncOrgData() | ~116 |
+| 11:47 | Edited frontend/src/pages/Setting.tsx | setSyncingOrgID() → setSyncing() | ~198 |
+| 11:47 | Edited frontend/src/pages/Setting.tsx | 20→16 lines | ~174 |
+
+## Session: 2026-07-10 11:49
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 11:49 | Edited frontend/src/services/api.ts | 1→2 lines | ~27 |
+| 11:50 | Session end: 1 writes across 1 files (api.ts) | 0 reads | ~27 tok |
+| 11:51 | Created internal/api/multi_org_security_test.go | — | ~1879 |
+| 11:54 | Session end: 2 writes across 2 files (api.ts, multi_org_security_test.go) | 2 reads | ~16658 tok |
+| 12:21 | Session end: 2 writes across 2 files (api.ts, multi_org_security_test.go) | 5 reads | ~16658 tok |
+| 12:35 | Created internal/requestmeta/tenant.go | — | ~241 |
+| 12:35 | Created internal/middleware/tenant_db.go | — | ~295 |
+| 12:36 | Created internal/repository/tenant.go | — | ~396 |
+| 12:37 | Edited internal/repository/user_repository.go | expanded (+19 lines) | ~216 |
+| 12:38 | Created internal/repository/tenant_test.go | — | ~1263 |
+| 12:39 | Edited internal/repository/tenant_test.go | modified openStubSQLForTenantTests() | ~155 |
+| 12:39 | Edited internal/repository/tenant_test.go | 11→11 lines | ~34 |
+| 12:39 | Edited internal/repository/tenant_test.go | modified containsIgnoreCase() | ~36 |
+| 12:40 | Created internal/repository/user_repository_isolation_test.go | — | ~1427 |
+| 12:41 | Edited internal/repository/user_repository_isolation_test.go | modified captureQuery() | ~651 |
+| 12:42 | Edited internal/repository/user_repository_isolation_test.go | modified captureQuery() | ~529 |
+| 12:42 | Edited internal/repository/user_repository_isolation_test.go | modified assertStmtCarriesOrg() | ~111 |
+| 12:42 | Edited internal/repository/user_repository_isolation_test.go | String() → SQL() | ~51 |
+| 12:43 | Edited internal/repository/user_repository_isolation_test.go | 9→11 lines | ~31 |
+| 12:43 | Edited internal/repository/user_repository_isolation_test.go | modified captureQuery() | ~232 |
+| 12:44 | Created internal/middleware/tenant_db_test.go | — | ~851 |
+| 12:46 | Edited internal/repository/department_repository.go | expanded (+17 lines) | ~224 |
+| 12:46 | Edited internal/repository/employee_repository.go | expanded (+14 lines) | ~168 |
+| 12:47 | Edited internal/repository/attendance_repository.go | modified NewAttendanceRepository() | ~433 |
+| 12:48 | Created internal/repository/multi_org_write_test.go | — | ~1127 |
+| 12:50 | Session end: 22 writes across 12 files (api.ts, multi_org_security_test.go, tenant.go, tenant_db.go, user_repository.go) | 12 reads | ~57402 tok |
+| 12:54 | Created internal/tenant/registry/registry.go | — | ~2380 |
+| 12:54 | Created internal/tenant/registry/registry_test.go | — | ~671 |
+| 12:55 | Created tools/migrate_multitenant/main.go | — | ~2657 |
+| 12:57 | Created tools/migrate_multitenant/main_test.go | — | ~2620 |
+| 12:58 | Edited tools/migrate_multitenant/main.go | 12→12 lines | ~90 |
+| 12:58 | Edited tools/migrate_multitenant/main.go | reduced (-8 lines) | ~19 |
+| 12:58 | Edited tools/migrate_multitenant/main_test.go | modified Contains() | ~186 |
+| 12:59 | Edited tools/migrate_multitenant/main.go | 66→71 lines | ~528 |
+| 13:04 | Session end: 30 writes across 16 files (api.ts, multi_org_security_test.go, tenant.go, tenant_db.go, user_repository.go) | 13 reads | ~69350 tok |
+
+## Session: 2026-07-10 14:06
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 14:19
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 14:20
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 14:28 | Edited internal/database/database.go | 10→11 lines | ~457 |
+| 14:28 | Edited internal/database/database.go | expanded (+9 lines) | ~229 |
+| 14:29 | Edited internal/database/database.go | modified ensureNullableOrgIDColumn() | ~258 |
+| 14:31 | Edited internal/tenant/registry/registry_test.go | modified TestTablesMissingOrgIDEmptyAfterExpand() | ~108 |
+| 14:32 | Created internal/tenant/registry/model_consistency_test.go | — | ~1163 |
+
+## Session: 2026-07-10 14:36
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 14:40
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 14:40
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 14:45
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 14:59
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 15:01
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 15:02
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 15:28
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 15:28
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 15:28
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 15:28
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 15:28
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 15:28
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 16:14
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 16:14
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 16:14
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 16:20
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 16:21
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 18:02
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 18:02
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-10 18:02
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 12:08
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 12:09
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 12:09
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 12:19
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 12:19
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 12:58 | Created .ai/PLAN_dapp_migration.md | — | ~1143 |
+| 12:58 | Session end: 1 writes across 1 files (PLAN_dapp_migration.md) | 1 reads | ~1225 tok |
+| 13:01 | Session end: 1 writes across 1 files (PLAN_dapp_migration.md) | 1 reads | ~1225 tok |
+| 13:07 | Session end: 1 writes across 1 files (PLAN_dapp_migration.md) | 1 reads | ~1225 tok |
+| 14:03 | Session end: 1 writes across 1 files (PLAN_dapp_migration.md) | 1 reads | ~1225 tok |
+
+## Session: 2026-07-13 14:11
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 14:15
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 14:17
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 14:35
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 14:44
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 15:07
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 15:08
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 15:10
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 15:11
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 15:11
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 15:12
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-13 15:12
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|

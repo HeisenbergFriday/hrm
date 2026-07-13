@@ -33,7 +33,7 @@ func GetLeaveEligibility(c *gin.Context) {
 	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
 		return
 	}
-	svc := service.NewAnnualLeaveService(database.DB)
+	svc := service.NewAnnualLeaveServiceWithOrgID(database.DB, c.GetString("orgID"))
 	results, err := svc.GetEligibility(userID, year)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -51,7 +51,7 @@ func RecalculateLeaveEligibility(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	svc := service.NewAnnualLeaveService(database.DB)
+	svc := service.NewAnnualLeaveServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := svc.RecalculateEligibility(req.UserID, req.Year); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -76,7 +76,7 @@ func GetLeaveGrants(c *gin.Context) {
 	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
 		return
 	}
-	svc := service.NewAnnualLeaveGrantService(database.DB)
+	svc := service.NewAnnualLeaveGrantServiceWithOrgID(database.DB, c.GetString("orgID"))
 	records, err := svc.GetGrantLedger(userID, year)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -98,7 +98,7 @@ func RunQuarterGrant(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "quarter 必须为 1-4"})
 		return
 	}
-	svc := service.NewAnnualLeaveGrantService(database.DB)
+	svc := service.NewAnnualLeaveGrantServiceWithOrgID(database.DB, c.GetString("orgID"))
 	result, err := svc.GrantQuarterWithResult(req.Year, req.Quarter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -118,7 +118,7 @@ func GetCompensatoryLeaveBalance(c *gin.Context) {
 	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
 		return
 	}
-	svc := service.NewCompensatoryLeaveService(database.DB)
+	svc := service.NewCompensatoryLeaveServiceWithOrgID(database.DB, c.GetString("orgID"))
 	balance, err := svc.GetBalance(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -138,7 +138,7 @@ func ManualGrantCompensatoryLeave(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	svc := service.NewCompensatoryLeaveService(database.DB)
+	svc := service.NewCompensatoryLeaveServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := svc.ManualCredit(req.UserID, req.Minutes, req.EffectiveDate, req.Remark); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -155,7 +155,7 @@ func RegrantLeave(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	svc := service.NewAnnualLeaveGrantService(database.DB)
+	svc := service.NewAnnualLeaveGrantServiceWithOrgID(database.DB, c.GetString("orgID"))
 	result, err := svc.RegrantForEligibilityChangeWithResult(req.UserID, req.Year)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -204,7 +204,7 @@ func SyncGrantsToDingTalk(c *gin.Context) {
 		})
 		return
 	}
-	svc := service.NewAnnualLeaveGrantService(database.DB)
+	svc := service.NewAnnualLeaveGrantServiceWithOrgID(database.DB, c.GetString("orgID"))
 	result, err := svc.SyncAllGrantsToDingTalk()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "data": result})
@@ -231,7 +231,7 @@ func ConsumeAnnualLeave(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "days 必须大于0"})
 		return
 	}
-	svc := service.NewAnnualLeaveGrantService(database.DB)
+	svc := service.NewAnnualLeaveGrantServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := svc.ConsumeAnnualLeave(req.UserID, req.Days, req.ApprovalRef, req.Remark); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -248,7 +248,7 @@ func GetConsumeLog(c *gin.Context) {
 	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
 		return
 	}
-	svc := service.NewAnnualLeaveGrantService(database.DB)
+	svc := service.NewAnnualLeaveGrantServiceWithOrgID(database.DB, c.GetString("orgID"))
 	logs, err := svc.GetConsumeLog(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -268,7 +268,7 @@ func GetOvertimeMatches(c *gin.Context) {
 	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
 		return
 	}
-	svc := service.NewOvertimeMatchingService(database.DB)
+	svc := service.NewOvertimeMatchingServiceWithOrgID(database.DB, c.GetString("orgID"))
 	results, err := svc.GetMatchResults(userID, startDate, endDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -287,7 +287,7 @@ func RunOvertimeMatch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	svc := service.NewOvertimeMatchingService(database.DB)
+	svc := service.NewOvertimeMatchingServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := svc.MatchApprovedOvertimeForUser(req.UserID, req.StartDate, req.EndDate); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -303,7 +303,7 @@ func ForceOvertimeMatch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	svc := service.NewOvertimeMatchingService(database.DB)
+	svc := service.NewOvertimeMatchingServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := svc.MatchApprovalWithForce(req.ApprovalID, true); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -328,7 +328,7 @@ func SyncAndMatch(c *gin.Context) {
 	}
 
 	// 步骤 0：从配置表读取 process_code
-	ruleRepo := repository.NewOvertimeRuleConfigRepository(database.DB)
+	ruleRepo := repository.NewOvertimeRuleConfigRepositoryWithOrgID(database.DB, c.GetString("orgID"))
 	cfg, err := ruleRepo.FindByKey("overtime.process_code")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -355,7 +355,7 @@ func SyncAndMatch(c *gin.Context) {
 	}
 	// 预加载用户信息，用于替换 ApplicantName
 	var users []database.User
-	database.DB.Find(&users)
+	database.DB.Where("org_id = ?", c.GetString("orgID")).Find(&users)
 	userNameMap := make(map[string]string)
 	for _, u := range users {
 		userNameMap[u.UserID] = u.Name
@@ -389,7 +389,8 @@ func SyncAndMatch(c *gin.Context) {
 			Extension:     map[string]interface{}{"result": inst.Result, "process_code": processCode},
 		}
 		var existing database.Approval
-		if err := database.DB.Where("process_id = ?", inst.ProcessInstanceID).First(&existing).Error; err != nil {
+		if err := database.DB.Where("org_id = ? AND process_id = ?", c.GetString("orgID"), inst.ProcessInstanceID).First(&existing).Error; err != nil {
+			approval.OrgID = c.GetString("orgID")
 			database.DB.Create(approval)
 		} else {
 			existing.Status = inst.Status
@@ -424,7 +425,7 @@ func SyncAndMatch(c *gin.Context) {
 	}
 
 	// 步骤 3：加班匹配（含调休同步到钉钉）
-	overtimeSvc := service.NewOvertimeMatchingService(database.DB)
+	overtimeSvc := service.NewOvertimeMatchingServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := overtimeSvc.MatchApprovedOvertime(req.StartDate, req.EndDate); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"step": "match", "error": "加班匹配失败: " + err.Error()})
 		return
@@ -451,7 +452,7 @@ func ClearAndRematchOvertime(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	svc := service.NewOvertimeMatchingService(database.DB)
+	svc := service.NewOvertimeMatchingServiceWithOrgID(database.DB, c.GetString("orgID"))
 	if err := svc.ClearAndRematch(req.UserID, req.StartDate, req.EndDate); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -469,7 +470,7 @@ func DeleteOvertimeMatchRecords(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	svc := service.NewOvertimeMatchingService(database.DB)
+	svc := service.NewOvertimeMatchingServiceWithOrgID(database.DB, c.GetString("orgID"))
 	count, err := svc.DeleteMatchRecords(req.UserID, req.StartDate, req.EndDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -554,6 +555,9 @@ func ResyncOvertimeToDingTalk(c *gin.Context) {
 	// reset 步骤已将所有记录置为 pending，此处无需再手动重置状态
 	query := db.Where("effective_overtime_minutes > 0 AND dingtalk_sync_status IN ?",
 		[]string{"pending", "failed"})
+	if orgID := strings.TrimSpace(c.GetString("orgID")); orgID != "" {
+		query = query.Where("org_id = ?", orgID)
+	}
 	if req.UserID != "" {
 		query = query.Where("user_id = ?", req.UserID)
 	}
@@ -631,7 +635,7 @@ func GetCompTimeBalance(c *gin.Context) {
 	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
 		return
 	}
-	svc := service.NewCompensatoryLeaveService(database.DB)
+	svc := service.NewCompensatoryLeaveServiceWithOrgID(database.DB, c.GetString("orgID"))
 	balance, err := svc.GetBalance(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

@@ -12,6 +12,7 @@ import (
 
 type AnnualLeaveService struct {
 	db              *gorm.DB
+	orgID           string
 	eligibilityRepo *repository.AnnualLeaveEligibilityRepository
 	ruleRepo        *repository.LeaveRuleConfigRepository
 }
@@ -21,6 +22,15 @@ func NewAnnualLeaveService(db *gorm.DB) *AnnualLeaveService {
 		db:              db,
 		eligibilityRepo: repository.NewAnnualLeaveEligibilityRepository(db),
 		ruleRepo:        repository.NewLeaveRuleConfigRepository(db),
+	}
+}
+
+func NewAnnualLeaveServiceWithOrgID(db *gorm.DB, orgID string) *AnnualLeaveService {
+	return &AnnualLeaveService{
+		db:              db,
+		orgID:           orgID,
+		eligibilityRepo: repository.NewAnnualLeaveEligibilityRepositoryWithOrgID(db, orgID),
+		ruleRepo:        repository.NewLeaveRuleConfigRepositoryWithOrgID(db, orgID),
 	}
 }
 
@@ -50,7 +60,11 @@ func quarterEnd(year, quarter int) time.Time {
 
 func (s *AnnualLeaveService) RecalculateEligibility(userID string, year int) error {
 	var profile database.EmployeeProfile
-	if err := s.db.Where("user_id = ?", userID).First(&profile).Error; err != nil {
+	query := s.db.Where("user_id = ? AND deleted_at IS NULL", userID)
+	if s.orgID != "" {
+		query = query.Where("org_id = ?", s.orgID)
+	}
+	if err := query.First(&profile).Error; err != nil {
 		return fmt.Errorf("员工档案不存在: %w", err)
 	}
 

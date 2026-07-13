@@ -9,6 +9,7 @@ import (
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
 	"peopleops/internal/repository"
+	"peopleops/internal/requestmeta"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,7 +21,8 @@ import (
 )
 
 type PerformanceService struct {
-	db *gorm.DB
+	db    *gorm.DB
+	orgID string
 
 	actRepo      *repository.PerformanceActivityRepository
 	ruleRepo     *repository.PerformanceDistributionRuleRepository
@@ -62,6 +64,7 @@ type AutoSelfEvalReminderResult struct {
 
 type SelfEvalAutoReminderRunOptions struct {
 	IncludeCurrentDay bool
+	OrgID             string
 }
 
 type selfEvalReminderSendOptions struct {
@@ -72,17 +75,47 @@ type selfEvalReminderSendOptions struct {
 }
 
 func NewPerformanceService(db *gorm.DB) *PerformanceService {
+	orgID := ""
+	if db != nil {
+		if tenantOrgID, err := requestmeta.TenantID(db.Statement.Context); err == nil {
+			orgID = tenantOrgID
+		}
+	}
 	return &PerformanceService{
 		db:           db,
-		actRepo:      repository.NewPerformanceActivityRepository(db),
-		ruleRepo:     repository.NewPerformanceDistributionRuleRepository(db),
-		participantR: repository.NewPerformanceParticipantRepository(db),
-		versionRepo:  repository.NewPerformanceReviewVersionRepository(db),
-		changeRepo:   repository.NewPerformanceRelationshipChangeLogRepository(db),
-		templateRepo: repository.NewPerformanceTemplateRepository(db),
-		goalRepo:     repository.NewPerformanceGoalRecordRepository(db),
-		approvalRepo: repository.NewPerformanceGoalApprovalRepository(db),
+		orgID:        orgID,
+		actRepo:      repository.NewPerformanceActivityRepositoryWithOrgID(db, orgID),
+		ruleRepo:     repository.NewPerformanceDistributionRuleRepositoryWithOrgID(db, orgID),
+		participantR: repository.NewPerformanceParticipantRepositoryWithOrgID(db, orgID),
+		versionRepo:  repository.NewPerformanceReviewVersionRepositoryWithOrgID(db, orgID),
+		changeRepo:   repository.NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db, orgID),
+		templateRepo: repository.NewPerformanceTemplateRepositoryWithOrgID(db, orgID),
+		goalRepo:     repository.NewPerformanceGoalRecordRepositoryWithOrgID(db, orgID),
+		approvalRepo: repository.NewPerformanceGoalApprovalRepositoryWithOrgID(db, orgID),
 	}
+}
+
+func (s *PerformanceService) tenantOrgID() string {
+	return strings.TrimSpace(s.orgID)
+}
+
+func (s *PerformanceService) scopedDB() *gorm.DB {
+	return s.scopeOrg(s.db, "org_id")
+}
+
+func (s *PerformanceService) scopeOrg(tx *gorm.DB, column string) *gorm.DB {
+	if tx == nil {
+		return tx
+	}
+	orgID := s.tenantOrgID()
+	if orgID == "" {
+		return tx
+	}
+	column = strings.TrimSpace(column)
+	if column == "" {
+		column = "org_id"
+	}
+	return tx.Where(column+" = ?", orgID)
 }
 
 func (s *PerformanceService) displayNameForUser(value string) string {
@@ -92,10 +125,10 @@ func (s *PerformanceService) displayNameForUser(value string) string {
 	}
 
 	var user database.User
-	if err := s.db.Where("id = ?", value).First(&user).Error; err == nil && strings.TrimSpace(user.Name) != "" {
+	if err := s.scopedDB().Where("id = ?", value).First(&user).Error; err == nil && strings.TrimSpace(user.Name) != "" {
 		return strings.TrimSpace(user.Name)
 	}
-	if err := s.db.Where("user_id = ?", value).First(&user).Error; err == nil && strings.TrimSpace(user.Name) != "" {
+	if err := s.scopedDB().Where("user_id = ?", value).First(&user).Error; err == nil && strings.TrimSpace(user.Name) != "" {
 		return strings.TrimSpace(user.Name)
 	}
 	return value
@@ -115,6 +148,14 @@ func PerformanceManagerEvalURL(activityID string, participantID uint) string {
 		return ""
 	}
 	return dingtalk.BuildAppURL(fmt.Sprintf("/performance-manager-eval/%s/%d", url.PathEscape(activityID), participantID))
+}
+
+func PerformanceGoalSettingURL(activityID string, participantID uint) string {
+	activityID = strings.TrimSpace(activityID)
+	if activityID == "" || participantID == 0 {
+		return ""
+	}
+	return dingtalk.BuildAppURL(fmt.Sprintf("/performance-goal-setting/%s/%d", url.PathEscape(activityID), participantID))
 }
 
 func PerformanceResultURL(activityID string, participantID uint) string {
@@ -551,7 +592,7 @@ func (s *PerformanceService) participantSelfUserIDs(participant *database.Perfor
 	}
 
 	var profiles []database.EmployeeProfile
-	if err := s.db.Where("(user_id = ? OR employee_id = ?) AND deleted_at IS NULL", employeeID, employeeID).Find(&profiles).Error; err != nil {
+	if err := s.scopedDB().Where("(user_id = ? OR employee_id = ?) AND deleted_at IS NULL", employeeID, employeeID).Find(&profiles).Error; err != nil {
 		return values
 	}
 	for _, profile := range profiles {
@@ -1106,7 +1147,7 @@ func (s *PerformanceService) ListActivities(page, pageSize int, status, keyword,
 
 func (s *PerformanceService) GetResultSummary(activityID string) (map[string]interface{}, error) {
 	var participants []database.PerformanceParticipant
-	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL", activityID).Find(&participants).Error; err != nil {
+	if err := s.scopedDB().Where("activity_id = ? AND deleted_at IS NULL", activityID).Find(&participants).Error; err != nil {
 		return nil, err
 	}
 
@@ -1363,6 +1404,7 @@ func seedDefaultDistributionRules(tx *gorm.DB, activity *database.PerformanceAct
 	rules := make([]database.PerformanceDistributionRule, 0, 5)
 	for _, level := range []string{"S", "A", "B", "C", "D"} {
 		rules = append(rules, database.PerformanceDistributionRule{
+			OrgID:               strings.TrimSpace(activity.OrgID),
 			ActivityID:          activityID,
 			Level:               level,
 			DistributionPercent: percentages[level],
@@ -1371,7 +1413,11 @@ func seedDefaultDistributionRules(tx *gorm.DB, activity *database.PerformanceAct
 			UpdatedBy:           userID,
 		})
 	}
-	if err := tx.Where("activity_id = ?", activityID).Delete(&database.PerformanceDistributionRule{}).Error; err != nil {
+	deleteQuery := tx.Where("activity_id = ?", activityID)
+	if strings.TrimSpace(activity.OrgID) != "" {
+		deleteQuery = deleteQuery.Where("org_id = ?", strings.TrimSpace(activity.OrgID))
+	}
+	if err := deleteQuery.Delete(&database.PerformanceDistributionRule{}).Error; err != nil {
 		return err
 	}
 	return tx.Create(&rules).Error
@@ -1387,7 +1433,7 @@ func (s *PerformanceService) GetDistributionCheck(activityID string) (*Distribut
 	}
 
 	var participants []database.PerformanceParticipant
-	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL", activityID).Find(&participants).Error; err != nil {
+	if err := s.scopedDB().Where("activity_id = ? AND deleted_at IS NULL", activityID).Find(&participants).Error; err != nil {
 		return nil, err
 	}
 
@@ -1638,7 +1684,7 @@ func (s *PerformanceService) normalizeActivityManagerAssignments(assignments []d
 	}
 
 	var managers []database.User
-	if err := s.db.Where("user_id IN ? AND status = ? AND deleted_at IS NULL", uniqueStrings(managerIDs), "active").Find(&managers).Error; err != nil {
+	if err := s.scopedDB().Where("user_id IN ? AND status = ? AND deleted_at IS NULL", uniqueStrings(managerIDs), "active").Find(&managers).Error; err != nil {
 		return nil, err
 	}
 	managerByID := make(map[string]database.User, len(managers))
@@ -2123,7 +2169,7 @@ func (s *PerformanceService) hydrateManagerConfigStatus(items []database.Perform
 	activeManagers := make(map[string]struct{}, len(managerIDs))
 	if len(managerIDs) > 0 {
 		var users []database.User
-		if err := s.db.Where("user_id IN ? AND status = ? AND deleted_at IS NULL", managerIDs, "active").Find(&users).Error; err == nil {
+		if err := s.scopedDB().Where("user_id IN ? AND status = ? AND deleted_at IS NULL", managerIDs, "active").Find(&users).Error; err == nil {
 			for _, user := range users {
 				activeManagers[user.UserID] = struct{}{}
 			}
@@ -2168,7 +2214,7 @@ func (s *PerformanceService) validateActivityIndicatorLibrary(indicatorLibraryID
 	}
 
 	var library database.PerformanceIndicatorLibrary
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", *indicatorLibraryID).First(&library).Error; err != nil {
+	if err := s.scopedDB().Where("id = ? AND deleted_at IS NULL", *indicatorLibraryID).First(&library).Error; err != nil {
 		return fmt.Errorf("指标库不存在: %w", err)
 	}
 
@@ -2287,7 +2333,7 @@ func (s *PerformanceService) UpdateParticipantAssessmentManager(participantID ui
 		}
 
 		var participant database.PerformanceParticipant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
+		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
 			return errors.New("参与人不存在")
 		}
 		if stringSetContains(s.participantSelfUserIDs(&participant), manager.UserID) {
@@ -2327,7 +2373,7 @@ func (s *PerformanceService) UpdateParticipantAssessmentManager(participantID ui
 		}
 		if participant.Status == "self_submitted" && s.participantUsesSelfFinalAssessmentWithDB(tx, &participant) {
 			var activity database.PerformanceActivity
-			if err := tx.Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
+			if err := s.scopeOrg(tx, "org_id").Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
 				return err
 			}
 			if err := s.applySelfFinalAssessmentWithDB(tx, &participant, &activity, operatorID); err != nil {
@@ -2442,7 +2488,7 @@ func (s *PerformanceService) assessmentManagerSourceAllowsUser(participant *data
 			return true
 		}
 		var employee database.User
-		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", participant.EmployeeID).First(&employee).Error; err == nil {
+		if err := s.scopedDB().Where("user_id = ? AND deleted_at IS NULL", participant.EmployeeID).First(&employee).Error; err == nil {
 			directManagerUserID, _ := resolveManagerInfo(employee)
 			return strings.TrimSpace(directManagerUserID) == managerUserID
 		}
@@ -2602,6 +2648,7 @@ func (s *PerformanceService) applySelfFinalAssessmentWithDB(tx *gorm.DB, partici
 	}
 
 	version := &database.PerformanceReviewVersion{
+		OrgID:          strings.TrimSpace(participant.OrgID),
 		ParticipantID:  participant.ID,
 		ActivityID:     participant.ActivityID,
 		ReviewType:     "manager",
@@ -2632,7 +2679,7 @@ func (s *PerformanceService) syncSelfFinalAssessmentsForActivity(activityID, ope
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var activity database.PerformanceActivity
-		if err := tx.Where("id = ? AND deleted_at IS NULL", activityID).First(&activity).Error; err != nil {
+		if err := s.scopeOrg(tx, "org_id").Where("id = ? AND deleted_at IS NULL", activityID).First(&activity).Error; err != nil {
 			return err
 		}
 
@@ -2756,7 +2803,7 @@ func (s *PerformanceService) ListAssessmentManagerCandidates(activityID string, 
 		addCandidate(ptrStringValue(participant.DirectManagerIDSnapshot), ManagerSourceDirectManager)
 
 		var employee database.User
-		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", participant.EmployeeID).First(&employee).Error; err == nil {
+		if err := s.scopedDB().Where("user_id = ? AND deleted_at IS NULL", participant.EmployeeID).First(&employee).Error; err == nil {
 			managerUserID, _ := resolveManagerInfo(employee)
 			addCandidate(managerUserID, ManagerSourceDirectManager)
 		}
@@ -2794,7 +2841,7 @@ func (s *PerformanceService) ListAssessmentManagerCandidates(activityID string, 
 	}
 
 	var users []database.User
-	if err := s.db.Where("user_id IN ? AND status = ? AND deleted_at IS NULL", candidateUserIDs, "active").Find(&users).Error; err != nil {
+	if err := s.scopedDB().Where("user_id IN ? AND status = ? AND deleted_at IS NULL", candidateUserIDs, "active").Find(&users).Error; err != nil {
 		return nil, err
 	}
 	userByID := make(map[string]database.User)
@@ -2807,7 +2854,7 @@ func (s *PerformanceService) ListAssessmentManagerCandidates(activityID string, 
 	}
 
 	var profiles []database.EmployeeProfile
-	if err := s.db.Where("user_id IN ? AND deleted_at IS NULL", candidateUserIDs).Find(&profiles).Error; err != nil {
+	if err := s.scopedDB().Where("user_id IN ? AND deleted_at IS NULL", candidateUserIDs).Find(&profiles).Error; err != nil {
 		return nil, err
 	}
 	employeeNoByUserID := make(map[string]string)
@@ -2822,7 +2869,7 @@ func (s *PerformanceService) ListAssessmentManagerCandidates(activityID string, 
 			ids = append(ids, id)
 		}
 		var departments []database.Department
-		if err := s.db.Where("department_id IN ? AND deleted_at IS NULL", ids).Find(&departments).Error; err != nil {
+		if err := s.scopedDB().Where("department_id IN ? AND deleted_at IS NULL", ids).Find(&departments).Error; err != nil {
 			return nil, err
 		}
 		for _, department := range departments {
@@ -2900,7 +2947,7 @@ func (s *PerformanceService) assessmentManagerCandidateOnlySelf(participantID ui
 			return true
 		}
 		var employee database.User
-		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", participant.EmployeeID).First(&employee).Error; err == nil {
+		if err := s.scopedDB().Where("user_id = ? AND deleted_at IS NULL", participant.EmployeeID).First(&employee).Error; err == nil {
 			managerUserID, _ := resolveManagerInfo(employee)
 			return stringSetContains(selfUserIDs, managerUserID)
 		}
@@ -3034,7 +3081,7 @@ func (s *PerformanceService) departmentManagerCandidateIDs(departmentID string) 
 		visited[departmentID] = struct{}{}
 
 		var department database.Department
-		if err := s.db.Where("department_id = ? AND deleted_at IS NULL", departmentID).First(&department).Error; err != nil {
+		if err := s.scopedDB().Where("department_id = ? AND deleted_at IS NULL", departmentID).First(&department).Error; err != nil {
 			break
 		}
 		if userID := firstNonEmptyString(department.Extension,
@@ -3061,7 +3108,7 @@ func (s *PerformanceService) departmentManagerCandidateIDs(departmentID string) 
 }
 
 func (s *PerformanceService) searchActiveUsersForAssessmentManager(keyword string, limit int) ([]database.User, error) {
-	query := s.db.Where("status = ? AND deleted_at IS NULL", "active")
+	query := s.scopedDB().Where("status = ? AND deleted_at IS NULL", "active")
 	keyword = strings.TrimSpace(keyword)
 	if keyword != "" {
 		like := "%" + keyword + "%"
@@ -3479,7 +3526,7 @@ func (s *PerformanceService) findPreviousPlanActivity(activity *database.Perform
 	}
 
 	var previous database.PerformanceActivity
-	query := s.db.Where(
+	query := s.scopedDB().Where(
 		"deleted_at IS NULL AND id <> ? AND flow_type = ? AND cycle_type = ?",
 		activity.ID,
 		PerformanceFlowNew,
@@ -3540,12 +3587,16 @@ func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity 
 
 	currentActivityID := strconv.FormatUint(uint64(activity.ID), 10)
 	previousActivityID := strconv.FormatUint(uint64(previous.ID), 10)
+	orgID := strings.TrimSpace(activity.OrgID)
 	now := time.Now()
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var participants []database.PerformanceParticipant
-		if err := tx.Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", currentActivityID, ignoredParticipantStatusList()).
-			Find(&participants).Error; err != nil {
+		participantQuery := tx.Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", currentActivityID, ignoredParticipantStatusList())
+		if orgID != "" {
+			participantQuery = participantQuery.Where("org_id = ?", orgID)
+		}
+		if err := participantQuery.Find(&participants).Error; err != nil {
 			return err
 		}
 		if len(participants) == 0 {
@@ -3563,8 +3614,11 @@ func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity 
 		}
 
 		var previousParticipants []database.PerformanceParticipant
-		if err := tx.Where("activity_id = ? AND employee_id IN ? AND deleted_at IS NULL", previousActivityID, employeeIDs).
-			Find(&previousParticipants).Error; err != nil {
+		previousParticipantQuery := tx.Where("activity_id = ? AND employee_id IN ? AND deleted_at IS NULL", previousActivityID, employeeIDs)
+		if orgID != "" {
+			previousParticipantQuery = previousParticipantQuery.Where("org_id = ?", orgID)
+		}
+		if err := previousParticipantQuery.Find(&previousParticipants).Error; err != nil {
 			return err
 		}
 		if len(previousParticipants) == 0 {
@@ -3579,13 +3633,17 @@ func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity 
 		}
 
 		var sourceRecords []database.PerformanceGoalRecord
-		if err := tx.Where(
+		sourceRecordQuery := tx.Where(
 			"activity_id = ? AND participant_id IN ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
 			previousActivityID,
 			previousParticipantIDs,
 			PerformanceGoalPhasePlan,
 			[]string{"quantitative", "key_action"},
-		).Order("participant_id ASC, sort_order ASC, id ASC").Find(&sourceRecords).Error; err != nil {
+		)
+		if orgID != "" {
+			sourceRecordQuery = sourceRecordQuery.Where("org_id = ?", orgID)
+		}
+		if err := sourceRecordQuery.Order("participant_id ASC, sort_order ASC, id ASC").Find(&sourceRecords).Error; err != nil {
 			return err
 		}
 		if len(sourceRecords) == 0 {
@@ -3599,7 +3657,7 @@ func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity 
 
 		if activity.PreviousReviewActivityID == nil || *activity.PreviousReviewActivityID == 0 {
 			previousID := previous.ID
-			if err := tx.Model(&database.PerformanceActivity{}).
+			if err := s.scopeOrg(tx.Model(&database.PerformanceActivity{}), "org_id").
 				Where("id = ?", activity.ID).
 				Updates(map[string]interface{}{"previous_review_activity_id": previousID, "updated_by": userID}).Error; err != nil {
 				return err
@@ -3618,7 +3676,7 @@ func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity 
 			}
 
 			var existingCount int64
-			if err := tx.Model(&database.PerformanceGoalRecord{}).
+			if err := s.scopeOrg(tx.Model(&database.PerformanceGoalRecord{}), "org_id").
 				Where("activity_id = ? AND participant_id = ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
 					currentActivityID,
 					participant.ID,
@@ -3633,7 +3691,9 @@ func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity 
 
 			newRecords := make([]database.PerformanceGoalRecord, 0, len(records))
 			for _, source := range records {
-				newRecords = append(newRecords, clonePlanRecordAsReview(source, currentActivityID, participant.ID, now))
+				record := clonePlanRecordAsReview(source, currentActivityID, participant.ID, now)
+				record.OrgID = orgID
+				newRecords = append(newRecords, record)
 			}
 			if err := tx.Create(&newRecords).Error; err != nil {
 				return err
@@ -3650,7 +3710,7 @@ func (s *PerformanceService) ensureNewFlowReviewRecordsReady(activity *database.
 
 	activityID := strconv.FormatUint(uint64(activity.ID), 10)
 	var participants []database.PerformanceParticipant
-	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList()).
+	if err := s.scopedDB().Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList()).
 		Find(&participants).Error; err != nil {
 		return err
 	}
@@ -3666,7 +3726,7 @@ func (s *PerformanceService) ensureNewFlowReviewRecordsReady(activity *database.
 	var rows []struct {
 		ParticipantID uint `gorm:"column:participant_id"`
 	}
-	if err := s.db.Model(&database.PerformanceGoalRecord{}).
+	if err := s.scopedDB().Model(&database.PerformanceGoalRecord{}).
 		Select("participant_id").
 		Where("activity_id = ? AND participant_id IN ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
 			activityID,
@@ -3887,9 +3947,13 @@ func (s *PerformanceService) LockActivity(activityID, userID string) error {
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var participants []database.PerformanceParticipant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		participantQuery := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList()).
-			Find(&participants).Error; err != nil {
+			Order("id ASC")
+		if strings.TrimSpace(activity.OrgID) != "" {
+			participantQuery = participantQuery.Where("org_id = ?", strings.TrimSpace(activity.OrgID))
+		}
+		if err := participantQuery.Find(&participants).Error; err != nil {
 			return err
 		}
 		now := time.Now()
@@ -3907,7 +3971,7 @@ func (s *PerformanceService) LockActivity(activityID, userID string) error {
 				return err
 			}
 		}
-		return tx.Model(&database.PerformanceActivity{}).
+		return s.scopeOrg(tx.Model(&database.PerformanceActivity{}), "org_id").
 			Where("id = ?", activityID).
 			Updates(map[string]interface{}{"status": "locked", "updated_by": userID}).Error
 	})
@@ -3915,7 +3979,7 @@ func (s *PerformanceService) LockActivity(activityID, userID string) error {
 
 func (s *PerformanceService) countActiveParticipants(activityID string) (int64, error) {
 	var count int64
-	if err := s.db.Model(&database.PerformanceParticipant{}).
+	if err := s.scopedDB().Model(&database.PerformanceParticipant{}).
 		Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList()).
 		Count(&count).Error; err != nil {
 		return 0, err
@@ -3925,7 +3989,7 @@ func (s *PerformanceService) countActiveParticipants(activityID string) (int64, 
 
 func (s *PerformanceService) ensureParticipantStageComplete(activityID, stage string) error {
 	var participants []database.PerformanceParticipant
-	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL", activityID).Find(&participants).Error; err != nil {
+	if err := s.scopedDB().Where("activity_id = ? AND deleted_at IS NULL", activityID).Find(&participants).Error; err != nil {
 		return err
 	}
 
@@ -4425,7 +4489,7 @@ func builtInPerformanceTemplate(code string) (*database.PerformanceTemplate, []d
 
 func (s *PerformanceService) ensureBuiltInPerformanceTemplate(code string) (*database.PerformanceTemplate, error) {
 	var existing database.PerformanceTemplate
-	err := s.db.Where("code = ? AND deleted_at IS NULL", code).First(&existing).Error
+	err := s.scopedDB().Where("code = ? AND deleted_at IS NULL", code).First(&existing).Error
 	if err == nil {
 		return s.repairBuiltInPerformanceTemplate(&existing, code)
 	}
@@ -4612,7 +4676,7 @@ func (s *PerformanceService) BatchConfirmResults(activityID string, participantI
 func (s *PerformanceService) confirmResultByID(participantID uint, userID string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var p database.PerformanceParticipant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
+		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 			return err
 		}
 		now := time.Now()
@@ -4625,6 +4689,7 @@ func (s *PerformanceService) confirmResultByID(participantID uint, userID string
 		p.UpdatedBy = userID
 
 		version := &database.PerformanceReviewVersion{
+			OrgID:          strings.TrimSpace(p.OrgID),
 			ParticipantID:  p.ID,
 			ActivityID:     p.ActivityID,
 			ReviewType:     "confirm_result",
@@ -4644,7 +4709,7 @@ func (s *PerformanceService) confirmResultByID(participantID uint, userID string
 func (s *PerformanceService) ConfirmEmployeeResult(participantID uint, userID string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var p database.PerformanceParticipant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
+		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 			return errors.New("参与人不存在")
 		}
 		if p.Status == "employee_confirmed" || p.Status == "manager_confirmed" || p.Status == "hr_confirmed" || p.Status == "locked" {
@@ -4654,7 +4719,7 @@ func (s *PerformanceService) ConfirmEmployeeResult(participantID uint, userID st
 			return errors.New("结果已锁定，无法确认")
 		}
 		var activity database.PerformanceActivity
-		if err := tx.Where("id = ? AND deleted_at IS NULL", p.ActivityID).First(&activity).Error; err != nil {
+		if err := s.scopeOrg(tx, "org_id").Where("id = ? AND deleted_at IS NULL", p.ActivityID).First(&activity).Error; err != nil {
 			return errors.New("绩效活动不存在")
 		}
 		if activity.Status != "employee_confirmation" {
@@ -4676,7 +4741,7 @@ func (s *PerformanceService) ConfirmEmployeeResult(participantID uint, userID st
 func (s *PerformanceService) ConfirmManagerResult(participantID uint, userID string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var p database.PerformanceParticipant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
+		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 			return errors.New("参与人不存在")
 		}
 		if p.Status == "manager_confirmed" || p.Status == "hr_confirmed" || p.Status == "locked" {
@@ -4686,7 +4751,7 @@ func (s *PerformanceService) ConfirmManagerResult(participantID uint, userID str
 			return errors.New("结果已锁定，无法确认")
 		}
 		var activity database.PerformanceActivity
-		if err := tx.Where("id = ? AND deleted_at IS NULL", p.ActivityID).First(&activity).Error; err != nil {
+		if err := s.scopeOrg(tx, "org_id").Where("id = ? AND deleted_at IS NULL", p.ActivityID).First(&activity).Error; err != nil {
 			return errors.New("绩效活动不存在")
 		}
 		isManagerRecheck := strings.TrimSpace(p.Status) == "manager_recheck"
@@ -4714,6 +4779,7 @@ func (s *PerformanceService) ConfirmManagerResult(participantID uint, userID str
 			reviewType = "confirm_manager_recheck"
 		}
 		version := &database.PerformanceReviewVersion{
+			OrgID:          strings.TrimSpace(p.OrgID),
 			ParticipantID:  p.ID,
 			ActivityID:     p.ActivityID,
 			ReviewType:     reviewType,
@@ -4733,14 +4799,14 @@ func (s *PerformanceService) ConfirmManagerResult(participantID uint, userID str
 func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var p database.PerformanceParticipant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
+		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 			return errors.New("参与人不存在")
 		}
 		if p.Status == "hr_confirmed" || p.Status == "locked" {
 			return nil
 		}
 		var activity database.PerformanceActivity
-		if err := tx.Where("id = ? AND deleted_at IS NULL", p.ActivityID).First(&activity).Error; err != nil {
+		if err := s.scopeOrg(tx, "org_id").Where("id = ? AND deleted_at IS NULL", p.ActivityID).First(&activity).Error; err != nil {
 			return errors.New("绩效活动不存在")
 		}
 		if activity.Status != "hr_confirmation" {
@@ -4756,7 +4822,7 @@ func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) 
 		}
 		if p.ManagerScore == 0 {
 			var itemCount int64
-			tx.Model(&database.PerformanceGoalRecord{}).
+			s.scopeOrg(tx.Model(&database.PerformanceGoalRecord{}), "org_id").
 				Where("participant_id = ? AND deleted_at IS NULL AND manager_score > 0", p.ID).
 				Count(&itemCount)
 			if itemCount == 0 {
@@ -4780,7 +4846,7 @@ func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) 
 // SendSelfEvalReminders 发送自评提醒给未提交的参与者
 func (s *PerformanceService) SendSelfEvalReminders(activityID string) error {
 	var activity database.PerformanceActivity
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", activityID).First(&activity).Error; err != nil {
+	if err := s.scopedDB().Where("id = ? AND deleted_at IS NULL", activityID).First(&activity).Error; err != nil {
 		return fmt.Errorf("活动不存在: %v", err)
 	}
 	result, err := s.sendSelfEvalRemindersForActivity(&activity, selfEvalReminderSendOptions{})
@@ -4858,7 +4924,11 @@ func (s *PerformanceService) SendDueSelfEvalAutoReminderForActivity(activityID s
 	}
 
 	var activity database.PerformanceActivity
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", activityID).First(&activity).Error; err != nil {
+	query := s.scopedDB().Where("id = ? AND deleted_at IS NULL", activityID)
+	if orgID := strings.TrimSpace(opts.OrgID); orgID != "" {
+		query = query.Where("org_id = ?", orgID)
+	}
+	if err := query.First(&activity).Error; err != nil {
 		return result, err
 	}
 	result.ActivitiesScanned = 1
@@ -4923,12 +4993,19 @@ func (s *PerformanceService) sendSelfEvalRemindersForActivity(activity *database
 		activityID = strings.TrimSpace(fmt.Sprint(activity.ID))
 	}
 	var participants []database.PerformanceParticipant
-	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, selfEvalReminderExcludedStatuses()).
-		Find(&participants).Error; err != nil {
+	query := s.scopedDB().Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, selfEvalReminderExcludedStatuses())
+	activityOrgID := strings.TrimSpace(activity.OrgID)
+	if activityOrgID != "" {
+		query = query.Where("org_id = ?", activityOrgID)
+	}
+	if err := query.Find(&participants).Error; err != nil {
 		return result, err
 	}
 	filtered := make([]database.PerformanceParticipant, 0, len(participants))
 	for _, participant := range participants {
+		if activityOrgID != "" && strings.TrimSpace(participant.OrgID) != activityOrgID {
+			continue
+		}
 		if isIgnoredPerformanceParticipantStatus(participant.Status) {
 			continue
 		}
@@ -4950,7 +5027,7 @@ func (s *PerformanceService) sendSelfEvalRemindersForActivity(activity *database
 		}
 		result.Candidates++
 		if opts.Automatic {
-			alreadySent, err := s.hasPerformanceReminderLog(activityID, p.ID, performanceReminderStageSelfEval, opts.ReminderKey, opts.ReminderDate)
+			alreadySent, err := s.hasPerformanceReminderLogForOrg(strings.TrimSpace(activity.OrgID), activityID, p.ID, performanceReminderStageSelfEval, opts.ReminderKey, opts.ReminderDate)
 			if err != nil {
 				return result, err
 			}
@@ -5024,11 +5101,15 @@ func selfEvalReminderExcludedStatuses() []string {
 }
 
 func (s *PerformanceService) hasPerformanceReminderLog(activityID string, participantID uint, stage, reminderKey, reminderDate string) (bool, error) {
+	return s.hasPerformanceReminderLogForOrg("", activityID, participantID, stage, reminderKey, reminderDate)
+}
+
+func (s *PerformanceService) hasPerformanceReminderLogForOrg(orgID, activityID string, participantID uint, stage, reminderKey, reminderDate string) (bool, error) {
 	if strings.TrimSpace(reminderKey) == "" || strings.TrimSpace(reminderDate) == "" {
 		return false, nil
 	}
 	var count int64
-	if err := s.db.Model(&database.PerformanceReminderLog{}).
+	query := s.scopedDB().Model(&database.PerformanceReminderLog{}).
 		Where(
 			"activity_id = ? AND participant_id = ? AND stage = ? AND reminder_key = ? AND reminder_date = ?",
 			activityID,
@@ -5036,8 +5117,11 @@ func (s *PerformanceService) hasPerformanceReminderLog(activityID string, partic
 			stage,
 			reminderKey,
 			reminderDate,
-		).
-		Count(&count).Error; err != nil {
+		)
+	if orgID = strings.TrimSpace(orgID); orgID != "" {
+		query = query.Where("org_id = ?", orgID)
+	}
+	if err := query.Count(&count).Error; err != nil {
 		return false, err
 	}
 	return count > 0, nil
@@ -5048,7 +5132,7 @@ func (s *PerformanceService) hasRecentPerformanceReminderLog(activityID string, 
 		return false, nil
 	}
 	var count int64
-	if err := s.db.Model(&database.PerformanceReminderLog{}).
+	if err := s.scopedDB().Model(&database.PerformanceReminderLog{}).
 		Where(
 			"activity_id = ? AND participant_id = ? AND stage = ? AND reminder_key = ? AND created_at >= ?",
 			activityID,
@@ -5082,6 +5166,7 @@ func (s *PerformanceService) createPerformanceReminderLogWithStage(activityID st
 		now = time.Now()
 	}
 	log := database.PerformanceReminderLog{
+		OrgID:         strings.TrimSpace(participant.OrgID),
 		ActivityID:    activityID,
 		ParticipantID: participant.ID,
 		EmployeeID:    strings.TrimSpace(participant.EmployeeID),
@@ -5150,7 +5235,7 @@ func (s *PerformanceService) notifyManagerSelfEvaluationRecheck(activity databas
 // SendManagerEvalReminders 发送主管评分提醒
 func (s *PerformanceService) SendManagerEvalReminders(activityID string) error {
 	var participants []database.PerformanceParticipant
-	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL AND status = ?", activityID, "self_submitted").
+	if err := s.scopedDB().Where("activity_id = ? AND deleted_at IS NULL AND status = ?", activityID, "self_submitted").
 		Find(&participants).Error; err != nil {
 		return err
 	}
@@ -5281,7 +5366,7 @@ func (s *PerformanceService) ensureNewFlowReviewRecordsForParticipant(participan
 		return
 	}
 	var reviewCount int64
-	if err := s.db.Model(&database.PerformanceGoalRecord{}).
+	if err := s.scopedDB().Model(&database.PerformanceGoalRecord{}).
 		Where("activity_id = ? AND participant_id = ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
 			participant.ActivityID,
 			participantID,
@@ -5555,7 +5640,7 @@ func (s *PerformanceService) batchSaveGoalRecords(participantID uint, records []
 				if isReviewSupplement {
 					updates["approval_status"] = "approved"
 				}
-				if err := tx.Model(&database.PerformanceGoalRecord{}).Where("id = ? AND deleted_at IS NULL", r.ID).
+				if err := s.scopeOrg(tx.Model(&database.PerformanceGoalRecord{}), "org_id").Where("id = ? AND deleted_at IS NULL", r.ID).
 					Updates(updates).Error; err != nil {
 					return err
 				}
@@ -5602,7 +5687,7 @@ func (s *PerformanceService) batchSaveGoalRecords(participantID uint, records []
 		// 软删除不在提交列表中的旧记录
 		for id := range existingMap {
 			if !submittedIDs[id] {
-				if err := tx.Model(&database.PerformanceGoalRecord{}).Where("id = ?", id).
+				if err := s.scopeOrg(tx.Model(&database.PerformanceGoalRecord{}), "org_id").Where("id = ?", id).
 					Update("deleted_at", now).Error; err != nil {
 					return err
 				}
@@ -5684,7 +5769,7 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 	now := time.Now()
 	displayName := s.displayNameForUser(userID)
 
-	if err := s.db.Model(&database.PerformanceGoalRecord{}).
+	if err := s.scopedDB().Model(&database.PerformanceGoalRecord{}).
 		Where("participant_id = ? AND activity_id = ? AND goal_phase = ?", participantID, participant.ActivityID, targetGoalPhase).
 		Update("approval_status", targetStatus).Error; err != nil {
 		return err
@@ -5702,7 +5787,7 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 			participantUpdates["manager_target_confirmed_at"] = now
 			participantUpdates["manager_target_confirmed_by"] = displayName
 		}
-		if err := s.db.Model(&database.PerformanceParticipant{}).
+		if err := s.scopedDB().Model(&database.PerformanceParticipant{}).
 			Where("id = ? AND deleted_at IS NULL", participantID).
 			Updates(participantUpdates).Error; err != nil {
 			return err
@@ -5762,7 +5847,7 @@ func (s *PerformanceService) GetGoalSuggestions(participantID uint) ([]database.
 	libraryID := *activity.IndicatorLibraryID
 
 	var indicatorItems []database.PerformanceIndicatorItem
-	if err := s.db.Where("library_id = ? AND deleted_at IS NULL AND section_type IN ?", libraryID, []string{"quantitative", "key_action"}).
+	if err := s.scopedDB().Where("library_id = ? AND deleted_at IS NULL AND section_type IN ?", libraryID, []string{"quantitative", "key_action"}).
 		Order("is_default DESC, sort_order ASC, created_at ASC").
 		Limit(12).
 		Find(&indicatorItems).Error; err != nil {
@@ -5842,7 +5927,7 @@ func (s *PerformanceService) SetBonusPenaltyScore(participantID uint, bonusScore
 
 	// 查询活动配置，判断是否启用附加分
 	var activity database.PerformanceActivity
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
+	if err := s.scopedDB().Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
 		return fmt.Errorf("绩效活动不存在: %w", err)
 	}
 
@@ -5943,14 +6028,14 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 	shouldNotifyManager := false
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var participant database.PerformanceParticipant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
+		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
 			return fmt.Errorf("参与人不存在: %w", err)
 		}
 		previousParticipant := participant
 
 		// 检查活动状态是否允许自评
 		var activity database.PerformanceActivity
-		if err := tx.Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
+		if err := s.scopeOrg(tx, "org_id").Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
 			return fmt.Errorf("获取绩效活动失败: %w", err)
 		}
 		if isHRFinalizedParticipant(participant) {
@@ -6056,6 +6141,7 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 		operationMeta["evaluation_good"] = participant.SelfEvaluationGood
 		operationMeta["evaluation_improvement"] = participant.SelfEvaluationImprovement
 		version := &database.PerformanceReviewVersion{
+			OrgID:         strings.TrimSpace(participant.OrgID),
 			ParticipantID: participant.ID,
 			ActivityID:    participant.ActivityID,
 			ReviewType:    "self",
@@ -6087,12 +6173,12 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 func (s *PerformanceService) SubmitGoalManagerEvaluation(participantID uint, items []GoalManagerEvaluationItem, bonusItems []GoalManagerEvaluationItem, suggestedLevel, evaluationGood, evaluationImprovement, userID string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var participant database.PerformanceParticipant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
+		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
 			return fmt.Errorf("参与人不存在: %w", err)
 		}
 
 		var activity database.PerformanceActivity
-		if err := tx.Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
+		if err := s.scopeOrg(tx, "org_id").Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
 			return fmt.Errorf("绩效活动不存在: %w", err)
 		}
 
@@ -6217,6 +6303,7 @@ func (s *PerformanceService) SubmitGoalManagerEvaluation(participantID uint, ite
 		}
 
 		version := &database.PerformanceReviewVersion{
+			OrgID:          strings.TrimSpace(participant.OrgID),
 			ParticipantID:  participant.ID,
 			ActivityID:     participant.ActivityID,
 			ReviewType:     "manager",
@@ -6247,9 +6334,10 @@ func (s *PerformanceService) SubmitGoalManagerEvaluation(participantID uint, ite
 
 func (s *PerformanceService) SetCompanyFinance(activityID, revenueSign, description, remark, userID string) (*database.PerformanceCompanyFinance, error) {
 	var finance database.PerformanceCompanyFinance
-	err := s.db.Where("activity_id = ?", activityID).First(&finance).Error
+	err := s.scopedDB().Where("activity_id = ?", activityID).First(&finance).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		finance = database.PerformanceCompanyFinance{
+			OrgID:       s.tenantOrgID(),
 			ActivityID:  activityID,
 			RevenueSign: strings.TrimSpace(revenueSign),
 			Description: description,
@@ -6262,7 +6350,7 @@ func (s *PerformanceService) SetCompanyFinance(activityID, revenueSign, descript
 		if finance.RevenueSign == "" {
 			finance.RevenueSign = "equal"
 		}
-		if createErr := s.db.Create(&finance).Error; createErr != nil {
+		if createErr := s.scopedDB().Create(&finance).Error; createErr != nil {
 			return nil, createErr
 		}
 		return &finance, nil
@@ -6280,7 +6368,7 @@ func (s *PerformanceService) SetCompanyFinance(activityID, revenueSign, descript
 	finance.SetBy = userID
 	finance.SetAt = time.Now()
 	finance.UpdatedBy = userID
-	if err := s.db.Save(&finance).Error; err != nil {
+	if err := s.scopedDB().Save(&finance).Error; err != nil {
 		return nil, err
 	}
 	return &finance, nil
@@ -6288,7 +6376,7 @@ func (s *PerformanceService) SetCompanyFinance(activityID, revenueSign, descript
 
 func (s *PerformanceService) GetCompanyFinance(activityID string) (*database.PerformanceCompanyFinance, error) {
 	var finance database.PerformanceCompanyFinance
-	if err := s.db.Where("activity_id = ?", activityID).First(&finance).Error; err != nil {
+	if err := s.scopedDB().Where("activity_id = ?", activityID).First(&finance).Error; err != nil {
 		return nil, err
 	}
 	return &finance, nil
@@ -6296,7 +6384,7 @@ func (s *PerformanceService) GetCompanyFinance(activityID string) (*database.Per
 
 func (s *PerformanceService) GetPendingHRConfirm(activityID string) ([]database.PerformanceParticipant, error) {
 	var participants []database.PerformanceParticipant
-	if err := s.db.Where("activity_id = ? AND status = ? AND deleted_at IS NULL", activityID, "manager_confirmed").
+	if err := s.scopedDB().Where("activity_id = ? AND status = ? AND deleted_at IS NULL", activityID, "manager_confirmed").
 		Order("department_name ASC, employee_name ASC").
 		Find(&participants).Error; err != nil {
 		return nil, err
@@ -6425,7 +6513,7 @@ func (s *PerformanceService) ForceLockOverdueHRConfirmation(activityID, userID s
 				return err
 			}
 		}
-		if err := tx.Model(&database.PerformanceActivity{}).
+		if err := s.scopeOrg(tx.Model(&database.PerformanceActivity{}), "org_id").
 			Where("id = ?", activityID).
 			Updates(map[string]interface{}{"status": "locked", "updated_by": userID}).Error; err != nil {
 			return err
@@ -6457,21 +6545,83 @@ func (s *PerformanceService) SendHRConfirmReminders(activityID string) error {
 	if err != nil {
 		return err
 	}
-	recipient := strings.TrimSpace(activity.CreatedBy)
-	if recipient == "" || recipient == "system" {
+
+	recipients, err := s.hrConfirmReminderRecipients(activity)
+	if err != nil {
+		return err
+	}
+	if len(recipients) == 0 {
 		return nil
 	}
 
 	title := "绩效 HR 确认提醒"
 	content := fmt.Sprintf("活动：%s\n当前仍有 %d 名员工待 HR 确认，请及时处理。", activity.Name, len(pending))
-	if err := dingtalk.SendCorpActionCardToUser(recipient, title, content, "去处理确认", PerformanceOverviewURL(activityID)); err != nil {
-		if dingtalk.IsUserNotNotifiableError(err) {
-			logrus.Infof("skip HR confirm reminder to non-notifiable user %s: %v", recipient, err)
-			return nil
+	var failed []string
+	for _, recipient := range recipients {
+		if err := dingtalk.SendCorpActionCardToUser(recipient, title, content, "去处理确认", PerformanceOverviewURL(activityID)); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logrus.Infof("skip HR confirm reminder to non-notifiable user %s: %v", recipient, err)
+				continue
+			}
+			logrus.Warnf("send HR confirm reminder to %s failed: %v", recipient, err)
+			failed = append(failed, recipient)
 		}
-		return err
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("HR确认提醒部分发送失败：%s", strings.Join(failed, ","))
 	}
 	return nil
+}
+
+func (s *PerformanceService) hrConfirmReminderRecipients(activity *database.PerformanceActivity) ([]string, error) {
+	if activity == nil {
+		return nil, nil
+	}
+	orgID := strings.TrimSpace(activity.OrgID)
+	if orgID == "" {
+		orgID = s.tenantOrgID()
+	}
+	recipients := make([]string, 0, 4)
+	seen := make(map[string]struct{})
+	add := func(userID string) {
+		userID = strings.TrimSpace(userID)
+		if userID == "" || userID == "system" || !dingtalk.IsNotifiableUserID(userID) {
+			return
+		}
+		if _, ok := seen[userID]; ok {
+			return
+		}
+		seen[userID] = struct{}{}
+		recipients = append(recipients, userID)
+	}
+	if orgID == "" {
+		add(activity.CreatedBy)
+		return recipients, nil
+	}
+
+	permissionCodes := []string{"performance:hr_confirm:submit", "performance:activity:manage"}
+	var users []database.User
+	query := s.db.Model(&database.User{}).
+		Select("DISTINCT users.*").
+		Joins("JOIN user_roles ON user_roles.user_id = users.user_id AND user_roles.deleted_at IS NULL").
+		Joins("JOIN role_permissions ON role_permissions.role_id = user_roles.role_id AND role_permissions.deleted_at IS NULL").
+		Joins("JOIN permissions ON permissions.id = role_permissions.permission_id AND permissions.deleted_at IS NULL").
+		Where("permissions.code IN ? AND users.deleted_at IS NULL", permissionCodes)
+	if orgID != "" {
+		query = query.Where("user_roles.org_id = ? AND users.org_id = ?", orgID, orgID)
+	}
+	if err := query.Find(&users).Error; err != nil {
+		return nil, err
+	}
+
+	for _, user := range users {
+		add(user.UserID)
+	}
+	if len(recipients) == 0 {
+		add(activity.CreatedBy)
+	}
+	sort.Strings(recipients)
+	return recipients, nil
 }
 
 func normalizeGoalWeight(weight float64) float64 {

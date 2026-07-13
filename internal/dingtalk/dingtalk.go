@@ -97,13 +97,33 @@ func GetCorpID() string {
 	return corpID
 }
 
+func InitWithConfig(cfg AppConfig) error {
+	appKey = strings.TrimSpace(cfg.AppKey)
+	appSecret = strings.TrimSpace(cfg.AppSecret)
+	corpID = strings.TrimSpace(cfg.CorpID)
+
+	if appKey == "" || appSecret == "" {
+		return fmt.Errorf("missing DingTalk app config for org_id=%s", strings.TrimSpace(cfg.OrgID))
+	}
+
+	logrus.Infof("initialized DingTalk app config for org_id=%s", strings.TrimSpace(cfg.OrgID))
+	return nil
+}
+
+func configuredValue(current, envName string) string {
+	if strings.TrimSpace(current) != "" {
+		return strings.TrimSpace(current)
+	}
+	return strings.TrimSpace(os.Getenv(envName))
+}
+
 func DefaultAppConfig() AppConfig {
 	return AppConfig{
 		OrgID:       "default",
 		Name:        strings.TrimSpace(os.Getenv("DINGTALK_ORG_NAME")),
-		CorpID:      corpID,
-		AppKey:      appKey,
-		AppSecret:   appSecret,
+		CorpID:      configuredValue(corpID, "DINGTALK_CORP_ID"),
+		AppKey:      configuredValue(appKey, "DINGTALK_APP_KEY"),
+		AppSecret:   configuredValue(appSecret, "DINGTALK_APP_SECRET"),
 		AgentID:     strings.TrimSpace(os.Getenv("DINGTALK_AGENT_ID")),
 		AppHomeURL:  strings.TrimSpace(os.Getenv("DINGTALK_APP_HOME_URL")),
 		RedirectURI: strings.TrimSpace(os.Getenv("DINGTALK_REDIRECT_URI")),
@@ -1023,7 +1043,11 @@ type VacationType struct {
 }
 
 func ListVacationTypes(opUserID string) ([]VacationType, error) {
-	accessToken, err := GetAccessToken()
+	return ListVacationTypesForConfig(opUserID, DefaultAppConfig())
+}
+
+func ListVacationTypesForConfig(opUserID string, cfg AppConfig) ([]VacationType, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -1170,6 +1194,10 @@ func UpdateAnnualLeaveQuota(userID string, year int, days float64, reason string
 }
 
 func UpdateCompensatoryLeaveQuota(userID string, minutes int, workDate string, reason string) error {
+	return UpdateCompensatoryLeaveQuotaForConfig(DefaultAppConfig(), userID, minutes, workDate, reason)
+}
+
+func UpdateCompensatoryLeaveQuotaForConfig(cfg AppConfig, userID string, minutes int, workDate string, reason string) error {
 	if minutes <= 0 {
 		return nil
 	}
@@ -1178,7 +1206,7 @@ func UpdateCompensatoryLeaveQuota(userID string, minutes int, workDate string, r
 		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
 
-	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveType(opUserID)
+	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveTypeForConfig(opUserID, cfg)
 	if err != nil {
 		return err
 	}
@@ -1197,7 +1225,7 @@ func UpdateCompensatoryLeaveQuota(userID string, minutes int, workDate string, r
 	logrus.Infof("[comp-leave-sync] UpdateCompensatoryLeaveQuota userID=%s minutes=%d leaveCode=%s workDate=%s",
 		userID, minutes, leaveCode, workDate)
 
-	accessToken, err := GetAccessToken()
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -1235,6 +1263,10 @@ func UpdateCompensatoryLeaveQuota(userID string, minutes int, workDate string, r
 }
 
 func SetCompensatoryLeaveQuota(userID string, year int, totalMinutes int, reason string) error {
+	return SetCompensatoryLeaveQuotaForConfig(DefaultAppConfig(), userID, year, totalMinutes, reason)
+}
+
+func SetCompensatoryLeaveQuotaForConfig(cfg AppConfig, userID string, year int, totalMinutes int, reason string) error {
 	if totalMinutes < 0 {
 		return fmt.Errorf("totalMinutes cannot be negative")
 	}
@@ -1242,14 +1274,14 @@ func SetCompensatoryLeaveQuota(userID string, year int, totalMinutes int, reason
 	if opUserID == "" {
 		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
-	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveType(opUserID)
+	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveTypeForConfig(opUserID, cfg)
 	if err != nil {
 		return err
 	}
 	if hoursPerDay <= 0 {
 		hoursPerDay = getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8)
 	}
-	accessToken, err := GetAccessToken()
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -1413,11 +1445,15 @@ func getVacationQuotaByYear(accessToken, opUserID, userID, leaveCode string, yea
 // quotaPerDay / quotaPerHour 单位均为 1/100（例如 0 = 0天，100 = 1天，800 = 1天×8小时）。
 // year 决定生效的配额周期（start_time / end_time 自动设为该年 1-1 到 12-31）。
 func InitVacationQuota(userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, reason string) error {
+	return InitVacationQuotaForConfig(DefaultAppConfig(), userID, leaveCode, year, quotaPerDay, quotaPerHour, reason)
+}
+
+func InitVacationQuotaForConfig(cfg AppConfig, userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, reason string) error {
 	opUserID := strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID"))
 	if opUserID == "" {
 		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
-	accessToken, err := GetAccessToken()
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -1499,11 +1535,19 @@ func resolveAnnualLeaveType(opUserID string) (string, float64, error) {
 }
 
 func createCompensatoryLeaveType(opUserID, leaveName string) (string, error) {
-	return CreateCustomLeaveType(opUserID, leaveName, false)
+	return createCompensatoryLeaveTypeForConfig(opUserID, leaveName, DefaultAppConfig())
+}
+
+func createCompensatoryLeaveTypeForConfig(opUserID, leaveName string, cfg AppConfig) (string, error) {
+	return CreateCustomLeaveTypeForConfig(opUserID, leaveName, false, cfg)
 }
 
 func CreateCustomLeaveType(opUserID, leaveName string, freedomLeave bool) (string, error) {
-	accessToken, err := GetAccessToken()
+	return CreateCustomLeaveTypeForConfig(opUserID, leaveName, freedomLeave, DefaultAppConfig())
+}
+
+func CreateCustomLeaveTypeForConfig(opUserID, leaveName string, freedomLeave bool, cfg AppConfig) (string, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return "", err
 	}
@@ -1561,6 +1605,10 @@ func extractCreatedLeaveCode(resp map[string]interface{}) string {
 }
 
 func resolveCompensatoryLeaveType(opUserID string) (string, float64, error) {
+	return resolveCompensatoryLeaveTypeForConfig(opUserID, DefaultAppConfig())
+}
+
+func resolveCompensatoryLeaveTypeForConfig(opUserID string, cfg AppConfig) (string, float64, error) {
 	if code := strings.TrimSpace(os.Getenv("DINGTALK_LIEU_LEAVE_CODE")); code != "" {
 		return code, getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8), nil
 	}
@@ -1586,7 +1634,7 @@ func resolveCompensatoryLeaveType(opUserID string) (string, float64, error) {
 		leaveName = "手动发放"
 	}
 
-	types, err := ListVacationTypes(opUserID)
+	types, err := ListVacationTypesForConfig(opUserID, cfg)
 	if err != nil {
 		return "", 0, err
 	}
@@ -1610,12 +1658,12 @@ func resolveCompensatoryLeaveType(opUserID string) (string, float64, error) {
 
 	// 没有找到符合条件的假期类型，自动通过 API 创建一个
 	logrus.Infof("[leave-sync] no compensatory leave type found, creating one: name=%s", leaveName)
-	leaveCode, err := createCompensatoryLeaveType(opUserID, leaveName)
+	leaveCode, err := createCompensatoryLeaveTypeForConfig(opUserID, leaveName, cfg)
 	if err != nil {
 		// 如果创建失败，可能是因为已存在相同名称的假期类型
 		// 重新获取假期类型列表并查找已存在的假期类型
 		logrus.Warnf("[leave-sync] create leave type failed, trying to find existing one: %v", err)
-		types, err := ListVacationTypes(opUserID)
+		types, err := ListVacationTypesForConfig(opUserID, cfg)
 		if err != nil {
 			return "", 0, fmt.Errorf("auto-create compensatory leave type %q failed and cannot find existing one: %w", leaveName, err)
 		}
@@ -3919,10 +3967,12 @@ func sendCorpMessagePayloadToUser(userID, title string, body map[string]interfac
 }
 
 func buildCorpMessagePayload(userID, title, content string) map[string]interface{} {
-	msgContent, _ := json.Marshal(map[string]interface{}{
-		"content": formatCorpMessageContent(title, content),
+	return buildCorpPayload(userID, map[string]interface{}{
+		"msgtype": "text",
+		"text": map[string]interface{}{
+			"content": formatCorpMessageContent(title, content),
+		},
 	})
-	return buildCorpPayload(userID, "text", string(msgContent))
 }
 
 func buildCorpActionCardPayload(userID, title, content, actionTitle, actionURL string) map[string]interface{} {
@@ -3930,21 +3980,22 @@ func buildCorpActionCardPayload(userID, title, content, actionTitle, actionURL s
 	if actionTitle == "" {
 		actionTitle = "查看详情"
 	}
-	msgContent, _ := json.Marshal(map[string]interface{}{
-		"title":        strings.TrimSpace(title),
-		"markdown":     formatCorpMessageMarkdown(title, content),
-		"single_title": actionTitle,
-		"single_url":   strings.TrimSpace(actionURL),
+	return buildCorpPayload(userID, map[string]interface{}{
+		"msgtype": "action_card",
+		"action_card": map[string]interface{}{
+			"title":        strings.TrimSpace(title),
+			"markdown":     formatCorpMessageMarkdown(title, content),
+			"single_title": actionTitle,
+			"single_url":   strings.TrimSpace(actionURL),
+		},
 	})
-	return buildCorpPayload(userID, "action_card", string(msgContent))
 }
 
-func buildCorpPayload(userID, msgType, msgContent string) map[string]interface{} {
+func buildCorpPayload(userID string, msg map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"agent_id":    getDingTalkAgentID(),
 		"userid_list": strings.TrimSpace(userID),
-		"msgtype":     msgType,
-		"msgcontent":  msgContent,
+		"msg":         msg,
 	}
 }
 

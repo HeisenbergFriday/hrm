@@ -74,6 +74,7 @@ type Attendance struct {
 // Approval 审批模型
 type Approval struct {
 	ID            uint                   `gorm:"primaryKey" json:"id"`
+	OrgID         string                 `gorm:"type:varchar(64);index" json:"org_id"`
 	ProcessID     string                 `gorm:"type:varchar(64);unique;not null" json:"process_id"` // 钉钉审批流程ID
 	Title         string                 `gorm:"type:varchar(256);not null" json:"title"`
 	ApplicantID   string                 `gorm:"type:varchar(64);not null" json:"applicant_id"`
@@ -91,6 +92,7 @@ type Approval struct {
 // ApprovalTemplate 审批模板模型
 type ApprovalTemplate struct {
 	ID          uint                   `gorm:"primaryKey" json:"id"`
+	OrgID       string                 `gorm:"type:varchar(64);index" json:"org_id"`
 	TemplateID  string                 `gorm:"type:varchar(64);unique;not null" json:"template_id"` // 钉钉模板ID
 	Name        string                 `gorm:"type:varchar(128);not null" json:"name"`
 	Description string                 `gorm:"type:text" json:"description"`
@@ -170,6 +172,7 @@ type DataPermission struct {
 // OperationLog 操作日志模型
 type OperationLog struct {
 	ID        uint                   `gorm:"primaryKey" json:"id"`
+	OrgID     string                 `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID    string                 `gorm:"type:varchar(64);not null" json:"user_id"`
 	UserName  string                 `gorm:"type:varchar(128);not null" json:"user_name"`
 	Operation string                 `gorm:"type:varchar(128);not null" json:"operation"`
@@ -183,7 +186,8 @@ type OperationLog struct {
 // SyncStatus 同步状态模型
 type SyncStatus struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
-	Type         string    `gorm:"type:varchar(32);unique;not null" json:"type"`
+	OrgID        string    `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_org_sync_type;index" json:"org_id"`
+	Type         string    `gorm:"type:varchar(32);not null;uniqueIndex:idx_org_sync_type" json:"type"`
 	LastSyncTime time.Time `json:"last_sync_time"`
 	Status       string    `gorm:"type:varchar(32);not null" json:"status"`
 	Message      string    `gorm:"type:text" json:"message"`
@@ -194,6 +198,7 @@ type SyncStatus struct {
 // DingTalkBinding 钉钉绑定模型
 type DingTalkBinding struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
+	OrgID          string    `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID         string    `gorm:"type:varchar(64);unique;not null" json:"user_id"`          // 本地用户ID
 	DingTalkUserID string    `gorm:"type:varchar(64);unique;not null" json:"dingtalk_user_id"` // 钉钉用户ID
 	UnionID        string    `gorm:"type:varchar(64);unique" json:"union_id"`                  // 钉钉UnionID
@@ -205,6 +210,7 @@ type DingTalkBinding struct {
 // UserSession 用户会话模型
 type UserSession struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
+	OrgID     string    `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID    string    `gorm:"type:varchar(64);not null" json:"user_id"`            // 本地用户ID
 	SessionID string    `gorm:"type:varchar(128);unique;not null" json:"session_id"` // 会话ID
 	Token     string    `gorm:"type:varchar(512);not null" json:"token"`             // JWT token
@@ -218,6 +224,7 @@ type UserSession struct {
 // LoginLog 登录日志模型
 type LoginLog struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
+	OrgID       string    `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID      string    `gorm:"type:varchar(64)" json:"user_id"`               // 本地用户ID
 	UserName    string    `gorm:"type:varchar(128)" json:"user_name"`            // 用户名
 	LoginType   string    `gorm:"type:varchar(32);not null" json:"login_type"`   // 登录类型：dingtalk_qr, dingtalk_in_app, dingtalk_account, local
@@ -232,6 +239,7 @@ type LoginLog struct {
 // AttendanceExport 考勤导出记录模型
 type AttendanceExport struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
+	OrgID       string    `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID      string    `gorm:"type:varchar(64);not null" json:"user_id"`    // 导出人ID
 	UserName    string    `gorm:"type:varchar(128);not null" json:"user_name"` // 导出人姓名
 	FileName    string    `gorm:"type:varchar(256);not null" json:"file_name"` // 文件名
@@ -296,6 +304,7 @@ type EmployeeProfile struct {
 // EmployeeTransfer 员工转岗模型
 type EmployeeTransfer struct {
 	ID                uint           `gorm:"primaryKey" json:"id"`
+	OrgID             string         `gorm:"type:varchar(64);index" json:"org_id"`
 	TransferID        string         `gorm:"type:varchar(64);unique;not null" json:"transfer_id"`   // 转岗ID
 	UserID            string         `gorm:"type:varchar(64);not null" json:"user_id"`              // 员工ID
 	UserName          string         `gorm:"type:varchar(128);not null" json:"user_name"`           // 员工姓名
@@ -320,6 +329,7 @@ type EmployeeTransfer struct {
 // EmployeeResignation 员工离职模型
 type EmployeeResignation struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
+	OrgID           string    `gorm:"type:varchar(64);index" json:"org_id"`
 	ResignationID   string    `gorm:"type:varchar(64);unique;not null" json:"resignation_id"` // 离职ID
 	UserID          string    `gorm:"type:varchar(64);not null" json:"user_id"`               // 员工ID
 	UserName        string    `gorm:"type:varchar(128);not null" json:"user_name"`            // 员工姓名
@@ -344,6 +354,7 @@ type EmployeeResignation struct {
 // EmployeeOnboarding 员工入职模型
 type EmployeeOnboarding struct {
 	ID           uint   `gorm:"primaryKey" json:"id"`
+	OrgID        string `gorm:"type:varchar(64);index" json:"org_id"`
 	OnboardingID string `gorm:"type:varchar(64);unique;not null" json:"onboarding_id"` // 入职ID
 	// 基本信息
 	EmployeeID   string `gorm:"type:varchar(64);unique;not null" json:"employee_id"` // 员工工号
@@ -377,6 +388,7 @@ type EmployeeOnboarding struct {
 // TalentAnalysis 人才分析模型
 type TalentAnalysis struct {
 	ID             uint   `gorm:"primaryKey" json:"id"`
+	OrgID          string `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID         string `gorm:"type:varchar(64);unique;not null" json:"user_id"`   // 员工ID
 	UserName       string `gorm:"type:varchar(128);not null" json:"user_name"`       // 员工姓名
 	DepartmentID   string `gorm:"type:varchar(64);not null" json:"department_id"`    // 部门ID
@@ -410,6 +422,7 @@ type TalentAnalysis struct {
 // EmployeeShiftConfig 员工自定义下班时间配置（本地存储，同步到钉钉时生效）
 type EmployeeShiftConfig struct {
 	gorm.Model
+	OrgID    string `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID   string `gorm:"type:varchar(64);uniqueIndex;not null" json:"user_id"`
 	UserName string `gorm:"type:varchar(128)" json:"user_name"`
 	ShiftID  int64  `gorm:"not null" json:"shift_id"`         // 钉钉班次ID
@@ -420,6 +433,7 @@ type EmployeeShiftConfig struct {
 // DingTalkShiftCatalog stores local name -> shift ID mappings to avoid repeated DingTalk API calls.
 type DingTalkShiftCatalog struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
+	OrgID     string    `gorm:"type:varchar(64);index" json:"org_id"`
 	Name      string    `gorm:"type:varchar(128);not null;index:idx_dingtalk_shift_catalogs_name" json:"name"`
 	ShiftKey  string    `gorm:"type:varchar(256);uniqueIndex:idx_dingtalk_shift_catalogs_shift_key;not null" json:"shift_key"` // 稳定签名: normalize(name, check_in, check_out)
 	ShiftID   int64     `gorm:"not null" json:"shift_id"`
@@ -438,6 +452,7 @@ func (DingTalkShiftCatalog) TableName() string {
 // WeekScheduleRule 大小周规则配置
 type WeekScheduleRule struct {
 	ID        uint           `gorm:"primaryKey" json:"id"`
+	OrgID     string         `gorm:"type:varchar(64);index" json:"org_id"`
 	ScopeType string         `gorm:"type:varchar(32);not null;index:idx_scope,unique" json:"scope_type"` // company/department/user
 	ScopeID   string         `gorm:"type:varchar(64);not null;index:idx_scope,unique" json:"scope_id"`   // 空=全公司, 部门ID, 用户ID
 	ScopeName string         `gorm:"type:varchar(128)" json:"scope_name"`                                // 显示名称
@@ -453,6 +468,7 @@ type WeekScheduleRule struct {
 // WeekScheduleOverride 大小周手动覆盖（针对特定周）
 type WeekScheduleOverride struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
+	OrgID         string    `gorm:"type:varchar(64);index" json:"org_id"`
 	ScopeType     string    `gorm:"type:varchar(32);not null;index:idx_scope_date,unique" json:"scope_type"`
 	ScopeID       string    `gorm:"type:varchar(64);not null;index:idx_scope_date,unique" json:"scope_id"`
 	WeekStartDate string    `gorm:"type:varchar(32);not null;index:idx_scope_date,unique" json:"week_start_date"` // 该周的周一日期
@@ -465,6 +481,7 @@ type WeekScheduleOverride struct {
 // WeekScheduleSyncLog 大小周同步日志
 type WeekScheduleSyncLog struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
+	OrgID      string    `gorm:"type:varchar(64);index" json:"org_id"`
 	SyncType   string    `gorm:"type:varchar(32);not null" json:"sync_type"` // to_dingtalk/from_dingtalk
 	TargetDate string    `gorm:"type:varchar(32)" json:"target_date"`        // 同步的目标周六日期
 	UserCount  int       `gorm:"default:0" json:"user_count"`                // 影响人数
@@ -476,6 +493,7 @@ type WeekScheduleSyncLog struct {
 // StatutoryHoliday 法定节假日/调休上班日
 type StatutoryHoliday struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
+	OrgID     string    `gorm:"type:varchar(64);index" json:"org_id"`
 	Date      string    `gorm:"type:varchar(32);uniqueIndex;not null" json:"date"` // 日期 2006-01-02
 	Name      string    `gorm:"type:varchar(128);not null" json:"name"`            // 节假日名称，如"国庆节"、"国庆调休上班"
 	Type      string    `gorm:"type:varchar(32);not null" json:"type"`             // holiday=放假, workday=调休上班
@@ -489,6 +507,7 @@ type StatutoryHoliday struct {
 // LeaveRuleConfig 年假规则配置
 type LeaveRuleConfig struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
+	OrgID         string    `gorm:"type:varchar(64);index" json:"org_id"`
 	RuleType      string    `gorm:"type:varchar(32);not null;index" json:"rule_type"`       // eligibility / grant
 	RuleKey       string    `gorm:"type:varchar(64);not null" json:"rule_key"`              // 规则唯一键
 	RuleName      string    `gorm:"type:varchar(128);not null" json:"rule_name"`            // 规则名称
@@ -503,6 +522,7 @@ type LeaveRuleConfig struct {
 // AnnualLeaveEligibility 年假资格（按员工+年+季度持久化）
 type AnnualLeaveEligibility struct {
 	ID                       uint      `gorm:"primaryKey" json:"id"`
+	OrgID                    string    `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID                   string    `gorm:"type:varchar(64);not null;uniqueIndex:idx_leave_elig_user_year_q" json:"user_id"`
 	Year                     int       `gorm:"not null;uniqueIndex:idx_leave_elig_user_year_q" json:"year"`
 	Quarter                  int       `gorm:"not null;uniqueIndex:idx_leave_elig_user_year_q" json:"quarter"` // 1-4
@@ -521,6 +541,7 @@ type AnnualLeaveEligibility struct {
 // AnnualLeaveGrant 年假发放台账
 type AnnualLeaveGrant struct {
 	ID                  uint       `gorm:"primaryKey" json:"id"`
+	OrgID               string     `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID              string     `gorm:"type:varchar(64);not null;index:idx_leave_grant_user_year;uniqueIndex:idx_leave_grant_user_year_q_type" json:"user_id"`
 	Year                int        `gorm:"not null;index:idx_leave_grant_user_year;uniqueIndex:idx_leave_grant_user_year_q_type" json:"year"`
 	Quarter             int        `gorm:"not null;uniqueIndex:idx_leave_grant_user_year_q_type" json:"quarter"` // 1-4
@@ -543,6 +564,7 @@ type AnnualLeaveGrant struct {
 // OvertimeRuleConfig 加班规则配置
 type OvertimeRuleConfig struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
+	OrgID         string    `gorm:"type:varchar(64);index" json:"org_id"`
 	RuleKey       string    `gorm:"type:varchar(64);not null;uniqueIndex" json:"rule_key"`
 	RuleName      string    `gorm:"type:varchar(128);not null" json:"rule_name"`
 	RuleValueJSON string    `gorm:"type:json;not null" json:"rule_value_json"`
@@ -556,6 +578,7 @@ type OvertimeRuleConfig struct {
 // OvertimeMatchResult 加班审批与考勤匹配结果
 type OvertimeMatchResult struct {
 	ID                       uint           `gorm:"primaryKey" json:"id"`
+	OrgID                    string         `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID                   string         `gorm:"type:varchar(64);not null;index:idx_user_work_date,unique" json:"user_id"`
 	UserName                 string         `gorm:"type:varchar(128)" json:"user_name"`
 	WorkDate                 string         `gorm:"type:varchar(32);not null;index:idx_user_work_date,unique" json:"work_date"`
@@ -589,6 +612,7 @@ type OvertimeMatchResult struct {
 // OvertimeSyncHistory 已成功同步到钉钉的加班记录快照
 type OvertimeSyncHistory struct {
 	ID                       uint       `gorm:"primaryKey" json:"id"`
+	OrgID                    string     `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID                   string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_overtime_sync_user_workdate" json:"user_id"`
 	WorkDate                 string     `gorm:"type:varchar(32);not null;uniqueIndex:idx_overtime_sync_user_workdate" json:"work_date"`
 	ApprovalID               uint       `gorm:"default:0;index" json:"approval_id"`
@@ -604,6 +628,7 @@ type OvertimeSyncHistory struct {
 // OvertimeSupplementaryRequest 加班补卡申请
 type OvertimeSupplementaryRequest struct {
 	ID                    uint       `gorm:"primaryKey" json:"id"`
+	OrgID                 string     `gorm:"type:varchar(64);index" json:"org_id"`
 	MatchResultID         uint       `gorm:"not null;index" json:"match_result_id"`
 	UserID                string     `gorm:"type:varchar(64);not null;index" json:"user_id"`
 	WorkDate              string     `gorm:"type:varchar(32);not null" json:"work_date"`
@@ -623,6 +648,7 @@ type OvertimeSupplementaryRequest struct {
 // CompensatoryLeaveLedger 调休余额台账
 type CompensatoryLeaveLedger struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
+	OrgID          string    `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID         string    `gorm:"type:varchar(64);not null;index:idx_comp_leave_user_date" json:"user_id"`
 	SourceType     string    `gorm:"type:varchar(32);not null" json:"source_type"` // overtime
 	SourceMatchID  uint      `gorm:"default:0" json:"source_match_id"`
@@ -641,6 +667,7 @@ type CompensatoryLeaveLedger struct {
 // AnnualLeaveConsumeLog 年假消费台账（防重复，FIFO扣减记录）
 type AnnualLeaveConsumeLog struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
+	OrgID       string    `gorm:"type:varchar(64);index" json:"org_id"`
 	UserID      string    `gorm:"type:varchar(64);not null;index" json:"user_id"`
 	GrantID     uint      `gorm:"not null;index;uniqueIndex:idx_leave_consume_request_grant" json:"grant_id"` // 对应的发放记录
 	ApprovalRef string    `gorm:"type:varchar(128);index:idx_leave_consume_approval_ref" json:"approval_ref"` // 审批ID，重试时用于幂等

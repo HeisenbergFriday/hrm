@@ -8,22 +8,35 @@ import (
 )
 
 type LeaveRuleConfigRepository struct {
-	db *gorm.DB
+	db    *gorm.DB
+	orgID string
 }
 
 func NewLeaveRuleConfigRepository(db *gorm.DB) *LeaveRuleConfigRepository {
 	return &LeaveRuleConfigRepository{db: db}
 }
 
+func NewLeaveRuleConfigRepositoryWithOrgID(db *gorm.DB, orgID string) *LeaveRuleConfigRepository {
+	return &LeaveRuleConfigRepository{db: db, orgID: orgID}
+}
+
+func (r *LeaveRuleConfigRepository) scoped() *gorm.DB {
+	tx := r.db
+	if r.orgID != "" {
+		tx = tx.Where("org_id = ?", r.orgID)
+	}
+	return tx
+}
+
 func (r *LeaveRuleConfigRepository) FindActiveByType(ruleType string) ([]database.LeaveRuleConfig, error) {
 	var configs []database.LeaveRuleConfig
-	err := r.db.Where("rule_type = ? AND status = 'active'", ruleType).Find(&configs).Error
+	err := r.scoped().Where("rule_type = ? AND status = 'active'", ruleType).Find(&configs).Error
 	return configs, err
 }
 
 func (r *LeaveRuleConfigRepository) FindByKey(ruleKey string) (*database.LeaveRuleConfig, error) {
 	var config database.LeaveRuleConfig
-	err := r.db.Where("rule_key = ?", ruleKey).First(&config).Error
+	err := r.scoped().Where("rule_key = ?", ruleKey).First(&config).Error
 	if err != nil {
 		return nil, err
 	}
@@ -31,8 +44,15 @@ func (r *LeaveRuleConfigRepository) FindByKey(ruleKey string) (*database.LeaveRu
 }
 
 func (r *LeaveRuleConfigRepository) Upsert(config *database.LeaveRuleConfig) error {
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, config.OrgID)
+		if err != nil {
+			return err
+		}
+		config.OrgID = merged
+	}
 	var existing database.LeaveRuleConfig
-	err := r.db.Where("rule_key = ?", config.RuleKey).First(&existing).Error
+	err := r.scoped().Where("rule_key = ?", config.RuleKey).First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return r.db.Create(config).Error
 	}

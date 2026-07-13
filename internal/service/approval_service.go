@@ -19,6 +19,13 @@ func NewApprovalService(db *gorm.DB) *ApprovalService {
 	}
 }
 
+func NewApprovalServiceWithOrgID(db *gorm.DB, orgID string) *ApprovalService {
+	return &ApprovalService{
+		approvalRepo: repository.NewApprovalRepositoryWithOrgID(db, orgID),
+		templateRepo: repository.NewApprovalTemplateRepositoryWithOrgID(db, orgID),
+	}
+}
+
 func (s *ApprovalService) GetTemplates() ([]database.ApprovalTemplate, int64, error) {
 	return s.templateRepo.FindAll()
 }
