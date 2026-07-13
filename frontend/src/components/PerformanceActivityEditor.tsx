@@ -39,6 +39,8 @@ interface PerformanceActivityEditorProps {
   userOptions: SelectOption[]
   scopeOptionsLoading: boolean
   importingParticipants?: boolean
+  previousActivityOptions?: SelectOption[]
+  previousActivityLoading?: boolean
   onImportParticipants: (file: File) => Promise<void>
   onSave: () => void
   onCancel: () => void
@@ -166,6 +168,8 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
   userOptions,
   scopeOptionsLoading,
   importingParticipants = false,
+  previousActivityOptions = [],
+  previousActivityLoading = false,
   onImportParticipants,
   onSave,
   onCancel,
@@ -180,23 +184,42 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
   const normalizedCycleType = normalizeCycleType(cycleType)
   const selectedIndicatorLibraryIdKey = selectedIndicatorLibraryId == null ? '' : String(selectedIndicatorLibraryId)
   const selectedTemplateIdKey = selectedTemplateId == null ? '' : String(selectedTemplateId)
+  const visiblePerformanceTemplates = React.useMemo(() => {
+    const seen = new Set<string>()
+    return performanceTemplates.filter(template => {
+      const key = `${String(template.flow_type || '').trim()}::${getFlowTemplateOptionLabel(template)}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [performanceTemplates])
   const selectedTemplate = React.useMemo(
     () => performanceTemplates.find(template => String(template.id) === selectedTemplateIdKey) || null,
     [performanceTemplates, selectedTemplateIdKey],
   )
+  const templateSelectOptions = React.useMemo(() => {
+    const options = visiblePerformanceTemplates.map(template => ({
+      value: template.id,
+      label: getFlowTemplateOptionLabel(template),
+    }))
+    if (selectedTemplate && !options.some(option => String(option.value) === String(selectedTemplate.id))) {
+      options.push({ value: selectedTemplate.id, label: getFlowTemplateOptionLabel(selectedTemplate) })
+    }
+    return options
+  }, [selectedTemplate, visiblePerformanceTemplates])
   const selectedFlowType = String(selectedTemplate?.flow_type || values.flow_type || '').trim()
   React.useEffect(() => {
-    if (selectedTemplateIdKey || performanceTemplatesLoading || performanceTemplates.length === 0) return
+    if (selectedTemplateIdKey || performanceTemplatesLoading || visiblePerformanceTemplates.length === 0) return
     const currentFlowType = String(form.getFieldValue('flow_type') || 'old').trim()
-    const defaultTemplate = performanceTemplates.find(template => String(template.flow_type || '').trim() === currentFlowType)
-      || performanceTemplates[0]
+    const defaultTemplate = visiblePerformanceTemplates.find(template => String(template.flow_type || '').trim() === currentFlowType)
+      || visiblePerformanceTemplates[0]
     if (!defaultTemplate) return
     form.setFieldsValue({
       template_id: defaultTemplate.id,
       flow_type: defaultTemplate.flow_type || currentFlowType,
     })
     forceFormRerender(version => version + 1)
-  }, [form, performanceTemplates, performanceTemplatesLoading, selectedTemplateIdKey])
+  }, [form, performanceTemplatesLoading, selectedTemplateIdKey, visiblePerformanceTemplates])
   const selectedIndicatorLibrary = React.useMemo(
     () => indicatorLibraries.find(lib => String(lib.id) === selectedIndicatorLibraryIdKey) || null,
     [indicatorLibraries, selectedIndicatorLibraryIdKey],
@@ -245,7 +268,7 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
 
   const saveActions = (
     <Space wrap>
-      <Button icon={<CloseOutlined />} onClick={onCancel} disabled={saving}>
+      <Button data-testid="performance-editor-cancel" icon={<CloseOutlined />} onClick={onCancel} disabled={saving}>
         取消
       </Button>
       <Button data-testid="performance-editor-save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave} style={{ background: '#4338ca', borderColor: '#4338ca' }}>
@@ -371,10 +394,7 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                       loading={performanceTemplatesLoading}
                       optionFilterProp="label"
                       filterOption={filterSelectOption}
-                      options={performanceTemplates.map(template => ({
-                        value: template.id,
-                        label: getFlowTemplateOptionLabel(template),
-                      }))}
+                      options={templateSelectOptions}
                       onChange={(value) => {
                         const template = performanceTemplates.find(item => String(item.id) === String(value))
                         if (template?.flow_type) {
@@ -472,6 +492,30 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                     />
                   </Form.Item>
                 </Col>
+                {selectedFlowType === 'new' && (
+                  <Col xs={24} md={8}>
+                    <Form.Item
+                      name="previous_review_activity_id"
+                      label="上一期绩效活动"
+                      extra={
+                        <Text type="secondary">
+                          选择上一期的沐腾科技活动后，系统会把上期"下季度目标计划"自动承接为本期考核指标。首次开启新流程可留空，后续通过"补录"手动录入上期考核指标。
+                        </Text>
+                      }
+                    >
+                      <Select
+                        data-testid="performance-editor-previous-activity"
+                        placeholder="请选择上一期活动（首次开启可留空）"
+                        allowClear
+                        showSearch
+                        loading={previousActivityLoading}
+                        optionFilterProp="label"
+                        filterOption={filterSelectOption}
+                        options={previousActivityOptions}
+                      />
+                    </Form.Item>
+                  </Col>
+                )}
               </Row>
             </section>
 

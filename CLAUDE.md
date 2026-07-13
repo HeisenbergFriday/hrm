@@ -458,7 +458,11 @@ AI 文档更新：
   `internal/database/models.go`、
   `internal/database/database.go`
 - **权限管理与路由守卫功能**：新增 `RouteGuard` 组件实现前端路由权限控制，菜单配置抽离至 `frontend/src/config/menu.tsx`，权限服务 `internal/service/permission_service.go` 支持细粒度菜单与按钮权限查询，角色仓储 `internal/repository/role_repository.go` 增强角色-权限关联查询，部门仓储 `internal/repository/department_repository.go` 新增部门层级查询方法
+- **多组织隔离基线**（`feat/multi-org-isolation` 分支，`internal/database/models.go` 相关表补 `OrgID` + 复合唯一索引，`internal/repository/{user,department,employee,attendance}_repository.go` 引入 `NewXxxRepositoryWithOrgID` 与 `scoped()` 过滤器，`internal/service/*` 对应增补 `NewXxxServiceWithOrgID` 构造，`internal/middleware/jwt.go` 拒绝缺 `org_id` 的旧 token 并返回 `code=token_missing_org_id`，`internal/middleware/auth_context.go` 缺 `orgID` 时报错而非兜底，`internal/database/organization_service.go` 新增 `ListActiveOrganizations`/`IsUserInOrganization`/`EnsureOrganizationUser`，`internal/dingtalk/dingtalk.go` 新增 `SyncDepartmentsForConfig`/`SyncUsersWithDeptsForConfig` 支持按 `AppConfig` 独立同步，前端 `frontend/src/pages/Login.tsx` 支持选择组织；业务表补 `org_id`（M1）、历史数据按钉钉 `corp_id` 锚点回填（M2）、按拓扑传导（M3）、模板类按组织克隆（M4）由后续迁移脚本执行）
 - **前端代码质量修复**：修复 `Home.tsx` 中 React Hook 规则违规，将 `useQuery` hooks 移至条件返回之前并通过 `enabled` 参数控制查询执行
+- **绩效模块重复代码清理与页面迭代**：`frontend/src/services/api.ts` 与 `internal/api/router.go` 各删除一份重复的 `performanceAPI` / `performance` 路由块，仅保留前置版本；`PerformanceOverview.tsx` 大幅迭代（分布规则、结果摘要、审批同步等展示与交互），`PerformanceActivityEditor.tsx` 与 `PerformanceIndicatorLibrary.tsx`、`PerformanceSelfEval.tsx` 同步小改
+- **考勤数据处理工具接入**（`tools/attendance-processing/`）：D:\app 的 6 个 Excel 计算模块（leave/overtime/subsidy/finally/parttime + rules_engine）原样搬入，业务逻辑零改动；新增 `cli.py` 作为统一命令行入口（JSON stdout 返回结果路径），由 Go 后端经 subprocess 调用；`internal/api/attendance_processing_handlers.go` 负责上传接收→临时目录→调 Python→回传结果文件，路由挂在 `attendance/processing/*`（需 `attendance_manage` 权限），前端页面 `frontend/src/pages/AttendanceProcessing.tsx`。注：当前为 subprocess 方案（Go 容器需含 Python 环境），HTTP 独立服务方案为后续可选演进。
+- **前端 UI 主题改版**：整体从深色侧边栏改为浅色系，主色由靛蓝 `#4338ca` 调整为蓝色 `#2563eb`；`frontend/src/index.css` 新增一整套 CSS 变量体系（`--color-*` 语义色板），`frontend/src/App.tsx` 引入 antd 主题 token（Layout/Menu 浅色化、header/user-chip 样式），`Home.tsx`、`Setting.tsx`、`PerformanceOverview.tsx` 随主题同步调整。
 
 ---
 

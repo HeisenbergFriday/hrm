@@ -13,28 +13,35 @@ import (
 )
 
 func main() {
-	// 高风险工具：执行前必须显式传入 leave-code，并优先使用 dry-run 复核目标范围。
-	leaveCode := flag.String("leave-code", "", "钉钉假期类型 leave_code（必填）")
-	year := flag.Int("year", time.Now().Year(), "配额周期年份")
-	quotaDays := flag.Float64("quota-days", 0, "发放天数（支持小数，默认 0 表示仅初始化记录不发放）")
-	quotaHours := flag.Float64("quota-hours", -1, "发放小时数（优先级高于 -quota-days，-1 表示使用 -quota-days）")
-	hoursPerDay := flag.Float64("hours-per-day", 8, "每天工时（用于天↔小时换算）")
-	reason := flag.String("reason", "批量初始化假期配额", "变更原因（记录在钉钉操作日志）")
-	dryRun := flag.Bool("dry-run", true, "仅列出员工，不实际调用钉钉接口")
+	orgIDFlag := flag.String("org-id", "", "required organization id; DingTalk writes use this org app config")
+	leaveCode := flag.String("leave-code", "", "DingTalk leave type leave_code")
+	year := flag.Int("year", time.Now().Year(), "quota cycle year")
+	quotaDays := flag.Float64("quota-days", 0, "grant days; 0 only initializes records")
+	quotaHours := flag.Float64("quota-hours", -1, "grant hours; takes precedence over -quota-days when >= 0")
+	hoursPerDay := flag.Float64("hours-per-day", 8, "working hours per day")
+	reason := flag.String("reason", "batch initialize leave quota", "DingTalk quota change reason")
+	dryRun := flag.Bool("dry-run", true, "list employees without writing to DingTalk")
 	flag.Parse()
 
+	orgID := strings.TrimSpace(*orgIDFlag)
+	if orgID == "" {
+		log.Fatal("missing -org-id")
+	}
 	if strings.TrimSpace(*leaveCode) == "" {
 		log.Fatal("missing required -leave-code")
 	}
 
 	if err := config.Load(); err != nil {
-		log.Fatalf("加载配置失败: %v", err)
+		log.Fatalf("load config failed: %v", err)
 	}
-	if err := dingtalk.Init(); err != nil {
-		log.Fatalf("钉钉初始化失败: %v", err)
+	dingCfg, ok := dingtalk.GetAppConfigForOrg(orgID)
+	if !ok {
+		log.Fatalf("dingtalk app config not found for org_id=%s", orgID)
+	}
+	if err := dingtalk.InitWithConfig(dingCfg); err != nil {
+		log.Fatalf("dingtalk init failed for org_id=%s: %v", orgID, err)
 	}
 
-	// 计算 1/100 单位的配额值
 	var perHour float64
 	if *quotaHours >= 0 {
 		perHour = *quotaHours
@@ -44,22 +51,21 @@ func main() {
 	quotaPerHour := int64(math.Round(perHour * 100))
 	quotaPerDay := int64(math.Round(perHour / *hoursPerDay * 100))
 
-	log.Printf("leave_code=%s  year=%d  quota=%.2f小时(%.2f天)  perHour×100=%d  perDay×100=%d",
-		*leaveCode, *year, perHour, perHour / *hoursPerDay, quotaPerHour, quotaPerDay)
+	log.Printf("org=%s leave_code=%s year=%d quota=%.2f hours (%.2f days) perHour_x100=%d perDay_x100=%d",
+		orgID, *leaveCode, *year, perHour, perHour / *hoursPerDay, quotaPerHour, quotaPerDay)
 
-	// 获取全部员工
-	log.Println("正在从钉钉同步员工列表...")
+	log.Printf("syncing DingTalk users for org=%s...", orgID)
 	users, err := dingtalk.SyncUsers()
 	if err != nil {
-		log.Fatalf("获取员工列表失败: %v", err)
+		log.Fatalf("sync users failed for org=%s: %v", orgID, err)
 	}
-	log.Printf("共找到 %d 名员工", len(users))
+	log.Printf("found %d employees for org=%s", len(users), orgID)
 
 	if *dryRun {
 		for _, u := range users {
-			fmt.Printf("  [dry-run] userID=%s  name=%s\n", u.UserID, u.Name)
+			fmt.Printf("  [dry-run] org=%s userID=%s name=%s\n", orgID, u.UserID, u.Name)
 		}
-		log.Println("dry-run 结束，未实际写入")
+		log.Println("dry-run finished without writes")
 		return
 	}
 
@@ -68,18 +74,18 @@ func main() {
 		if u.UserID == "" {
 			continue
 		}
-		err := dingtalk.InitVacationQuota(u.UserID, *leaveCode, *year, quotaPerDay, quotaPerHour, *reason)
+		err := dingtalk.InitVacationQuotaForConfig(dingCfg, u.UserID, *leaveCode, *year, quotaPerDay, quotaPerHour, *reason)
 		if err != nil {
-			log.Printf("  FAIL  userID=%s  name=%s  err=%v", u.UserID, u.Name, err)
+			log.Printf("  FAIL  org=%s userID=%s name=%s err=%v", orgID, u.UserID, u.Name, err)
 			failed++
 		} else {
-			log.Printf("  OK    userID=%s  name=%s", u.UserID, u.Name)
+			log.Printf("  OK    org=%s userID=%s name=%s", orgID, u.UserID, u.Name)
 			success++
 		}
 	}
 
-	log.Printf("完成：成功 %d，失败 %d，合计 %d", success, failed, success+failed)
+	log.Printf("done: success=%d failed=%d total=%d", success, failed, success+failed)
 	if failed > 0 {
-		log.Fatalf("存在 %d 个失败，请检查日志", failed)
+		log.Fatalf("%d records failed; check logs", failed)
 	}
 }

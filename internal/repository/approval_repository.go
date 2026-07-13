@@ -8,20 +8,49 @@ import (
 )
 
 type ApprovalRepository struct {
-	db *gorm.DB
+	db    *gorm.DB
+	orgID string
 }
 
 func NewApprovalRepository(db *gorm.DB) *ApprovalRepository {
 	return &ApprovalRepository{db: db}
 }
 
+func NewApprovalRepositoryWithOrgID(db *gorm.DB, orgID string) *ApprovalRepository {
+	return &ApprovalRepository{db: db, orgID: orgID}
+}
+
+func (r *ApprovalRepository) scoped() *gorm.DB {
+	tx := r.db
+	if r.orgID != "" {
+		tx = tx.Where("org_id = ?", r.orgID)
+	}
+	return tx
+}
+
 func (r *ApprovalRepository) Create(approval *database.Approval) error {
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, approval.OrgID)
+		if err != nil {
+			return err
+		}
+		approval.OrgID = merged
+	}
 	return r.db.Create(approval).Error
 }
 
 func (r *ApprovalRepository) FindByID(id string) (*database.Approval, error) {
 	var approval database.Approval
-	err := r.db.First(&approval, "id = ?", id).Error
+	err := r.scoped().First(&approval, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &approval, nil
+}
+
+func (r *ApprovalRepository) FindByUintID(id uint) (*database.Approval, error) {
+	var approval database.Approval
+	err := r.scoped().First(&approval, id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +61,7 @@ func (r *ApprovalRepository) FindAll(page, pageSize int, filters map[string]stri
 	var approvals []database.Approval
 	var total int64
 
-	query := r.db.Model(&database.Approval{})
+	query := r.scoped().Model(&database.Approval{})
 
 	if v, ok := filters["status"]; ok && v != "" {
 		query = query.Where("status = ?", v)
@@ -71,14 +100,34 @@ func (r *ApprovalRepository) FindAll(page, pageSize int, filters map[string]stri
 // ApprovalTemplate Repository
 
 type ApprovalTemplateRepository struct {
-	db *gorm.DB
+	db    *gorm.DB
+	orgID string
 }
 
 func NewApprovalTemplateRepository(db *gorm.DB) *ApprovalTemplateRepository {
 	return &ApprovalTemplateRepository{db: db}
 }
 
+func NewApprovalTemplateRepositoryWithOrgID(db *gorm.DB, orgID string) *ApprovalTemplateRepository {
+	return &ApprovalTemplateRepository{db: db, orgID: orgID}
+}
+
+func (r *ApprovalTemplateRepository) scoped() *gorm.DB {
+	tx := r.db
+	if r.orgID != "" {
+		tx = tx.Where("org_id = ?", r.orgID)
+	}
+	return tx
+}
+
 func (r *ApprovalTemplateRepository) Create(template *database.ApprovalTemplate) error {
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, template.OrgID)
+		if err != nil {
+			return err
+		}
+		template.OrgID = merged
+	}
 	return r.db.Create(template).Error
 }
 
@@ -86,10 +135,10 @@ func (r *ApprovalTemplateRepository) FindAll() ([]database.ApprovalTemplate, int
 	var templates []database.ApprovalTemplate
 	var total int64
 
-	if err := r.db.Model(&database.ApprovalTemplate{}).Count(&total).Error; err != nil {
+	if err := r.scoped().Model(&database.ApprovalTemplate{}).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := r.db.Find(&templates).Error; err != nil {
+	if err := r.scoped().Find(&templates).Error; err != nil {
 		return nil, 0, err
 	}
 

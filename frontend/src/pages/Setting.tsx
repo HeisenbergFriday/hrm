@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { Typography, Form, Input, Button, Spin, Empty, Alert, message, Row, Col } from 'antd'
 import { SettingOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
-import { syncAPI } from '../services/api'
+import { orgAPI, syncAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import { formatDateTime } from '../utils/format'
@@ -20,15 +20,15 @@ const Setting: React.FC = () => {
     }
   })
 
-  const handleSync = async (type: string) => {
+  // 多租户：普通设置页只能同步当前登录组织，跨组织同步须走受控运维入口。
+  const handleSyncCurrentOrg = async () => {
     setSyncing(true)
     try {
-      const fn = type === 'departments' ? syncAPI.syncDepartments : syncAPI.syncUsers
-      await fn()
-      message.success(`${type === 'departments' ? '部门' : '用户'}同步成功`)
-      refetchSyncStatus()
+      await orgAPI.syncOrg()
+      message.success('当前组织花名册同步成功')
+      await refetchSyncStatus()
     } catch (error) {
-      message.error(`${type === 'departments' ? '部门' : '用户'}同步失败`)
+      message.error('当前组织花名册同步失败')
     } finally {
       setSyncing(false)
     }
@@ -101,22 +101,20 @@ const Setting: React.FC = () => {
                     <span>{formatDateTime(syncStatus.users.last_sync_time)}</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 'var(--space-4)' }}>
+                <Alert
+                  style={{ marginBottom: 'var(--space-4)' }}
+                  type="info"
+                  showIcon
+                  message="花名册同步只作用于当前登录的组织；跨组织同步请通过运维入口执行。"
+                />
+                <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
                   <Button
                     type="primary"
                     icon={<SyncOutlined />}
                     loading={syncing}
-                    onClick={() => handleSync('departments')}
+                    onClick={handleSyncCurrentOrg}
                   >
-                    同步部门
-                  </Button>
-                  <Button
-                    type="primary"
-                    icon={<SyncOutlined />}
-                    loading={syncing}
-                    onClick={() => handleSync('users')}
-                  >
-                    同步用户
+                    同步当前组织花名册
                   </Button>
                 </div>
               </div>

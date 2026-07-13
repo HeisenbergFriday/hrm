@@ -87,6 +87,7 @@ export const orgAPI = {
     api.get('/org/employees', { params }),
   getEmployee: (id: string) => api.get(`/org/employees/${id}`),
   getEmployeePositionDiagnostic: (id: string) => api.get(`/org/employees/${id}/position-sync-diagnostic`),
+  // 多租户：普通接口只同步当前 JWT 组织，不再接受 org_id/target_org_id 参数
   syncOrg: () => api.post('/org/sync'),
 }
 
@@ -117,6 +118,40 @@ export const attendanceAPI = {
 
   getExports: (params: { page?: number; page_size?: number }) => api.get('/attendance/exports', { params }),
   getLastSyncTime: () => api.get('/attendance/last-sync'),
+
+  // 考勤数据处理
+  processing: {
+    leave: (formData: FormData) =>
+      api.post('/attendance/processing/leave', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        responseType: 'blob',
+        timeout: 300000,
+      }),
+    overtime: (formData: FormData) =>
+      api.post('/attendance/processing/overtime', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        responseType: 'blob',
+        timeout: 300000,
+      }),
+    subsidy: (formData: FormData) =>
+      api.post('/attendance/processing/subsidy', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        responseType: 'blob',
+        timeout: 300000,
+      }),
+    final: (formData: FormData) =>
+      api.post('/attendance/processing/final', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        responseType: 'blob',
+        timeout: 300000,
+      }),
+    parttime: (formData: FormData) =>
+      api.post('/attendance/processing/parttime', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        responseType: 'blob',
+        timeout: 300000,
+      }),
+  },
 }
 
 export const approvalAPI = {
@@ -1385,5 +1420,3 @@ export const performanceAPI = {
     }[]
   }) => api.post(`/performance/activities/${activityId}/batch-assign-goals`, data),
 }
-
-export default api

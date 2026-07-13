@@ -15,6 +15,7 @@ import { refreshMenuKeys } from './services/api'
 import RouteGuard from './components/RouteGuard'
 import ErrorBoundary from './components/ErrorBoundary'
 import { authRedirectTargetFromLocation, loginPathWithRedirect, rememberAuthRedirect } from './utils/authRedirect'
+import { orgIdParams, resolveOrgId } from './utils/org'
 
 const Login = lazy(() => import('./pages/Login'))
 const Callback = lazy(() => import('./pages/Callback'))
@@ -31,6 +32,7 @@ const SyncLog = lazy(() => import('./pages/SyncLog'))
 const Attendance = lazy(() => import('./pages/Attendance'))
 const AttendanceStats = lazy(() => import('./pages/AttendanceStats'))
 const AttendanceExport = lazy(() => import('./pages/AttendanceExport'))
+const AttendanceProcessing = lazy(() => import('./pages/AttendanceProcessing'))
 const WeekSchedule = lazy(() => import('./pages/WeekSchedule'))
 const EmployeeShiftConfig = lazy(() => import('./pages/EmployeeShiftConfig'))
 const LeaveOvertime = lazy(() => import('./pages/LeaveOvertime'))
@@ -58,13 +60,36 @@ const { Header, Sider, Content } = Layout
 
 const appTheme = {
   token: {
-    colorPrimary: '#4338ca',
-    colorPrimaryHover: '#6366f1',
-    colorPrimaryActive: '#3730a3',
+    colorPrimary: '#2563eb',
+    colorPrimaryHover: '#3b82f6',
+    colorPrimaryActive: '#1d4ed8',
+    colorInfo: '#0891b2',
+    colorSuccess: '#10b981',
+    colorWarning: '#f59e0b',
+    colorBgLayout: '#f6f8fb',
+    colorBgContainer: '#ffffff',
+    colorBorderSecondary: '#e6edf5',
+    colorText: '#172033',
+    colorTextSecondary: '#64748b',
     borderRadius: 8,
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif",
+    boxShadow: '0 12px 28px rgba(15, 23, 42, 0.08)',
   },
   components: {
+    Layout: {
+      headerBg: 'rgba(255, 255, 255, 0.88)',
+      siderBg: '#ffffff',
+      bodyBg: '#f6f8fb',
+    },
+    Menu: {
+      itemBg: 'transparent',
+      itemSelectedBg: '#eaf2ff',
+      itemSelectedColor: '#1d4ed8',
+      itemHoverBg: '#f1f6ff',
+      itemHoverColor: '#1d4ed8',
+      subMenuItemBg: 'transparent',
+      darkItemBg: 'transparent',
+    },
     Button: {
       borderRadius: 8,
       controlHeight: 36,
@@ -87,6 +112,7 @@ const routeMenuKeys: Record<string, string> = {
   '/attendance': menuPermissionKey('attendance'),
   '/attendance-stats': menuPermissionKey('attendance-stats'),
   '/attendance-export': menuPermissionKey('attendance-export'),
+  '/attendance-processing': menuPermissionKey('attendance-processing'),
   '/week-schedule': menuPermissionKey('week-schedule'),
   '/employee-shift-config': menuPermissionKey('employee-shift-config'),
   '/approval': menuPermissionKey('approval-templates'),
@@ -239,7 +265,10 @@ function App() {
 
     const doAutoLogin = async () => {
       try {
-        const configRes = await axios.get('/api/v1/auth/dingtalk/config')
+        const orgId = resolveOrgId()
+        const configRes = await axios.get('/api/v1/auth/dingtalk/config', {
+          params: orgIdParams(),
+        })
         const { corp_id: corpId, missing } = configRes.data.data
         const dd = (window as any).dd
 
@@ -263,6 +292,7 @@ function App() {
             try {
               const response = await axios.post('/api/v1/auth/dingtalk/in-app', {
                 code: result.code,
+                org_id: orgId,
               })
               const { token, user } = response.data.data
               login(user, token)
@@ -296,7 +326,7 @@ function App() {
 
   if (authPaths.includes(location.pathname)) {
     return (
-      <ConfigProvider locale={zhCN}>
+      <ConfigProvider locale={zhCN} theme={appTheme}>
         <AuthRoutes />
       </ConfigProvider>
     )
@@ -305,7 +335,7 @@ function App() {
   if (!isLoggedIn) {
     if (autoLogging) {
       return (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f0f2f5' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--color-bg-page)' }}>
           <div style={{ textAlign: 'center' }}>
             <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
             <p style={{ marginTop: 16 }}>正在通过钉钉自动登录，请稍候...</p>
@@ -315,7 +345,7 @@ function App() {
     }
 
     return (
-      <ConfigProvider locale={zhCN}>
+      <ConfigProvider locale={zhCN} theme={appTheme}>
         <ErrorBoundary resetKey={location.pathname}>
           <Suspense fallback={<PageLoading />}>
             <Login />
@@ -326,8 +356,8 @@ function App() {
   }
 
   return (
-    <ConfigProvider locale={zhCN}>
-      <Layout>
+    <ConfigProvider locale={zhCN} theme={appTheme}>
+      <Layout className="app-shell">
         <Sider
           className={collapsed ? 'app-sider app-sider-collapsed' : 'app-sider'}
           collapsible
@@ -339,13 +369,13 @@ function App() {
         >
           <div
             className="logo"
-            style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 16, fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden' }}
+            style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-title)', fontSize: 16, fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden' }}
           >
             人事管理系统
           </div>
           <div className="app-sider-menu-scroll">
             <Menu
-              theme="dark"
+              theme="light"
               mode="inline"
               selectedKeys={[selectedMenuKey]}
               defaultOpenKeys={location.pathname.startsWith('/performance') ? [menuPermissionKey('performance-group')] : [menuPermissionKey('organization-group')]}
@@ -355,20 +385,20 @@ function App() {
           <div
             className="app-sider-trigger"
             onClick={() => setCollapsed(!collapsed)}
-            onMouseEnter={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.background = 'rgba(0,0,0,0.3)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; e.currentTarget.style.background = 'rgba(0,0,0,0.15)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--color-primary)'; e.currentTarget.style.background = '#f1f6ff' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--color-text-secondary)'; e.currentTarget.style.background = 'transparent' }}
           >
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           </div>
         </Sider>
-        <Layout style={{ marginLeft: collapsed ? 80 : 200, transition: 'margin-left 0.3s ease' }}>
-          <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 24px', gap: 16 }}>
-            <span style={{ color: '#fff' }}>{user?.name || '管理员'}</span>
+        <Layout style={{ marginLeft: collapsed ? 80 : 200, transition: 'margin-left 0.3s ease', background: 'transparent' }}>
+          <Header className="app-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 24px', gap: 16 }}>
+            <span className="app-user-chip">{user?.name || '管理员'}</span>
             <Button
               type="text"
               icon={<LogoutOutlined />}
               onClick={handleLogout}
-              style={{ color: '#fff' }}
+              style={{ color: 'var(--color-text-secondary)' }}
             >
               退出
             </Button>
@@ -386,6 +416,7 @@ function App() {
                 <Route path="/attendance" element={<RouteGuard menuKey="menu:attendance"><Attendance /></RouteGuard>} />
                 <Route path="/attendance-stats" element={<RouteGuard menuKey="menu:attendance-stats"><AttendanceStats /></RouteGuard>} />
                 <Route path="/attendance-export" element={<RouteGuard menuKey="menu:attendance-export"><AttendanceExport /></RouteGuard>} />
+                <Route path="/attendance-processing" element={<RouteGuard menuKey="menu:attendance-processing"><AttendanceProcessing /></RouteGuard>} />
                 <Route path="/week-schedule" element={<RouteGuard menuKey="menu:week-schedule"><WeekSchedule /></RouteGuard>} />
                 <Route path="/employee-shift-config" element={<RouteGuard menuKey="menu:employee-shift-config"><EmployeeShiftConfig /></RouteGuard>} />
                 <Route path="/approval" element={<RouteGuard menuKey="menu:approval-templates"><Approval /></RouteGuard>} />

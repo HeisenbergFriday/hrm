@@ -1,13 +1,16 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
+	"peopleops/internal/middleware"
 	"peopleops/internal/repository"
+	"peopleops/internal/requestmeta"
 	"peopleops/internal/service"
 	"strconv"
 	"strings"
@@ -23,11 +26,39 @@ func currentOperatorID(c *gin.Context) string {
 		return "system"
 	}
 	if database.DB != nil {
-		if user, err := loadUserByAuthID(userID); err == nil && strings.TrimSpace(user.UserID) != "" {
+		if user, err := loadUserByAuthIDInOrg(c.GetString("orgID"), userID); err == nil && strings.TrimSpace(user.UserID) != "" {
 			return user.UserID
 		}
 	}
 	return userID
+}
+
+func performanceRequestDB(c *gin.Context) *gorm.DB {
+	if c == nil || c.Request == nil {
+		return database.DB
+	}
+	if db := middleware.RequestDB(c); db != nil {
+		return db
+	}
+	return database.DB
+}
+
+func performanceOrgDB(orgID string) *gorm.DB {
+	if database.DB == nil {
+		return nil
+	}
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return database.DB
+	}
+	return database.DB.WithContext(requestmeta.WithTenant(context.Background(), orgID))
+}
+
+func optionalPerformanceOrgID(orgIDs []string) string {
+	if len(orgIDs) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(orgIDs[0])
 }
 
 func addPerformanceIdentityValues(values map[string]struct{}, rawValues ...string) {
@@ -61,7 +92,7 @@ func currentOperatorIdentityValues(c *gin.Context) map[string]struct{} {
 	}
 
 	for _, value := range performanceIdentityKeys(values) {
-		user, err := loadUserByAuthID(value)
+		user, err := loadUserByAuthIDInOrg(c.GetString("orgID"), value)
 		if err != nil {
 			continue
 		}
@@ -73,7 +104,9 @@ func currentOperatorIdentityValues(c *gin.Context) map[string]struct{} {
 		return values
 	}
 	var profiles []database.EmployeeProfile
-	if err := database.DB.Where("(user_id IN ? OR employee_id IN ?) AND deleted_at IS NULL", lookupIDs, lookupIDs).Find(&profiles).Error; err != nil {
+	if err := performanceRequestDB(c).
+		Where("org_id = ? AND (user_id IN ? OR employee_id IN ?) AND deleted_at IS NULL", c.GetString("orgID"), lookupIDs, lookupIDs).
+		Find(&profiles).Error; err != nil {
 		return values
 	}
 	for _, profile := range profiles {
@@ -110,8 +143,15 @@ func logPerformanceNotifyError(action, userID string, err error) {
 // resolvePerformanceScope 获取用户的数据范围（绩效模块专用）
 func resolvePerformanceScope(c *gin.Context) (*service.OrgDataScope, error) {
 	userID := currentOperatorID(c)
-	svc := service.NewPermissionService(database.DB)
-	return svc.GetUserPerformanceScope(userID)
+	svc := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
+	scope, err := svc.GetUserPerformanceScopeInOrg(c.GetString("orgID"), userID)
+	if err != nil {
+		return nil, err
+	}
+	if scope != nil && scope.IsSelf() {
+		scope.UserIDs = uniqueNonEmptyStrings(scope.UserIDs, performanceIdentityKeys(currentOperatorIdentityValues(c)), []string{userID})
+	}
+	return scope, nil
 }
 
 // requirePermission 检查当前用户是否具有指定权限码，不满足则返回 403 并中止
@@ -120,8 +160,8 @@ func requirePermission(c *gin.Context, codes ...string) bool {
 	if userID == "admin" || userID == "system" {
 		return true
 	}
-	svc := service.NewPermissionService(database.DB)
-	ok, err := svc.HasAnyPermission(userID, codes...)
+	svc := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
+	ok, err := svc.HasAnyPermissionInOrg(c.GetString("orgID"), userID, codes...)
 	if err != nil || !ok {
 		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "权限不足", Data: nil})
 		return false
@@ -137,8 +177,8 @@ func hasPerformancePermission(c *gin.Context, codes ...string) (bool, error) {
 	if userID == "admin" || userID == "system" {
 		return true, nil
 	}
-	svc := service.NewPermissionService(database.DB)
-	return svc.HasAnyPermission(userID, codes...)
+	svc := service.NewPermissionServiceWithOrgID(database.DB, c.GetString("orgID"))
+	return svc.HasAnyPermissionInOrg(c.GetString("orgID"), userID, codes...)
 }
 
 // resolveAndVerifyScope 获取 scope 并验证指定部门是否在可见范围内
@@ -293,8 +333,8 @@ func verifyPerformanceActivityAccess(c *gin.Context, activity *database.Performa
 			return false
 		}
 		var count int64
-		if err := database.DB.Model(&database.PerformanceParticipant{}).
-			Where("activity_id = ? AND employee_id IN ? AND deleted_at IS NULL", activityID, userIDs).
+		if err := performanceRequestDB(c).Model(&database.PerformanceParticipant{}).
+			Where("org_id = ? AND activity_id = ? AND employee_id IN ? AND deleted_at IS NULL", c.GetString("orgID"), activityID, userIDs).
 			Count(&count).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "活动访问校验失败", Data: gin.H{"error": err.Error()}})
 			return false
@@ -312,8 +352,8 @@ func verifyPerformanceActivityAccess(c *gin.Context, activity *database.Performa
 		return false
 	}
 	var count int64
-	if err := database.DB.Model(&database.PerformanceParticipant{}).
-		Where("activity_id = ? AND department_id IN ? AND deleted_at IS NULL", activityID, departmentIDs).
+	if err := performanceRequestDB(c).Model(&database.PerformanceParticipant{}).
+		Where("org_id = ? AND activity_id = ? AND department_id IN ? AND deleted_at IS NULL", c.GetString("orgID"), activityID, departmentIDs).
 		Count(&count).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "活动访问校验失败", Data: gin.H{"error": err.Error()}})
 		return false
@@ -330,7 +370,7 @@ func verifyPerformanceActivityAccess(c *gin.Context, activity *database.Performa
 }
 
 func verifyPerformanceActivityIDAccess(c *gin.Context, activityID string) bool {
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	activity, err := svc.GetActivity(activityID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "绩效活动不存在", Data: gin.H{"error": err.Error()}})
@@ -412,7 +452,7 @@ func GetPerformanceActivities(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	items, total, err := svc.ListActivities(page, pageSize, status, keyword, startDate, endDate, scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取绩效活动列表失败", Data: gin.H{"error": err.Error()}})
@@ -514,7 +554,7 @@ func CreatePerformanceActivity(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	activity, err := svc.CreateActivity(service.CreateActivityRequest{
 		Name:                           req.Name,
 		CycleType:                      req.CycleType,
@@ -566,7 +606,7 @@ func CreatePerformanceActivity(c *gin.Context) {
 
 func GetPerformanceActivity(c *gin.Context) {
 	id := c.Param("activity_id")
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	activity, err := svc.GetActivity(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "绩效活动不存在", Data: gin.H{"error": err.Error()}})
@@ -631,7 +671,7 @@ func UpdatePerformanceActivity(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	activity, err := svc.UpdateActivity(id, service.CreateActivityRequest{
 		Name:                           req.Name,
 		CycleType:                      req.CycleType,
@@ -687,14 +727,14 @@ func PublishPerformanceActivity(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	shouldNotify := shouldNotifyOnSelfEvaluationOpen(svc, activityID)
 	if err := svc.PublishActivity(activityID, currentOperatorID(c)); err != nil {
 		msg := err.Error()
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: msg, Data: nil})
 		return
 	}
-	queueSelfEvaluationNotification(activityID, shouldNotify)
+	queueSelfEvaluationNotification(c.GetString("orgID"), activityID, shouldNotify)
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: nil})
 }
 
@@ -706,7 +746,7 @@ func ClosePerformanceActivity(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.CloseActivity(activityID, currentOperatorID(c)); err != nil {
 		msg := err.Error()
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: msg, Data: nil})
@@ -736,7 +776,7 @@ func PutDistributionRules(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 
 	// 手动构造匿名结构体切片
 	rules := make([]struct {
@@ -763,7 +803,7 @@ func GetDistributionRules(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:distribution:manage", "performance:activity:manage") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	rules, err := svc.GetDistributionRules(activityID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取分布规则失败", Data: gin.H{"error": err.Error()}})
@@ -777,7 +817,7 @@ func GetRealtimeDistributionCheck(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:distribution:manage", "performance:activity:manage") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	teams, err := svc.GetRealtimeDistributionCheck(activityID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取实时分布检查失败", Data: gin.H{"error": err.Error()}})
@@ -794,7 +834,7 @@ func RefreshPerformanceParticipants(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	result, err := svc.RefreshParticipants(activityID, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -831,7 +871,7 @@ func ImportPerformanceActivityParticipants(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.ResolveImportedPerformanceEmployees(result); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "匹配员工信息失败", Data: gin.H{"error": err.Error()}})
 		return
@@ -841,7 +881,7 @@ func ImportPerformanceActivityParticipants(c *gin.Context) {
 }
 
 func GetPerformanceParticipants(c *gin.Context) {
-	if !requirePermission(c, "performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:manager_eval:submit", "performance:hr_confirm:submit") {
+	if !requirePermission(c, "performance:result:view", "performance:activity:manage", "performance:goal:manage", "performance:self_eval:submit", "performance:manager_eval:submit", "performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit") {
 		return
 	}
 	activityID := c.Param("activity_id")
@@ -862,7 +902,7 @@ func GetPerformanceParticipants(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	items, total, err := svc.ListParticipants(activityID, page, pageSize, departmentID, managerID, status, employeeKeyword, scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取参与人列表失败", Data: gin.H{"error": err.Error()}})
@@ -921,8 +961,8 @@ func findMyPerformanceParticipantsByActivity(c *gin.Context, activityIDs []strin
 	}
 
 	var participants []database.PerformanceParticipant
-	if err := database.DB.
-		Where("activity_id IN ? AND employee_id IN ? AND deleted_at IS NULL", activityIDs, identityValues).
+	if err := performanceRequestDB(c).
+		Where("org_id = ? AND activity_id IN ? AND employee_id IN ? AND deleted_at IS NULL", c.GetString("orgID"), activityIDs, identityValues).
 		Order("id ASC").
 		Find(&participants).Error; err != nil {
 		return nil, err
@@ -942,7 +982,7 @@ func findMyPerformanceParticipantsByActivity(c *gin.Context, activityIDs []strin
 
 func GetParticipant(c *gin.Context) {
 	participantID := c.Param("participant_id")
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: gin.H{"error": err.Error()}})
@@ -1008,7 +1048,7 @@ func UpdateParticipantAssessmentManager(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1045,7 +1085,7 @@ func BatchUpdateAssessmentManagers(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	items := make([]service.AssessmentManagerUpdateRequest, 0, len(req.Items))
 	for _, item := range req.Items {
 		participant, err := svc.GetParticipant(strconv.FormatUint(uint64(item.ParticipantID), 10))
@@ -1092,7 +1132,7 @@ func GetAssessmentManagerCandidates(c *gin.Context) {
 		participantID = uint(parsed)
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if participantID > 0 {
 		participant, err := svc.GetParticipant(strconv.FormatUint(uint64(participantID), 10))
 		if err != nil {
@@ -1124,7 +1164,7 @@ func SubmitSelfEvaluation(c *gin.Context) {
 	participantID := c.Param("participant_id")
 
 	// 身份校验：验证当前用户是该参与人的员工本人
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1170,7 +1210,7 @@ func SubmitManagerEvaluation(c *gin.Context) {
 	participantID := c.Param("participant_id")
 
 	// 身份校验：验证当前用户是该参与人的主管
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1250,7 +1290,7 @@ func BatchSubmitManagerEvaluation(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 
 	// 查询活动配置，判断是否启用附加分
 	activity, _ := svc.GetActivity(activityID)
@@ -1331,7 +1371,7 @@ func AdjustFinalLevel(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1364,7 +1404,7 @@ func ConfirmResult(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1454,7 +1494,7 @@ func ConfirmEmployeeResultHandler(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.Itoa(participantID))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1480,7 +1520,7 @@ func ConfirmManagerResultHandler(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.Itoa(participantID))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1518,7 +1558,7 @@ func ConfirmHRResultHandler(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.Itoa(participantID))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1542,7 +1582,7 @@ func ConfirmHRResultHandler(c *gin.Context) {
 
 func GetParticipantVersions(c *gin.Context) {
 	participantID := c.Param("participant_id")
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1567,7 +1607,7 @@ func GetParticipantVersions(c *gin.Context) {
 
 func GetParticipantRelationshipChangeLogs(c *gin.Context) {
 	participantID := c.Param("participant_id")
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1595,7 +1635,7 @@ func GetActivityRelationshipChangeLogs(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:activity:manage", "performance:assessment_manager:update", "performance:assessment_manager:batch_update") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	logs, err := svc.GetActivityRelationshipChangeLogs(activityID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取关系变更日志失败", Data: gin.H{"error": err.Error()}})
@@ -1612,11 +1652,13 @@ func StartPerformanceActivity(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
+	shouldNotify := shouldNotifyOnTargetSettingOpen(svc, activityID)
 	if err := svc.StartActivity(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
+	queueTargetSettingNotification(c.GetString("orgID"), activityID, shouldNotify)
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: nil})
 }
 
@@ -1628,13 +1670,13 @@ func OpenSelfEvaluation(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	shouldNotify := shouldNotifyOnSelfEvaluationOpen(svc, activityID)
 	if err := svc.OpenSelfEvaluation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
-	queueSelfEvaluationNotification(activityID, shouldNotify)
+	queueSelfEvaluationNotification(c.GetString("orgID"), activityID, shouldNotify)
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: nil})
 }
 
@@ -1646,7 +1688,7 @@ func OpenManagerEvaluation(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.OpenManagerEvaluation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1662,7 +1704,7 @@ func ConfirmActivityResults(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.ConfirmResults(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1678,7 +1720,7 @@ func ArchivePerformanceActivity(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.ArchiveActivity(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1694,11 +1736,13 @@ func OpenTargetSettingHandler(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
+	shouldNotify := shouldNotifyOnTargetSettingOpen(svc, activityID)
 	if err := svc.OpenTargetSetting(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
+	queueTargetSettingNotification(c.GetString("orgID"), activityID, shouldNotify)
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "目标设定已开启", Data: nil})
 }
 
@@ -1710,13 +1754,14 @@ func OpenEmployeeConfirmationHandler(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.OpenEmployeeConfirmation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
+	orgID := c.GetString("orgID")
 	go func() {
-		if err := notifyParticipantsResultReady(activityID); err != nil {
+		if err := notifyParticipantsResultReady(activityID, orgID); err != nil {
 			logrus.Warnf("notify participants result ready failed: %v", err)
 		}
 	}()
@@ -1731,11 +1776,17 @@ func OpenManagerConfirmationHandler(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.OpenManagerConfirmation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
+	orgID := c.GetString("orgID")
+	go func() {
+		if err := notifyManagersOnManagerConfirmationOpen(activityID, orgID); err != nil {
+			logrus.Warnf("notify managers on manager confirmation open failed: %v", err)
+		}
+	}()
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "主管确认已开启", Data: nil})
 }
 
@@ -1747,11 +1798,16 @@ func OpenHRConfirmationHandler(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.OpenHRConfirmation(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
+	go func() {
+		if err := svc.SendHRConfirmReminders(activityID); err != nil {
+			logrus.Warnf("notify HR on HR confirmation open failed: %v", err)
+		}
+	}()
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "HR确认已开启", Data: nil})
 }
 
@@ -1763,16 +1819,11 @@ func LockPerformanceActivityHandler(c *gin.Context) {
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.LockActivity(activityID, currentOperatorID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
-	go func() {
-		if err := notifyParticipantsResultLocked(activityID); err != nil {
-			logrus.Warnf("notify participants result locked failed: %v", err)
-		}
-	}()
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "活动已锁定", Data: nil})
 }
 
@@ -1781,17 +1832,12 @@ func ForceLockOverdueHRConfirmationHandler(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:activity:manage") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	result, err := svc.ForceLockOverdueHRConfirmation(activityID, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
-	go func() {
-		if err := notifyParticipantsResultLocked(activityID); err != nil {
-			logrus.Warnf("notify participants result locked (force) failed: %v", err)
-		}
-	}()
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "逾期强制锁定已完成", Data: gin.H{"result": result}})
 }
 
@@ -1811,7 +1857,7 @@ func BatchConfirmResults(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	results, err := svc.BatchConfirmResults(activityID, req.ParticipantIDs, currentOperatorName(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -1825,7 +1871,7 @@ func SendSelfEvalReminder(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:activity:manage") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.SendSelfEvalReminders(activityID); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1838,7 +1884,7 @@ func SendManagerEvalReminder(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:activity:manage") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.SendManagerEvalReminders(activityID); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1851,7 +1897,7 @@ func SendHRConfirmReminder(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:activity:manage") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if err := svc.SendHRConfirmReminders(activityID); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
@@ -1874,7 +1920,7 @@ func SetCompanyFinanceHandler(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	finance, err := svc.SetCompanyFinance(activityID, req.RevenueSign, req.Description, req.Remark, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -1888,7 +1934,7 @@ func GetCompanyFinanceHandler(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:activity:manage") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	finance, err := svc.GetCompanyFinance(activityID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "未找到收支信息", Data: gin.H{"error": err.Error()}})
@@ -1902,7 +1948,7 @@ func GetPendingHRConfirmHandler(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:activity:manage", "performance:hr_confirm:submit") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	items, err := svc.GetPendingHRConfirm(activityID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取待 HR 确认列表失败", Data: gin.H{"error": err.Error()}})
@@ -1924,7 +1970,7 @@ func SetHRConfirmDeadlineHandler(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	activity, err := svc.SetHRConfirmDeadline(activityID, req.Deadline, currentOperatorID(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -1938,7 +1984,7 @@ func GetHRConfirmDeadlineStatusHandler(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:activity:manage", "performance:hr_confirm:submit") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	status, err := svc.GetHRConfirmDeadlineStatus(activityID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取 HR 截止状态失败", Data: gin.H{"error": err.Error()}})
@@ -1957,7 +2003,7 @@ func TriggerPerformanceInterview(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -1993,7 +2039,7 @@ func SubmitReviewSelfEvaluation(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -2057,7 +2103,7 @@ func SubmitReviewManagerEvaluation(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -2111,8 +2157,9 @@ func SubmitReviewManagerEvaluation(c *gin.Context) {
 	}
 
 	// 2. 通知员工评分结果
+	orgID := c.GetString("orgID")
 	go func() {
-		if notifyErr := notifyEmployeeOnManagerEval(participantID, req.FinalLevel, req.ManagerComment); notifyErr != nil {
+		if notifyErr := notifyEmployeeOnManagerEval(participantID, req.FinalLevel, req.ManagerComment, orgID); notifyErr != nil {
 			logrus.Warnf("notify employee on manager eval failed: %v", notifyErr)
 		}
 	}()
@@ -2140,7 +2187,7 @@ func SubmitGoalSelfEvaluationHandler(c *gin.Context) {
 
 	userID := currentOperatorID(c)
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -2201,7 +2248,7 @@ func SubmitGoalManagerEvaluationHandler(c *gin.Context) {
 
 	userID := currentOperatorID(c)
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -2219,8 +2266,9 @@ func SubmitGoalManagerEvaluationHandler(c *gin.Context) {
 }
 
 // notifyEmployeeOnManagerEval 通知员工主管已评分
-func notifyEmployeeOnManagerEval(participantID, finalLevel, comment string) error {
-	svc := service.NewPerformanceService(database.DB)
+func notifyEmployeeOnManagerEval(participantID, finalLevel, comment string, orgIDs ...string) error {
+	orgID := optionalPerformanceOrgID(orgIDs)
+	svc := service.NewPerformanceService(performanceOrgDB(orgID))
 	participant, err := svc.GetParticipant(participantID)
 	if err != nil {
 		return err
@@ -2250,29 +2298,112 @@ func shouldNotifyOnSelfEvaluationOpen(svc *service.PerformanceService, activityI
 	return activity.Status != "self_evaluation"
 }
 
-func queueSelfEvaluationNotification(activityID string, shouldNotify bool) {
+func shouldNotifyOnTargetSettingOpen(svc *service.PerformanceService, activityID string) bool {
+	activity, err := svc.GetActivity(activityID)
+	if err != nil || activity == nil {
+		return false
+	}
+	return activity.Status != "target_setting"
+}
+
+func queueTargetSettingNotification(orgID, activityID string, shouldNotify bool) {
 	if !shouldNotify {
 		return
 	}
 
 	go func() {
-		if err := notifyParticipantsOnSelfEvaluationOpen(activityID); err != nil {
+		if err := notifyParticipantsOnTargetSettingOpen(activityID, orgID); err != nil {
+			logrus.Warnf("notify participants on target setting open failed: %v", err)
+		}
+	}()
+}
+
+func queueSelfEvaluationNotification(orgID, activityID string, shouldNotify bool) {
+	if !shouldNotify {
+		return
+	}
+
+	go func() {
+		if err := notifyParticipantsOnSelfEvaluationOpen(activityID, orgID); err != nil {
 			logrus.Warnf("notify participants on self evaluation open failed: %v", err)
 		}
 	}()
 }
 
-func notifyParticipantsOnSelfEvaluationOpen(activityID string) error {
-	svc := service.NewPerformanceService(database.DB)
+func notifyParticipantsOnTargetSettingOpen(activityID string, orgIDs ...string) error {
+	orgID := optionalPerformanceOrgID(orgIDs)
+	db := performanceOrgDB(orgID)
+	svc := service.NewPerformanceService(db)
 	activity, err := svc.GetActivity(activityID)
 	if err != nil {
 		return err
 	}
 
 	var participants []database.PerformanceParticipant
-	if err := database.DB.
-		Where("activity_id = ? AND deleted_at IS NULL", activityID).
-		Find(&participants).Error; err != nil {
+	participantQuery := db.Where("activity_id = ? AND deleted_at IS NULL", activityID)
+	if orgID != "" {
+		participantQuery = participantQuery.Where("org_id = ?", orgID)
+	}
+	if err := participantQuery.Find(&participants).Error; err != nil {
+		return err
+	}
+
+	title := fmt.Sprintf("【绩效提醒】%s 已开启目标设定", activity.Name)
+	window := formatSelfEvaluationWindow(activity.TargetSetStartAt, activity.TargetSetEndAt)
+	sent := 0
+	skipped := 0
+	failures := make([]string, 0)
+
+	for _, participant := range participants {
+		if !shouldNotifyParticipant(participant) {
+			continue
+		}
+
+		content := fmt.Sprintf(
+			"员工：%s\n活动：%s\n目标设定时间：%s\n\n请及时填写绩效目标，提交后将由考核上级审核。",
+			participant.EmployeeName,
+			activity.Name,
+			window,
+		)
+		if err := dingtalk.SendCorpActionCardToUser(participant.EmployeeID, title, content, "去设定目标", service.PerformanceGoalSettingURL(activityID, participant.ID)); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logPerformanceNotifyError("notify participant on target setting open", participant.EmployeeID, err)
+				skipped++
+				continue
+			}
+			failures = append(failures, fmt.Sprintf("%s(%s): %v", participant.EmployeeName, participant.EmployeeID, err))
+			continue
+		}
+		sent++
+	}
+
+	if len(failures) > 0 {
+		failed := len(failures)
+		if len(failures) > 3 {
+			failures = failures[:3]
+		}
+		return fmt.Errorf("sent=%d skipped=%d failed=%d sample=%s", sent, skipped, failed, strings.Join(failures, "; "))
+	}
+
+	logrus.Infof("target setting notifications sent for activity %s: sent=%d skipped=%d", activityID, sent, skipped)
+	return nil
+}
+
+func notifyParticipantsOnSelfEvaluationOpen(activityID string, orgIDs ...string) error {
+	orgID := optionalPerformanceOrgID(orgIDs)
+	db := performanceOrgDB(orgID)
+	svc := service.NewPerformanceService(db)
+	activity, err := svc.GetActivity(activityID)
+	if err != nil {
+		return err
+	}
+
+	var participants []database.PerformanceParticipant
+	participantQuery := db.Where("activity_id = ? AND deleted_at IS NULL", activityID)
+	if orgID != "" {
+		participantQuery = participantQuery.Where("org_id = ?", orgID)
+	}
+	if err := participantQuery.Find(&participants).Error; err != nil {
 		return err
 	}
 
@@ -2319,16 +2450,20 @@ func notifyParticipantsOnSelfEvaluationOpen(activityID string) error {
 }
 
 // notifyParticipantsResultReady 通知所有参与者绩效结果已出，需登录确认
-func notifyParticipantsResultReady(activityID string) error {
-	svc := service.NewPerformanceService(database.DB)
+func notifyParticipantsResultReady(activityID string, orgIDs ...string) error {
+	orgID := optionalPerformanceOrgID(orgIDs)
+	db := performanceOrgDB(orgID)
+	svc := service.NewPerformanceService(db)
 	activity, err := svc.GetActivity(activityID)
 	if err != nil || activity == nil {
 		return fmt.Errorf("活动不存在: %v", err)
 	}
 	var participants []database.PerformanceParticipant
-	if err := database.DB.
-		Where("activity_id = ? AND deleted_at IS NULL AND status = ?", activityID, "manager_submitted").
-		Find(&participants).Error; err != nil {
+	participantQuery := db.Where("activity_id = ? AND deleted_at IS NULL AND status = ?", activityID, "manager_submitted")
+	if orgID != "" {
+		participantQuery = participantQuery.Where("org_id = ?", orgID)
+	}
+	if err := participantQuery.Find(&participants).Error; err != nil {
 		return err
 	}
 	if len(participants) == 0 {
@@ -2367,17 +2502,118 @@ func notifyParticipantsResultReady(activityID string) error {
 	return nil
 }
 
-// notifyParticipantsResultLocked 通知所有参与者绩效结果已锁定
-func notifyParticipantsResultLocked(activityID string) error {
-	svc := service.NewPerformanceService(database.DB)
+func notifyManagerOnGoalSubmitted(participantID string, orgIDs ...string) error {
+	orgID := optionalPerformanceOrgID(orgIDs)
+	svc := service.NewPerformanceService(performanceOrgDB(orgID))
+	participant, err := svc.GetParticipant(participantID)
+	if err != nil {
+		return err
+	}
+	managerID := ""
+	if participant.ManagerID != nil {
+		managerID = strings.TrimSpace(*participant.ManagerID)
+	}
+	if managerID == "" || !dingtalk.IsNotifiableUserID(managerID) {
+		return nil
+	}
+	activity, err := svc.GetActivity(participant.ActivityID)
+	if err != nil || activity == nil {
+		return fmt.Errorf("活动不存在: %v", err)
+	}
+	content := fmt.Sprintf(
+		"员工：%s\n活动：%s\n\n该员工已提交绩效目标，请及时审核。",
+		participant.EmployeeName,
+		activity.Name,
+	)
+	if err := dingtalk.SendCorpActionCardToUser(managerID, "绩效目标待审核", content, "去审核目标", service.PerformanceGoalSettingURL(participant.ActivityID, participant.ID)); err != nil {
+		if dingtalk.IsUserNotNotifiableError(err) {
+			logPerformanceNotifyError("notify manager on goal submitted", managerID, err)
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func notifyManagersOnManagerConfirmationOpen(activityID string, orgIDs ...string) error {
+	orgID := optionalPerformanceOrgID(orgIDs)
+	db := performanceOrgDB(orgID)
+	svc := service.NewPerformanceService(db)
 	activity, err := svc.GetActivity(activityID)
 	if err != nil || activity == nil {
 		return fmt.Errorf("活动不存在: %v", err)
 	}
 	var participants []database.PerformanceParticipant
-	if err := database.DB.
-		Where("activity_id = ? AND deleted_at IS NULL AND is_locked = ?", activityID, true).
-		Find(&participants).Error; err != nil {
+	participantQuery := db.Where("activity_id = ? AND deleted_at IS NULL AND status = ?", activityID, "employee_confirmed")
+	if orgID != "" {
+		participantQuery = participantQuery.Where("org_id = ?", orgID)
+	}
+	if err := participantQuery.Find(&participants).Error; err != nil {
+		return err
+	}
+	if len(participants) == 0 {
+		return nil
+	}
+
+	managerCounts := make(map[string]int)
+	managerFirstParticipant := make(map[string]database.PerformanceParticipant)
+	for _, participant := range participants {
+		if participant.ManagerID == nil {
+			continue
+		}
+		managerID := strings.TrimSpace(*participant.ManagerID)
+		if managerID == "" || !dingtalk.IsNotifiableUserID(managerID) {
+			continue
+		}
+		managerCounts[managerID]++
+		if _, ok := managerFirstParticipant[managerID]; !ok {
+			managerFirstParticipant[managerID] = participant
+		}
+	}
+
+	var sent int
+	var skipped int
+	var failures []string
+	for managerID, count := range managerCounts {
+		firstParticipant := managerFirstParticipant[managerID]
+		content := fmt.Sprintf("活动：%s\n当前有 %d 名员工待主管确认，请及时处理。", activity.Name, count)
+		if err := dingtalk.SendCorpActionCardToUser(managerID, "绩效主管确认提醒", content, "去确认结果", service.PerformanceResultURL(activityID, firstParticipant.ID)); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logPerformanceNotifyError("notify manager on manager confirmation open", managerID, err)
+				skipped++
+				continue
+			}
+			failures = append(failures, fmt.Sprintf("%s: %v", managerID, err))
+			continue
+		}
+		sent++
+	}
+	if len(failures) > 0 {
+		failed := len(failures)
+		if len(failures) > 3 {
+			failures = failures[:3]
+		}
+		return fmt.Errorf("sent=%d skipped=%d failed=%d sample=%s", sent, skipped, failed, strings.Join(failures, "; "))
+	}
+	logrus.Infof("manager confirmation notifications sent for activity %s: sent=%d skipped=%d", activityID, sent, skipped)
+	return nil
+}
+
+// notifyParticipantsResultLocked 通知所有参与者绩效结果已锁定
+func notifyParticipantsResultLocked(activityID string, orgIDs ...string) error {
+	orgID := optionalPerformanceOrgID(orgIDs)
+	db := performanceOrgDB(orgID)
+	svc := service.NewPerformanceService(db)
+	activity, err := svc.GetActivity(activityID)
+	if err != nil || activity == nil {
+		return fmt.Errorf("活动不存在: %v", err)
+	}
+	var participants []database.PerformanceParticipant
+	participantQuery := db.Where("activity_id = ? AND deleted_at IS NULL AND is_locked = ?", activityID, true)
+	if orgID != "" {
+		participantQuery = participantQuery.Where("org_id = ?", orgID)
+	}
+	if err := participantQuery.Find(&participants).Error; err != nil {
 		return err
 	}
 	if len(participants) == 0 {
@@ -2452,7 +2688,7 @@ func GetPerformanceResultSummary(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:activity:manage", "performance:hr_confirm:submit") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	result, err := svc.GetResultSummary(activityID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取统计摘要失败", Data: gin.H{"error": err.Error()}})
@@ -2466,7 +2702,7 @@ func GetPerformanceDistributionCheck(c *gin.Context) {
 	if !requirePerformanceActivityAccess(c, activityID, "performance:distribution:manage", "performance:activity:manage") {
 		return
 	}
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	result, err := svc.GetDistributionCheck(activityID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取分布检查失败", Data: gin.H{"error": err.Error()}})
@@ -2555,7 +2791,7 @@ func GetPerformanceTemplates(c *gin.Context) {
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 	status := c.Query("status")
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	items, total, err := svc.ListTemplates(page, pageSize, status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取模板列表失败", Data: gin.H{"error": err.Error()}})
@@ -2573,7 +2809,7 @@ func CreatePerformanceTemplate(c *gin.Context) {
 
 	userID := currentOperatorID(c)
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	template, err := svc.CreateTemplate(toPerformanceTemplateRequest(req), userID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
@@ -2589,7 +2825,7 @@ func GetPerformanceTemplate(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	result, err := svc.GetTemplate(uint(templateID))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "模板不存在", Data: gin.H{"error": err.Error()}})
@@ -2613,7 +2849,7 @@ func UpdatePerformanceTemplate(c *gin.Context) {
 
 	userID := currentOperatorID(c)
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	template, err := svc.UpdateTemplate(uint(templateID), toPerformanceTemplateRequest(req), userID)
 	if err != nil {
 		statusCode := http.StatusBadRequest
@@ -2648,7 +2884,7 @@ func verifyPerformanceTemplateAvailable(c *gin.Context, templateID uint) bool {
 		return false
 	}
 	var template database.PerformanceTemplate
-	if err := database.DB.Where("id = ? AND deleted_at IS NULL AND status = ?", templateID, "active").First(&template).Error; err != nil {
+	if err := performanceRequestDB(c).Where("org_id = ? AND id = ? AND deleted_at IS NULL AND status = ?", c.GetString("orgID"), templateID, "active").First(&template).Error; err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "绩效流程模板不存在或未启用", Data: nil})
 		return false
 	}
@@ -2673,7 +2909,7 @@ func GetIndicatorLibraries(c *gin.Context) {
 		return
 	}
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(libRepo, nil)
 	items, total, err := svc.ListLibraries(page, pageSize, departmentID, keyword, status, scope, templateID)
 	if err != nil {
@@ -2740,14 +2976,16 @@ func CreateIndicatorLibrary(c *gin.Context) {
 	}
 
 	lib := createLib()
+	lib.OrgID = c.GetString("orgID")
 	items := make([]database.PerformanceIndicatorItem, 0, len(req.Items))
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := performanceRequestDB(c).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(lib).Error; err != nil {
 			return err
 		}
 		for idx, raw := range req.Items {
 			item := database.PerformanceIndicatorItem{
 				LibraryID:         lib.ID,
+				OrgID:             c.GetString("orgID"),
 				SectionType:       raw.SectionType,
 				Name:              raw.Name,
 				Description:       raw.Description,
@@ -2785,7 +3023,7 @@ func GetIndicatorLibrary(c *gin.Context) {
 		return
 	}
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(libRepo, nil)
 	lib, ok := loadIndicatorLibraryForScope(c, svc, uint(id), "无权访问该指标库")
 	if !ok {
@@ -2817,7 +3055,7 @@ func UpdateIndicatorLibrary(c *gin.Context) {
 		return
 	}
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(libRepo, nil)
 	lib, ok := loadIndicatorLibraryForScope(c, svc, uint(id), "无权修改该指标库")
 	if !ok {
@@ -2854,7 +3092,7 @@ func ArchiveIndicatorLibrary(c *gin.Context) {
 		return
 	}
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(libRepo, nil)
 	if _, ok := loadIndicatorLibraryForScope(c, svc, uint(id), "无权归档该指标库"); !ok {
 		return
@@ -2881,7 +3119,7 @@ func GetIndicatorLibrariesByDepartment(c *gin.Context) {
 		return
 	}
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(libRepo, nil)
 	items, err := svc.GetLibrariesByDepartment(departmentID, templateID)
 	if err != nil {
@@ -2908,8 +3146,8 @@ func InheritIndicatorLibrary(c *gin.Context) {
 		return
 	}
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
-	itemRepo := repository.NewPerformanceIndicatorItemRepository(database.DB)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepository(performanceRequestDB(c))
+	itemRepo := repository.NewPerformanceIndicatorItemRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(libRepo, itemRepo)
 	if _, ok := loadIndicatorLibraryForScope(c, svc, req.ParentLibraryID, "无权访问父指标库"); !ok {
 		return
@@ -2936,8 +3174,8 @@ func GetIndicatorItems(c *gin.Context) {
 	}
 	sectionType := c.Query("section_type")
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
-	itemRepo := repository.NewPerformanceIndicatorItemRepository(database.DB)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepository(performanceRequestDB(c))
+	itemRepo := repository.NewPerformanceIndicatorItemRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(libRepo, itemRepo)
 	if _, ok := loadIndicatorLibraryForScope(c, svc, uint(libraryID), "无权访问该指标库"); !ok {
 		return
@@ -3005,8 +3243,8 @@ func CreateIndicatorItem(c *gin.Context) {
 		UpdatedBy:         currentOperatorID(c),
 	}
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
-	itemRepo := repository.NewPerformanceIndicatorItemRepository(database.DB)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepository(performanceRequestDB(c))
+	itemRepo := repository.NewPerformanceIndicatorItemRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(libRepo, itemRepo)
 	if _, ok := loadIndicatorLibraryForScope(c, svc, req.LibraryID, "无权在该指标库添加指标项"); !ok {
 		return
@@ -3051,8 +3289,8 @@ func UpdateIndicatorItem(c *gin.Context) {
 		return
 	}
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
-	itemRepo := repository.NewPerformanceIndicatorItemRepository(database.DB)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepository(performanceRequestDB(c))
+	itemRepo := repository.NewPerformanceIndicatorItemRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(libRepo, itemRepo)
 	item, ok := loadIndicatorItemForScope(c, svc, uint(id), "无权修改该指标项")
 	if !ok {
@@ -3094,8 +3332,8 @@ func DeleteIndicatorItem(c *gin.Context) {
 		return
 	}
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(database.DB)
-	itemRepo := repository.NewPerformanceIndicatorItemRepository(database.DB)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepository(performanceRequestDB(c))
+	itemRepo := repository.NewPerformanceIndicatorItemRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(libRepo, itemRepo)
 	if _, ok := loadIndicatorItemForScope(c, svc, uint(id), "无权删除该指标项"); !ok {
 		return
@@ -3128,7 +3366,7 @@ func SearchIndicatorItems(c *gin.Context) {
 		return
 	}
 
-	itemRepo := repository.NewPerformanceIndicatorItemRepository(database.DB)
+	itemRepo := repository.NewPerformanceIndicatorItemRepository(performanceRequestDB(c))
 	svc := service.NewPerformanceIndicatorService(nil, itemRepo)
 	items, err := svc.SearchItems(libraryIDs, keyword, sectionType, scope)
 	if err != nil {
@@ -3151,7 +3389,7 @@ func GetGoalRecords(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -3216,7 +3454,7 @@ func BatchSaveGoalRecords(c *gin.Context) {
 
 	userID := currentOperatorID(c)
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -3270,7 +3508,7 @@ func BatchSaveReviewGoalRecords(c *gin.Context) {
 
 	userID := currentOperatorID(c)
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -3316,7 +3554,7 @@ func SubmitGoalApprovalHandler(c *gin.Context) {
 		action = "submit"
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -3339,6 +3577,14 @@ func SubmitGoalApprovalHandler(c *gin.Context) {
 	if err := svc.SubmitGoalApproval(uint(participantID), action, req.Comment, userID); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
+	}
+	if action == "submit" {
+		orgID := c.GetString("orgID")
+		go func() {
+			if err := notifyManagerOnGoalSubmitted(strconv.FormatUint(participantID, 10), orgID); err != nil {
+				logrus.Warnf("notify manager on goal submitted failed: %v", err)
+			}
+		}()
 	}
 
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: nil})
@@ -3364,7 +3610,7 @@ func ApproveGoalRecords(c *gin.Context) {
 
 	userID := currentOperatorID(c)
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -3407,7 +3653,7 @@ func RejectGoalRecords(c *gin.Context) {
 
 	userID := currentOperatorID(c)
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -3440,7 +3686,7 @@ func GetManagerGoals(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -3474,7 +3720,7 @@ func GetGoalSuggestions(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})
@@ -3529,7 +3775,7 @@ func BatchAssignGoals(c *gin.Context) {
 		managerID = userID
 	}
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	if !verifyPerformanceActivityIDAccess(c, activityID) {
 		return
 	}
@@ -3579,7 +3825,7 @@ func SetBonusPenaltyScoreHandler(c *gin.Context) {
 
 	userID := currentOperatorID(c)
 
-	svc := service.NewPerformanceService(database.DB)
+	svc := service.NewPerformanceService(performanceRequestDB(c))
 	participant, err := svc.GetParticipant(strconv.FormatUint(participantID, 10))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "参与人不存在", Data: nil})

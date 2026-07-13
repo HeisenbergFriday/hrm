@@ -8,21 +8,60 @@ import (
 )
 
 type AttendanceRepository struct {
-	db *gorm.DB
+	db    *gorm.DB
+	orgID string
 }
 
 func NewAttendanceRepository(db *gorm.DB) *AttendanceRepository {
 	return &AttendanceRepository{db: db}
 }
 
+// NewAttendanceRepositoryWithOrgID 构造带 org 隔离的考勤仓储；Upsert/Create 会强制
+// record.OrgID 与仓储绑定组织一致，禁止落 "default" 或跨组织写入。
+func NewAttendanceRepositoryWithOrgID(db *gorm.DB, orgID string) *AttendanceRepository {
+	return &AttendanceRepository{db: db, orgID: orgID}
+}
+
+func (r *AttendanceRepository) scoped() *gorm.DB {
+	tx := r.db
+	if r.orgID != "" {
+		tx = tx.Where("org_id = ?", r.orgID)
+	}
+	return tx
+}
+
 func (r *AttendanceRepository) Create(record *database.Attendance) error {
+	if record == nil {
+		return gorm.ErrInvalidData
+	}
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, record.OrgID)
+		if err != nil {
+			return err
+		}
+		record.OrgID = merged
+	}
 	return r.db.Create(record).Error
 }
 
 func (r *AttendanceRepository) Upsert(record *database.Attendance) error {
+	if record == nil {
+		return gorm.ErrInvalidData
+	}
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, record.OrgID)
+		if err != nil {
+			return err
+		}
+		record.OrgID = merged
+	} else if record.OrgID == "" {
+		// 迁移期兼容：无租户上下文构造的旧调用会继续使用 default 占位。
+		// 新代码请使用 NewAttendanceRepositoryWithOrgID。
+		record.OrgID = "default"
+	}
 	var existing database.Attendance
 	err := r.db.
-		Where("user_id = ? AND check_time = ? AND check_type = ?", record.UserID, record.CheckTime, record.CheckType).
+		Where("org_id = ? AND user_id = ? AND check_time = ? AND check_type = ?", record.OrgID, record.UserID, record.CheckTime, record.CheckType).
 		First(&existing).Error
 	if err == nil {
 		existing.UserName = record.UserName
@@ -38,7 +77,7 @@ func (r *AttendanceRepository) Upsert(record *database.Attendance) error {
 
 func (r *AttendanceRepository) FindByID(id string) (*database.Attendance, error) {
 	var record database.Attendance
-	err := r.db.First(&record, "id = ?", id).Error
+	err := r.scoped().First(&record, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -51,18 +90,31 @@ func (r *AttendanceRepository) FindAll(page, pageSize int, filters map[string]st
 
 	query := r.db.Model(&database.Attendance{})
 
+	orgID := ""
+	if v, ok := filters["org_id"]; ok && v != "" {
+		orgID = v
+		query = query.Where("attendances.org_id = ?", v)
+	}
+
 	if v, ok := filters["user_id"]; ok && v != "" {
-		query = query.Where("user_id = ?", v)
+		query = query.Where("attendances.user_id = ?", v)
 	}
 	if userIDs := csvFilterValues(filters["user_ids"]); len(userIDs) > 0 {
-		query = query.Where("user_id IN ?", userIDs)
+		query = query.Where("attendances.user_id IN ?", userIDs)
 	}
 	if v, ok := filters["department_id"]; ok && v != "" {
-		// 通过子查询找到该部门下所有用户的 user_id
-		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
+		if orgID != "" {
+			query = query.Where("attendances.user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id = ? AND deleted_at IS NULL)", orgID, v)
+		} else {
+			query = query.Where("attendances.user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
+		}
 	}
 	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
-		query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+		if orgID != "" {
+			query = query.Where("attendances.user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)", orgID, departmentIDs)
+		} else {
+			query = query.Where("attendances.user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+		}
 	}
 	if v, ok := filters["start_date"]; ok && v != "" {
 		t, err := time.Parse("2006-01-02", v)

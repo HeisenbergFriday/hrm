@@ -16,6 +16,7 @@ import {
   SwapOutlined,
   CalendarOutlined,
   ScheduleOutlined,
+  ToolOutlined,
 } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 
@@ -63,6 +64,8 @@ export const menuConfig: MenuItem[] = [
       { key: menuPermissionKey('attendance'), title: '考勤查询', label: <Link to="/attendance">考勤查询</Link>, icon: <ClockCircleOutlined /> },
       { key: menuPermissionKey('attendance-stats'), title: '异常统计', label: <Link to="/attendance-stats">异常统计</Link>, icon: <WarningOutlined /> },
       { key: menuPermissionKey('attendance-export'), title: '导出记录', label: <Link to="/attendance-export">导出记录</Link>, icon: <FileExcelOutlined /> },
+      { key: menuPermissionKey('attendance-processing'), title: '数据处理', label: <Link to="/attendance-processing">数据处理</Link>, icon: <ToolOutlined /> },
+      { key: menuPermissionKey('leave-overtime'), title: '年假与调休', label: <Link to="/leave-overtime">年假与调休</Link>, icon: <ScheduleOutlined /> },
       { key: menuPermissionKey('week-schedule'), title: '大小周与节假日', label: <Link to="/week-schedule">大小周与节假日</Link>, icon: <CalendarOutlined /> },
       { key: menuPermissionKey('employee-shift-config'), title: '员工下班时间', label: <Link to="/employee-shift-config">员工下班时间</Link>, icon: <ClockCircleOutlined /> },
     ],
@@ -101,12 +104,6 @@ export const menuConfig: MenuItem[] = [
     children: [
       { key: menuPermissionKey('audit-logs'), title: '操作日志', label: <Link to="/audit-logs">操作日志</Link>, icon: <HistoryOutlined /> },
     ],
-  },
-  {
-    key: menuPermissionKey('leave-overtime'),
-    title: '年假与调休',
-    label: <Link to="/leave-overtime">年假与调休</Link>,
-    icon: <ScheduleOutlined />,
   },
   {
     key: menuPermissionKey('performance-group'),

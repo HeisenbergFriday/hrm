@@ -16,6 +16,7 @@ type Claims struct {
 	UserID   string `json:"user_id"`
 	UserDBID string `json:"user_db_id,omitempty"`
 	UserName string `json:"user_name"`
+	OrgID    string `json:"org_id"` // 组织ID（多租户）
 	jwt.RegisteredClaims
 }
 
@@ -66,9 +67,21 @@ func jwtAuth(allowQueryToken bool) gin.HandlerFunc {
 			return
 		}
 
+		// 多租户：JWT 必须携带 org_id。老 token（迁移前颁发）会被拒绝，前端应据此 code 引导重新登录。
+		orgID := strings.TrimSpace(claims.OrgID)
+		if orgID == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "token missing org_id, please re-login",
+				"code":  "token_missing_org_id",
+			})
+			c.Abort()
+			return
+		}
+
 		c.Set("userID", claims.UserID)
 		c.Set("userDBID", claims.UserDBID)
 		c.Set("userName", claims.UserName)
+		c.Set("orgID", orgID)
 		c.Next()
 	}
 }

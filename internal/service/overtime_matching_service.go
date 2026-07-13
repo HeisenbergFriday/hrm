@@ -18,11 +18,19 @@ import (
 
 type OvertimeMatchingService struct {
 	db         *gorm.DB
+	orgID      string
 	matchRepo  *repository.OvertimeMatchResultRepository
 	ledgerRepo *repository.CompensatoryLeaveLedgerRepository
 	ruleRepo   *repository.OvertimeRuleConfigRepository
 	suppRepo   *repository.SupplementaryRequestRepository
 	rematch    *overtimeRematchSession
+}
+
+func (s *OvertimeMatchingService) scopedDB() *gorm.DB {
+	if s.orgID != "" {
+		return s.db.Where("org_id = ?", s.orgID)
+	}
+	return s.db
 }
 
 func NewOvertimeMatchingService(db *gorm.DB) *OvertimeMatchingService {
@@ -32,6 +40,17 @@ func NewOvertimeMatchingService(db *gorm.DB) *OvertimeMatchingService {
 		ledgerRepo: repository.NewCompensatoryLeaveLedgerRepository(db),
 		ruleRepo:   repository.NewOvertimeRuleConfigRepository(db),
 		suppRepo:   repository.NewSupplementaryRequestRepository(db),
+	}
+}
+
+func NewOvertimeMatchingServiceWithOrgID(db *gorm.DB, orgID string) *OvertimeMatchingService {
+	return &OvertimeMatchingService{
+		db:         db,
+		orgID:      orgID,
+		matchRepo:  repository.NewOvertimeMatchResultRepositoryWithOrgID(db, orgID),
+		ledgerRepo: repository.NewCompensatoryLeaveLedgerRepositoryWithOrgID(db, orgID),
+		ruleRepo:   repository.NewOvertimeRuleConfigRepositoryWithOrgID(db, orgID),
+		suppRepo:   repository.NewSupplementaryRequestRepositoryWithOrgID(db, orgID),
 	}
 }
 
@@ -95,7 +114,7 @@ func (s *OvertimeMatchingService) MatchApprovedOvertimeForUser(userID, startDate
 	}
 
 	var approvals []database.Approval
-	query := s.db.Where("status IN ?", []string{"completed", "COMPLETED"})
+	query := s.scopedDB().Where("status IN ?", []string{"completed", "COMPLETED"})
 	if trimmedUserID := strings.TrimSpace(userID); trimmedUserID != "" {
 		query = query.Where("applicant_id = ?", trimmedUserID)
 	}
@@ -136,17 +155,21 @@ func (s *OvertimeMatchingService) MatchApproval(approvalID uint) error {
 }
 
 func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force bool) error {
-	var approval database.Approval
-	if err := s.db.First(&approval, approvalID).Error; err != nil {
+	approvalRepo := repository.NewApprovalRepository(s.db)
+	if s.orgID != "" {
+		approvalRepo = repository.NewApprovalRepositoryWithOrgID(s.db, s.orgID)
+	}
+	approval, err := approvalRepo.FindByUintID(approvalID)
+	if err != nil {
 		return err
 	}
-	if !s.isApprovedOvertimeApproval(&approval) {
+	if !s.isApprovedOvertimeApproval(approval) {
 		return nil
 	}
 
-	approvalStart, approvalEnd := s.extractApprovalTimeWindow(&approval)
+	approvalStart, approvalEnd := s.extractApprovalTimeWindow(approval)
 	if approvalStart.IsZero() || approvalEnd.IsZero() {
-		return s.saveMatchResult(&approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "unmatched", "审批时间窗口解析失败")
+		return s.saveMatchResult(approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "unmatched", "审批时间窗口解析失败")
 	}
 
 	// 获取审批日期（取开始时间的日期部分）
@@ -156,11 +179,11 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 
 	// 检查是否已经存在该员工当天的匹配记录（幂等控制，含软删除记录避免唯一索引冲突）
 	var existingMatch database.OvertimeMatchResult
-	err := s.db.Unscoped().Where("user_id = ? AND work_date = ?", approval.ApplicantID, approvalDate).First(&existingMatch).Error
+	err = s.scopedDB().Unscoped().Where("user_id = ? AND work_date = ?", approval.ApplicantID, approvalDate).First(&existingMatch).Error
 	if err == nil {
 		if existingMatch.DeletedAt.Valid {
 			// 软删除记录仍占用唯一索引，需物理删除
-			if delErr := s.db.Unscoped().Delete(&existingMatch).Error; delErr != nil {
+			if delErr := s.scopedDB().Unscoped().Delete(&existingMatch).Error; delErr != nil {
 				return delErr
 			}
 		} else if !force {
@@ -170,7 +193,7 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 		} else {
 			// 强制重新匹配，物理删除旧记录（软删除同样会保留索引冲突）
 			fmt.Printf("[OvertimeMatch] 强制重新匹配，删除旧记录: user_id=%s, work_date=%s\n", approval.ApplicantID, approvalDate)
-			if delErr := s.db.Unscoped().Delete(&existingMatch).Error; delErr != nil {
+			if delErr := s.scopedDB().Unscoped().Delete(&existingMatch).Error; delErr != nil {
 				return delErr
 			}
 		}
@@ -183,10 +206,10 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 	endOfWindow := startOfDay.Add(30 * time.Hour) // 次日 06:00:00
 
 	var attendances []database.Attendance
-	if err := s.db.Where("user_id = ? AND check_time >= ? AND check_time <= ?",
+	if err := s.scopedDB().Where("user_id = ? AND check_time >= ? AND check_time <= ?",
 		approval.ApplicantID, startOfDay, endOfWindow).
 		Order("check_time asc").Find(&attendances).Error; err != nil {
-		return s.saveMatchResult(&approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "query_clock_failed", "查询本地打卡记录失败，未生成调休："+err.Error())
+		return s.saveMatchResult(approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "query_clock_failed", "查询本地打卡记录失败，未生成调休："+err.Error())
 	}
 
 	// 过滤有效打卡记录
@@ -211,7 +234,7 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 			msg = fmt.Sprintf("审批已通过；加班窗口[%s~%s]内无有效打卡（窗口外有%d条有效打卡）；本次加班视为无效，未生成调休",
 				approvalStart.Format("15:04"), approvalEnd.Format("15:04"), len(validAttendances))
 		}
-		if err := s.saveMatchResult(&approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "no_clock_record", msg); err != nil {
+		if err := s.saveMatchResult(approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "no_clock_record", msg); err != nil {
 			return err
 		}
 		_ = s.createSupplementaryRequestIfNotExists(approval.ApplicantID, approvalDate, approval.ID)
@@ -223,7 +246,7 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 		if len(overtimeWindowAttendances) == 1 {
 			clockInfo = fmt.Sprintf("（仅1条：%s）", overtimeWindowAttendances[0].CheckTime.Format("15:04"))
 		}
-		if err := s.saveMatchResult(&approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "insufficient_clock_record",
+		if err := s.saveMatchResult(approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "insufficient_clock_record",
 			fmt.Sprintf("审批已通过；加班窗口[%s~%s]内有效打卡仅%d次%s（不足2次）；无法计算打卡时长，本次加班视为无效，未生成调休",
 				approvalStart.Format("15:04"), approvalEnd.Format("15:04"), len(overtimeWindowAttendances), clockInfo)); err != nil {
 			return err
@@ -248,7 +271,7 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 	actualDuration := checkout.Sub(checkin)
 	actualClockSpanMinutes := int(actualDuration.Minutes())
 	if actualClockSpanMinutes <= 0 {
-		return s.saveMatchResult(&approval, approvalStart, approvalEnd, &checkin, &checkout, actualClockSpanMinutes, 0, 0, "invalid_clock_time", "打卡时间异常，本次加班视为无效加班。")
+		return s.saveMatchResult(approval, approvalStart, approvalEnd, &checkin, &checkout, actualClockSpanMinutes, 0, 0, "invalid_clock_time", "打卡时间异常，本次加班视为无效加班。")
 	}
 
 	// 计算休息扣除时间
@@ -294,9 +317,9 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 			actualClockSpanMinutes, breakDeductMinutes)
 	}
 
-	if err := s.saveMatchResult(&approval, approvalStart, approvalEnd, &checkin, &checkout, actualClockSpanMinutes, breakDeductMinutes, effectiveOvertimeMinutes, status, reason); err != nil {
-		return err
-	}
+		if err := s.saveMatchResult(approval, approvalStart, approvalEnd, &checkin, &checkout, actualClockSpanMinutes, breakDeductMinutes, effectiveOvertimeMinutes, status, reason); err != nil {
+			return err
+		}
 	match, err := s.matchRepo.FindByUserAndWorkDate(approval.ApplicantID, approvalDate)
 	if err != nil {
 		return err
@@ -305,6 +328,9 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 	// 生成调休台账
 	if effectiveOvertimeMinutes > 0 {
 		compSvc := NewCompensatoryLeaveService(s.db)
+		if s.orgID != "" {
+			compSvc = NewCompensatoryLeaveServiceWithOrgID(s.db, s.orgID)
+		}
 		if err := compSvc.CreditFromOvertime(match.ID); err != nil {
 			_ = s.matchRepo.UpdateLocalBalanceStatus(match.ID, "failed")
 			_ = s.matchRepo.UpdateStatus(match.ID, "local_balance_failed", "本系统调休余额增加失败："+err.Error())
@@ -337,6 +363,9 @@ func (s *OvertimeMatchingService) ensureExistingMatchSettled(match *database.Ove
 	}
 	if !strings.EqualFold(strings.TrimSpace(match.LocalBalanceStatus), "success") {
 		compSvc := NewCompensatoryLeaveService(s.db)
+		if s.orgID != "" {
+			compSvc = NewCompensatoryLeaveServiceWithOrgID(s.db, s.orgID)
+		}
 		if err := compSvc.CreditFromOvertime(match.ID); err != nil {
 			_ = s.matchRepo.UpdateLocalBalanceStatus(match.ID, "failed")
 			_ = s.matchRepo.UpdateStatus(match.ID, "local_balance_failed", "本系统调休余额增加失败："+err.Error())
@@ -365,6 +394,9 @@ func (s *OvertimeMatchingService) RollbackApprovalMatch(approvalID uint) error {
 		return nil
 	}
 	compSvc := NewCompensatoryLeaveService(s.db)
+	if s.orgID != "" {
+		compSvc = NewCompensatoryLeaveServiceWithOrgID(s.db, s.orgID)
+	}
 	if err := compSvc.RollbackCredit(match.ID); err != nil {
 		return err
 	}
@@ -847,8 +879,11 @@ func (s *OvertimeMatchingService) saveMatchResult(a *database.Approval, approval
 	// 优先使用 ApplicantName；若为空或与 ID 相同，从 User 表回填
 	userName := a.ApplicantName
 	if userName == "" || userName == a.ApplicantID {
-		var user database.User
-		if s.db.Where("user_id = ?", a.ApplicantID).First(&user).Error == nil && user.Name != "" {
+		userRepo := repository.NewUserRepository(s.db)
+		if s.orgID != "" {
+			userRepo = repository.NewUserRepositoryWithOrgID(s.db, s.orgID)
+		}
+		if user, err := userRepo.FindByUserID(a.ApplicantID); err == nil && user.Name != "" {
 			userName = user.Name
 		}
 	}
@@ -925,8 +960,15 @@ func (s *OvertimeMatchingService) rollbackAndDeleteMatches(userID, startDate, en
 	}
 	scopes := collectOvertimeSyncScopes(matches)
 	var deletedCount int64
-	err = s.db.Transaction(func(tx *gorm.DB) error {
+	err = s.scopedDB().Transaction(func(tx *gorm.DB) error {
 		compSvc := NewCompensatoryLeaveService(tx)
+		if s.orgID != "" {
+			compSvc = NewCompensatoryLeaveServiceWithOrgID(tx, s.orgID)
+		}
+		scopedTx := tx
+		if s.orgID != "" {
+			scopedTx = scopedTx.Where("org_id = ?", s.orgID)
+		}
 		for _, match := range matches {
 			if shouldRollbackOvertimeMatch(match) {
 				if err := compSvc.RollbackCredit(match.ID); err != nil {
@@ -935,7 +977,7 @@ func (s *OvertimeMatchingService) rollbackAndDeleteMatches(userID, startDate, en
 			}
 		}
 
-		query := tx.Where("work_date >= ? AND work_date <= ?", startDate, endDate)
+		query := scopedTx.Where("work_date >= ? AND work_date <= ?", startDate, endDate)
 		if userID != "" {
 			query = query.Where("user_id = ?", userID)
 		}
@@ -950,7 +992,7 @@ func (s *OvertimeMatchingService) rollbackAndDeleteMatches(userID, startDate, en
 }
 
 func (s *OvertimeMatchingService) listMatchesForRange(userID, startDate, endDate string) ([]database.OvertimeMatchResult, error) {
-	query := s.db.Where("work_date >= ? AND work_date <= ?", startDate, endDate)
+	query := s.scopedDB().Where("work_date >= ? AND work_date <= ?", startDate, endDate)
 	if userID != "" {
 		query = query.Where("user_id = ?", userID)
 	}
@@ -1091,7 +1133,11 @@ func (s *OvertimeMatchingService) markMatchSyncedWithoutPush(match *database.Ove
 
 func (s *OvertimeMatchingService) findOvertimeSyncHistory(userID, workDate string) (*database.OvertimeSyncHistory, error) {
 	var history database.OvertimeSyncHistory
-	if err := s.db.Where("user_id = ? AND work_date = ?", userID, workDate).First(&history).Error; err != nil {
+	query := s.scopedDB().Where("user_id = ? AND work_date = ?", userID, workDate)
+	if s.orgID != "" {
+		query = query.Where("org_id = ?", s.orgID)
+	}
+	if err := query.First(&history).Error; err != nil {
 		return nil, err
 	}
 	return &history, nil
@@ -1103,6 +1149,7 @@ func (s *OvertimeMatchingService) upsertOvertimeSyncHistory(match *database.Over
 	}
 	now := time.Now()
 	history := database.OvertimeSyncHistory{
+		OrgID:                    match.OrgID,
 		UserID:                   match.UserID,
 		WorkDate:                 match.WorkDate,
 		ApprovalID:               match.ApprovalID,
@@ -1112,8 +1159,9 @@ func (s *OvertimeMatchingService) upsertOvertimeSyncHistory(match *database.Over
 		SyncMode:                 syncMode,
 		SyncedAt:                 &now,
 	}
-	return s.db.Clauses(clause.OnConflict{
+	return s.scopedDB().Clauses(clause.OnConflict{
 		Columns: []clause.Column{
+			{Name: "org_id"},
 			{Name: "user_id"},
 			{Name: "work_date"},
 		},
@@ -1126,7 +1174,7 @@ func (s *OvertimeMatchingService) upsertOvertimeSyncHistory(match *database.Over
 			"synced_at",
 			"updated_at",
 		}),
-	}).Create(&history).Error
+		}).Create(&history).Error
 }
 
 func shouldRollbackOvertimeMatch(match database.OvertimeMatchResult) bool {
@@ -1147,6 +1195,9 @@ func (s *OvertimeMatchingService) syncAbsoluteOvertimeBalances(scopes []overtime
 	}
 
 	compSvc := NewCompensatoryLeaveService(s.db)
+	if s.orgID != "" {
+		compSvc = NewCompensatoryLeaveServiceWithOrgID(s.db, s.orgID)
+	}
 	for _, scope := range scopes {
 		totalMinutes, err := compSvc.GetOvertimeBalanceByYear(scope.UserID, scope.Year)
 		if err != nil {
@@ -1169,9 +1220,12 @@ func (s *OvertimeMatchingService) markOvertimeYearSynced(scope overtimeSyncScope
 	startDate := fmt.Sprintf("%04d-01-01", scope.Year)
 	endDate := fmt.Sprintf("%04d-12-31", scope.Year)
 	requestID := fmt.Sprintf("absolute:%s:%d:%d", scope.UserID, scope.Year, time.Now().UnixNano())
-	return s.db.Model(&database.OvertimeMatchResult{}).
-		Where("user_id = ? AND work_date >= ? AND work_date <= ? AND effective_overtime_minutes > 0 AND local_balance_status = ?", scope.UserID, startDate, endDate, "success").
-		Updates(map[string]interface{}{
+	query := s.scopedDB().Model(&database.OvertimeMatchResult{}).
+		Where("user_id = ? AND work_date >= ? AND work_date <= ? AND effective_overtime_minutes > 0 AND local_balance_status = ?", scope.UserID, startDate, endDate, "success")
+	if s.orgID != "" {
+		query = query.Where("org_id = ?", s.orgID)
+	}
+	return query.Updates(map[string]interface{}{
 			"dingtalk_sync_status":     "success",
 			"dingtalk_sync_request_id": requestID,
 			"dingtalk_sync_error":      "",
@@ -1182,9 +1236,12 @@ func (s *OvertimeMatchingService) markOvertimeYearSynced(scope overtimeSyncScope
 func (s *OvertimeMatchingService) markOvertimeYearSyncFailed(scope overtimeSyncScope, syncErr error) error {
 	startDate := fmt.Sprintf("%04d-01-01", scope.Year)
 	endDate := fmt.Sprintf("%04d-12-31", scope.Year)
-	return s.db.Model(&database.OvertimeMatchResult{}).
-		Where("user_id = ? AND work_date >= ? AND work_date <= ? AND effective_overtime_minutes > 0 AND local_balance_status = ?", scope.UserID, startDate, endDate, "success").
-		Updates(map[string]interface{}{
+	query := s.scopedDB().Model(&database.OvertimeMatchResult{}).
+		Where("user_id = ? AND work_date >= ? AND work_date <= ? AND effective_overtime_minutes > 0 AND local_balance_status = ?", scope.UserID, startDate, endDate, "success")
+	if s.orgID != "" {
+		query = query.Where("org_id = ?", s.orgID)
+	}
+	return query.Updates(map[string]interface{}{
 			"dingtalk_sync_status": "failed",
 			"dingtalk_sync_error":  syncErr.Error(),
 			"match_status":         "dingtalk_sync_failed",
@@ -1227,18 +1284,22 @@ func (s *OvertimeMatchingService) ApproveSupplementaryRequest(requestID uint, cl
 	}
 
 	// 查找关联的匹配记录
-	var match database.OvertimeMatchResult
-	if err := s.db.First(&match, suppReq.MatchResultID).Error; err != nil {
+	match, err := s.matchRepo.FindByID(suppReq.MatchResultID)
+	if err != nil {
 		return fmt.Errorf("匹配记录不存在: %w", err)
 	}
 
 	// 获取加班审批信息
-	var approval database.Approval
-	if err := s.db.First(&approval, match.ApprovalID).Error; err != nil {
+	approvalRepo := repository.NewApprovalRepository(s.db)
+	if s.orgID != "" {
+		approvalRepo = repository.NewApprovalRepositoryWithOrgID(s.db, s.orgID)
+	}
+	approval, err := approvalRepo.FindByUintID(match.ApprovalID)
+	if err != nil {
 		return fmt.Errorf("审批记录不存在: %w", err)
 	}
 
-	approvalStart, approvalEnd := s.extractApprovalTimeWindow(&approval)
+	approvalStart, approvalEnd := s.extractApprovalTimeWindow(approval)
 	if approvalStart.IsZero() || approvalEnd.IsZero() {
 		return fmt.Errorf("审批时间窗口解析失败")
 	}
@@ -1258,13 +1319,16 @@ func (s *OvertimeMatchingService) ApproveSupplementaryRequest(requestID uint, cl
 	effectiveOvertimeMinutes := s.applyOvertimeRules(rawEffectiveMinutes)
 
 	// 删除旧的匹配记录（物理删除以避免唯一索引冲突）
-	if err := s.db.Unscoped().Delete(&match).Error; err != nil {
+	if err := s.scopedDB().Unscoped().Where("id = ?", match.ID).Delete(&database.OvertimeMatchResult{}).Error; err != nil {
 		return fmt.Errorf("删除旧匹配记录失败: %w", err)
 	}
 
 	// 回滚旧的调休台账
 	if match.EffectiveOvertimeMinutes > 0 && !strings.EqualFold(strings.TrimSpace(match.MatchStatus), "rolled_back") {
 		compSvc := NewCompensatoryLeaveService(s.db)
+		if s.orgID != "" {
+			compSvc = NewCompensatoryLeaveServiceWithOrgID(s.db, s.orgID)
+		}
 		_ = compSvc.RollbackCredit(match.ID)
 	}
 
@@ -1281,7 +1345,7 @@ func (s *OvertimeMatchingService) ApproveSupplementaryRequest(requestID uint, cl
 			actualClockSpanMinutes, breakDeductMinutes)
 	}
 
-	if err := s.saveMatchResult(&approval, approvalStart, approvalEnd, &clockIn, &clockOut, actualClockSpanMinutes, breakDeductMinutes, effectiveOvertimeMinutes, status, reason); err != nil {
+	if err := s.saveMatchResult(approval, approvalStart, approvalEnd, &clockIn, &clockOut, actualClockSpanMinutes, breakDeductMinutes, effectiveOvertimeMinutes, status, reason); err != nil {
 		return fmt.Errorf("保存匹配结果失败: %w", err)
 	}
 
@@ -1292,6 +1356,9 @@ func (s *OvertimeMatchingService) ApproveSupplementaryRequest(requestID uint, cl
 			return fmt.Errorf("查找新匹配记录失败: %w", err)
 		}
 		compSvc := NewCompensatoryLeaveService(s.db)
+		if s.orgID != "" {
+			compSvc = NewCompensatoryLeaveServiceWithOrgID(s.db, s.orgID)
+		}
 		if err := compSvc.CreditFromOvertime(newMatch.ID); err != nil {
 			_ = s.matchRepo.UpdateLocalBalanceStatus(newMatch.ID, "failed")
 			_ = s.matchRepo.UpdateStatus(newMatch.ID, "local_balance_failed", "本系统调休余额增加失败："+err.Error())

@@ -226,7 +226,11 @@ func (s *AttendanceService) SaveRecord(record *database.Attendance) error {
 	return s.attendanceRepo.Upsert(record)
 }
 
-func (s *AttendanceService) SyncRecords(records []dingtalk.AttendanceRecord, userNameMap map[string]string) (int, error) {
+func (s *AttendanceService) SyncRecords(orgID string, records []dingtalk.AttendanceRecord, userNameMap map[string]string) (int, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		orgID = "default"
+	}
 	count := 0
 	for _, r := range records {
 		if r.UserCheckTime == "" {
@@ -247,6 +251,7 @@ func (s *AttendanceService) SyncRecords(records []dingtalk.AttendanceRecord, use
 		}
 
 		record := &database.Attendance{
+			OrgID:     orgID,
 			UserID:    r.UserID,
 			UserName:  userNameMap[r.UserID],
 			CheckTime: checkTime,
@@ -288,8 +293,8 @@ func (s *AttendanceService) GetExports(page, pageSize int) ([]database.Attendanc
 	return s.exportRepo.FindAll(page, pageSize)
 }
 
-func (s *AttendanceService) GetLastSyncTime() (*database.SyncStatus, error) {
-	return s.syncRepo.FindByType("attendance")
+func (s *AttendanceService) GetLastSyncTime(orgID string) (*database.SyncStatus, error) {
+	return s.syncRepo.FindByOrgAndType(orgID, "attendance")
 }
 
 func (s *AttendanceService) getUsersForStats(filters map[string]string) ([]database.User, error) {

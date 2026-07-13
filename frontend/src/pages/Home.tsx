@@ -3,42 +3,41 @@ import { Row, Col, Typography, Spin, Alert, Button, Result } from 'antd'
 import { UserOutlined, TeamOutlined, ClockCircleOutlined, FileOutlined, DashboardOutlined, LockOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { userAPI, departmentAPI, attendanceAPI, approvalAPI } from '../services/api'
+import { attendanceAPI, approvalAPI, orgAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import { useAuthStore } from '../store/authStore'
 
 const { Text } = Typography
 
+const isForbiddenError = (error: unknown) => {
+  const status = (error as { response?: { status?: number } })?.response?.status
+  return status === 403
+}
+
 const statCards = [
-  { key: 'users', title: '员工总数', icon: <UserOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', shadow: 'rgba(102,126,234,0.35)' },
-  { key: 'departments', title: '部门总数', icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)', shadow: 'rgba(67,233,123,0.3)' },
-  { key: 'attendance', title: '考勤率', icon: <ClockCircleOutlined />, gradient: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)', shadow: 'rgba(250,112,154,0.3)' },
-  { key: 'approvals', title: '审批数量', icon: <FileOutlined />, gradient: 'linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)', shadow: 'rgba(161,140,209,0.3)' },
+  { key: 'users', title: '员工总数', icon: <UserOutlined />, gradient: 'linear-gradient(135deg, #2563eb 0%, #0891b2 100%)', shadow: 'rgba(37,99,235,0.22)' },
+  { key: 'departments', title: '部门总数', icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #10b981 0%, #22c55e 100%)', shadow: 'rgba(16,185,129,0.2)' },
+  { key: 'attendance', title: '考勤率', icon: <ClockCircleOutlined />, gradient: 'linear-gradient(135deg, #f59e0b 0%, #fb7185 100%)', shadow: 'rgba(245,158,11,0.2)' },
+  { key: 'approvals', title: '审批数量', icon: <FileOutlined />, gradient: 'linear-gradient(135deg, #8b5cf6 0%, #06b6d4 100%)', shadow: 'rgba(139,92,246,0.2)' },
 ] as const
 
 const Home: React.FC = () => {
   const navigate = useNavigate()
   const { menuKeys } = useAuthStore()
 
-  const { data: usersData, isLoading: usersLoading, isError: usersError } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => userAPI.getUsers({ page: 1, page_size: 1 }),
+  const { data: overviewData, isLoading: overviewLoading, isError: overviewError, error: overviewQueryError } = useQuery({
+    queryKey: ['orgOverview', 'home'],
+    queryFn: () => orgAPI.getOverview(),
     enabled: menuKeys.length > 0
   })
 
-  const { data: departmentsData, isLoading: deptsLoading, isError: deptsError } = useQuery({
-    queryKey: ['departments'],
-    queryFn: departmentAPI.getDepartments,
-    enabled: menuKeys.length > 0
-  })
-
-  const { data: attendanceData, isLoading: attendanceLoading, isError: attendanceError } = useQuery({
+  const { data: attendanceData, isLoading: attendanceLoading, isError: attendanceError, error: attendanceQueryError } = useQuery({
     queryKey: ['attendanceStats'],
     queryFn: () => attendanceAPI.getStats({}),
     enabled: menuKeys.length > 0
   })
 
-  const { data: approvalsData, isLoading: approvalsLoading, isError: approvalsError } = useQuery({
+  const { data: approvalsData, isLoading: approvalsLoading, isError: approvalsError, error: approvalsQueryError } = useQuery({
     queryKey: ['approvals'],
     queryFn: () => approvalAPI.getInstances({ page: 1, page_size: 1 }),
     enabled: menuKeys.length > 0
@@ -49,7 +48,7 @@ const Home: React.FC = () => {
     return (
       <PageContainer>
         <div style={{
-          background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 50%, #818cf8 100%)',
+          background: 'linear-gradient(135deg, #2563eb 0%, #0891b2 55%, #10b981 100%)',
           borderRadius: 'var(--radius-2xl)',
           padding: '28px 32px',
           marginBottom: 'var(--space-6)',
@@ -57,7 +56,7 @@ const Home: React.FC = () => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          boxShadow: '0 4px 20px rgba(67,56,202,0.3)',
+          boxShadow: '0 16px 36px rgba(37,99,235,0.16)',
         }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
@@ -82,7 +81,7 @@ const Home: React.FC = () => {
           </div>
         </div>
         <Result
-          icon={<LockOutlined style={{ color: '#4338ca' }} />}
+          icon={<LockOutlined style={{ color: 'var(--color-primary)' }} />}
           title="暂无数据权限"
           subTitle="您尚未被分配任何角色，请联系管理员配置权限后再使用系统功能。"
         />
@@ -90,8 +89,11 @@ const Home: React.FC = () => {
     )
   }
 
-  const isLoading = usersLoading || deptsLoading || attendanceLoading || approvalsLoading
-  const isError = usersError || deptsError || attendanceError || approvalsError
+  const isLoading = overviewLoading || attendanceLoading || approvalsLoading
+  const hasUnexpectedError =
+    (overviewError && !isForbiddenError(overviewQueryError)) ||
+    (attendanceError && !isForbiddenError(attendanceQueryError)) ||
+    (approvalsError && !isForbiddenError(approvalsQueryError))
 
   if (isLoading) {
     return (
@@ -101,7 +103,7 @@ const Home: React.FC = () => {
     )
   }
 
-  if (isError) {
+  if (hasUnexpectedError) {
     return (
       <PageContainer>
         <Alert
@@ -115,8 +117,9 @@ const Home: React.FC = () => {
     )
   }
 
-  const userCount = usersData?.data?.total || 0
-  const departmentCount = departmentsData?.data?.departments?.length || 0
+  const overviewSummary = overviewData?.data?.overview?.summary
+  const userCount = overviewSummary?.total_employees || 0
+  const departmentCount = overviewSummary?.department_count || 0
   const attendanceRate = attendanceData?.data?.summary?.normal_rate ? parseFloat(attendanceData.data.summary.normal_rate) : 0
   const approvalCount = approvalsData?.data?.total || 0
 
@@ -131,7 +134,7 @@ const Home: React.FC = () => {
     <PageContainer>
       {/* 欢迎区 */}
       <div style={{
-        background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 50%, #818cf8 100%)',
+        background: 'linear-gradient(135deg, #2563eb 0%, #0891b2 55%, #10b981 100%)',
         borderRadius: 'var(--radius-2xl)',
         padding: '28px 32px',
         marginBottom: 'var(--space-6)',
@@ -139,7 +142,7 @@ const Home: React.FC = () => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        boxShadow: '0 4px 20px rgba(67,56,202,0.3)',
+        boxShadow: '0 16px 36px rgba(37,99,235,0.16)',
       }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
@@ -229,7 +232,7 @@ const Home: React.FC = () => {
         <span style={{ color: '#374151', fontWeight: 'var(--font-weight-bold)', marginBottom: 'var(--space-4)', display: 'block', fontSize: 'var(--font-size-md)' }}>快捷入口</span>
         <Row gutter={[16, 16]}>
           {[
-            { label: '组织架构', icon: <TeamOutlined />, color: '#4338ca', bg: '#eef2ff', path: '/department-tree' },
+            { label: '组织架构', icon: <TeamOutlined />, color: '#2563eb', bg: '#eaf2ff', path: '/department-tree' },
             { label: '考勤管理', icon: <ClockCircleOutlined />, color: '#0369a1', bg: '#e0f2fe', path: '/attendance' },
             { label: '审批管理', icon: <FileOutlined />, color: '#b45309', bg: '#fef3c7', path: '/approval-instances' },
             { label: '绩效管理', icon: <DashboardOutlined />, color: '#15803d', bg: '#dcfce7', path: '/performance-overview' },

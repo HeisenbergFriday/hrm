@@ -14,10 +14,15 @@ import (
 )
 
 func main() {
-	// 高风险重同步工具：默认 dry-run，正式执行前必须显式关闭 dry-run 并确认目标记录 ID。
 	idsRaw := flag.String("ids", "", "comma-separated overtime_match_results ids")
+	orgIDFlag := flag.String("org-id", "", "required organization id; all selected ids must belong to this org")
 	dryRun := flag.Bool("dry-run", true, "print the planned resync records without writing to DingTalk or database")
 	flag.Parse()
+
+	orgID := strings.TrimSpace(*orgIDFlag)
+	if orgID == "" {
+		log.Fatal("missing -org-id")
+	}
 	if strings.TrimSpace(*idsRaw) == "" {
 		log.Fatal("missing -ids")
 	}
@@ -37,24 +42,28 @@ func main() {
 	if *dryRun {
 		for _, id := range ids {
 			var match database.OvertimeMatchResult
-			if err := database.DB.First(&match, id).Error; err != nil {
-				log.Printf("  FAIL  load id=%d  err=%v", id, err)
+			if err := database.DB.Where("org_id = ?", orgID).First(&match, id).Error; err != nil {
+				log.Printf("  FAIL  load org=%s id=%d  err=%v", orgID, id, err)
 				continue
 			}
-			fmt.Printf("  [dry-run] id=%d  userID=%s  date=%s  minutes=%d  status=%s\n",
-				match.ID, match.UserID, match.WorkDate, match.EffectiveOvertimeMinutes, match.DingtalkSyncStatus)
+			fmt.Printf("  [dry-run] org=%s  id=%d  userID=%s  date=%s  minutes=%d  status=%s\n",
+				match.OrgID, match.ID, match.UserID, match.WorkDate, match.EffectiveOvertimeMinutes, match.DingtalkSyncStatus)
 		}
-		log.Println("dry-run 结束，未实际写入")
+		log.Println("dry-run finished without writes")
 		return
 	}
 
-	if err := dingtalk.Init(); err != nil {
-		log.Fatalf("dingtalk init failed: %v", err)
+	dingCfg, ok := dingtalk.GetAppConfigForOrg(orgID)
+	if !ok {
+		log.Fatalf("dingtalk app config not found for org_id=%s", orgID)
+	}
+	if err := dingtalk.InitWithConfig(dingCfg); err != nil {
+		log.Fatalf("dingtalk init failed for org_id=%s: %v", orgID, err)
 	}
 
 	for _, id := range ids {
-		if err := resyncOne(database.DB, id); err != nil {
-			log.Fatalf("resync id=%d failed: %v", id, err)
+		if err := resyncOne(database.DB, dingCfg, orgID, id); err != nil {
+			log.Fatalf("resync org=%s id=%d failed: %v", orgID, id, err)
 		}
 	}
 }
@@ -79,23 +88,28 @@ func parseIDs(raw string) ([]uint, error) {
 	return ids, nil
 }
 
-func resyncOne(db *gorm.DB, id uint) error {
+func resyncOne(db *gorm.DB, dingCfg dingtalk.AppConfig, orgID string, id uint) error {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return fmt.Errorf("org id is required")
+	}
+
 	var match database.OvertimeMatchResult
-	if err := db.First(&match, id).Error; err != nil {
+	if err := db.Where("org_id = ?", orgID).First(&match, id).Error; err != nil {
 		return err
 	}
 	if match.EffectiveOvertimeMinutes <= 0 {
 		return fmt.Errorf("record has no effective overtime minutes")
 	}
 	reason := fmt.Sprintf("休息日加班调休 %s %d分钟", match.WorkDate, match.EffectiveOvertimeMinutes)
-	if err := dingtalk.UpdateCompensatoryLeaveQuota(match.UserID, match.EffectiveOvertimeMinutes, match.WorkDate, reason); err != nil {
-		_ = db.Model(&database.OvertimeMatchResult{}).Where("id = ?", match.ID).Updates(map[string]interface{}{
+	if err := dingtalk.UpdateCompensatoryLeaveQuotaForConfig(dingCfg, match.UserID, match.EffectiveOvertimeMinutes, match.WorkDate, reason); err != nil {
+		_ = db.Model(&database.OvertimeMatchResult{}).Where("org_id = ? AND id = ?", orgID, match.ID).Updates(map[string]interface{}{
 			"dingtalk_sync_status": "failed",
 			"dingtalk_sync_error":  err.Error(),
 		}).Error
 		return err
 	}
-	return db.Model(&database.OvertimeMatchResult{}).Where("id = ?", match.ID).Updates(map[string]interface{}{
+	return db.Model(&database.OvertimeMatchResult{}).Where("org_id = ? AND id = ?", orgID, match.ID).Updates(map[string]interface{}{
 		"dingtalk_sync_status":     "success",
 		"dingtalk_sync_request_id": fmt.Sprintf("manual-resync:%d", match.ID),
 		"dingtalk_sync_error":      "",

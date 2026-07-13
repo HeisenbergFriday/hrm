@@ -225,7 +225,7 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 	}
 
 	var profiles []database.EmployeeProfile
-	if err := s.db.Where("(employee_id IN ? OR user_id IN ?) AND deleted_at IS NULL", lookupIDs, lookupIDs).Find(&profiles).Error; err != nil {
+	if err := s.scopedDB().Where("(employee_id IN ? OR user_id IN ?) AND deleted_at IS NULL", lookupIDs, lookupIDs).Find(&profiles).Error; err != nil {
 		return err
 	}
 	profileUserByEmployeeID := make(map[string]string)
@@ -258,7 +258,7 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 	}
 
 	var users []database.User
-	if err := s.db.Where("user_id IN ? AND deleted_at IS NULL", candidateUserIDs).Find(&users).Error; err != nil {
+	if err := s.scopedDB().Where("user_id IN ? AND deleted_at IS NULL", candidateUserIDs).Find(&users).Error; err != nil {
 		return err
 	}
 	userByID := make(map[string]database.User)
@@ -278,7 +278,7 @@ func (s *PerformanceService) ResolveImportedPerformanceEmployees(result *Perform
 	departmentNameByID := make(map[string]string)
 	if len(departmentIDs) > 0 {
 		var departments []database.Department
-		if err := s.db.Where("department_id IN ? AND deleted_at IS NULL", departmentIDs).Find(&departments).Error; err != nil {
+		if err := s.scopedDB().Where("department_id IN ? AND deleted_at IS NULL", departmentIDs).Find(&departments).Error; err != nil {
 			return err
 		}
 		for _, department := range departments {
@@ -417,7 +417,7 @@ func (s *PerformanceService) resolveImportedAssessmentManager(
 		}
 	} else {
 		var managers []database.User
-		if err := s.db.Where("name = ? AND status = ? AND deleted_at IS NULL", managerNameInput, "active").Find(&managers).Error; err != nil {
+		if err := s.scopedDB().Where("name = ? AND status = ? AND deleted_at IS NULL", managerNameInput, "active").Find(&managers).Error; err != nil {
 			return "", "", "", "", reason, err
 		}
 		if len(managers) == 0 {

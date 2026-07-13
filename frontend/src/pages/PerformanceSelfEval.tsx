@@ -367,7 +367,15 @@ const PerformanceSelfEval: React.FC = () => {
               type="warning"
               showIcon
               message="缺少上一季度绩效考核指标"
-              description="新流程自评需要先承接上一期目标计划作为本期考核指标。请联系HR先补录/导入本期上一季度考核指标，或从上一期活动的下季度目标计划承接后再自评。"
+              description={
+                <div>
+                  <div>新流程自评需要先承接上一期目标计划作为本期考核指标。</div>
+                  <div style={{ marginTop: 4 }}>
+                    请联系 HR 在【绩效总览 → 参与人列表】点击本活动的<Text strong>「补录」</Text>为你手动录入本期考核指标；
+                    或让 HR 在活动编辑中选择「承接上一期活动」，系统会自动把上一期设定的下季度目标同步为本期考核指标。
+                  </div>
+                </div>
+              }
               style={{ marginBottom: 12 }}
             />
           )}

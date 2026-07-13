@@ -8,20 +8,40 @@ import (
 )
 
 type SupplementaryRequestRepository struct {
-	db *gorm.DB
+	db    *gorm.DB
+	orgID string
 }
 
 func NewSupplementaryRequestRepository(db *gorm.DB) *SupplementaryRequestRepository {
 	return &SupplementaryRequestRepository{db: db}
 }
 
+func NewSupplementaryRequestRepositoryWithOrgID(db *gorm.DB, orgID string) *SupplementaryRequestRepository {
+	return &SupplementaryRequestRepository{db: db, orgID: orgID}
+}
+
+func (r *SupplementaryRequestRepository) scoped() *gorm.DB {
+	tx := r.db
+	if r.orgID != "" {
+		tx = tx.Where("org_id = ?", r.orgID)
+	}
+	return tx
+}
+
 func (r *SupplementaryRequestRepository) Create(req *database.OvertimeSupplementaryRequest) error {
+	if r.orgID != "" {
+		merged, err := EnsureSameOrg(r.orgID, req.OrgID)
+		if err != nil {
+			return err
+		}
+		req.OrgID = merged
+	}
 	return r.db.Create(req).Error
 }
 
 func (r *SupplementaryRequestRepository) FindByMatchResultID(matchResultID uint) (*database.OvertimeSupplementaryRequest, error) {
 	var req database.OvertimeSupplementaryRequest
-	err := r.db.Where("match_result_id = ?", matchResultID).
+	err := r.scoped().Where("match_result_id = ?", matchResultID).
 		Order("created_at desc").First(&req).Error
 	if err != nil {
 		return nil, err
@@ -31,7 +51,7 @@ func (r *SupplementaryRequestRepository) FindByMatchResultID(matchResultID uint)
 
 func (r *SupplementaryRequestRepository) FindPendingByMatchResultID(matchResultID uint) (*database.OvertimeSupplementaryRequest, error) {
 	var req database.OvertimeSupplementaryRequest
-	err := r.db.Where("match_result_id = ? AND status IN ?", matchResultID, []string{"pending", "approved"}).
+	err := r.scoped().Where("match_result_id = ? AND status IN ?", matchResultID, []string{"pending", "approved"}).
 		Order("created_at desc").First(&req).Error
 	if err != nil {
 		return nil, err
@@ -41,7 +61,7 @@ func (r *SupplementaryRequestRepository) FindPendingByMatchResultID(matchResultI
 
 func (r *SupplementaryRequestRepository) FindByUserID(userID, startDate, endDate string) ([]database.OvertimeSupplementaryRequest, error) {
 	var reqs []database.OvertimeSupplementaryRequest
-	query := r.db.Order("created_at desc")
+	query := r.scoped().Order("created_at desc")
 	if userID != "" {
 		query = query.Where("user_id = ?", userID)
 	}
@@ -57,7 +77,7 @@ func (r *SupplementaryRequestRepository) FindByUserID(userID, startDate, endDate
 
 func (r *SupplementaryRequestRepository) FindByID(id uint) (*database.OvertimeSupplementaryRequest, error) {
 	var req database.OvertimeSupplementaryRequest
-	err := r.db.First(&req, id).Error
+	err := r.scoped().First(&req, id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +86,7 @@ func (r *SupplementaryRequestRepository) FindByID(id uint) (*database.OvertimeSu
 
 func (r *SupplementaryRequestRepository) Approve(id uint, approvedBy string, clockIn, clockOut time.Time) error {
 	now := time.Now()
-	return r.db.Model(&database.OvertimeSupplementaryRequest{}).Where("id = ?", id).Updates(map[string]interface{}{
+	return r.scoped().Model(&database.OvertimeSupplementaryRequest{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"status":                  "approved",
 		"approved_by":             approvedBy,
 		"approved_at":             &now,
@@ -76,18 +96,18 @@ func (r *SupplementaryRequestRepository) Approve(id uint, approvedBy string, clo
 }
 
 func (r *SupplementaryRequestRepository) Reject(id uint, rejectedReason string) error {
-	return r.db.Model(&database.OvertimeSupplementaryRequest{}).Where("id = ?", id).Updates(map[string]interface{}{
+	return r.scoped().Model(&database.OvertimeSupplementaryRequest{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"status":          "rejected",
 		"rejected_reason": rejectedReason,
 	}).Error
 }
 
 func (r *SupplementaryRequestRepository) UpdateDingtalkProcessID(id uint, processID string) error {
-	return r.db.Model(&database.OvertimeSupplementaryRequest{}).Where("id = ?", id).Update("dingtalk_process_id", processID).Error
+	return r.scoped().Model(&database.OvertimeSupplementaryRequest{}).Where("id = ?", id).Update("dingtalk_process_id", processID).Error
 }
 
 func (r *SupplementaryRequestRepository) FindByStatus(status string) ([]database.OvertimeSupplementaryRequest, error) {
 	var reqs []database.OvertimeSupplementaryRequest
-	err := r.db.Where("status = ?", status).Order("created_at desc").Find(&reqs).Error
+	err := r.scoped().Where("status = ?", status).Order("created_at desc").Find(&reqs).Error
 	return reqs, err
 }

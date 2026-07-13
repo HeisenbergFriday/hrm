@@ -43,7 +43,17 @@ frontend/node_modules/
 .tmp/
 query
 test_dingtalk_dept.go
+NUL
+tmp_*.sql
+tmp_*.sh
+
+# Python
+__pycache__/
+*.pyc
 
 # OS
 .DS_Store
 Thumbs.db
+peopleops-hr-test.tar
+uploads/*.xlsx
+uploads/*.jpg

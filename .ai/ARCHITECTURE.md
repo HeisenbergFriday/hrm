@@ -99,8 +99,9 @@ type Response struct {
 
 #### 认证
 - JWT Bearer token
-- Claims 含 `UserID` + `UserName`
-- Handler 内通过 `c.Get("userID")` 取当前用户
+- Claims 含 `UserID` + `UserName` + `OrgID`
+- Handler 内通过 `c.Get("userID")` 取当前用户，通过 `c.Get("orgID")` 取当前企业上下文
+- 钉钉多企业登录必须使用选中企业的 `org_id` 解析钉钉应用配置、换取用户信息并签发同企业 JWT，禁止选中企业后静默回退默认钉钉应用
 - 中间件：`internal/middleware/jwt.go`
 
 #### 钉钉 ID 存储
@@ -193,6 +194,7 @@ type Response struct {
 
 ### 权限管理
 - RBAC 模型：`Role` → `Permission` → `RolePermission` → `UserRole`
+- `Role`、`Permission`、`RolePermission`、菜单权限与数据权限定义保持全局；`UserRole` 按 `(org_id, user_id)` 维度分配，运行时权限必须使用 JWT `org_id` 过滤，避免同一钉钉 `user_id` 在多企业之间串权限
 - 支持菜单权限和数据权限
 - 前端页面：角色管理、权限管理、菜单权限、数据权限
 

@@ -7,6 +7,7 @@ import (
 // PerformanceTemplate 绩效模板
 type PerformanceTemplate struct {
 	ID                 uint                   `gorm:"primaryKey" json:"id"`
+	OrgID              string                 `gorm:"type:varchar(64);index" json:"org_id"`
 	Name               string                 `gorm:"type:varchar(128);not null;index" json:"name"`
 	Code               string                 `gorm:"type:varchar(64);index" json:"code"`
 	Description        string                 `gorm:"type:text" json:"description"`
@@ -31,6 +32,7 @@ type PerformanceTemplate struct {
 // PerformanceTemplateSection 绩效模板评分维度
 type PerformanceTemplateSection struct {
 	ID                uint       `gorm:"primaryKey" json:"id"`
+	OrgID             string     `gorm:"type:varchar(64);index" json:"org_id"`
 	TemplateID        uint       `gorm:"not null;index" json:"template_id"`
 	Name              string     `gorm:"type:varchar(128);not null" json:"name"`
 	SectionType       string     `gorm:"type:varchar(32);not null" json:"section_type"` // score, text
@@ -46,6 +48,7 @@ type PerformanceTemplateSection struct {
 // PerformanceTemplateItem 绩效模板评分项
 type PerformanceTemplateItem struct {
 	ID          uint       `gorm:"primaryKey" json:"id"`
+	OrgID       string     `gorm:"type:varchar(64);index" json:"org_id"`
 	SectionID   uint       `gorm:"not null;index" json:"section_id"`
 	Name        string     `gorm:"type:varchar(256);not null" json:"name"`
 	Description string     `gorm:"type:text" json:"description"`
@@ -68,7 +71,8 @@ type PerformanceActivityManagerAssignment struct {
 }
 
 type PerformanceActivity struct {
-	ID uint `gorm:"primaryKey" json:"id"`
+	ID    uint   `gorm:"primaryKey" json:"id"`
+	OrgID string `gorm:"type:varchar(64);index" json:"org_id"`
 
 	Name               string `gorm:"type:varchar(128);not null;index" json:"name"`
 	CycleType          string `gorm:"type:varchar(32);not null" json:"cycle_type"` // monthly, quarterly, annual
@@ -144,6 +148,7 @@ type PerformanceActivity struct {
 // PerformanceLevelRule 绩效等级规则
 type PerformanceLevelRule struct {
 	ID        uint       `gorm:"primaryKey" json:"id"`
+	OrgID     string     `gorm:"type:varchar(64);index" json:"org_id"`
 	Name      string     `gorm:"type:varchar(128);not null" json:"name"`
 	Status    string     `gorm:"type:varchar(32);not null;default:active" json:"status"` // active, inactive
 	CreatedAt time.Time  `json:"created_at"`
@@ -154,6 +159,7 @@ type PerformanceLevelRule struct {
 // PerformanceLevelRuleItem 绩效等级规则明细
 type PerformanceLevelRuleItem struct {
 	ID                  uint      `gorm:"primaryKey" json:"id"`
+	OrgID               string    `gorm:"type:varchar(64);index" json:"org_id"`
 	RuleID              uint      `gorm:"not null;index" json:"rule_id"`
 	Level               string    `gorm:"type:varchar(32);not null" json:"level"` // S, A, B, C, D
 	MinScore            float64   `gorm:"default:0" json:"min_score"`
@@ -166,6 +172,7 @@ type PerformanceLevelRuleItem struct {
 
 type PerformanceDistributionRule struct {
 	ID                  uint       `gorm:"primaryKey" json:"id"`
+	OrgID               string     `gorm:"type:varchar(64);index" json:"org_id"`
 	ActivityID          string     `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 	Level               string     `gorm:"type:varchar(32);not null;index" json:"level"`
 	DistributionPercent int        `gorm:"not null" json:"distribution_percent"`
@@ -180,6 +187,7 @@ type PerformanceDistributionRule struct {
 // PerformanceDistributionException 强制分布例外记录
 type PerformanceDistributionException struct {
 	ID                     uint                   `gorm:"primaryKey" json:"id"`
+	OrgID                  string                 `gorm:"type:varchar(64);index" json:"org_id"`
 	ActivityID             string                 `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 	OperatorID             string                 `gorm:"type:varchar(64);not null" json:"operator_id"`
 	Reason                 string                 `gorm:"type:text;not null" json:"reason"`
@@ -191,6 +199,7 @@ type PerformanceDistributionException struct {
 // PerformanceReminderLog records automatic reminder rounds and prevents duplicate sends.
 type PerformanceReminderLog struct {
 	ID            uint       `gorm:"primaryKey" json:"id"`
+	OrgID         string     `gorm:"type:varchar(64);index" json:"org_id"`
 	ActivityID    string     `gorm:"type:varchar(64);not null;index;uniqueIndex:idx_perf_reminder_round"`
 	ParticipantID uint       `gorm:"not null;index;uniqueIndex:idx_perf_reminder_round"`
 	EmployeeID    string     `gorm:"type:varchar(64);not null;index"`
@@ -207,6 +216,7 @@ type PerformanceReminderLog struct {
 
 type PerformanceParticipant struct {
 	ID               uint   `gorm:"primaryKey" json:"id"`
+	OrgID            string `gorm:"type:varchar(64);index" json:"org_id"`
 	ActivityID       string `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 	EmployeeID       string `gorm:"type:varchar(64);not null;index" json:"employee_id"`
 	EmployeeName     string `gorm:"type:varchar(128);not null" json:"employee_name"`
@@ -300,6 +310,7 @@ type PerformanceParticipant struct {
 
 type PerformanceReview struct {
 	ID            uint   `gorm:"primaryKey" json:"id"`
+	OrgID         string `gorm:"type:varchar(64);index" json:"org_id"`
 	ParticipantID uint   `gorm:"not null;index" json:"participant_id"`
 	ActivityID    string `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 
@@ -325,6 +336,7 @@ type PerformanceReview struct {
 
 type PerformanceReviewVersion struct {
 	ID            uint   `gorm:"primaryKey" json:"id"`
+	OrgID         string `gorm:"type:varchar(64);index" json:"org_id"`
 	ParticipantID uint   `gorm:"not null;index" json:"participant_id"`
 	ActivityID    string `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 
@@ -358,6 +370,7 @@ type PerformanceReviewVersion struct {
 
 type PerformanceRelationshipChangeLog struct {
 	ID            uint   `gorm:"primaryKey" json:"id"`
+	OrgID         string `gorm:"type:varchar(64);index" json:"org_id"`
 	ActivityID    string `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 	ParticipantID uint   `gorm:"not null;index" json:"participant_id"`
 	UserID        string `gorm:"type:varchar(64);index" json:"user_id"`
@@ -388,6 +401,7 @@ type PerformanceRelationshipChangeLog struct {
 // PerformanceGoalRecord 目标/指标记录
 type PerformanceGoalRecord struct {
 	ID              uint       `gorm:"primaryKey" json:"id"`
+	OrgID           string     `gorm:"type:varchar(64);index" json:"org_id"`
 	ActivityID      string     `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 	ParticipantID   uint       `gorm:"not null;index" json:"participant_id"`
 	IndicatorItemID *uint      `gorm:"index" json:"indicator_item_id"`
@@ -422,6 +436,7 @@ type PerformanceGoalRecord struct {
 // PerformanceGoalApprovalLog 目标审批日志
 type PerformanceGoalApprovalLog struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
+	OrgID         string    `gorm:"type:varchar(64);index" json:"org_id"`
 	ParticipantID uint      `gorm:"not null;index" json:"participant_id"`
 	ActivityID    string    `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 	GoalRecordID  uint      `gorm:"index" json:"goal_record_id"`
@@ -438,6 +453,7 @@ type PerformanceGoalApprovalLog struct {
 // PerformanceCompanyFinance 公司收支状态
 type PerformanceCompanyFinance struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
+	OrgID       string    `gorm:"type:varchar(64);index" json:"org_id"`
 	ActivityID  string    `gorm:"type:varchar(64);not null;index" json:"activity_id"`
 	RevenueSign string    `gorm:"type:varchar(32)" json:"revenue_sign"` // revenue_gt_expense, expense_gt_revenue, equal
 	Description string    `gorm:"type:text" json:"description"`
@@ -453,6 +469,7 @@ type PerformanceCompanyFinance struct {
 // PerformanceIndicatorLibrary 部门指标库
 type PerformanceIndicatorLibrary struct {
 	ID              uint       `gorm:"primaryKey" json:"id"`
+	OrgID           string     `gorm:"type:varchar(64);index" json:"org_id"`
 	DepartmentID    string     `gorm:"type:varchar(64);not null;index" json:"department_id"`
 	DepartmentName  string     `gorm:"type:varchar(128);not null" json:"department_name"`
 	ParentLibraryID *uint      `gorm:"index" json:"parent_library_id"`
@@ -471,6 +488,7 @@ type PerformanceIndicatorLibrary struct {
 // PerformanceIndicatorItem 指标项
 type PerformanceIndicatorItem struct {
 	ID                uint       `gorm:"primaryKey" json:"id"`
+	OrgID             string     `gorm:"type:varchar(64);index" json:"org_id"`
 	LibraryID         uint       `gorm:"not null;index" json:"library_id"`
 	ParentIndicatorID *uint      `gorm:"index" json:"parent_indicator_id"`
 	SectionType       string     `gorm:"type:varchar(32);not null" json:"section_type"` // quantitative, key_action, bonus_penalty

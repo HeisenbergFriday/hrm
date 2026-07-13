@@ -14,6 +14,7 @@ type CompensatoryLeaveService struct {
 	db         *gorm.DB
 	ledgerRepo *repository.CompensatoryLeaveLedgerRepository
 	matchRepo  *repository.OvertimeMatchResultRepository
+	orgID      string
 }
 
 func NewCompensatoryLeaveService(db *gorm.DB) *CompensatoryLeaveService {
@@ -21,6 +22,15 @@ func NewCompensatoryLeaveService(db *gorm.DB) *CompensatoryLeaveService {
 		db:         db,
 		ledgerRepo: repository.NewCompensatoryLeaveLedgerRepository(db),
 		matchRepo:  repository.NewOvertimeMatchResultRepository(db),
+	}
+}
+
+func NewCompensatoryLeaveServiceWithOrgID(db *gorm.DB, orgID string) *CompensatoryLeaveService {
+	return &CompensatoryLeaveService{
+		db:         db,
+		ledgerRepo: repository.NewCompensatoryLeaveLedgerRepositoryWithOrgID(db, orgID),
+		matchRepo:  repository.NewOvertimeMatchResultRepositoryWithOrgID(db, orgID),
+		orgID:      orgID,
 	}
 }
 
@@ -47,8 +57,8 @@ func (s *CompensatoryLeaveService) GetOvertimeBalanceByYear(userID string, year 
 }
 
 func (s *CompensatoryLeaveService) CreditFromOvertime(matchID uint) error {
-	var m database.OvertimeMatchResult
-	if err := s.db.First(&m, matchID).Error; err != nil {
+	m, err := s.matchRepo.FindByID(matchID)
+	if err != nil {
 		return fmt.Errorf("匹配记录不存在: %w", err)
 	}
 
@@ -78,8 +88,8 @@ func (s *CompensatoryLeaveService) CreditFromOvertime(matchID uint) error {
 }
 
 func (s *CompensatoryLeaveService) RollbackCredit(matchID uint) error {
-	var m database.OvertimeMatchResult
-	if err := s.db.First(&m, matchID).Error; err != nil {
+	m, err := s.matchRepo.FindByID(matchID)
+	if err != nil {
 		return err
 	}
 

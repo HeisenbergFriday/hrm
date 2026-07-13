@@ -29,6 +29,25 @@ var (
 	tokenMu   sync.Mutex
 )
 
+type AppConfig struct {
+	OrgID       string `json:"org_id"`
+	Name        string `json:"name"`
+	CorpID      string `json:"corp_id"`
+	AppKey      string `json:"app_key"`
+	AppSecret   string `json:"app_secret"`
+	AgentID     string `json:"agent_id"`
+	AppHomeURL  string `json:"app_home_url"`
+	RedirectURI string `json:"redirect_uri"`
+	Status      string `json:"status"`
+}
+
+type cachedAccessToken struct {
+	token string
+	exp   time.Time
+}
+
+var accessTokenCache = make(map[string]cachedAccessToken)
+
 var ErrUserNotNotifiable = errors.New("dingtalk user is not active/notifiable")
 
 func IsUserNotNotifiableError(err error) bool {
@@ -76,6 +95,92 @@ func Init() error {
 // GetCorpID 杩斿洖浼佷笟 CorpId锛屼緵鍓嶇 JS-SDK 浣跨敤
 func GetCorpID() string {
 	return corpID
+}
+
+func InitWithConfig(cfg AppConfig) error {
+	appKey = strings.TrimSpace(cfg.AppKey)
+	appSecret = strings.TrimSpace(cfg.AppSecret)
+	corpID = strings.TrimSpace(cfg.CorpID)
+
+	if appKey == "" || appSecret == "" {
+		return fmt.Errorf("missing DingTalk app config for org_id=%s", strings.TrimSpace(cfg.OrgID))
+	}
+
+	logrus.Infof("initialized DingTalk app config for org_id=%s", strings.TrimSpace(cfg.OrgID))
+	return nil
+}
+
+func configuredValue(current, envName string) string {
+	if strings.TrimSpace(current) != "" {
+		return strings.TrimSpace(current)
+	}
+	return strings.TrimSpace(os.Getenv(envName))
+}
+
+func DefaultAppConfig() AppConfig {
+	return AppConfig{
+		OrgID:       "default",
+		Name:        strings.TrimSpace(os.Getenv("DINGTALK_ORG_NAME")),
+		CorpID:      configuredValue(corpID, "DINGTALK_CORP_ID"),
+		AppKey:      configuredValue(appKey, "DINGTALK_APP_KEY"),
+		AppSecret:   configuredValue(appSecret, "DINGTALK_APP_SECRET"),
+		AgentID:     strings.TrimSpace(os.Getenv("DINGTALK_AGENT_ID")),
+		AppHomeURL:  strings.TrimSpace(os.Getenv("DINGTALK_APP_HOME_URL")),
+		RedirectURI: strings.TrimSpace(os.Getenv("DINGTALK_REDIRECT_URI")),
+		Status:      "active",
+	}
+}
+
+func ActiveAppConfigs() []AppConfig {
+	configs := []AppConfig{DefaultAppConfig()}
+	for _, cfg := range organizationConfigsFromEnv() {
+		status := strings.TrimSpace(strings.ToLower(cfg.Status))
+		if status != "" && status != "active" {
+			continue
+		}
+		cfg.OrgID = strings.TrimSpace(cfg.OrgID)
+		if cfg.OrgID == "" {
+			continue
+		}
+		configs = append(configs, cfg)
+	}
+	return configs
+}
+
+func GetAppConfigForOrg(orgID string) (AppConfig, bool) {
+	requested := strings.TrimSpace(orgID)
+	if requested == "" {
+		requested = strings.TrimSpace(os.Getenv("DINGTALK_QR_DEFAULT_ORG_ID"))
+	}
+	if requested == "" || strings.EqualFold(requested, "default") {
+		return DefaultAppConfig(), true
+	}
+	for _, cfg := range organizationConfigsFromEnv() {
+		status := strings.TrimSpace(strings.ToLower(cfg.Status))
+		if status != "" && status != "active" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(cfg.OrgID), requested) {
+			cfg.OrgID = strings.TrimSpace(cfg.OrgID)
+			return cfg, true
+		}
+	}
+	return DefaultAppConfig(), false
+}
+
+func organizationConfigsFromEnv() []AppConfig {
+	raw := strings.TrimSpace(os.Getenv("DINGTALK_ORGANIZATIONS"))
+	raw = strings.Trim(raw, "'")
+	if raw == "" {
+		return nil
+	}
+
+	var configs []AppConfig
+	if err := json.Unmarshal([]byte(raw), &configs); err != nil {
+		logrus.Warnf("parse DINGTALK_ORGANIZATIONS failed: %v", err)
+		return nil
+	}
+	return configs
 }
 
 func GetConfiguredAppHomeURL() string {
@@ -136,27 +241,33 @@ func GetRedirectURI() string {
 // ===================== Access Token =====================
 
 // GetAccessToken 鑾峰彇浼佷笟鍐呴儴搴旂敤鐨?access_token锛堝甫缂撳瓨锛?
-func GetAccessToken() (string, error) {
+func getAccessTokenForCredential(credentialAppKey, credentialAppSecret string) (string, error) {
+	credentialAppKey = strings.TrimSpace(credentialAppKey)
+	credentialAppSecret = strings.TrimSpace(credentialAppSecret)
+	if credentialAppKey == "" || credentialAppSecret == "" {
+		return "", fmt.Errorf("missing dingtalk app key or app secret")
+	}
+
+	cacheKey := credentialAppKey + "|" + credentialAppSecret
 	tokenMu.Lock()
 	defer tokenMu.Unlock()
 
-	// 缂撳瓨鏈夋晥
-	if token != "" && time.Now().Before(tokenExp) {
-		return token, nil
+	if cached, ok := accessTokenCache[cacheKey]; ok && cached.token != "" && time.Now().Before(cached.exp) {
+		return cached.token, nil
 	}
 
 	body := map[string]string{
-		"appKey":    appKey,
-		"appSecret": appSecret,
+		"appKey":    credentialAppKey,
+		"appSecret": credentialAppSecret,
 	}
 	resp, err := postJSON("https://api.dingtalk.com/v1.0/oauth2/accessToken", body, nil)
 	if err != nil {
-		return "", fmt.Errorf("鑾峰彇 access_token 澶辫触: %w", err)
+		return "", fmt.Errorf("get access_token failed: %w", err)
 	}
 
 	accessToken, ok := resp["accessToken"].(string)
 	if !ok {
-		return "", fmt.Errorf("access_token 鍝嶅簲鏍煎紡寮傚父: %v", resp)
+		return "", fmt.Errorf("unexpected access_token response: %v", resp)
 	}
 
 	expireIn := 7200.0
@@ -164,10 +275,22 @@ func GetAccessToken() (string, error) {
 		expireIn = v
 	}
 
-	token = accessToken
-	tokenExp = time.Now().Add(time.Duration(expireIn-60) * time.Second)
+	expiresAt := time.Now().Add(time.Duration(expireIn-60) * time.Second)
+	accessTokenCache[cacheKey] = cachedAccessToken{token: accessToken, exp: expiresAt}
+	if credentialAppKey == appKey {
+		token = accessToken
+		tokenExp = expiresAt
+	}
 	logrus.Info("dingtalk access_token fetched")
-	return token, nil
+	return accessToken, nil
+}
+
+func GetAccessToken() (string, error) {
+	return getAccessTokenForCredential(appKey, appSecret)
+}
+
+func GetAccessTokenForConfig(cfg AppConfig) (string, error) {
+	return getAccessTokenForCredential(cfg.AppKey, cfg.AppSecret)
 }
 
 // ===================== OAuth 鐧诲綍 =====================
@@ -178,10 +301,18 @@ func GetQRCode(state string) (string, error) {
 }
 
 func GetQRCodeWithRedirect(state, redirectURI string) (string, error) {
+	return GetQRCodeWithConfig(state, redirectURI, DefaultAppConfig())
+}
+
+func GetQRCodeWithConfig(state, redirectURI string, cfg AppConfig) (string, error) {
+	clientID := strings.TrimSpace(cfg.AppKey)
+	if clientID == "" {
+		return "", fmt.Errorf("missing dingtalk app key")
+	}
 	loginURL := fmt.Sprintf(
 		"https://login.dingtalk.com/oauth2/auth?redirect_uri=%s&response_type=code&client_id=%s&scope=openid%%20corpid&state=%s&prompt=consent",
 		url.QueryEscape(redirectURI),
-		appKey,
+		clientID,
 		state,
 	)
 	return loginURL, nil
@@ -189,9 +320,13 @@ func GetQRCodeWithRedirect(state, redirectURI string) (string, error) {
 
 // GetUserAccessToken 鐢ㄦ巿鏉冪爜鎹㈠彇鐢ㄦ埛 token
 func GetUserAccessToken(code string) (string, error) {
+	return GetUserAccessTokenForConfig(code, DefaultAppConfig())
+}
+
+func GetUserAccessTokenForConfig(code string, cfg AppConfig) (string, error) {
 	body := map[string]string{
-		"clientId":     appKey,
-		"clientSecret": appSecret,
+		"clientId":     strings.TrimSpace(cfg.AppKey),
+		"clientSecret": strings.TrimSpace(cfg.AppSecret),
 		"code":         code,
 		"grantType":    "authorization_code",
 	}
@@ -209,13 +344,15 @@ func GetUserAccessToken(code string) (string, error) {
 
 // GetUserInfoByCode 閫氳繃鎺堟潈鐮佽幏鍙栫敤鎴蜂俊鎭紙鏂扮増 OAuth2锛岀敤浜庢壂鐮佺櫥褰曪級
 func GetUserInfoByCode(code string) (map[string]interface{}, error) {
-	// 1. 鍏堢敤 code 鎹㈠彇鐢ㄦ埛 access_token
-	userToken, err := GetUserAccessToken(code)
+	return GetUserInfoByCodeForConfig(code, DefaultAppConfig())
+}
+
+func GetUserInfoByCodeForConfig(code string, cfg AppConfig) (map[string]interface{}, error) {
+	userToken, err := GetUserAccessTokenForConfig(code, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. 鐢?user access_token 鑾峰彇鐢ㄦ埛淇℃伅
 	headers := map[string]string{
 		"x-acs-dingtalk-access-token": userToken,
 	}
@@ -229,7 +366,11 @@ func GetUserInfoByCode(code string) (map[string]interface{}, error) {
 
 // GetUserIDByInAppCode 浼佷笟鍐呴儴搴旂敤鍏嶇櫥锛氶€氳繃鍏嶇櫥鐮佽幏鍙栦紒涓氬唴 userid
 func GetUserIDByInAppCode(code string) (string, error) {
-	accessToken, err := GetAccessToken()
+	return GetUserIDByInAppCodeForConfig(code, DefaultAppConfig())
+}
+
+func GetUserIDByInAppCodeForConfig(code string, cfg AppConfig) (string, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return "", err
 	}
@@ -266,7 +407,11 @@ func GetUserIDByInAppCode(code string) (string, error) {
 
 // GetUserDetailByUserID 閫氳繃 userid 鑾峰彇鐢ㄦ埛璇︾粏淇℃伅锛圕ontact.User.Read锛?
 func GetUserDetailByUserID(userid string) (map[string]interface{}, error) {
-	accessToken, err := GetAccessToken()
+	return GetUserDetailByUserIDForConfig(userid, DefaultAppConfig())
+}
+
+func GetUserDetailByUserIDForConfig(userid string, cfg AppConfig) (map[string]interface{}, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +442,11 @@ func GetUserDetailByUserID(userid string) (map[string]interface{}, error) {
 }
 
 func GetUserIDByUnionID(unionID string) (string, error) {
-	accessToken, err := GetAccessToken()
+	return GetUserIDByUnionIDForConfig(unionID, DefaultAppConfig())
+}
+
+func GetUserIDByUnionIDForConfig(unionID string, cfg AppConfig) (string, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return "", err
 	}
@@ -384,6 +533,30 @@ func SyncDepartments() ([]DeptInfo, error) {
 	}
 
 	logrus.Infof("dingtalk sync departments complete: %d", len(allDepts))
+	return allDepts, nil
+}
+
+// SyncDepartmentsForConfig 使用指定组织的钉钉应用凭证同步部门（多租户）
+func SyncDepartmentsForConfig(cfg AppConfig) ([]DeptInfo, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var allDepts []DeptInfo
+
+	// Recursively fetch all departments starting from root department 1.
+	if err := fetchDeptTree(accessToken, 1, &allDepts); err != nil {
+		return nil, err
+	}
+
+	// Also include the root department itself.
+	rootDept, err := fetchDeptDetail(accessToken, 1)
+	if err == nil && rootDept != nil {
+		allDepts = append([]DeptInfo{*rootDept}, allDepts...)
+	}
+
+	logrus.Infof("dingtalk sync departments complete for org=%s: %d", cfg.OrgID, len(allDepts))
 	return allDepts, nil
 }
 
@@ -528,6 +701,44 @@ func SyncUsersWithDepts(depts []DeptInfo) ([]UserInfo, error) {
 	}
 
 	logrus.Infof("dingtalk sync users complete: %d", len(allUsers))
+	return allUsers, nil
+}
+
+// SyncUsersWithDeptsForConfig 使用指定组织的钉钉应用凭证同步用户（多租户）
+func SyncUsersWithDeptsForConfig(cfg AppConfig, depts []DeptInfo) ([]UserInfo, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	userMap := make(map[string]UserInfo) // 去重
+
+	for _, dept := range depts {
+		users, err := fetchDeptUsers(accessToken, dept.DeptID)
+		if err != nil {
+			logrus.Warnf("获取部门 %d(%s) 用户失败: %v", dept.DeptID, dept.Name, err)
+			continue
+		}
+		for _, u := range users {
+			userMap[u.UserID] = u
+		}
+	}
+
+	if err := enrichUsersWithUserDetails(accessToken, userMap); err != nil {
+		logrus.Warnf("dingtalk user detail sync skipped partially: %v", err)
+	}
+	resolveManagerNames(userMap)
+	if err := enrichUsersWithHRMFields(accessToken, userMap); err != nil {
+		logrus.Warnf("dingtalk hrm field sync skipped: %v", err)
+	}
+	resolveManagerNames(userMap)
+
+	var allUsers []UserInfo
+	for _, u := range userMap {
+		allUsers = append(allUsers, u)
+	}
+
+	logrus.Infof("dingtalk sync users complete for org=%s: %d", cfg.OrgID, len(allUsers))
 	return allUsers, nil
 }
 
@@ -832,7 +1043,11 @@ type VacationType struct {
 }
 
 func ListVacationTypes(opUserID string) ([]VacationType, error) {
-	accessToken, err := GetAccessToken()
+	return ListVacationTypesForConfig(opUserID, DefaultAppConfig())
+}
+
+func ListVacationTypesForConfig(opUserID string, cfg AppConfig) ([]VacationType, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -979,6 +1194,10 @@ func UpdateAnnualLeaveQuota(userID string, year int, days float64, reason string
 }
 
 func UpdateCompensatoryLeaveQuota(userID string, minutes int, workDate string, reason string) error {
+	return UpdateCompensatoryLeaveQuotaForConfig(DefaultAppConfig(), userID, minutes, workDate, reason)
+}
+
+func UpdateCompensatoryLeaveQuotaForConfig(cfg AppConfig, userID string, minutes int, workDate string, reason string) error {
 	if minutes <= 0 {
 		return nil
 	}
@@ -987,7 +1206,7 @@ func UpdateCompensatoryLeaveQuota(userID string, minutes int, workDate string, r
 		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
 
-	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveType(opUserID)
+	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveTypeForConfig(opUserID, cfg)
 	if err != nil {
 		return err
 	}
@@ -1006,7 +1225,7 @@ func UpdateCompensatoryLeaveQuota(userID string, minutes int, workDate string, r
 	logrus.Infof("[comp-leave-sync] UpdateCompensatoryLeaveQuota userID=%s minutes=%d leaveCode=%s workDate=%s",
 		userID, minutes, leaveCode, workDate)
 
-	accessToken, err := GetAccessToken()
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -1044,6 +1263,10 @@ func UpdateCompensatoryLeaveQuota(userID string, minutes int, workDate string, r
 }
 
 func SetCompensatoryLeaveQuota(userID string, year int, totalMinutes int, reason string) error {
+	return SetCompensatoryLeaveQuotaForConfig(DefaultAppConfig(), userID, year, totalMinutes, reason)
+}
+
+func SetCompensatoryLeaveQuotaForConfig(cfg AppConfig, userID string, year int, totalMinutes int, reason string) error {
 	if totalMinutes < 0 {
 		return fmt.Errorf("totalMinutes cannot be negative")
 	}
@@ -1051,14 +1274,14 @@ func SetCompensatoryLeaveQuota(userID string, year int, totalMinutes int, reason
 	if opUserID == "" {
 		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
-	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveType(opUserID)
+	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveTypeForConfig(opUserID, cfg)
 	if err != nil {
 		return err
 	}
 	if hoursPerDay <= 0 {
 		hoursPerDay = getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8)
 	}
-	accessToken, err := GetAccessToken()
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -1222,11 +1445,15 @@ func getVacationQuotaByYear(accessToken, opUserID, userID, leaveCode string, yea
 // quotaPerDay / quotaPerHour 单位均为 1/100（例如 0 = 0天，100 = 1天，800 = 1天×8小时）。
 // year 决定生效的配额周期（start_time / end_time 自动设为该年 1-1 到 12-31）。
 func InitVacationQuota(userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, reason string) error {
+	return InitVacationQuotaForConfig(DefaultAppConfig(), userID, leaveCode, year, quotaPerDay, quotaPerHour, reason)
+}
+
+func InitVacationQuotaForConfig(cfg AppConfig, userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, reason string) error {
 	opUserID := strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID"))
 	if opUserID == "" {
 		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
-	accessToken, err := GetAccessToken()
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -1308,11 +1535,19 @@ func resolveAnnualLeaveType(opUserID string) (string, float64, error) {
 }
 
 func createCompensatoryLeaveType(opUserID, leaveName string) (string, error) {
-	return CreateCustomLeaveType(opUserID, leaveName, false)
+	return createCompensatoryLeaveTypeForConfig(opUserID, leaveName, DefaultAppConfig())
+}
+
+func createCompensatoryLeaveTypeForConfig(opUserID, leaveName string, cfg AppConfig) (string, error) {
+	return CreateCustomLeaveTypeForConfig(opUserID, leaveName, false, cfg)
 }
 
 func CreateCustomLeaveType(opUserID, leaveName string, freedomLeave bool) (string, error) {
-	accessToken, err := GetAccessToken()
+	return CreateCustomLeaveTypeForConfig(opUserID, leaveName, freedomLeave, DefaultAppConfig())
+}
+
+func CreateCustomLeaveTypeForConfig(opUserID, leaveName string, freedomLeave bool, cfg AppConfig) (string, error) {
+	accessToken, err := GetAccessTokenForConfig(cfg)
 	if err != nil {
 		return "", err
 	}
@@ -1370,6 +1605,10 @@ func extractCreatedLeaveCode(resp map[string]interface{}) string {
 }
 
 func resolveCompensatoryLeaveType(opUserID string) (string, float64, error) {
+	return resolveCompensatoryLeaveTypeForConfig(opUserID, DefaultAppConfig())
+}
+
+func resolveCompensatoryLeaveTypeForConfig(opUserID string, cfg AppConfig) (string, float64, error) {
 	if code := strings.TrimSpace(os.Getenv("DINGTALK_LIEU_LEAVE_CODE")); code != "" {
 		return code, getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8), nil
 	}
@@ -1395,7 +1634,7 @@ func resolveCompensatoryLeaveType(opUserID string) (string, float64, error) {
 		leaveName = "手动发放"
 	}
 
-	types, err := ListVacationTypes(opUserID)
+	types, err := ListVacationTypesForConfig(opUserID, cfg)
 	if err != nil {
 		return "", 0, err
 	}
@@ -1419,12 +1658,12 @@ func resolveCompensatoryLeaveType(opUserID string) (string, float64, error) {
 
 	// 没有找到符合条件的假期类型，自动通过 API 创建一个
 	logrus.Infof("[leave-sync] no compensatory leave type found, creating one: name=%s", leaveName)
-	leaveCode, err := createCompensatoryLeaveType(opUserID, leaveName)
+	leaveCode, err := createCompensatoryLeaveTypeForConfig(opUserID, leaveName, cfg)
 	if err != nil {
 		// 如果创建失败，可能是因为已存在相同名称的假期类型
 		// 重新获取假期类型列表并查找已存在的假期类型
 		logrus.Warnf("[leave-sync] create leave type failed, trying to find existing one: %v", err)
-		types, err := ListVacationTypes(opUserID)
+		types, err := ListVacationTypesForConfig(opUserID, cfg)
 		if err != nil {
 			return "", 0, fmt.Errorf("auto-create compensatory leave type %q failed and cannot find existing one: %w", leaveName, err)
 		}
@@ -3728,10 +3967,12 @@ func sendCorpMessagePayloadToUser(userID, title string, body map[string]interfac
 }
 
 func buildCorpMessagePayload(userID, title, content string) map[string]interface{} {
-	msgContent, _ := json.Marshal(map[string]interface{}{
-		"content": formatCorpMessageContent(title, content),
+	return buildCorpPayload(userID, map[string]interface{}{
+		"msgtype": "text",
+		"text": map[string]interface{}{
+			"content": formatCorpMessageContent(title, content),
+		},
 	})
-	return buildCorpPayload(userID, "text", string(msgContent))
 }
 
 func buildCorpActionCardPayload(userID, title, content, actionTitle, actionURL string) map[string]interface{} {
@@ -3739,21 +3980,22 @@ func buildCorpActionCardPayload(userID, title, content, actionTitle, actionURL s
 	if actionTitle == "" {
 		actionTitle = "查看详情"
 	}
-	msgContent, _ := json.Marshal(map[string]interface{}{
-		"title":        strings.TrimSpace(title),
-		"markdown":     formatCorpMessageMarkdown(title, content),
-		"single_title": actionTitle,
-		"single_url":   strings.TrimSpace(actionURL),
+	return buildCorpPayload(userID, map[string]interface{}{
+		"msgtype": "action_card",
+		"action_card": map[string]interface{}{
+			"title":        strings.TrimSpace(title),
+			"markdown":     formatCorpMessageMarkdown(title, content),
+			"single_title": actionTitle,
+			"single_url":   strings.TrimSpace(actionURL),
+		},
 	})
-	return buildCorpPayload(userID, "action_card", string(msgContent))
 }
 
-func buildCorpPayload(userID, msgType, msgContent string) map[string]interface{} {
+func buildCorpPayload(userID string, msg map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"agent_id":    getDingTalkAgentID(),
 		"userid_list": strings.TrimSpace(userID),
-		"msgtype":     msgType,
-		"msgcontent":  msgContent,
+		"msg":         msg,
 	}
 }
 
