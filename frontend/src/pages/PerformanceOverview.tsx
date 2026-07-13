@@ -820,70 +820,59 @@ const PerformanceOverview: React.FC = () => {
     setCurrentActivity(activity)
     setDetailDrawerVisible(true)
     setParticipantsLoading(true)
-    setSummaryLoading(true)
-    setDistributionCheckLoading(true)
+    setSummaryLoading(activeView === 'hr')
+    setDistributionCheckLoading(activeView === 'hr')
     setHrDeadlineStatus(null)
 
-    // 使用 Promise.allSettled 避免单个接口失败阻塞整个流程
+    try {
+      const res: any = await performanceAPI.getParticipants(activity.id, { page: 1, page_size: 200 })
+      const pData = res?.data || res
+      setParticipants(pData?.items || [])
+      setSelectedParticipantIds([])
+    } catch {
+      setParticipants([])
+      setSelectedParticipantIds([])
+    } finally {
+      setParticipantsLoading(false)
+    }
+
+    if (activeView !== 'hr') {
+      setSummary(null)
+      setDistributionCheck(null)
+      setDistributionRules([])
+      setSummaryLoading(false)
+      setDistributionCheckLoading(false)
+      return
+    }
+
     const results = await Promise.allSettled([
-      performanceAPI.getParticipants(activity.id, { page: 1, page_size: 200 }),
       performanceAPI.getResultSummary(activity.id),
       performanceAPI.getDistributionCheck(activity.id),
       performanceAPI.getDistributionRules(activity.id),
       performanceAPI.getHRConfirmDeadlineStatus(activity.id),
     ])
 
-    // 处理参与人
-    const participantsResult = results[0]
-    if (participantsResult.status === 'fulfilled') {
-      const res = participantsResult.value as any
-      const pData = res?.data || res
-      setParticipants(pData?.items || [])
-      setSelectedParticipantIds([])
-    } else {
-      setParticipants([])
-      setSelectedParticipantIds([])
-    }
-    setParticipantsLoading(false)
-
-    // 处理统计摘要
-    const summaryResult = results[1]
-    if (summaryResult.status === 'fulfilled') {
-      const res = summaryResult.value as any
+    if (results[0].status === 'fulfilled') {
+      const res = results[0].value as any
       setSummary(res?.data || null)
-    } else {
-      setSummary(null)
-    }
+    } else setSummary(null)
     setSummaryLoading(false)
 
-    // 处理强制分布检查
-    const distributionCheckResult = results[2]
-    if (distributionCheckResult.status === 'fulfilled') {
-      const res = distributionCheckResult.value as any
-      const dcData = res?.data || res
-      setDistributionCheck(dcData || null)
-    } else {
-      setDistributionCheck(null)
-    }
+    if (results[1].status === 'fulfilled') {
+      const res = results[1].value as any
+      setDistributionCheck((res?.data || res) || null)
+    } else setDistributionCheck(null)
     setDistributionCheckLoading(false)
 
-    // 处理分布规则
-    const rulesResult = results[3]
-    if (rulesResult.status === 'fulfilled') {
-      const res = rulesResult.value as any
-      const rData = res?.data || res
-      setDistributionRules(rData?.rules || [])
-    } else {
-      setDistributionRules([])
-    }
+    if (results[2].status === 'fulfilled') {
+      const res = results[2].value as any
+      setDistributionRules((res?.data || res)?.rules || [])
+    } else setDistributionRules([])
 
-    const hrDeadlineResult = results[4]
-    if (hrDeadlineResult.status === 'fulfilled') {
-      const res = hrDeadlineResult.value as any
+    if (results[3].status === 'fulfilled') {
+      const res = results[3].value as any
       setHrDeadlineStatus((res?.data || res) as PerformanceHRDeadlineStatus)
-    } else {
-      setHrDeadlineStatus(null)
-    }
+    } else setHrDeadlineStatus(null)
   }
 
   const reloadParticipants = async (activityId: number) => {
@@ -1114,19 +1103,10 @@ const PerformanceOverview: React.FC = () => {
   const renderPermissionButton = (
     permissionCode: string,
     button: React.ReactElement,
-    permissionName = PERFORMANCE_PERMISSION_LABELS[permissionCode] || permissionCode,
+    _permissionName = PERFORMANCE_PERMISSION_LABELS[permissionCode] || permissionCode,
   ) => {
     if (hasPermission(permissionCode)) return button
-    return (
-      <Tooltip key={button.key || permissionCode} title={`你缺少${permissionName}权限，需要联系管理员添加`}>
-        <span>
-          {React.cloneElement(button, {
-            disabled: true,
-            onClick: undefined,
-          } as Partial<React.ComponentProps<typeof Button>>)}
-        </span>
-      </Tooltip>
-    )
+    return null
   }
 
   const renderActivityManageButton = (button: React.ReactElement) =>
@@ -2048,7 +2028,7 @@ const PerformanceOverview: React.FC = () => {
     () => activities.filter(item => {
       if (activeView === 'employee') return Boolean(item.my_participant)
       if (activeView === 'manager') {
-        return canUseManagerView && IN_PROGRESS_ACTIVITY_STATUSES.includes(item.status)
+        return canUseManagerView
       }
       return canUseHRView
     }),
@@ -2141,7 +2121,7 @@ const PerformanceOverview: React.FC = () => {
       return currentActivity?.my_participant ? [currentActivity.my_participant] : []
     }
     if (activeView === 'manager') {
-      return participants.filter(participant => participantManagedByCurrentUser(participant, currentUser))
+      return participants
     }
     return participants
   }, [activeView, currentActivity, currentUser, participants])
@@ -2175,7 +2155,7 @@ const PerformanceOverview: React.FC = () => {
 
   const activityListActions = (
     <Space>
-      {activeView === 'hr' && (
+      {activeView === 'hr' && hasPermission('performance:activity:manage') && (
         <Button type="primary" data-testid="performance-create-activity" icon={<PlusOutlined />} onClick={() => openActivityModal()}>新建活动</Button>
       )}
       <Button data-testid="performance-refresh-activities" icon={<ReloadOutlined />} onClick={() => loadActivities()} disabled={activitiesLoading}>刷新</Button>

@@ -462,6 +462,7 @@ AI 文档更新：
 - **前端代码质量修复**：修复 `Home.tsx` 中 React Hook 规则违规，将 `useQuery` hooks 移至条件返回之前并通过 `enabled` 参数控制查询执行
 - **绩效模块重复代码清理与页面迭代**：`frontend/src/services/api.ts` 与 `internal/api/router.go` 各删除一份重复的 `performanceAPI` / `performance` 路由块，仅保留前置版本；`PerformanceOverview.tsx` 大幅迭代（分布规则、结果摘要、审批同步等展示与交互），`PerformanceActivityEditor.tsx` 与 `PerformanceIndicatorLibrary.tsx`、`PerformanceSelfEval.tsx` 同步小改
 - **考勤数据处理工具接入**（`tools/attendance-processing/`）：D:\app 的 6 个 Excel 计算模块（leave/overtime/subsidy/finally/parttime + rules_engine）原样搬入，业务逻辑零改动；新增 `cli.py` 作为统一命令行入口（JSON stdout 返回结果路径），由 Go 后端经 subprocess 调用；`internal/api/attendance_processing_handlers.go` 负责上传接收→临时目录→调 Python→回传结果文件，路由挂在 `attendance/processing/*`（需 `attendance_manage` 权限），前端页面 `frontend/src/pages/AttendanceProcessing.tsx`。注：当前为 subprocess 方案（Go 容器需含 Python 环境），HTTP 独立服务方案为后续可选演进。
+- **前端 UI 主题改版**：整体从深色侧边栏改为浅色系，主色由靛蓝 `#4338ca` 调整为蓝色 `#2563eb`；`frontend/src/index.css` 新增一整套 CSS 变量体系（`--color-*` 语义色板），`frontend/src/App.tsx` 引入 antd 主题 token（Layout/Menu 浅色化、header/user-chip 样式），`Home.tsx`、`Setting.tsx`、`PerformanceOverview.tsx` 随主题同步调整。
 
 ---
 
