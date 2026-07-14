@@ -291,7 +291,7 @@ func (s *AnnualLeaveGrantService) syncGrantToDingTalk(grant *database.AnnualLeav
 	if grant.Remark != "" {
 		reason = grant.Remark
 	}
-	if err := dingtalk.UpdateAnnualLeaveQuota(grant.UserID, grant.Year, days, reason); err != nil {
+	if err := dingtalk.UpdateAnnualLeaveQuotaForOrg(orgIDFromDB(s.db), grant.UserID, grant.Year, days, reason); err != nil {
 		log.Printf("[leave-sync] 同步失败 grantID=%d userID=%s year=%d days=%.2f err=%v", grant.ID, grant.UserID, grant.Year, days, err)
 		result.DingTalkFailedCount++
 		result.Errors = append(result.Errors, fmt.Sprintf("%s Q%d: %s", grant.UserID, grant.Quarter, err.Error()))

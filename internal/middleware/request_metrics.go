@@ -41,13 +41,18 @@ func RequestMetrics() gin.HandlerFunc {
 }
 
 func RequestDB(c *gin.Context) *gorm.DB {
-	if c == nil {
-		return database.DB
-	}
-	if db, ok := c.Get(requestDBKey); ok {
-		if typed, ok := db.(*gorm.DB); ok && typed != nil {
-			return typed
+	if c != nil {
+		if db, ok := c.Get(requestDBKey); ok {
+			if typed, ok := db.(*gorm.DB); ok && typed != nil {
+				return typed
+			}
 		}
+	}
+	if database.DB == nil {
+		return nil
+	}
+	if c == nil || c.Request == nil {
+		return database.DB
 	}
 	return database.DB.WithContext(c.Request.Context())
 }

@@ -535,7 +535,7 @@ async function fillControl(page: Page, testId: string, value: string) {
 }
 
 test.describe('performance module', () => {
-  test('renders overview, validates activity form, imports and refreshes participants, and advances a stage', async ({ page }) => {
+  test('renders overview, validates activity form, imports participants, and advances a stage', async ({ page }) => {
     await setupPerformanceMock(page)
     await page.goto('/performance-overview')
 
@@ -564,14 +564,15 @@ test.describe('performance module', () => {
 
     await page.getByTestId('performance-activity-view-101').click()
     await expect(page.getByTestId('performance-detail-content')).toBeVisible()
-    await page.locator('.ant-drawer-close').click()
-    await expect(page.locator('.ant-drawer-content-wrapper')).toBeHidden()
 
     const openTargetResponse = page.waitForResponse(response =>
       response.url().includes('/performance/activities/101/open-target-setting') && response.request().method() === 'POST',
     )
-    await page.getByTestId('performance-activity-open-target-101').click()
+    await page.getByTestId('performance-detail-open-target-101').click()
     await openTargetResponse
+
+    await page.locator('.ant-drawer-close').click()
+    await expect(page.locator('.ant-drawer-content-wrapper')).toBeHidden()
 
     await page.getByTestId('performance-activity-view-102').click()
     await expect(page.getByTestId('performance-detail-content')).toBeVisible()
@@ -588,7 +589,9 @@ test.describe('performance module', () => {
 
     await page.goto('/performance-overview')
     await expect(page.getByTestId('performance-overview-page')).toBeVisible()
-    await expect(page.getByTestId('performance-activity-open-target-101')).toBeDisabled()
+    await page.getByTestId('performance-activity-view-101').click()
+    await expect(page.getByTestId('performance-detail-content')).toBeVisible()
+    await expect(page.getByTestId('performance-detail-open-target-101')).toHaveCount(0)
 
     await page.goto('/performance-goal-setting/102/201')
     await expect(page.locator('.ant-result')).toBeVisible()

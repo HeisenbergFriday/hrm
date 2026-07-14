@@ -16,6 +16,7 @@ import {
   SwapOutlined,
   CalendarOutlined,
   ScheduleOutlined,
+  DatabaseOutlined,
   ToolOutlined,
 } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
@@ -66,6 +67,7 @@ export const menuConfig: MenuItem[] = [
       { key: menuPermissionKey('attendance-export'), title: '导出记录', label: <Link to="/attendance-export">导出记录</Link>, icon: <FileExcelOutlined /> },
       { key: menuPermissionKey('attendance-processing'), title: '数据处理', label: <Link to="/attendance-processing">数据处理</Link>, icon: <ToolOutlined /> },
       { key: menuPermissionKey('leave-overtime'), title: '年假与调休', label: <Link to="/leave-overtime">年假与调休</Link>, icon: <ScheduleOutlined /> },
+      { key: menuPermissionKey('attendance-toolbox'), title: '考勤工具箱', label: <Link to="/attendance-toolbox">考勤工具箱</Link>, icon: <ToolOutlined /> },
       { key: menuPermissionKey('week-schedule'), title: '大小周与节假日', label: <Link to="/week-schedule">大小周与节假日</Link>, icon: <CalendarOutlined /> },
       { key: menuPermissionKey('employee-shift-config'), title: '员工下班时间', label: <Link to="/employee-shift-config">员工下班时间</Link>, icon: <ClockCircleOutlined /> },
     ],
@@ -111,8 +113,11 @@ export const menuConfig: MenuItem[] = [
     label: '绩效管理',
     icon: <BarChartOutlined />,
     children: [
-      { key: menuPermissionKey('performance-overview'), title: '绩效活动', label: <Link to="/performance-overview">绩效活动</Link> },
-      { key: menuPermissionKey('performance-indicator-library'), title: '指标库管理', label: <Link to="/performance-indicator-library">指标库管理</Link> },
+      { key: menuPermissionKey('performance-overview'), title: '绩效活动', label: <Link to="/performance-overview">绩效活动</Link>, icon: <CalendarOutlined /> },
+      { key: menuPermissionKey('performance-reports'), title: '绩效报表', label: <Link to="/performance-reports">绩效报表</Link>, icon: <FileExcelOutlined /> },
+      { key: menuPermissionKey('performance-interviews'), title: '绩效面谈', label: <Link to="/performance-interviews">绩效面谈</Link>, icon: <FileTextOutlined /> },
+      { key: menuPermissionKey('performance-appeals'), title: '绩效申诉', label: <Link to="/performance-appeals">绩效申诉</Link>, icon: <WarningOutlined /> },
+      { key: menuPermissionKey('performance-indicator-library'), title: '指标库管理', label: <Link to="/performance-indicator-library">指标库管理</Link>, icon: <DatabaseOutlined /> },
     ],
   },
   {

@@ -15,9 +15,10 @@ import (
 const authContextKey = "authContext"
 
 type AuthContext struct {
+	OrgID            string
+	Organization     *database.Organization
 	RawUserID        string
 	UserID           string
-	OrgID            string
 	User             *database.User
 	Roles            []database.Role
 	PermissionSet    map[string]struct{}
@@ -91,9 +92,9 @@ func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 		return nil, errors.New("auth_context: orgID not present in gin.Context; ensure JWT middleware runs first")
 	}
 	authCtx := &AuthContext{
+		OrgID:         orgID,
 		RawUserID:     rawUserID,
 		UserID:        rawUserID,
-		OrgID:         orgID,
 		PermissionSet: make(map[string]struct{}),
 		MenuKeySet:    make(map[string]struct{}),
 	}
@@ -102,6 +103,12 @@ func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 	}
 
 	db := RequestDB(c)
+	organization, err := loadCurrentOrganization(db, orgID)
+	if err != nil {
+		return nil, err
+	}
+	authCtx.Organization = organization
+
 	user, normalizedUserID, err := loadCurrentUser(db, orgID, rawUserID)
 	if err != nil {
 		return nil, err
@@ -134,6 +141,16 @@ func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 	}
 
 	return authCtx, nil
+}
+
+func loadCurrentOrganization(db *gorm.DB, orgID string) (*database.Organization, error) {
+	orgID = database.NormalizeOrganizationID(orgID)
+	var organization database.Organization
+	err := db.Where("org_id = ? AND status = ? AND deleted_at IS NULL", orgID, "active").First(&organization).Error
+	if err == nil {
+		return &organization, nil
+	}
+	return nil, nil
 }
 
 func loadCurrentUser(db *gorm.DB, orgID, rawUserID string) (*database.User, string, error) {

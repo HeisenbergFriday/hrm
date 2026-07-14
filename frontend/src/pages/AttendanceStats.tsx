@@ -100,11 +100,15 @@ const AttendanceStats: React.FC = () => {
   }
 
   const handleExpandRow = (type: string) => {
-    if (expandedRows.includes(type)) {
-      setExpandedRows(expandedRows.filter(t => t !== type))
-    } else {
-      setExpandedRows([...expandedRows, type])
-    }
+    setExpandedRows(prev =>
+      prev.includes(type)
+        ? prev.filter(t => t !== type)
+        : [...prev, type],
+    )
+  }
+
+  const handleExpandedRowsChange = (keys: readonly React.Key[]) => {
+    setExpandedRows(keys.map(String))
   }
 
   const abnormalColumns = [
@@ -243,7 +247,7 @@ const AttendanceStats: React.FC = () => {
           </div>
         ) : statsData?.data ? (
           <>
-            <Row gutter={16} style={{ marginBottom: 'var(--space-6)' }}>
+            <Row className="mobile-stat-grid" gutter={16} style={{ marginBottom: 'var(--space-6)' }}>
               <Col span={4}>
                 <Statistic
                   title="总人数"
@@ -300,6 +304,7 @@ const AttendanceStats: React.FC = () => {
               expandable={{
                 expandedRowKeys: expandedRows,
                 expandedRowRender,
+                onExpandedRowsChange: handleExpandedRowsChange,
               }}
               pagination={false}
               style={{ marginBottom: 'var(--space-6)' }}

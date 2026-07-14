@@ -34,6 +34,7 @@ D:\ai项目
 │  ├─ api\                          # 路由注册与 HTTP handlers
 │  │  ├─ router.go                  # 所有路由注册（入口）
 │  │  ├─ handlers.go                # 通用业务 handler
+│  │  ├─ attendance_toolbox_handlers.go # 考勤工具箱上传计算 handler
 │  │  ├─ leave_handlers.go          # 年假/调休/加班/排班 handler
 │  │  ├─ performance_handlers.go    # 绩效相关 handler
 │  │  └─ supplementary_handlers.go  # 补卡申请 handler
@@ -45,8 +46,9 @@ D:\ai项目
 │  │  └─ performance_models.go      # 绩效相关模型定义
 │  ├─ dingtalk\                     # 钉钉客户端与同步逻辑
 │  │  └─ dingtalk.go                # 钉钉 API 封装（token 自动刷新、考勤组缓存）
-│  ├─ middleware\                   # JWT 中间件
-│  │  └─ jwt.go                     # JWT 验证中间件
+│  ├─ middleware\                   # 通用 HTTP 中间件
+│  │  ├─ jwt.go                     # JWT 验证中间件
+│  │  └─ idempotency.go             # Idempotency-Key 全局写请求幂等中间件
 │  ├─ repository\                   # 数据访问层
 │  │  ├─ user_repository.go
 │  │  ├─ audit_repository.go
@@ -73,6 +75,7 @@ D:\ai项目
 │  └─ service\                      # 业务逻辑层
 │     ├─ user_service.go
 │     ├─ attendance_service.go
+│     ├─ attendance_toolbox_service.go # 考勤 Excel 工具箱服务
 │     ├─ attendance_rule_engine.go
 │     ├─ attendance_record_filter.go
 │     ├─ annual_leave_service.go
@@ -117,6 +120,8 @@ D:\ai项目
 │  ├─ resync_overtime_to_dingtalk\
 │  ├─ reset_vacation_quota\
 │  └─ set_comp_time_balance\
+├─ tools\
+│  └─ attendance_toolbox\            # 内置考勤 Excel 计算引擎（由 D:\app 迁入）
 ├─ scripts\                         # 脚本工具
 ├─ uploads\                         # 上传文件目录
 ├─ .ai\                             # AI 协作文档
@@ -143,7 +148,7 @@ D:\ai项目
 |---|---|---|
 | 认证 | 账号密码登录、钉钉扫码、钉钉内免登、JWT | `.ai/MODULES/auth.md` |
 | 组织与员工 | 部门树、部门维度轻量统计、员工列表、聚合员工详情、组织同步 | `.ai/MODULES/org.md` |
-| 考勤 | 记录查询、异常统计、导出、最近同步时间 | `.ai/MODULES/attendance.md` |
+| 考勤 | 记录查询、异常统计、导出、最近同步时间、考勤 Excel 工具箱入口 | `.ai/MODULES/attendance.md` |
 | 审批 | 审批模板、审批实例、审批详情、审批同步 | `.ai/MODULES/approval.md` |
 | 员工档案 | 档案、调岗、离职、入职、人才分析 | `.ai/MODULES/employee-profile.md` |
 | 大小周排班 | 大小周规则、节假日、钉钉班次、手动覆盖、双向同步 | `.ai/MODULES/week-schedule.md` |
@@ -159,7 +164,7 @@ D:\ai项目
 
 | 路由组 | 说明 | Handler 文件 |
 |---|---|---|
-| `/auth` | 登录、登出、钉钉登录、获取当前用户 | `handlers.go` |
+| `/auth` | 登录、登出、钉钉登录、获取当前用户、多企业企业列表 | `handlers.go` |
 | `/users` | 用户 CRUD | `handlers.go` |
 | `/departments` | 部门 CRUD | `handlers.go` |
 | `/sync` | 钉钉同步（部门、用户、状态） | `handlers.go` |
@@ -186,7 +191,7 @@ D:\ai项目
 
 | 路由 | 页面文件 | 功能 |
 |---|---|---|
-| `/login` | Login.tsx | 账号密码/钉钉扫码登录 |
+| `/login` | Login.tsx | 多企业选择 + 钉钉扫码登录 / 钉钉内免登 |
 | `/callback` | Callback.tsx | 钉钉 OAuth 回调 |
 | `/` | Home.tsx | 首页仪表盘 |
 | `/department-tree` | DepartmentTree.tsx | 部门树浏览 + 部门维度轻量统计入口 |
@@ -195,6 +200,7 @@ D:\ai项目
 | `/attendance` | Attendance.tsx | 考勤查询 |
 | `/attendance-stats` | AttendanceStats.tsx | 考勤异常统计 |
 | `/attendance-export` | AttendanceExport.tsx | 考勤导出 |
+| `/attendance-toolbox` | AttendanceToolbox.tsx | 考勤 Excel 工具箱（系统内上传计算） |
 | `/approval` | Approval.tsx | 审批列表 |
 | `/approval-templates` | ApprovalTemplate.tsx | 审批模板 |
 | `/approval-instances` | ApprovalInstance.tsx | 审批实例 |
@@ -242,6 +248,7 @@ D:\ai项目
 | `internal/database/performance_models.go` | 绩效相关模型定义 |
 | `internal/dingtalk/dingtalk.go` | 钉钉 API 封装 |
 | `internal/middleware/jwt.go` | JWT 验证中间件 |
+| `internal/middleware/idempotency.go` | 已登录写请求的全局幂等中间件 |
 
 ### 前端
 
@@ -266,6 +273,7 @@ D:\ai项目
 - `ApprovalTemplate`：审批模板
 - `Role` / `Permission` / `RolePermission` / `UserRole`：RBAC 权限体系
 - `OperationLog`：操作审计日志
+- `IdempotencyRecord`：全局写请求幂等记录（请求哈希、响应快照、过期时间）
 - `SyncStatus`：钉钉同步状态记录
 - `DingTalkBinding`：本地用户↔钉钉账号绑定
 - `UserSession` / `LoginLog`：会话与登录日志

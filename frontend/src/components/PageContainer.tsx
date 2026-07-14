@@ -1,5 +1,6 @@
 import React from 'react'
-import { Typography } from 'antd'
+import { Grid, Typography } from 'antd'
+import { resolveMobileLayout, useMobileRuntime } from '../utils/responsive'
 
 const { Text } = Typography
 
@@ -23,37 +24,49 @@ const PageContainer: React.FC<PageContainerProps> = ({
   noPadding = false,
   ...props
 }) => {
+  const screens = Grid.useBreakpoint()
+  const mobileRuntime = useMobileRuntime()
+  const isMobile = resolveMobileLayout(screens.md, mobileRuntime)
   const containerClassName = ['page-container', noPadding ? 'page-container-no-padding' : '', className]
     .filter(Boolean)
     .join(' ')
+  const containerStyle: React.CSSProperties = {
+    padding: noPadding ? 0 : 'var(--page-padding)',
+    background: 'var(--color-bg-page)',
+    ...style,
+  }
+  const showHeader = isMobile ? Boolean(extra) : Boolean(title || extra)
+
+  if (isMobile && !noPadding) {
+    containerStyle.padding = 'var(--space-3)'
+  }
 
   return (
     <div
       {...props}
       className={containerClassName}
-      style={{
-        padding: noPadding ? 0 : 'var(--page-padding)',
-        background: 'var(--color-bg-page)',
-        ...style,
-      }}
+      style={containerStyle}
     >
-      {(title || extra) && (
+      {showHeader && (
         <div
           style={{
             display: 'flex',
-            alignItems: 'flex-start',
+            flexDirection: isMobile ? 'column' : 'row',
+            alignItems: isMobile ? 'stretch' : 'flex-start',
             justifyContent: 'space-between',
-            marginBottom: 16,
+            gap: isMobile ? 12 : 16,
+            marginBottom: isMobile ? 12 : 16,
           }}
         >
-          <div>
-            {title && (
+          <div style={{ minWidth: 0 }}>
+            {!isMobile && title && (
               <h2
                 style={{
                   margin: '0 0 4px',
-                  fontSize: 'var(--font-size-xl)',
+                  fontSize: isMobile ? 'var(--font-size-lg)' : 'var(--font-size-xl)',
                   fontWeight: 'var(--font-weight-bold)',
                   color: 'var(--color-text-title)',
+                  lineHeight: isMobile ? '26px' : '32px',
                 }}
               >
                 {icon && (
@@ -70,7 +83,11 @@ const PageContainer: React.FC<PageContainerProps> = ({
               </Text>
             )}
           </div>
-          {extra && <div>{extra}</div>}
+          {extra && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {extra}
+            </div>
+          )}
         </div>
       )}
       {children}

@@ -211,6 +211,7 @@ func (s *ShiftConfigService) GetOrCreateShift(name, checkIn, checkOut string) (i
 	if opUserID == "" {
 		return 0, fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
+	orgID := orgIDFromDB(s.db)
 
 	shiftKey := normalize(name, checkIn, checkOut)
 
@@ -225,7 +226,7 @@ func (s *ShiftConfigService) GetOrCreateShift(name, checkIn, checkOut string) (i
 		return persistedID, nil
 	}
 
-	shifts, err := dingtalk.GetShiftList()
+	shifts, err := dingtalk.GetShiftListForOrg(orgID)
 	if err != nil {
 		return 0, fmt.Errorf("get shift list failed: %w", err)
 	}
@@ -258,7 +259,7 @@ func (s *ShiftConfigService) GetOrCreateShift(name, checkIn, checkOut string) (i
 		}
 	}
 
-	shiftID, err := dingtalk.CreateShift(opUserID, name, checkIn, checkOut)
+	shiftID, err := dingtalk.CreateShiftForOrg(orgID, opUserID, name, checkIn, checkOut)
 	if err != nil {
 		return 0, fmt.Errorf("create shift failed: %w", err)
 	}
@@ -339,8 +340,9 @@ func (s *ShiftConfigService) ApplyAndSync(input *ApplyShiftConfigInput) (*ApplyS
 		result.Message = "saved locally, but missing DINGTALK_ADMIN_USER_ID for sync"
 		return result, nil
 	}
+	orgID := orgIDFromDB(s.db)
 
-	groups, err := dingtalk.GetAttendanceGroups()
+	groups, err := dingtalk.GetAttendanceGroupsForOrg(orgID)
 	if err != nil {
 		result.Status = "partial"
 		result.Message = "saved locally, but get attendance groups failed: " + err.Error()
@@ -364,7 +366,7 @@ func (s *ShiftConfigService) ApplyAndSync(input *ApplyShiftConfigInput) (*ApplyS
 		break
 	}
 
-	groupDetail, err := dingtalk.GetAttendanceGroup(opUserID, groupID)
+	groupDetail, err := dingtalk.GetAttendanceGroupForOrg(orgID, opUserID, groupID)
 	if err != nil {
 		result.Status = "partial"
 		result.ErrorDetail = err.Error()
@@ -390,7 +392,7 @@ func (s *ShiftConfigService) ApplyAndSync(input *ApplyShiftConfigInput) (*ApplyS
 		return result, nil
 	}
 
-	successCount, failedItems, batchErr := dingtalk.BatchSetAttendanceSchedule(opUserID, items, groupID)
+	successCount, failedItems, batchErr := dingtalk.BatchSetAttendanceScheduleForOrg(orgID, opUserID, items, groupID)
 	result.SyncedCount = successCount
 	result.FailedCount = len(failedItems)
 	result.FailedItems = failedItems
@@ -424,9 +426,10 @@ func (s *ShiftConfigService) Preview(input *PreviewShiftConfigInput) (*PreviewSh
 	canSyncRest := false
 	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
 	if opUserID != "" {
-		if groups, groupErr := dingtalk.GetAttendanceGroups(); groupErr == nil {
+		orgID := orgIDFromDB(s.db)
+		if groups, groupErr := dingtalk.GetAttendanceGroupsForOrg(orgID); groupErr == nil {
 			if groupID, findErr := dingtalk.FindScheduleGroupID(groups); findErr == nil {
-				if groupDetail, detailErr := dingtalk.GetAttendanceGroup(opUserID, groupID); detailErr == nil {
+				if groupDetail, detailErr := dingtalk.GetAttendanceGroupForOrg(orgID, opUserID, groupID); detailErr == nil {
 					canSyncRest = dingtalk.GetAttendanceGroupRestClassID(groupDetail) > 0
 				}
 			}

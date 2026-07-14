@@ -107,6 +107,7 @@ const MenuPermission: React.FC = () => {
       key: 'performance',
       children: [
         { title: '绩效活动', key: 'performance-overview' },
+        { title: '绩效报表', key: 'performance-reports' },
         { title: '指标库管理', key: 'performance-indicator-library' },
       ],
     },

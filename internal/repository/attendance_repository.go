@@ -2,6 +2,7 @@ package repository
 
 import (
 	"peopleops/internal/database"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -89,11 +90,15 @@ func (r *AttendanceRepository) FindAll(page, pageSize int, filters map[string]st
 	var total int64
 
 	query := r.db.Model(&database.Attendance{})
-
-	orgID := ""
-	if v, ok := filters["org_id"]; ok && v != "" {
-		orgID = v
-		query = query.Where("attendances.org_id = ?", v)
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		orgID = strings.TrimSpace(filters["org_id"])
+	}
+	if orgID == "" {
+		orgID = database.CurrentOrganizationIDFromDB(r.db)
+	}
+	if orgID != "" {
+		query = query.Where("attendances.org_id = ?", orgID)
 	}
 
 	if v, ok := filters["user_id"]; ok && v != "" {

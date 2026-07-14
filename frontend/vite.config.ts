@@ -40,7 +40,7 @@ export default defineConfig({
   ].filter(Boolean),
   server: {
     host: '0.0.0.0',
-    port: 3000,
+    port: 8081,
     strictPort: true,
     proxy: {
       '/api': {

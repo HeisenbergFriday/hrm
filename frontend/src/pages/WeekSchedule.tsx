@@ -274,6 +274,16 @@ function buildMonthCalendarSections(calendarItems: WeekCalendarItem[]): MonthCal
   return Array.from(monthMap.values()).sort((a, b) => a.month.localeCompare(b.month))
 }
 
+function getMobileCalendarNote(cell: MonthCalendarCell, selectedUserEndTime: string | null) {
+  if (!cell.inCurrentMonth) return ''
+  if (cell.holidayLabel) return cell.holidayLabel
+  if (cell.state === 'holiday') return '放假'
+  if (cell.state === 'workday') return '调班'
+  if (cell.state === 'saturday-work') return '上班'
+  if (cell.state === 'rest') return '休息'
+  return selectedUserEndTime || '工作'
+}
+
 export default function WeekSchedule() {
   const queryClient = useQueryClient()
   const permissions = useAuthStore((state) => state.permissions)
@@ -827,6 +837,7 @@ export default function WeekSchedule() {
 
   return (
     <PageContainer
+      className="week-schedule-page"
       title="大小周与节假日管理"
       subtitle="日历已改成按月表格展示。工作日、休息日、节假日和大小周状态都会在同一张月度表里展示，点击任意周行可以手动覆盖该周为大周或小周。"
       icon={<CalendarOutlined />}
@@ -931,6 +942,7 @@ export default function WeekSchedule() {
         ) : (
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <Alert
+              className="week-calendar-legend"
               type="info"
               showIcon
               message="颜色说明"
@@ -939,11 +951,47 @@ export default function WeekSchedule() {
 
             {filteredMonthSections.map((section) => (
               <Card
+                className="week-calendar-month-card"
                 key={section.month}
                 title={`${dayjs(`${section.month}-01`).format('YYYY年M月')}作息时间表`}
                 bodyStyle={{ padding: 0, overflowX: 'auto' }}
               >
+                <div className="week-calendar-mobile-panel">
+                  <div className="week-calendar-mobile-month-title">
+                    {dayjs(`${section.month}-01`).format('YYYY年M月')}
+                  </div>
+                  <div className="week-calendar-mobile-weekdays" aria-hidden="true">
+                    {['一', '二', '三', '四', '五', '六', '日'].map((label) => (
+                      <span key={label}>{label}</span>
+                    ))}
+                  </div>
+                  <div className="week-calendar-mobile-grid">
+                    {section.rows.flatMap((row) =>
+                      row.cells.map((cell) => {
+                        const isToday = dayjs(cell.date).isSame(dayjs(), 'day')
+                        const note = getMobileCalendarNote(cell, selectedUserEndTime)
+                        return (
+                          <button
+                            key={`${row.week.week_start}-${cell.date}`}
+                            type="button"
+                            className="week-calendar-mobile-day"
+                            data-state={cell.state}
+                            data-outside={!cell.inCurrentMonth ? 'true' : undefined}
+                            data-today={isToday ? 'true' : undefined}
+                            disabled={!canManageAttendance || !cell.inCurrentMonth}
+                            onClick={() => openOverrideModal(row.week)}
+                            aria-label={`${cell.date} ${note}`}
+                          >
+                            <span className="week-calendar-mobile-day-number">{cell.dayNumber}</span>
+                            <span className="week-calendar-mobile-day-note">{note}</span>
+                          </button>
+                        )
+                      }),
+                    )}
+                  </div>
+                </div>
                 <table
+                  className="week-calendar-table"
                   style={{
                     width: '100%',
                     minWidth: 980,

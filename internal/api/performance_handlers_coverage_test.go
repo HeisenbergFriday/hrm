@@ -620,6 +620,33 @@ func TestPerformanceNotificationHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("result ready query filters hidden participants", func(t *testing.T) {
+		matchedParticipantQuery := false
+		performanceCoverageDBWith(t,
+			apiPerformanceActivityRowsResponse([][]driver.Value{apiPerformanceActivityRow(1, "Q2 Review", "result_confirming")}),
+			apiImportQueryResponse{
+				match: func(query string, _ []driver.NamedValue) bool {
+					lower := strings.ToLower(query)
+					matched := strings.Contains(lower, "performance_participants") &&
+						strings.Contains(lower, "result_hidden") &&
+						!strings.Contains(lower, "count(")
+					if matched {
+						matchedParticipantQuery = true
+					}
+					return matched
+				},
+				columns: []string{"id"},
+				rows:    nil,
+			},
+		)
+		if err := notifyParticipantsResultReady("1"); err != nil {
+			t.Fatalf("notifyParticipantsResultReady() error = %v", err)
+		}
+		if !matchedParticipantQuery {
+			t.Fatal("participant query did not filter result_hidden")
+		}
+	})
+
 	t.Run("result ready skips unnotifiable participants", func(t *testing.T) {
 		performanceCoverageDBWith(t,
 			apiPerformanceActivityRowsResponse([][]driver.Value{apiPerformanceActivityRow(1, "Q2 Review", "result_confirming")}),
@@ -659,6 +686,33 @@ func TestPerformanceNotificationHelpers(t *testing.T) {
 		)
 		if err := notifyParticipantsResultLocked("1"); err == nil {
 			t.Fatal("expected participant query error")
+		}
+	})
+
+	t.Run("result locked query filters hidden participants", func(t *testing.T) {
+		matchedParticipantQuery := false
+		performanceCoverageDBWith(t,
+			apiPerformanceActivityRowsResponse([][]driver.Value{apiPerformanceActivityRow(1, "Q2 Review", "locked")}),
+			apiImportQueryResponse{
+				match: func(query string, _ []driver.NamedValue) bool {
+					lower := strings.ToLower(query)
+					matched := strings.Contains(lower, "performance_participants") &&
+						strings.Contains(lower, "result_hidden") &&
+						!strings.Contains(lower, "count(")
+					if matched {
+						matchedParticipantQuery = true
+					}
+					return matched
+				},
+				columns: []string{"id"},
+				rows:    nil,
+			},
+		)
+		if err := notifyParticipantsResultLocked("1"); err != nil {
+			t.Fatalf("notifyParticipantsResultLocked() error = %v", err)
+		}
+		if !matchedParticipantQuery {
+			t.Fatal("participant query did not filter result_hidden")
 		}
 	})
 

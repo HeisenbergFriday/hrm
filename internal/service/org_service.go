@@ -160,12 +160,14 @@ type OrgOverview struct {
 }
 
 type OrgDepartmentSyncItem struct {
-	DepartmentID string
-	Name         string
-	ParentID     string
-	Order        int
-	HeadUserIDs  []string
-	Extension    map[string]interface{}
+	OrgID                string
+	DepartmentID         string
+	DingTalkDepartmentID string
+	Name                 string
+	ParentID             string
+	Order                int
+	HeadUserIDs          []string
+	Extension            map[string]interface{}
 }
 
 type OrgDepartmentSyncResult struct {
@@ -476,9 +478,9 @@ func (s *OrgService) GetVisibleDepartments(scope *OrgDataScope) ([]database.Depa
 }
 
 func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepartmentSyncItem, source string) (OrgDepartmentSyncResult, error) {
-	orgID = strings.TrimSpace(orgID)
-	if orgID == "" {
-		orgID = "default"
+	orgID = database.NormalizeOrganizationID(orgID)
+	if s.orgID != "" && database.NormalizeOrganizationID(s.orgID) != orgID {
+		return OrgDepartmentSyncResult{}, ErrOrgAccessDenied
 	}
 	source = strings.TrimSpace(source)
 	if source == "" {
@@ -488,7 +490,11 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepar
 	result := OrgDepartmentSyncResult{}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		for _, item := range items {
+			// The explicit method argument is the trusted tenant boundary. Do not allow
+			// a per-item organization value to redirect writes to another tenant.
+			item.OrgID = orgID
 			item.DepartmentID = strings.TrimSpace(item.DepartmentID)
+			item.DingTalkDepartmentID = strings.TrimSpace(item.DingTalkDepartmentID)
 			item.Name = strings.TrimSpace(item.Name)
 			item.ParentID = strings.TrimSpace(item.ParentID)
 			if item.DepartmentID == "" || item.Name == "" {
@@ -500,12 +506,13 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepar
 			err := tx.Where("org_id = ? AND department_id = ?", orgID, item.DepartmentID).First(&existing).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				department := database.Department{
-					OrgID:        orgID,
-					DepartmentID: item.DepartmentID,
-					Name:         item.Name,
-					ParentID:     item.ParentID,
-					Order:        item.Order,
-					Extension:    departmentSyncExtension(nil, item),
+					OrgID:                orgID,
+					DepartmentID:         item.DepartmentID,
+					DingTalkDepartmentID: item.DingTalkDepartmentID,
+					Name:                 item.Name,
+					ParentID:             item.ParentID,
+					Order:                item.Order,
+					Extension:            departmentSyncExtension(nil, item),
 				}
 				if err := tx.Create(&department).Error; err != nil {
 					return err
@@ -520,7 +527,7 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepar
 				return err
 			}
 
-			logs := make([]database.DepartmentChangeLog, 0, 3)
+			logs := make([]database.DepartmentChangeLog, 0, 5)
 			if existing.Name != item.Name {
 				logs = append(logs, newDepartmentChangeLog(orgID, item.DepartmentID, item.Name, "updated", "name", existing.Name, item.Name, source, s.nowFn()))
 				existing.Name = item.Name
@@ -532,6 +539,10 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepar
 			if existing.Order != item.Order {
 				logs = append(logs, newDepartmentChangeLog(orgID, item.DepartmentID, item.Name, "updated", "order", strconv.Itoa(existing.Order), strconv.Itoa(item.Order), source, s.nowFn()))
 				existing.Order = item.Order
+			}
+			if existing.DingTalkDepartmentID != item.DingTalkDepartmentID {
+				logs = append(logs, newDepartmentChangeLog(orgID, item.DepartmentID, item.Name, "updated", "dingtalk_department_id", existing.DingTalkDepartmentID, item.DingTalkDepartmentID, source, s.nowFn()))
+				existing.DingTalkDepartmentID = item.DingTalkDepartmentID
 			}
 			nextExtension := departmentSyncExtension(existing.Extension, item)
 			if !reflect.DeepEqual(existing.Extension, nextExtension) {
@@ -934,13 +945,16 @@ func (s *OrgService) GetEmployeeAggregate(scope *OrgDataScope, id string) (*Empl
 }
 
 func (s *OrgService) baseEmployeeQuery(departmentIDs []string) *gorm.DB {
+	orgID := strings.TrimSpace(s.orgID)
+	if orgID == "" {
+		orgID = orgIDFromDB(s.db)
+	}
+	orgID = database.NormalizeOrganizationID(orgID)
 	query := s.db.Model(&database.User{}).
-		Joins("JOIN employee_profiles ON employee_profiles.org_id = users.org_id AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
+		Joins("JOIN employee_profiles ON employee_profiles.org_id = ? AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL", orgID).
+		Where("users.org_id = ?", orgID).
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin")
-	if s.orgID != "" {
-		query = query.Where("users.org_id = ?", s.orgID)
-	}
 	if len(departmentIDs) > 0 {
 		query = query.Where("users.department_id IN ?", departmentIDs)
 	}
@@ -1691,12 +1705,8 @@ func sortDepartmentTree(nodes []*OrgDepartmentTreeNode) {
 }
 
 func newDepartmentChangeLog(orgID, departmentID, departmentName, changeType, fieldName, oldValue, newValue, source string, changedAt time.Time) database.DepartmentChangeLog {
-	orgID = strings.TrimSpace(orgID)
-	if orgID == "" {
-		orgID = "default"
-	}
 	return database.DepartmentChangeLog{
-		OrgID:          orgID,
+		OrgID:          database.NormalizeOrganizationID(orgID),
 		DepartmentID:   departmentID,
 		DepartmentName: departmentName,
 		ChangeType:     changeType,

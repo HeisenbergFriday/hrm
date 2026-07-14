@@ -165,6 +165,65 @@ describe('PerformanceActivityEditor 交互测试', () => {
       expect(screen.getByText('请选择周期类型')).toBeInTheDocument()
       expect(screen.getByText('请选择绩效周期')).toBeInTheDocument()
     })
+
+    it('沐腾评分活动不要求填写 HR/员工确认时间', async () => {
+      const user = userEvent.setup()
+
+      function ReviewScoringHarness() {
+        const [form] = Form.useForm()
+        const [, rerender] = React.useState(0)
+        const onSave = vi.fn(async () => {
+          try { await form.validateFields() } catch { /* 让 antd 渲染错误 */ }
+        })
+
+        React.useEffect(() => {
+          form.setFieldsValue({
+            name: '测试评分活动',
+            cycle_type: 'quarterly',
+            template_id: 2,
+            flow_type: 'new',
+            activity_kind: 'review_scoring',
+            previous_review_activity_id: 12,
+            date_range: [dayjs('2026-04-01'), dayjs('2026-06-30')],
+          })
+          rerender(version => version + 1)
+        }, [form])
+
+        return (
+          <PerformanceActivityEditor
+            visible
+            editing={false}
+            form={form}
+            performanceTemplates={defaultPerformanceTemplates}
+            activities={[
+              { id: 12, name: '沐腾已锁定', flow_type: 'new', activity_kind: 'goal_setting', status: 'locked', cycle_type: 'quarterly', start_date: '2026-01-01', end_date: '2026-03-31' },
+            ]}
+            indicatorLibraries={[]}
+            indicatorLibrariesLoading={false}
+            departmentOptions={[]}
+            userOptions={[]}
+            scopeOptionsLoading={false}
+            onImportParticipants={vi.fn().mockResolvedValue(undefined)}
+            onSave={onSave}
+            onCancel={vi.fn()}
+          />
+        )
+      }
+
+      render(<ReviewScoringHarness />)
+
+      await waitFor(() => {
+        expect(screen.getByText('评分活动承接目标活动')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('performance-editor-save'))
+
+      await waitFor(() => {
+        expect(screen.getByText('请选择自评时间')).toBeInTheDocument()
+      })
+      expect(screen.getByText('请选择主管评分时间')).toBeInTheDocument()
+      expect(screen.queryByText('HR/员工确认时间')).not.toBeInTheDocument()
+      expect(screen.queryByText('请选择HR/员工确认时间')).not.toBeInTheDocument()
+    })
   })
 
   // ==================== 场景 3: 按钮回调 ====================
@@ -322,6 +381,71 @@ describe('PerformanceActivityEditor 交互测试', () => {
       await waitFor(() => {
         expect(screen.getByText('请选择当前流程模板下的指标库')).toBeInTheDocument()
       })
+    })
+
+    it('沐腾流程承接来源只展示已完成的沐腾科技活动', async () => {
+      const user = userEvent.setup()
+
+      function PreviousActivityHarness() {
+        const [form] = Form.useForm()
+        const [, rerender] = React.useState(0)
+
+        React.useEffect(() => {
+          form.setFieldsValue({
+            name: '测试活动',
+            cycle_type: 'quarterly',
+            template_id: 2,
+            flow_type: 'new',
+            activity_kind: 'review_scoring',
+            date_range: [dayjs('2026-04-01'), dayjs('2026-06-30')],
+            self_eval_range: [dayjs('2026-07-01'), dayjs('2026-07-05')],
+            manager_eval_range: [dayjs('2026-07-06'), dayjs('2026-07-10')],
+            result_confirm_range: [dayjs('2026-07-11'), dayjs('2026-07-15')],
+          })
+          rerender(version => version + 1)
+        }, [form])
+
+        return (
+          <PerformanceActivityEditor
+            visible
+            editing={false}
+            form={form}
+            performanceTemplates={defaultPerformanceTemplates}
+            activities={[
+              { id: 10, name: '旧流程已完成', flow_type: 'old', status: 'locked', cycle_type: 'quarterly', start_date: '2026-01-01', end_date: '2026-03-31' },
+              { id: 11, name: '沐腾进行中', flow_type: 'new', status: 'target_setting', cycle_type: 'quarterly', start_date: '2026-01-01', end_date: '2026-03-31' },
+              { id: 12, name: '沐腾已锁定', flow_type: 'new', status: 'locked', cycle_type: 'quarterly', start_date: '2026-01-01', end_date: '2026-03-31' },
+              { id: 13, name: '沐腾月度已完成', flow_type: 'new', status: 'archived', cycle_type: 'monthly', start_date: '2026-03-01', end_date: '2026-03-31' },
+              { id: 14, name: '沐腾已归档', flow_type: 'new', status: 'archived', cycle_type: 'quarterly', start_date: '2025-10-01', end_date: '2025-12-31' },
+            ]}
+            indicatorLibraries={[]}
+            indicatorLibrariesLoading={false}
+            departmentOptions={[]}
+            userOptions={[]}
+            scopeOptionsLoading={false}
+            onImportParticipants={vi.fn().mockResolvedValue(undefined)}
+            onSave={vi.fn()}
+            onCancel={vi.fn()}
+          />
+        )
+      }
+
+      render(<PreviousActivityHarness />)
+
+      await waitFor(() => {
+        expect(screen.getByText('评分活动承接目标活动')).toBeInTheDocument()
+      })
+
+      const select = screen.getByTestId('performance-editor-previous-review-activity')
+      await user.click(select.querySelector('.ant-select-selector') || select)
+
+      await waitFor(() => {
+        expect(screen.getByText(/沐腾已归档/)).toBeInTheDocument()
+        expect(screen.getByText(/沐腾已锁定/)).toBeInTheDocument()
+      })
+      expect(screen.queryByText(/旧流程已完成/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/沐腾进行中/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/沐腾月度已完成/)).not.toBeInTheDocument()
     })
   })
 })

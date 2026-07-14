@@ -176,7 +176,7 @@ const ApprovalStats: React.FC = () => {
           </Button>
         </div>
 
-        <Row gutter={16} style={{ marginBottom: 'var(--space-6)' }}>
+        <Row className="mobile-stat-grid" gutter={16} style={{ marginBottom: 'var(--space-6)' }}>
           <Col span={6}>
             <Statistic
               title="总审批数"
@@ -209,7 +209,7 @@ const ApprovalStats: React.FC = () => {
 
         <Title level={5}>状态分布</Title>
         <div style={{ marginBottom: 'var(--space-6)' }}>
-          <Row gutter={16}>
+          <Row className="mobile-stat-grid" gutter={16}>
             {mockStatsData.status_stats.map((stat, index) => (
               <Col key={index} span={8}>
                 <PageCard>

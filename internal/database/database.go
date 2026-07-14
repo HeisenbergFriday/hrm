@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"peopleops/internal/requestmeta"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -16,6 +18,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -89,6 +92,7 @@ func Init() error {
 	}
 
 	DB = db
+	registerOrganizationCallbacks(DB)
 	log.Println("数据库连接成功")
 
 	// 先独立补列，与 migrate() 成败无关，防止 main.go 吞错误后列仍缺失
@@ -116,6 +120,8 @@ func Init() error {
 	migratePermissions()
 	migratePerformanceIndicatorRolePresets()
 	migrateMenuPermissions()
+	migratePerformanceReportMenuPermissions()
+	migratePerformanceFollowupMenuPermissions()
 	migrateAttendanceToolboxMenuPermissions()
 	migrateLiedeOrganizationAdminRoles()
 
@@ -126,6 +132,943 @@ func Init() error {
 }
 
 // GetPerformanceDB 获取绩效模块的数据源（统一使用主库）
+func registerOrganizationCallbacks(db *gorm.DB) {
+	if db == nil {
+		return
+	}
+	if err := db.Callback().Create().Before("gorm:create").Register("peopleops:set_org_id", setCreateOrganizationID); err != nil {
+		log.Printf("[org-scope] register create callback failed: %v", err)
+	}
+	if err := db.Callback().Query().Before("gorm:query").Register("peopleops:query_org_scope", applyOrganizationScope); err != nil {
+		log.Printf("[org-scope] register query callback failed: %v", err)
+	}
+	if err := db.Callback().Update().Before("gorm:update").Register("peopleops:update_org_scope", applyOrganizationScope); err != nil {
+		log.Printf("[org-scope] register update callback failed: %v", err)
+	}
+	if err := db.Callback().Delete().Before("gorm:delete").Register("peopleops:delete_org_scope", applyOrganizationScope); err != nil {
+		log.Printf("[org-scope] register delete callback failed: %v", err)
+	}
+}
+
+func statementOrganizationID(db *gorm.DB) string {
+	if db == nil || db.Statement == nil {
+		return ""
+	}
+	info := requestmeta.FromContext(db.Statement.Context)
+	if info == nil || strings.TrimSpace(info.OrgID) == "" {
+		return ""
+	}
+	return NormalizeOrganizationID(info.OrgID)
+}
+
+func CurrentOrganizationIDFromDB(db *gorm.DB) string {
+	if db != nil && db.Statement != nil {
+		if info := requestmeta.FromContext(db.Statement.Context); info != nil {
+			return NormalizeOrganizationID(info.OrgID)
+		}
+	}
+	return DefaultOrganizationID
+}
+
+func statementHasOrganizationField(db *gorm.DB) bool {
+	return db != nil &&
+		db.Statement != nil &&
+		db.Statement.Schema != nil &&
+		db.Statement.Schema.LookUpField("OrgID") != nil
+}
+
+func statementOrganizationScopeColumn(db *gorm.DB) (clause.Column, bool) {
+	if statementHasOrganizationField(db) {
+		return clause.Column{Table: clause.CurrentTable, Name: "org_id"}, true
+	}
+	if db == nil || db.Statement == nil {
+		return clause.Column{}, false
+	}
+	if isOrganizationScopedTable(db.Statement.Table) {
+		return clause.Column{Table: clause.CurrentTable, Name: "org_id"}, true
+	}
+	return clause.Column{}, false
+}
+
+func applyOrganizationScope(db *gorm.DB) {
+	orgID := statementOrganizationID(db)
+	column, ok := statementOrganizationScopeColumn(db)
+	if orgID == "" || !ok {
+		return
+	}
+	db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{
+		clause.Eq{
+			Column: column,
+			Value:  orgID,
+		},
+	}})
+}
+
+func setCreateOrganizationID(db *gorm.DB) {
+	orgID := statementOrganizationID(db)
+	if orgID == "" || !statementHasOrganizationField(db) {
+		return
+	}
+	field := db.Statement.Schema.LookUpField("OrgID")
+	if field == nil {
+		return
+	}
+	value := db.Statement.ReflectValue
+	setOrgID := func(v reflect.Value) {
+		for v.IsValid() && v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				return
+			}
+			v = v.Elem()
+		}
+		if !v.IsValid() || v.Kind() != reflect.Struct {
+			return
+		}
+		current, zero := field.ValueOf(db.Statement.Context, v)
+		if !zero && strings.TrimSpace(fmt.Sprint(current)) != "" {
+			return
+		}
+		_ = field.Set(db.Statement.Context, v, orgID)
+	}
+
+	for value.IsValid() && value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return
+		}
+		value = value.Elem()
+	}
+	switch value.Kind() {
+	case reflect.Struct:
+		setOrgID(value)
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			setOrgID(value.Index(i))
+		}
+	}
+}
+
+type envOrganization struct {
+	OrgID           string `json:"org_id"`
+	Name            string `json:"name"`
+	CorpID          string `json:"corp_id"`
+	DingTalkAppKey  string `json:"dingtalk_app_key"`
+	DingTalkSecret  string `json:"dingtalk_secret"`
+	DingTalkAgentID string `json:"dingtalk_agent_id"`
+	AppKey          string `json:"app_key"`
+	AppSecret       string `json:"app_secret"`
+	AgentID         string `json:"agent_id"`
+	AppHomeURL      string `json:"app_home_url"`
+	RedirectURI     string `json:"redirect_uri"`
+	Status          string `json:"status"`
+}
+
+func migrateOrganizationData() error {
+	if err := seedConfiguredOrganizations(); err != nil {
+		return err
+	}
+	for _, table := range organizationScopedTables() {
+		if err := ensureOrganizationColumn(table); err != nil {
+			return err
+		}
+		if err := backfillOrganizationColumn(table); err != nil {
+			return err
+		}
+	}
+	if DB.Migrator().HasTable(&User{}) {
+		if err := ensureUserDingTalkColumn(); err != nil {
+			return err
+		}
+		if err := DB.Exec("UPDATE `users` SET `ding_talk_user_id` = `user_id` WHERE (`ding_talk_user_id` IS NULL OR `ding_talk_user_id` = '') AND `user_id` <> ''").Error; err != nil {
+			return err
+		}
+	}
+	if DB.Migrator().HasTable(&Department{}) {
+		if err := ensureDepartmentDingTalkColumn(); err != nil {
+			return err
+		}
+		if err := DB.Exec("UPDATE `departments` SET `dingtalk_department_id` = `department_id` WHERE (`dingtalk_department_id` IS NULL OR `dingtalk_department_id` = '') AND `department_id` <> ''").Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateSyncStatusOrganizationScope() error {
+	if !DB.Migrator().HasTable(&SyncStatus{}) {
+		return nil
+	}
+	if err := dropUniqueIndexesForColumn("sync_statuses", "type", "idx_sync_statuses_org_type"); err != nil {
+		return err
+	}
+	return ensureCompositeUniqueIndex("sync_statuses", "idx_sync_statuses_org_type", "org_id", "type")
+}
+
+func migrateRolePermissionOrganizationScope() error {
+	if !DB.Migrator().HasTable(&Role{}) {
+		return nil
+	}
+
+	if DB.Migrator().HasTable(&UserRole{}) && DB.Migrator().HasTable(&User{}) {
+		if err := DB.Exec(`
+			UPDATE user_roles ur
+			JOIN users u ON u.user_id = ur.user_id
+			SET ur.org_id = u.org_id
+			WHERE u.deleted_at IS NULL
+		`).Error; err != nil {
+			return err
+		}
+	}
+
+	if err := cloneGlobalRoleConfigsToOrganizations(); err != nil {
+		return err
+	}
+
+	if DB.Migrator().HasTable(&UserRole{}) {
+		if err := remapUserRolesToOrganizationRoles(); err != nil {
+			return err
+		}
+		if err := DB.Exec(`
+			DELETE ur
+			FROM user_roles ur
+			JOIN (
+				SELECT org_id, user_id, MAX(id) AS keep_id
+				FROM user_roles
+				WHERE deleted_at IS NULL
+				GROUP BY org_id, user_id
+				HAVING COUNT(*) > 1
+			) dup ON dup.org_id = ur.org_id AND dup.user_id = ur.user_id
+			WHERE ur.deleted_at IS NULL
+			  AND ur.id <> dup.keep_id
+		`).Error; err != nil {
+			return err
+		}
+	}
+
+	if err := dropUniqueIndexesForColumn("roles", "name", "idx_roles_org_name"); err != nil {
+		return err
+	}
+	if err := ensureCompositeUniqueIndex("roles", "idx_roles_org_name", "org_id", "name"); err != nil {
+		return err
+	}
+	if err := dropUniqueIndexesForColumn("user_roles", "user_id", "idx_user_roles_org_user"); err != nil {
+		return err
+	}
+	if err := ensureCompositeUniqueIndex("user_roles", "idx_user_roles_org_user", "org_id", "user_id"); err != nil {
+		return err
+	}
+	if err := dropUniqueIndexesForColumn("menu_permissions", "role_id", "idx_menu_permissions_org_role"); err != nil {
+		return err
+	}
+	if err := ensureCompositeUniqueIndex("menu_permissions", "idx_menu_permissions_org_role", "org_id", "role_id"); err != nil {
+		return err
+	}
+	if err := dropUniqueIndexesForColumn("data_permissions", "role_id", "idx_data_permissions_org_role"); err != nil {
+		return err
+	}
+	if err := ensureCompositeUniqueIndex("data_permissions", "idx_data_permissions_org_role", "org_id", "role_id"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func cloneGlobalRoleConfigsToOrganizations() error {
+	orgIDs, err := activeOrganizationIDs()
+	if err != nil || len(orgIDs) <= 1 {
+		return err
+	}
+
+	var sourceRoles []Role
+	if err := DB.Where("org_id = ? AND deleted_at IS NULL", DefaultOrganizationID).Order("id ASC").Find(&sourceRoles).Error; err != nil {
+		return err
+	}
+	if len(sourceRoles) == 0 {
+		return nil
+	}
+
+	sourceRoleIDs := make([]uint, 0, len(sourceRoles))
+	for _, role := range sourceRoles {
+		sourceRoleIDs = append(sourceRoleIDs, role.ID)
+	}
+
+	rolePermissionsByRoleID := make(map[uint][]uint, len(sourceRoleIDs))
+	if len(sourceRoleIDs) > 0 {
+		var mappings []RolePermission
+		if err := DB.Where("role_id IN ? AND deleted_at IS NULL", sourceRoleIDs).Find(&mappings).Error; err != nil {
+			return err
+		}
+		for _, mapping := range mappings {
+			rolePermissionsByRoleID[mapping.RoleID] = append(rolePermissionsByRoleID[mapping.RoleID], mapping.PermissionID)
+		}
+	}
+
+	menuPermissionsByRoleID := make(map[uint]MenuPermission, len(sourceRoleIDs))
+	var menuPermissions []MenuPermission
+	if err := DB.Where("org_id = ? AND role_id IN ? AND deleted_at IS NULL", DefaultOrganizationID, sourceRoleIDs).Find(&menuPermissions).Error; err != nil {
+		return err
+	}
+	for _, item := range menuPermissions {
+		menuPermissionsByRoleID[item.RoleID] = item
+	}
+
+	dataPermissionsByRoleID := make(map[uint]DataPermission, len(sourceRoleIDs))
+	var dataPermissions []DataPermission
+	if err := DB.Where("org_id = ? AND role_id IN ? AND deleted_at IS NULL", DefaultOrganizationID, sourceRoleIDs).Find(&dataPermissions).Error; err != nil {
+		return err
+	}
+	for _, item := range dataPermissions {
+		dataPermissionsByRoleID[item.RoleID] = item
+	}
+
+	for _, orgID := range orgIDs {
+		if orgID == DefaultOrganizationID {
+			continue
+		}
+		for _, sourceRole := range sourceRoles {
+			targetRole, err := ensureOrganizationRoleClone(orgID, sourceRole)
+			if err != nil {
+				return err
+			}
+			for _, permissionID := range rolePermissionsByRoleID[sourceRole.ID] {
+				if err := ensureRolePermissionBinding(targetRole.ID, permissionID); err != nil {
+					return err
+				}
+			}
+			if item, ok := menuPermissionsByRoleID[sourceRole.ID]; ok {
+				if err := ensureOrganizationMenuPermission(orgID, targetRole.ID, item.MenuKeys); err != nil {
+					return err
+				}
+			}
+			if item, ok := dataPermissionsByRoleID[sourceRole.ID]; ok {
+				if err := ensureOrganizationDataPermission(orgID, targetRole.ID, item.Scope, item.DepartmentKeys); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func remapUserRolesToOrganizationRoles() error {
+	type userRoleBinding struct {
+		UserRoleID uint
+		RoleID     uint
+		UserOrgID  string
+		RoleName   string
+	}
+
+	var bindings []userRoleBinding
+	if err := DB.Table("user_roles").
+		Select("user_roles.id AS user_role_id, user_roles.role_id AS role_id, users.org_id AS user_org_id, roles.name AS role_name").
+		Joins("JOIN users ON users.user_id = user_roles.user_id AND users.deleted_at IS NULL").
+		Joins("JOIN roles ON roles.id = user_roles.role_id AND roles.deleted_at IS NULL").
+		Where("user_roles.deleted_at IS NULL").
+		Scan(&bindings).Error; err != nil {
+		return err
+	}
+
+	for _, binding := range bindings {
+		targetOrgID := NormalizeOrganizationID(binding.UserOrgID)
+		var targetRole Role
+		if err := DB.Where("org_id = ? AND name = ? AND deleted_at IS NULL", targetOrgID, binding.RoleName).First(&targetRole).Error; err != nil {
+			return err
+		}
+
+		updates := map[string]interface{}{"org_id": targetOrgID}
+		if targetRole.ID != binding.RoleID {
+			updates["role_id"] = targetRole.ID
+		}
+		if err := DB.Model(&UserRole{}).Where("id = ?", binding.UserRoleID).Updates(updates).Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func ensureOrganizationRoleClone(orgID string, source Role) (*Role, error) {
+	orgID = NormalizeOrganizationID(orgID)
+	var existing Role
+	err := DB.Unscoped().Where("org_id = ? AND name = ?", orgID, source.Name).First(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		role := &Role{
+			OrgID:       orgID,
+			Name:        source.Name,
+			Description: source.Description,
+		}
+		return role, DB.Create(role).Error
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	updates := map[string]interface{}{}
+	if existing.DeletedAt.Valid {
+		updates["deleted_at"] = nil
+	}
+	if strings.TrimSpace(existing.Description) == "" && strings.TrimSpace(source.Description) != "" {
+		updates["description"] = source.Description
+	}
+	if len(updates) > 0 {
+		if err := DB.Unscoped().Model(&existing).Updates(updates).Error; err != nil {
+			return nil, err
+		}
+	}
+	return &existing, nil
+}
+
+func ensureRolePermissionBinding(roleID, permissionID uint) error {
+	var existing RolePermission
+	err := DB.Unscoped().
+		Where("role_id = ? AND permission_id = ?", roleID, permissionID).
+		Order("deleted_at IS NULL DESC, id ASC").
+		First(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		return DB.Create(&RolePermission{RoleID: roleID, PermissionID: permissionID}).Error
+	}
+	if err != nil {
+		return err
+	}
+	if existing.DeletedAt.Valid {
+		return DB.Unscoped().Model(&existing).Update("deleted_at", nil).Error
+	}
+	return nil
+}
+
+func ensureOrganizationMenuPermission(orgID string, roleID uint, menuKeys string) error {
+	orgID = NormalizeOrganizationID(orgID)
+	var existing MenuPermission
+	err := DB.Unscoped().
+		Where("org_id = ? AND role_id = ?", orgID, roleID).
+		Order("deleted_at IS NULL DESC, id ASC").
+		First(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		return DB.Create(&MenuPermission{OrgID: orgID, RoleID: roleID, MenuKeys: menuKeys}).Error
+	}
+	if err != nil {
+		return err
+	}
+	updates := map[string]interface{}{}
+	if existing.DeletedAt.Valid {
+		updates["deleted_at"] = nil
+	}
+	if strings.TrimSpace(existing.MenuKeys) == "" && strings.TrimSpace(menuKeys) != "" {
+		updates["menu_keys"] = menuKeys
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return DB.Unscoped().Model(&existing).Updates(updates).Error
+}
+
+func ensureOrganizationDataPermission(orgID string, roleID uint, scope, departmentKeys string) error {
+	orgID = NormalizeOrganizationID(orgID)
+	var existing DataPermission
+	err := DB.Unscoped().
+		Where("org_id = ? AND role_id = ?", orgID, roleID).
+		Order("deleted_at IS NULL DESC, id ASC").
+		First(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		return DB.Create(&DataPermission{
+			OrgID:          orgID,
+			RoleID:         roleID,
+			Scope:          scope,
+			DepartmentKeys: departmentKeys,
+		}).Error
+	}
+	if err != nil {
+		return err
+	}
+	updates := map[string]interface{}{}
+	if existing.DeletedAt.Valid {
+		updates["deleted_at"] = nil
+	}
+	if strings.TrimSpace(existing.Scope) == "" && strings.TrimSpace(scope) != "" {
+		updates["scope"] = scope
+	}
+	if strings.TrimSpace(existing.DepartmentKeys) == "" && strings.TrimSpace(departmentKeys) != "" {
+		updates["department_keys"] = departmentKeys
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return DB.Unscoped().Model(&existing).Updates(updates).Error
+}
+
+func activeOrganizationIDs() ([]string, error) {
+	if !DB.Migrator().HasTable(&Organization{}) {
+		return []string{DefaultOrganizationID}, nil
+	}
+	var orgs []Organization
+	if err := DB.Where("status = ? AND deleted_at IS NULL", "active").Order("org_id ASC").Find(&orgs).Error; err != nil {
+		return nil, err
+	}
+	values := make([]string, 0, len(orgs)+1)
+	values = append(values, DefaultOrganizationID)
+	for _, org := range orgs {
+		values = append(values, NormalizeOrganizationID(org.OrgID))
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func dropUniqueIndexesForColumn(table, column, keepIndex string) error {
+	exists, err := tableExists(table)
+	if err != nil || !exists {
+		return err
+	}
+
+	type indexRow struct {
+		IndexName string
+	}
+	var rows []indexRow
+	if err := DB.Raw(`
+		SELECT DISTINCT INDEX_NAME
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = ?
+		  AND COLUMN_NAME = ?
+		  AND NON_UNIQUE = 0
+	`, table, column).Scan(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		indexName := strings.TrimSpace(row.IndexName)
+		if indexName == "" || indexName == keepIndex || indexName == "PRIMARY" {
+			continue
+		}
+		if err := DB.Exec(fmt.Sprintf("DROP INDEX %s ON %s", quoteIdentifier(indexName), quoteIdentifier(table))).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureCompositeUniqueIndex(table, index string, columns ...string) error {
+	exists, err := tableExists(table)
+	if err != nil || !exists {
+		return err
+	}
+	hasIndex, err := indexExists(table, index)
+	if err != nil {
+		return err
+	}
+	if hasIndex {
+		return nil
+	}
+
+	parts := make([]string, 0, len(columns))
+	for _, column := range columns {
+		parts = append(parts, quoteIdentifier(column))
+	}
+	return DB.Exec(fmt.Sprintf(
+		"CREATE UNIQUE INDEX %s ON %s (%s)",
+		quoteIdentifier(index),
+		quoteIdentifier(table),
+		strings.Join(parts, ", "),
+	)).Error
+}
+
+func ensureUserDingTalkColumn() error {
+	hasColumn, err := columnExists("users", "ding_talk_user_id")
+	if err != nil {
+		return err
+	}
+	if !hasColumn {
+		if err := DB.Exec("ALTER TABLE `users` ADD COLUMN `ding_talk_user_id` varchar(64)").Error; err != nil {
+			return err
+		}
+	}
+	legacyColumn, err := columnExists("users", "dingtalk_user_id")
+	if err != nil {
+		return err
+	}
+	if legacyColumn {
+		if err := DB.Exec("UPDATE `users` SET `ding_talk_user_id` = `dingtalk_user_id` WHERE (`ding_talk_user_id` IS NULL OR `ding_talk_user_id` = '') AND `dingtalk_user_id` <> ''").Error; err != nil {
+			return err
+		}
+	}
+	hasIndex, err := indexExists("users", "idx_users_org_dingtalk_user")
+	if err != nil {
+		return err
+	}
+	if !hasIndex {
+		err := DB.Exec("CREATE UNIQUE INDEX `idx_users_org_dingtalk_user` ON `users` (`org_id`, `ding_talk_user_id`)").Error
+		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate key name") {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureDepartmentDingTalkColumn() error {
+	hasColumn, err := columnExists("departments", "dingtalk_department_id")
+	if err != nil {
+		return err
+	}
+	if !hasColumn {
+		if err := DB.Exec("ALTER TABLE `departments` ADD COLUMN `dingtalk_department_id` varchar(64)").Error; err != nil {
+			return err
+		}
+	}
+	hasIndex, err := indexExists("departments", "idx_departments_org_dingtalk_department")
+	if err != nil {
+		return err
+	}
+	if !hasIndex {
+		err := DB.Exec("CREATE UNIQUE INDEX `idx_departments_org_dingtalk_department` ON `departments` (`org_id`, `dingtalk_department_id`)").Error
+		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate key name") {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedConfiguredOrganizations() error {
+	orgs := []Organization{defaultOrganizationFromEnv()}
+	raw := strings.TrimSpace(os.Getenv("DINGTALK_ORGANIZATIONS"))
+	if raw != "" {
+		var configured []envOrganization
+		if err := json.Unmarshal([]byte(raw), &configured); err != nil {
+			return fmt.Errorf("invalid DINGTALK_ORGANIZATIONS: %w", err)
+		}
+		for _, cfg := range configured {
+			orgs = append(orgs, organizationFromEnvConfig(cfg))
+		}
+	}
+
+	for _, org := range orgs {
+		org.OrgID = NormalizeOrganizationID(org.OrgID)
+		org.Name = strings.TrimSpace(org.Name)
+		if org.Name == "" {
+			org.Name = org.OrgID
+		}
+		if strings.TrimSpace(org.Status) == "" {
+			org.Status = "active"
+		}
+		var existing Organization
+		err := DB.Where("org_id = ?", org.OrgID).First(&existing).Error
+		if err == nil {
+			updates := map[string]interface{}{
+				"name":   org.Name,
+				"status": org.Status,
+			}
+			if org.CorpID != "" {
+				updates["corp_id"] = org.CorpID
+			}
+			if org.DingTalkAppKey != "" {
+				updates["ding_talk_app_key"] = org.DingTalkAppKey
+			}
+			if org.DingTalkSecret != "" {
+				updates["ding_talk_secret"] = org.DingTalkSecret
+			}
+			if org.DingTalkAgentID != "" {
+				updates["ding_talk_agent_id"] = org.DingTalkAgentID
+			}
+			if org.AppHomeURL != "" {
+				updates["app_home_url"] = org.AppHomeURL
+			}
+			if org.RedirectURI != "" {
+				updates["redirect_uri"] = org.RedirectURI
+			}
+			if err := DB.Model(&Organization{}).Where("org_id = ?", org.OrgID).Updates(updates).Error; err != nil {
+				return err
+			}
+			continue
+		}
+		if err != gorm.ErrRecordNotFound {
+			return err
+		}
+		if err := DB.Create(&org).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func defaultOrganizationFromEnv() Organization {
+	return Organization{
+		OrgID:           DefaultOrganizationID,
+		Name:            getEnvOrDefault("PEOPLEOPS_DEFAULT_ORG_NAME", "Default Organization"),
+		CorpID:          os.Getenv("DINGTALK_CORP_ID"),
+		DingTalkAppKey:  os.Getenv("DINGTALK_APP_KEY"),
+		DingTalkSecret:  os.Getenv("DINGTALK_APP_SECRET"),
+		DingTalkAgentID: os.Getenv("DINGTALK_AGENT_ID"),
+		AppHomeURL:      os.Getenv("DINGTALK_APP_HOME_URL"),
+		RedirectURI:     os.Getenv("DINGTALK_REDIRECT_URI"),
+		Status:          "active",
+	}
+}
+
+func organizationFromEnvConfig(cfg envOrganization) Organization {
+	return Organization{
+		OrgID:           cfg.OrgID,
+		Name:            cfg.Name,
+		CorpID:          cfg.CorpID,
+		DingTalkAppKey:  firstNonEmpty(cfg.DingTalkAppKey, cfg.AppKey),
+		DingTalkSecret:  firstNonEmpty(cfg.DingTalkSecret, cfg.AppSecret),
+		DingTalkAgentID: firstNonEmpty(cfg.DingTalkAgentID, cfg.AgentID),
+		AppHomeURL:      cfg.AppHomeURL,
+		RedirectURI:     cfg.RedirectURI,
+		Status:          cfg.Status,
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func organizationScopedTables() []string {
+	models := []interface{}{
+		&User{},
+		&Department{},
+		&DepartmentChangeLog{},
+		&Attendance{},
+		&Approval{},
+		&ApprovalTemplate{},
+		&Role{},
+		&UserRole{},
+		&MenuPermission{},
+		&DataPermission{},
+		&OperationLog{},
+		&SyncStatus{},
+		&IdempotencyRecord{},
+		&DingTalkBinding{},
+		&UserSession{},
+		&LoginLog{},
+		&AttendanceExport{},
+		&EmployeeProfile{},
+		&EmployeeTransfer{},
+		&EmployeeResignation{},
+		&EmployeeOnboarding{},
+		&TalentAnalysis{},
+		&EmployeeShiftConfig{},
+		&DingTalkShiftCatalog{},
+		&WeekScheduleRule{},
+		&WeekScheduleOverride{},
+		&WeekScheduleSyncLog{},
+		&StatutoryHoliday{},
+		&LeaveRuleConfig{},
+		&AnnualLeaveEligibility{},
+		&AnnualLeaveGrant{},
+		&OvertimeRuleConfig{},
+		&OvertimeMatchResult{},
+		&OvertimeSyncHistory{},
+		&OvertimeSupplementaryRequest{},
+		&CompensatoryLeaveLedger{},
+		&AnnualLeaveConsumeLog{},
+		&PerformanceTemplate{},
+		&PerformanceTemplateSection{},
+		&PerformanceTemplateItem{},
+		&PerformanceLevelRule{},
+		&PerformanceLevelRuleItem{},
+		&PerformanceActivity{},
+		&PerformanceDistributionRule{},
+		&PerformanceDistributionException{},
+		&PerformanceReminderLog{},
+		&PerformanceInterviewRecord{},
+		&PerformanceAppealRecord{},
+		&PerformanceParticipant{},
+		&PerformanceReview{},
+		&PerformanceReviewVersion{},
+		&PerformanceRelationshipChangeLog{},
+		&PerformanceGoalRecord{},
+		&PerformanceGoalApprovalLog{},
+		&PerformanceCompanyFinance{},
+		&PerformanceIndicatorLibrary{},
+		&PerformanceIndicatorItem{},
+	}
+	tables := make([]string, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		stmt := &gorm.Statement{DB: DB}
+		if err := stmt.Parse(model); err != nil || stmt.Schema == nil {
+			continue
+		}
+		table := strings.TrimSpace(stmt.Schema.Table)
+		if table == "" {
+			continue
+		}
+		if _, ok := seen[table]; ok {
+			continue
+		}
+		seen[table] = struct{}{}
+		tables = append(tables, table)
+	}
+	return tables
+}
+
+var organizationScopedTableNameSet = map[string]struct{}{
+	"users":                                {},
+	"departments":                          {},
+	"department_change_logs":               {},
+	"attendances":                          {},
+	"approvals":                            {},
+	"approval_templates":                   {},
+	"roles":                                {},
+	"user_roles":                           {},
+	"menu_permissions":                     {},
+	"data_permissions":                     {},
+	"operation_logs":                       {},
+	"sync_statuses":                        {},
+	"idempotency_records":                  {},
+	"ding_talk_bindings":                   {},
+	"user_sessions":                        {},
+	"login_logs":                           {},
+	"attendance_exports":                   {},
+	"employee_profiles":                    {},
+	"employee_transfers":                   {},
+	"employee_resignations":                {},
+	"employee_onboardings":                 {},
+	"talent_analyses":                      {},
+	"employee_shift_configs":               {},
+	"dingtalk_shift_catalogs":              {},
+	"week_schedule_rules":                  {},
+	"week_schedule_overrides":              {},
+	"week_schedule_sync_logs":              {},
+	"statutory_holidays":                   {},
+	"leave_rule_configs":                   {},
+	"annual_leave_eligibilities":           {},
+	"annual_leave_grants":                  {},
+	"overtime_rule_configs":                {},
+	"overtime_match_results":               {},
+	"overtime_sync_histories":              {},
+	"overtime_supplementary_requests":      {},
+	"compensatory_leave_ledgers":           {},
+	"annual_leave_consume_logs":            {},
+	"performance_templates":                {},
+	"performance_template_sections":        {},
+	"performance_template_items":           {},
+	"performance_level_rules":              {},
+	"performance_level_rule_items":         {},
+	"performance_activities":               {},
+	"performance_distribution_rules":       {},
+	"performance_distribution_exceptions":  {},
+	"performance_reminder_logs":            {},
+	"performance_interview_records":        {},
+	"performance_appeal_records":           {},
+	"performance_participants":             {},
+	"performance_reviews":                  {},
+	"performance_review_versions":          {},
+	"performance_relationship_change_logs": {},
+	"performance_goal_records":             {},
+	"performance_goal_approval_logs":       {},
+	"performance_company_finances":         {},
+	"performance_indicator_libraries":      {},
+	"performance_indicator_items":          {},
+}
+
+func isOrganizationScopedTable(table string) bool {
+	table = normalizeStatementTableName(table)
+	if table == "" {
+		return false
+	}
+	_, ok := organizationScopedTableNameSet[table]
+	return ok
+}
+
+func normalizeStatementTableName(table string) string {
+	table = strings.TrimSpace(table)
+	if table == "" {
+		return ""
+	}
+	table = strings.Trim(table, "`")
+	fields := strings.Fields(table)
+	if len(fields) > 0 {
+		table = fields[0]
+	}
+	table = strings.Trim(table, "`")
+	if idx := strings.LastIndex(table, "."); idx >= 0 {
+		table = table[idx+1:]
+	}
+	return strings.Trim(table, "`")
+}
+
+func ensureOrganizationColumn(table string) error {
+	exists, err := tableExists(table)
+	if err != nil || !exists {
+		return err
+	}
+	hasColumn, err := columnExists(table, "org_id")
+	if err != nil {
+		return err
+	}
+	if !hasColumn {
+		if err := DB.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN `org_id` varchar(64) NOT NULL DEFAULT 'default'", quoteIdentifier(table))).Error; err != nil {
+			return err
+		}
+	}
+	indexName := organizationIndexName(table)
+	hasIndex, err := indexExists(table, indexName)
+	if err != nil {
+		return err
+	}
+	if !hasIndex {
+		err := DB.Exec(fmt.Sprintf("CREATE INDEX %s ON %s (`org_id`)", quoteIdentifier(indexName), quoteIdentifier(table))).Error
+		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate key name") {
+			return err
+		}
+	}
+	return nil
+}
+
+func backfillOrganizationColumn(table string) error {
+	exists, err := tableExists(table)
+	if err != nil || !exists {
+		return err
+	}
+	hasColumn, err := columnExists(table, "org_id")
+	if err != nil || !hasColumn {
+		return err
+	}
+	return DB.Exec(fmt.Sprintf("UPDATE %s SET `org_id` = ? WHERE `org_id` IS NULL OR `org_id` = ''", quoteIdentifier(table)), DefaultOrganizationID).Error
+}
+
+func tableExists(table string) (bool, error) {
+	var count int64
+	err := DB.Raw("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", table).Scan(&count).Error
+	return count > 0, err
+}
+
+func columnExists(table, column string) (bool, error) {
+	var count int64
+	err := DB.Raw("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?", table, column).Scan(&count).Error
+	return count > 0, err
+}
+
+func indexExists(table, index string) (bool, error) {
+	var count int64
+	err := DB.Raw("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?", table, index).Scan(&count).Error
+	return count > 0, err
+}
+
+func organizationIndexName(table string) string {
+	name := "idx_" + table + "_org_id"
+	if len(name) <= 60 {
+		return name
+	}
+	return name[:60]
+}
+
+func quoteIdentifier(identifier string) string {
+	return "`" + strings.ReplaceAll(identifier, "`", "``") + "`"
+}
+
 func GetPerformanceDB() *gorm.DB {
 	return DB
 }
@@ -229,6 +1172,7 @@ func migrate() error {
 		&MenuPermission{},
 		&DataPermission{},
 		&OperationLog{},
+		&IdempotencyRecord{},
 		&SyncStatus{},
 		&DingTalkBinding{},
 		&UserSession{},
@@ -253,6 +1197,8 @@ func migrate() error {
 		&PerformanceDistributionRule{},
 		&PerformanceDistributionException{},
 		&PerformanceReminderLog{},
+		&PerformanceInterviewRecord{},
+		&PerformanceAppealRecord{},
 		&PerformanceParticipant{},
 		&PerformanceReview{},
 		&PerformanceReviewVersion{},
@@ -272,6 +1218,16 @@ func migrate() error {
 	if err := migrateRoleNameUniqueIndex(); err != nil {
 		return err
 	}
+	if err := migrateOrganizationData(); err != nil {
+		return err
+	}
+	if err := migrateRolePermissionOrganizationScope(); err != nil {
+		return err
+	}
+	if err := migrateSyncStatusOrganizationScope(); err != nil {
+		return err
+	}
+
 	if err := migrateShiftCatalogSchema(); err != nil {
 		return err
 	}
@@ -1061,15 +2017,15 @@ func seedOrganizationsFromEnv() {
 		err := DB.Where("org_id = ?", cfg.OrgID).First(&org).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			org = Organization{
-				OrgID:       cfg.OrgID,
-				Name:        cfg.Name,
-				CorpID:      cfg.CorpID,
-				Status:      cfg.Status,
-				AppKey:      cfg.AppKey,
-				AppSecret:   cfg.AppSecret,
-				AgentID:     cfg.AgentID,
-				AppHomeURL:  cfg.AppHomeURL,
-				RedirectURI: cfg.RedirectURI,
+				OrgID:           cfg.OrgID,
+				Name:            cfg.Name,
+				CorpID:          cfg.CorpID,
+				Status:          cfg.Status,
+				DingTalkAppKey:  cfg.AppKey,
+				DingTalkSecret:  cfg.AppSecret,
+				DingTalkAgentID: cfg.AgentID,
+				AppHomeURL:      cfg.AppHomeURL,
+				RedirectURI:     cfg.RedirectURI,
 			}
 			if err := DB.Create(&org).Error; err != nil {
 				log.Printf("[seed] create organization %s failed: %v", cfg.OrgID, err)
@@ -1088,14 +2044,14 @@ func seedOrganizationsFromEnv() {
 			"app_home_url": cfg.AppHomeURL,
 			"redirect_uri": cfg.RedirectURI,
 		}
-		if strings.TrimSpace(org.AgentID) == "" && cfg.AgentID != "" {
-			updates["agent_id"] = cfg.AgentID
+		if strings.TrimSpace(org.DingTalkAgentID) == "" && cfg.AgentID != "" {
+			updates["ding_talk_agent_id"] = cfg.AgentID
 		}
-		if strings.TrimSpace(org.AppKey) == "" && cfg.AppKey != "" {
-			updates["app_key"] = cfg.AppKey
+		if strings.TrimSpace(org.DingTalkAppKey) == "" && cfg.AppKey != "" {
+			updates["ding_talk_app_key"] = cfg.AppKey
 		}
-		if strings.TrimSpace(org.AppSecret) == "" && cfg.AppSecret != "" {
-			updates["app_secret"] = cfg.AppSecret
+		if strings.TrimSpace(org.DingTalkSecret) == "" && cfg.AppSecret != "" {
+			updates["ding_talk_secret"] = cfg.AppSecret
 		}
 		if err := DB.Model(&org).Updates(updates).Error; err != nil {
 			log.Printf("[seed] update organization %s failed: %v", cfg.OrgID, err)
@@ -1190,7 +2146,14 @@ func seed() {
 			{Name: "绩效主管评分", Code: "performance:manager_eval:submit", Description: "主管绩效评分"},
 			{Name: "绩效员工确认", Code: "performance:employee_confirm:submit", Description: "员工确认绩效结果"},
 			{Name: "绩效主管确认", Code: "performance:manager_confirm:submit", Description: "主管确认绩效结果"},
-			{Name: "绩效HR确认", Code: "performance:hr_confirm:submit", Description: "HR确认绩效结果"},
+			{Name: "绩效HR确认", Code: "performance:hr_confirm:submit", Description: "旧流程HR确认绩效结果"},
+			{Name: "绩效部门/中心评估", Code: "performance:department_eval:submit", Description: "部门/中心负责人确认或调整绩效结果"},
+			{Name: "绩效HR审核", Code: "performance:hr_review:submit", Description: "HR审核沐腾科技流程绩效结果"},
+			{Name: "绩效结果公布", Code: "performance:result_publish:manage", Description: "公布沐腾科技流程绩效结果"},
+			{Name: "绩效结果屏蔽管理", Code: "performance:result_visibility:manage", Description: "设置或解除绩效结果屏蔽"},
+			{Name: "绩效屏蔽结果查看", Code: "performance:hidden_result:view", Description: "查看已屏蔽的绩效结果"},
+			{Name: "绩效面谈管理", Code: "performance:interview:manage", Description: "安排、记录和完成绩效面谈"},
+			{Name: "绩效申诉处理", Code: "performance:appeal:manage", Description: "处理沐腾科技流程绩效申诉"},
 			{Name: "绩效等级调整", Code: "performance:level_adjust:manage", Description: "调整绩效最终等级"},
 			{Name: "绩效分布规则", Code: "performance:distribution:manage", Description: "设置绩效分布规则"},
 			{Name: "绩效指标库管理", Code: "performance:indicator:manage", Description: "指标库/指标项CRUD"},
@@ -1246,7 +2209,9 @@ func seedRolePermissions() {
 		"approval:sync", "approval:create", "approval:update", "approval:delete",
 		"performance:activity:manage", "performance:self_eval:submit", "performance:manager_eval:submit",
 		"performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit",
-		"performance:level_adjust:manage", "performance:distribution:manage", "performance:indicator:manage",
+		"performance:department_eval:submit", "performance:hr_review:submit", "performance:result_publish:manage",
+		"performance:result_visibility:manage", "performance:hidden_result:view",
+		"performance:interview:manage", "performance:appeal:manage", "performance:level_adjust:manage", "performance:distribution:manage", "performance:indicator:manage",
 		"performance:goal:manage", "performance:assessment_manager:update", "performance:assessment_manager:batch_update",
 		"performance:result:view",
 		"org:read", "audit_log:read",
@@ -1265,7 +2230,7 @@ func seedRolePermissions() {
 	managerCodes := []string{
 		"performance:activity:manage", "performance:self_eval:submit", "performance:manager_eval:submit",
 		"performance:manager_confirm:submit", "performance:level_adjust:manage", "performance:distribution:manage",
-		"performance:indicator:manage", "performance:goal:manage", "performance:assessment_manager:update",
+		"performance:result_visibility:manage", "performance:interview:manage", "performance:indicator:manage", "performance:goal:manage", "performance:assessment_manager:update",
 		"performance:assessment_manager:batch_update", "performance:result:view",
 	}
 	if managerID, ok := roleMap["部门负责人"]; ok {
@@ -1302,7 +2267,7 @@ func seedUserRoles() {
 	if adminID, ok := roleMap["管理员"]; ok {
 		var admin User
 		if err := DB.Where("user_id = ?", getEnvOrDefault("ADMIN_USER_ID", "admin")).First(&admin).Error; err == nil {
-			DB.Create(&UserRole{OrgID: admin.OrgID, UserID: admin.UserID, RoleID: adminID})
+			DB.Create(&UserRole{OrgID: NormalizeOrganizationID(admin.OrgID), UserID: admin.UserID, RoleID: adminID})
 		}
 	}
 }
@@ -1469,6 +2434,13 @@ func migratePermissions() {
 		{Name: "删除审批模板", Code: "approval:delete", Description: "删除审批模板"},
 		{Name: "绩效考核上级调整", Code: "performance:assessment_manager:update", Description: "调整单个绩效参与人的考核上级"},
 		{Name: "绩效考核上级批量调整", Code: "performance:assessment_manager:batch_update", Description: "批量调整绩效参与人的考核上级"},
+		{Name: "绩效部门/中心评估", Code: "performance:department_eval:submit", Description: "部门/中心负责人确认或调整绩效结果"},
+		{Name: "绩效HR审核", Code: "performance:hr_review:submit", Description: "HR审核沐腾科技流程绩效结果"},
+		{Name: "绩效结果公布", Code: "performance:result_publish:manage", Description: "公布沐腾科技流程绩效结果"},
+		{Name: "绩效结果屏蔽管理", Code: "performance:result_visibility:manage", Description: "设置或解除绩效结果屏蔽"},
+		{Name: "绩效屏蔽结果查看", Code: "performance:hidden_result:view", Description: "查看已屏蔽的绩效结果"},
+		{Name: "绩效面谈管理", Code: "performance:interview:manage", Description: "安排、记录和完成绩效面谈"},
+		{Name: "绩效申诉处理", Code: "performance:appeal:manage", Description: "处理沐腾科技流程绩效申诉"},
 	}
 	for _, p := range newPerms {
 		var existing Permission
@@ -1491,6 +2463,7 @@ func migratePermissions() {
 	// 4. 给有 permission_manage 的角色补 audit_log:read 和 org:read
 	grantCompatPermission("permission_manage", "audit_log:read", permMap)
 	grantCompatPermission("permission_manage", "org:read", permMap)
+	grantCompatPermission("permission_manage", "performance:hidden_result:view", permMap)
 	// 5. 给有 performance:activity:manage 的角色补 org:read（部门负责人需要看部门树）
 	grantCompatPermission("performance:activity:manage", "org:read", permMap)
 	// 6. 将旧 approval_manage 平滑迁移到细粒度审批操作权限
@@ -1501,6 +2474,19 @@ func migratePermissions() {
 	// 7. 拥有绩效活动管理的角色默认可维护活动内考核上级。
 	grantCompatPermission("performance:activity:manage", "performance:assessment_manager:update", permMap)
 	grantCompatPermission("performance:activity:manage", "performance:assessment_manager:batch_update", permMap)
+	// 8. 沐腾科技流程拆分节点权限后，保留既有绩效管理员和旧HR角色入口。
+	grantCompatPermission("performance:activity:manage", "performance:department_eval:submit", permMap)
+	grantCompatPermission("performance:activity:manage", "performance:hr_review:submit", permMap)
+	grantCompatPermission("performance:activity:manage", "performance:result_publish:manage", permMap)
+	grantCompatPermission("performance:activity:manage", "performance:result_visibility:manage", permMap)
+	grantCompatPermission("performance:activity:manage", "performance:interview:manage", permMap)
+	grantCompatPermission("performance:activity:manage", "performance:appeal:manage", permMap)
+	grantCompatPermission("performance:hr_confirm:submit", "performance:hr_review:submit", permMap)
+	grantCompatPermission("performance:hr_confirm:submit", "performance:result_publish:manage", permMap)
+	grantCompatPermission("performance:result_publish:manage", "performance:result_visibility:manage", permMap)
+	grantCompatPermission("performance:hr_confirm:submit", "performance:appeal:manage", permMap)
+	grantCompatPermission("performance:level_adjust:manage", "performance:department_eval:submit", permMap)
+	grantCompatPermission("performance:department_eval:submit", "performance:interview:manage", permMap)
 }
 
 // grantCompatPermission 给已拥有 sourcePerm 的角色自动补充 targetPerm（幂等）
@@ -1613,7 +2599,7 @@ func ensureRolePreset(name, description string) (Role, error) {
 	var role Role
 	err := DB.Unscoped().Where("name = ?", name).First(&role).Error
 	if err == gorm.ErrRecordNotFound {
-		role = Role{Name: name, Description: description}
+		role = Role{OrgID: DefaultOrganizationID, Name: name, Description: description}
 		return role, DB.Create(&role).Error
 	}
 	if err != nil {
@@ -1669,7 +2655,7 @@ func ensureRoleMenuPermission(roleID uint, menuKeys []string) error {
 		if err != nil {
 			return err
 		}
-		return DB.Create(&MenuPermission{RoleID: roleID, MenuKeys: string(payload)}).Error
+		return DB.Create(&MenuPermission{OrgID: DefaultOrganizationID, RoleID: roleID, MenuKeys: string(payload)}).Error
 	}
 	if err != nil {
 		return err
@@ -1711,6 +2697,15 @@ func stringSlicesEqual(left, right []string) bool {
 	return true
 }
 
+func stringSliceContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func ensureRoleDataPermission(roleID uint, scope string, departmentKeys string) error {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
@@ -1726,7 +2721,7 @@ func ensureRoleDataPermission(roleID uint, scope string, departmentKeys string) 
 		Order("deleted_at IS NULL DESC, id ASC").
 		First(&existing).Error
 	if err == gorm.ErrRecordNotFound {
-		return DB.Create(&DataPermission{RoleID: roleID, Scope: scope, DepartmentKeys: departmentKeys}).Error
+		return DB.Create(&DataPermission{OrgID: DefaultOrganizationID, RoleID: roleID, Scope: scope, DepartmentKeys: departmentKeys}).Error
 	}
 	if err != nil {
 		return err
@@ -1768,21 +2763,28 @@ func normalizeMenuPermissionKeys(keys []string) []string {
 }
 
 var legacyMenuKeysByPermission = map[string][]string{
-	"org:read":                            {"menu:organization-dashboard", "menu:department-tree", "menu:employees"},
-	"user_manage":                         {"menu:employee-profile", "menu:employee-flow", "menu:talent-analysis", "menu:sync-log"},
-	"attendance_manage":                   {"menu:attendance", "menu:attendance-stats", "menu:attendance-export", "menu:week-schedule", "menu:employee-shift-config", "menu:sync-jobs", "menu:leave-overtime"},
-	"approval_manage":                     {"menu:approval-templates", "menu:approval-instances", "menu:approval-stats"},
-	"permission_manage":                   {"menu:permission", "menu:setting"},
-	"audit_log:read":                      {"menu:audit-logs"},
-	"performance:activity:manage":         {"menu:performance-overview"},
-	"performance:self_eval:submit":        {"menu:performance-overview"},
-	"performance:manager_eval:submit":     {"menu:performance-overview"},
-	"performance:employee_confirm:submit": {"menu:performance-overview"},
-	"performance:manager_confirm:submit":  {"menu:performance-overview"},
-	"performance:hr_confirm:submit":       {"menu:performance-overview"},
-	"performance:goal:manage":             {"menu:performance-overview"},
-	"performance:result:view":             {"menu:performance-overview"},
-	"performance:indicator:manage":        {"menu:performance-indicator-library"},
+	"org:read":                             {"menu:organization-dashboard", "menu:department-tree", "menu:employees"},
+	"user_manage":                          {"menu:employee-profile", "menu:employee-flow", "menu:talent-analysis", "menu:sync-log"},
+	"attendance_manage":                    {"menu:attendance", "menu:attendance-stats", "menu:attendance-export", "menu:attendance-toolbox", "menu:week-schedule", "menu:employee-shift-config", "menu:sync-jobs", "menu:leave-overtime"},
+	"approval_manage":                      {"menu:approval-templates", "menu:approval-instances", "menu:approval-stats"},
+	"permission_manage":                    {"menu:permission", "menu:setting"},
+	"audit_log:read":                       {"menu:audit-logs"},
+	"performance:activity:manage":          {"menu:performance-overview", "menu:performance-reports", "menu:performance-interviews", "menu:performance-appeals"},
+	"performance:self_eval:submit":         {"menu:performance-overview", "menu:performance-reports"},
+	"performance:manager_eval:submit":      {"menu:performance-overview", "menu:performance-reports"},
+	"performance:employee_confirm:submit":  {"menu:performance-overview", "menu:performance-reports"},
+	"performance:manager_confirm:submit":   {"menu:performance-overview", "menu:performance-reports"},
+	"performance:hr_confirm:submit":        {"menu:performance-overview", "menu:performance-reports"},
+	"performance:department_eval:submit":   {"menu:performance-overview", "menu:performance-reports"},
+	"performance:hr_review:submit":         {"menu:performance-overview", "menu:performance-reports"},
+	"performance:result_publish:manage":    {"menu:performance-overview", "menu:performance-reports", "menu:performance-interviews", "menu:performance-appeals"},
+	"performance:result_visibility:manage": {"menu:performance-overview", "menu:performance-reports"},
+	"performance:hidden_result:view":       {"menu:performance-overview", "menu:performance-reports"},
+	"performance:interview:manage":         {"menu:performance-interviews"},
+	"performance:appeal:manage":            {"menu:performance-overview", "menu:performance-reports", "menu:performance-appeals"},
+	"performance:goal:manage":              {"menu:performance-overview", "menu:performance-reports"},
+	"performance:result:view":              {"menu:performance-overview", "menu:performance-reports", "menu:performance-interviews", "menu:performance-appeals"},
+	"performance:indicator:manage":         {"menu:performance-indicator-library"},
 }
 
 // migrateMenuPermissions 将旧版本“操作权限推导菜单”的结果固化到 menu_permissions。
@@ -1809,8 +2811,95 @@ func migrateMenuPermissions() {
 			log.Printf("迁移菜单权限：序列化角色 %d 菜单失败: %v", role.ID, err)
 			continue
 		}
-		if err := DB.Create(&MenuPermission{RoleID: role.ID, MenuKeys: string(payload)}).Error; err != nil {
+		if err := DB.Create(&MenuPermission{OrgID: DefaultOrganizationID, RoleID: role.ID, MenuKeys: string(payload)}).Error; err != nil {
 			log.Printf("迁移菜单权限：写入角色 %d 菜单失败: %v", role.ID, err)
+		}
+	}
+}
+
+func migratePerformanceReportMenuPermissions() {
+	var records []MenuPermission
+	if err := DB.Where("deleted_at IS NULL").Find(&records).Error; err != nil {
+		log.Printf("迁移绩效报表菜单权限：读取菜单权限失败: %v", err)
+		return
+	}
+	for _, record := range records {
+		var keys []string
+		if err := json.Unmarshal([]byte(strings.TrimSpace(record.MenuKeys)), &keys); err != nil {
+			log.Printf("迁移绩效报表菜单权限：解析角色 %d 菜单失败: %v", record.RoleID, err)
+			continue
+		}
+		normalized := normalizeMenuPermissionKeys(keys)
+		if !stringSliceContains(normalized, "menu:performance-overview") ||
+			stringSliceContains(normalized, "menu:performance-reports") {
+			continue
+		}
+		if err := ensureRoleMenuPermission(record.RoleID, []string{"menu:performance-reports"}); err != nil {
+			log.Printf("迁移绩效报表菜单权限：角色 %d 补充菜单失败: %v", record.RoleID, err)
+		}
+	}
+}
+
+func migratePerformanceFollowupMenuPermissions() {
+	var records []MenuPermission
+	if err := DB.Where("deleted_at IS NULL").Find(&records).Error; err != nil {
+		log.Printf("迁移绩效后续模块菜单权限：读取菜单权限失败: %v", err)
+		return
+	}
+	for _, record := range records {
+		var keys []string
+		if err := json.Unmarshal([]byte(strings.TrimSpace(record.MenuKeys)), &keys); err != nil {
+			log.Printf("迁移绩效后续模块菜单权限：解析角色 %d 菜单失败: %v", record.RoleID, err)
+			continue
+		}
+		normalized := normalizeMenuPermissionKeys(keys)
+		if !stringSliceContains(normalized, "menu:performance-overview") {
+			continue
+		}
+		if stringSliceContains(normalized, "menu:performance-interviews") &&
+			stringSliceContains(normalized, "menu:performance-appeals") {
+			continue
+		}
+		if err := ensureRoleMenuPermission(record.RoleID, []string{"menu:performance-interviews", "menu:performance-appeals"}); err != nil {
+			log.Printf("迁移绩效后续模块菜单权限：角色 %d 补充菜单失败: %v", record.RoleID, err)
+		}
+	}
+}
+
+func migrateAttendanceToolboxMenuPermissions() {
+	var records []MenuPermission
+	if err := DB.Where("deleted_at IS NULL").Find(&records).Error; err != nil {
+		log.Printf("迁移考勤工具箱菜单权限：读取菜单权限失败: %v", err)
+		return
+	}
+	for _, record := range records {
+		var keys []string
+		if err := json.Unmarshal([]byte(strings.TrimSpace(record.MenuKeys)), &keys); err != nil {
+			log.Printf("迁移考勤工具箱菜单权限：解析角色 %d 菜单失败: %v", record.RoleID, err)
+			continue
+		}
+		normalized := normalizeMenuPermissionKeys(keys)
+		if stringSliceContains(normalized, "menu:attendance-toolbox") {
+			continue
+		}
+		// 为有任何考勤相关菜单的角色添加工具箱权限
+		// 包括：考勤、考勤统计、导出、排班、下班时间、年假调休等
+		attendanceRelatedMenus := []string{
+			"menu:attendance", "menu:attendance-stats", "menu:attendance-export",
+			"menu:week-schedule", "menu:employee-shift-config", "menu:leave-overtime",
+		}
+		hasAttendanceMenu := false
+		for _, menu := range attendanceRelatedMenus {
+			if stringSliceContains(normalized, menu) {
+				hasAttendanceMenu = true
+				break
+			}
+		}
+		if !hasAttendanceMenu {
+			continue
+		}
+		if err := ensureRoleMenuPermission(record.RoleID, []string{"menu:attendance-toolbox"}); err != nil {
+			log.Printf("迁移考勤工具箱菜单权限：角色 %d 补充菜单失败: %v", record.RoleID, err)
 		}
 	}
 }
@@ -1838,24 +2927,4 @@ func deriveLegacyMenuKeysForRole(roleID uint) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func migrateAttendanceToolboxMenuPermissions() {
-	var attendancePermission Permission
-	if err := DB.Where("code = ? AND deleted_at IS NULL", "attendance_manage").First(&attendancePermission).Error; err != nil {
-		return
-	}
-
-	var rolePermissions []RolePermission
-	if err := DB.Where("permission_id = ? AND deleted_at IS NULL", attendancePermission.ID).Find(&rolePermissions).Error; err != nil {
-		log.Printf("迁移考勤工具箱菜单权限：读取角色权限失败: %v", err)
-		return
-	}
-
-	menuKeys := append([]string{"menu:home"}, legacyMenuKeysByPermission["attendance_manage"]...)
-	for _, rolePermission := range rolePermissions {
-		if err := ensureRoleMenuPermission(rolePermission.RoleID, menuKeys); err != nil {
-			log.Printf("迁移考勤工具箱菜单权限：角色 %d 补充菜单失败: %v", rolePermission.RoleID, err)
-		}
-	}
 }
