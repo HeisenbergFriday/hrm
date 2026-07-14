@@ -41,6 +41,11 @@ const formatWeightPercent = (weight: number) => {
   const percent = getWeightPercentValue(weight)
   return `${Number.isInteger(percent) ? percent.toFixed(0) : percent}%`
 }
+const isFixedGoalRecord = (record: any) =>
+  Boolean(record?.is_fixed) ||
+  String(record?.fixed_key || '').trim() !== '' ||
+  String(record?.goal_type || '').trim() === 'fixed'
+
 const mapGoalRecordToQuantItem = (record: PerformanceGoalRecord, goalPhase: string) => ({
   id: record.id,
   item_name: record.item_name,
@@ -80,10 +85,10 @@ const mapGoalRecordToActionItem = (record: PerformanceGoalRecord, goalPhase: str
 
 const mapGoalRecordsToGoalItems = (records: PerformanceGoalRecord[], goalPhase: string) => ({
   quant: records
-    .filter(record => record.section_type === 'quantitative')
+    .filter(record => record.section_type === 'quantitative' && !isFixedGoalRecord(record))
     .map(record => mapGoalRecordToQuantItem(record, goalPhase)),
   actions: records
-    .filter(record => record.section_type === 'key_action')
+    .filter(record => record.section_type === 'key_action' && !isFixedGoalRecord(record))
     .map(record => mapGoalRecordToActionItem(record, goalPhase)),
 })
 
@@ -127,6 +132,17 @@ const targetReadonlyParticipantStatuses = new Set([
   'locked',
 ])
 
+const reviewSupplementEditableParticipantStatuses = ['pending', 'target_pending_approval', 'target_rejected', 'target_set']
+const reviewSupplementEditableActivityStatuses = ['target_setting', 'target_approval', 'self_evaluation']
+
+function isSeparatedMutengActivity(activity?: PerformanceActivity | null) {
+  return activity?.flow_type === 'new' && ['goal_setting', 'review_scoring'].includes(String(activity?.activity_kind || '').trim())
+}
+
+function isMutengReviewScoringActivity(activity?: PerformanceActivity | null) {
+  return activity?.flow_type === 'new' && String(activity?.activity_kind || '').trim() === 'review_scoring'
+}
+
 const PerformanceGoalSetting: React.FC = () => {
   const { activityId, participantId } = useParams<{ activityId: string; participantId: string }>()
   const navigate = useNavigate()
@@ -150,8 +166,10 @@ const PerformanceGoalSetting: React.FC = () => {
   const [actionSearchResults, setActionSearchResults] = useState<Record<number, any[]>>({})
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isNewFlow = activity?.flow_type === 'new'
-  const isReviewSupplementMode = isNewFlow && requestedGoalPhase === 'review'
+  const isReviewSupplementMode = isNewFlow && (requestedGoalPhase === 'review' || isMutengReviewScoringActivity(activity))
   const currentGoalPhase = isReviewSupplementMode ? 'review' : (isNewFlow ? 'plan' : 'review')
+  const isNewFlowPlanMode = isNewFlow && currentGoalPhase === 'plan'
+  const isSeparatedMuteng = isSeparatedMutengActivity(activity)
 
   const loadData = useCallback(async () => {
     if (!participantId || !activityId) return
@@ -170,19 +188,19 @@ const PerformanceGoalSetting: React.FC = () => {
       setParticipant(currentParticipant)
       setActivity(currentActivity)
       const isNewFlow = currentActivity?.flow_type === 'new'
-      const targetGoalPhase = isNewFlow && requestedGoalPhase === 'review' ? 'review' : (isNewFlow ? 'plan' : 'review')
+      const targetGoalPhase = isNewFlow && (requestedGoalPhase === 'review' || isMutengReviewScoringActivity(currentActivity)) ? 'review' : (isNewFlow ? 'plan' : 'review')
       const targetItems = isNewFlow
         ? allItems.filter((i: PerformanceGoalRecord) => String(i.goal_phase || 'review').trim() === targetGoalPhase)
         : allItems
       const { quant, actions } = mapGoalRecordsToGoalItems(targetItems, targetGoalPhase)
-      const reviewItems = isNewFlow && targetGoalPhase === 'plan'
+      const reviewItems = isNewFlow && targetGoalPhase === 'plan' && !isSeparatedMutengActivity(currentActivity)
         ? allItems.filter((i: PerformanceGoalRecord) => String(i.goal_phase || 'review').trim() === 'review')
         : []
       const reviewSupplementItems = mapGoalRecordsToGoalItems(reviewItems, 'review')
 
       setQuantItems(quant.length > 0 ? quant : [{ ...newQuantItem(targetGoalPhase), goal_phase: targetGoalPhase }])
       const nextActions = actions.length > 0 ? actions : [{ ...newActionItem(targetGoalPhase), goal_phase: targetGoalPhase }]
-      setActionItems(isNewFlow ? ensureFixedActionItems(nextActions, targetGoalPhase) : nextActions)
+      setActionItems(nextActions)
       setReviewSupplementRows(
         reviewItems.length > 0
           ? buildNewFlowPlanRows(reviewSupplementItems.quant, reviewSupplementItems.actions, 'review')
@@ -244,53 +262,6 @@ const PerformanceGoalSetting: React.FC = () => {
       is_fixed: false,
       sort_order: 0
     }
-  }
-
-  function newFixedActionItem(fixedKey: string, goalPhase = currentGoalPhase) {
-    const fixedMap: Record<string, { item_name: string; item_definition: string }> = {
-      manager_arrangement: {
-        item_name: '上级安排事项完成情况',
-        item_definition: '上级安排的所有事项需在规定时间内完成，工作结果得到领导认可',
-      },
-      values_discipline: {
-        item_name: '价值观及工作纪律',
-        item_definition: '拥抱公司价值观，不得违反公司管理制度、规范等',
-      },
-    }
-    return {
-      ...newActionItem(goalPhase),
-      ...(fixedMap[fixedKey] || fixedMap.manager_arrangement),
-      weight: 0.15,
-      weight_percent: '15',
-      goal_phase: goalPhase,
-      goal_type: 'fixed',
-      fixed_key: fixedKey,
-      is_fixed: true,
-    }
-  }
-
-  function ensureFixedActionItems(items: any[], goalPhase = currentGoalPhase) {
-    const byKey = new Map(items.map(item => [String(item.fixed_key || ''), item]))
-    const fixedKeys = ['manager_arrangement', 'values_discipline']
-    const fixedItems = fixedKeys.map(key => {
-      const base = newFixedActionItem(key, goalPhase)
-      const existing = byKey.get(key) || {}
-      return {
-        ...base,
-        ...existing,
-        item_name: base.item_name,
-        item_definition: base.item_definition,
-        target_value: existing.target_value || base.item_definition,
-        weight: 0.15,
-        weight_percent: '15',
-        goal_type: 'fixed',
-        goal_phase: goalPhase,
-        fixed_key: key,
-        is_fixed: true,
-      }
-    })
-    const variableItems = items.filter(item => !item.fixed_key)
-    return [...fixedItems, ...variableItems]
   }
 
   const handleAddQuantItem = () => {
@@ -373,16 +344,16 @@ const PerformanceGoalSetting: React.FC = () => {
   const quantWeightTotal = quantItems.reduce((sum, i) => sum + (i.weight || 0), 0)
   const actionWeightTotal = actionItems.reduce((sum, i) => sum + (i.weight || 0), 0)
   const totalWeight = quantWeightTotal + actionWeightTotal
-  const fixedWeightTotal = actionItems.filter(item => item.is_fixed).reduce((sum, i) => sum + (i.weight || 0), 0)
-  const variableWeightTotal = totalWeight - fixedWeightTotal
   const remainingWeight = normalizeWeightFraction(Math.max(0, 1 - totalWeight))
   const formatPercent = formatWeightPercent
   const targetSettingReadonly =
     isReviewSupplementMode
-      ? Boolean(participant && !['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(participant.status)) ||
-        Boolean(activity && !['target_setting', 'self_evaluation'].includes(activity.status))
+      ? Boolean(participant && !reviewSupplementEditableParticipantStatuses.includes(participant.status)) ||
+        Boolean(activity && !reviewSupplementEditableActivityStatuses.includes(activity.status))
       : Boolean(participant && targetReadonlyParticipantStatuses.has(participant.status)) ||
         [...quantItems, ...actionItems].some(item => item.approval_status === 'approved')
+  const isPlanGoalItem = (item: any) =>
+    isNewFlow && String(item?.goal_phase || currentGoalPhase).trim() === 'plan'
 
   const getGoalItemCompletion = (item: any, kind: GoalItemKind) => {
     if (item?.is_fixed) {
@@ -390,7 +361,7 @@ const PerformanceGoalSetting: React.FC = () => {
     }
 
     const requiredFields = isNewFlow
-      ? ['item_name', 'item_definition', 'target_value']
+      ? (isPlanGoalItem(item) ? ['item_name', 'item_definition'] : ['item_name', 'item_definition', 'target_value'])
       : kind === 'quant'
       ? ['item_name', 'item_definition', 'target_value', 'red_line_value', 'challenge_value', 'scoring_rule']
       : ['item_name', 'item_definition', 'target_value']
@@ -550,7 +521,7 @@ const PerformanceGoalSetting: React.FC = () => {
       item_name: suggestion.name || suggestion.item_name,
       item_definition: suggestion.description || suggestion.item_definition,
       red_line_value: suggestion.red_line_value || '',
-      target_value: suggestion.target_value || '',
+      target_value: isNewFlowPlanMode ? '' : (suggestion.target_value || ''),
       challenge_value: suggestion.challenge_value || '',
       scoring_rule: suggestion.scoring_rule || '',
       weight: suggestion.weight || 0,
@@ -561,7 +532,7 @@ const PerformanceGoalSetting: React.FC = () => {
         ...newActionItem(),
         item_name: newItem.item_name,
         item_definition: newItem.item_definition,
-        target_value: suggestion.target_value || suggestion.scoring_rule || '',
+        target_value: isNewFlowPlanMode ? '' : (suggestion.target_value || suggestion.scoring_rule || ''),
         weight: newItem.weight,
         __touched: true,
       }])
@@ -618,11 +589,11 @@ const PerformanceGoalSetting: React.FC = () => {
     }
     if (isQuant) {
       patch.red_line_value = matched.red_line_value || ''
-      patch.target_value = matched.target_value || ''
+      patch.target_value = isNewFlowPlanMode ? '' : (matched.target_value || '')
       patch.challenge_value = matched.challenge_value || ''
       patch.scoring_rule = matched.scoring_rule || ''
     } else {
-      patch.target_value = matched.target_value || matched.scoring_rule || ''
+      patch.target_value = isNewFlowPlanMode ? '' : (matched.target_value || matched.scoring_rule || '')
     }
     setter(allItems.map((item, idx) => idx === rowIndex ? { ...item, ...patch, __touched: true } : item))
   }
@@ -630,7 +601,7 @@ const PerformanceGoalSetting: React.FC = () => {
   const isBlankGoalItem = (item: any) =>
     !String(item.item_name || '').trim() &&
     !String(item.item_definition || '').trim() &&
-    !String(item.target_value || '').trim() &&
+    (isPlanGoalItem(item) || !String(item.target_value || '').trim()) &&
     !String(item.red_line_value || '').trim() &&
     !String(item.challenge_value || '').trim() &&
     !String(item.scoring_rule || '').trim() &&
@@ -643,6 +614,7 @@ const PerformanceGoalSetting: React.FC = () => {
   }
 
   const getGoalFieldError = (item: any, field: string, kind: 'quant' | 'action') => {
+    if (isPlanGoalItem(item) && field === 'target_value') return ''
     if (!shouldValidateGoalItem(item)) return ''
     if (field === 'item_name' && !String(item.item_name || '').trim()) {
       return kind === 'quant' ? '请填写指标名称' : '请填写重点计划'
@@ -680,11 +652,12 @@ const PerformanceGoalSetting: React.FC = () => {
   )
 
   const buildPayload = () => {
+    const shouldClearTargetValue = isNewFlowPlanMode
     const quantSourceItems = isNewFlow
       ? quantItems.filter(item => !isBlankGoalItem(item))
       : quantItems
     const actionSourceItems = isNewFlow
-      ? actionItems.filter(item => item.is_fixed || !isBlankGoalItem(item))
+      ? actionItems.filter(item => !isFixedGoalRecord(item) && !isBlankGoalItem(item))
       : actionItems
     const items = [
       ...quantSourceItems.map((item, idx) => ({
@@ -698,7 +671,7 @@ const PerformanceGoalSetting: React.FC = () => {
         item_definition: item.item_definition,
         weight: item.weight,
         red_line_value: item.red_line_value,
-        target_value: item.target_value,
+        target_value: shouldClearTargetValue ? '' : item.target_value,
         challenge_value: item.challenge_value,
         scoring_rule: item.scoring_rule,
         actual_result: item.actual_result,
@@ -715,13 +688,45 @@ const PerformanceGoalSetting: React.FC = () => {
         item_name: item.item_name,
         item_definition: item.item_definition,
         weight: item.weight,
-        target_value: item.is_fixed ? (item.target_value || item.item_definition) : item.target_value,
+        target_value: shouldClearTargetValue ? '' : (item.is_fixed ? (item.target_value || item.item_definition) : item.target_value),
         actual_result: item.actual_result,
         attachments: item.attachments,
         sort_order: quantSourceItems.length + idx
       }))
     ]
     return items
+  }
+
+  const buildReviewSupplementPayload = () => reviewSupplementRows.map((row, idx) => {
+    const item = row.item
+    const isKpi = row.kind === 'kpi'
+    return {
+      id: item.id,
+      section_type: isKpi ? 'quantitative' : 'key_action',
+      goal_phase: 'review',
+      goal_type: item.goal_type || (isKpi ? 'kpi' : 'okr'),
+      fixed_key: item.fixed_key || '',
+      is_fixed: Boolean(item.is_fixed),
+      item_name: item.item_name,
+      item_definition: item.item_definition,
+      weight: item.weight,
+      red_line_value: item.red_line_value,
+      target_value: item.target_value,
+      challenge_value: item.challenge_value,
+      scoring_rule: item.scoring_rule,
+      actual_result: item.actual_result,
+      attachments: item.attachments,
+      sort_order: idx,
+    }
+  })
+
+  const validateReviewSupplementFields = () => {
+    if (!showReviewSupplement) return true
+    if (reviewSupplementRows.some(row => !String(row.item.target_value || '').trim())) {
+      message.warning('请填写上一季度目标/关键职责事项的完成情况')
+      return false
+    }
+    return true
   }
 
   const handleSaveDraft = async () => {
@@ -737,10 +742,14 @@ const PerformanceGoalSetting: React.FC = () => {
     }
     setSaving(true)
     try {
+      const reviewSupplementItems = showReviewSupplement ? buildReviewSupplementPayload() : []
       if (isReviewSupplementMode) {
         await performanceAPI.batchSaveReviewGoalRecords(Number(participantId), { items })
         message.success('补录保存成功')
       } else {
+        if (reviewSupplementItems.length > 0) {
+          await performanceAPI.batchSaveReviewGoalRecords(Number(participantId), { items: reviewSupplementItems })
+        }
         await performanceAPI.batchSaveGoalRecords(Number(participantId), { items })
         message.success('草稿保存成功')
       }
@@ -763,13 +772,15 @@ const PerformanceGoalSetting: React.FC = () => {
         message.warning('请填写目标/关键职责事项说明')
         return false
       }
-      if (activeQuantItems.some(i => !String(i.target_value || '').trim())) {
-        message.warning('请填写 KPI 目标值')
-        return false
-      }
-      if (variableActions.some(i => !String(i.target_value || '').trim())) {
-        message.warning('请填写 OKR / 重点计划完成标准')
-        return false
+      if (!isNewFlowPlanMode) {
+        if (activeQuantItems.some(i => !String(i.target_value || '').trim())) {
+          message.warning('请填写 KPI 目标值')
+          return false
+        }
+        if (variableActions.some(i => !String(i.target_value || '').trim())) {
+          message.warning('请填写 OKR / 重点计划完成标准')
+          return false
+        }
       }
       if ([...activeQuantItems, ...variableActions].some(i => !(Number(i.weight) > 0))) {
         message.warning('请填写每项目标权重')
@@ -838,6 +849,9 @@ const PerformanceGoalSetting: React.FC = () => {
     if (!validateRequiredFields()) {
       return
     }
+    if (!validateReviewSupplementFields()) {
+      return
+    }
 
     Modal.confirm({
       title: isReviewSupplementMode ? '确认完成补录' : '确认提交目标',
@@ -845,10 +859,14 @@ const PerformanceGoalSetting: React.FC = () => {
       onOk: async () => {
         setSubmitting(true)
         try {
+          const reviewSupplementItems = showReviewSupplement ? buildReviewSupplementPayload() : []
           if (isReviewSupplementMode) {
             await performanceAPI.batchSaveReviewGoalRecords(Number(participantId), { items })
             message.success('上一季度考核指标已补录')
           } else {
+            if (reviewSupplementItems.length > 0) {
+              await performanceAPI.batchSaveReviewGoalRecords(Number(participantId), { items: reviewSupplementItems })
+            }
             await performanceAPI.batchSaveGoalRecords(Number(participantId), { items })
             await performanceAPI.submitGoalApproval(Number(participantId))
             message.success('目标已提交')
@@ -1233,7 +1251,7 @@ const PerformanceGoalSetting: React.FC = () => {
         )
       },
     },
-    {
+    ...(!isNewFlowPlanMode ? [{
       title: '目标值/完成标准',
       dataIndex: 'target_value',
       key: 'target_value',
@@ -1271,7 +1289,7 @@ const PerformanceGoalSetting: React.FC = () => {
           error
         )
       },
-    },
+    }] : []),
     {
       title: '',
       key: 'action',
@@ -1295,7 +1313,15 @@ const PerformanceGoalSetting: React.FC = () => {
   ]
 
   const reviewSupplementWeightTotal = reviewSupplementRows.reduce((sum, row) => sum + (row.item.weight || 0), 0)
-  const showReviewSupplement = isNewFlow && !isReviewSupplementMode && reviewSupplementRows.length > 0
+  const showReviewSupplement = isNewFlow && !isSeparatedMuteng && !isReviewSupplementMode && reviewSupplementRows.length > 0
+  const handleReviewSupplementTargetChange = (rowKey: string, value: string) => {
+    setReviewSupplementRows(prev => prev.map(row => (
+      row.key === rowKey
+        ? { ...row, item: { ...row.item, target_value: value, __touched: true } }
+        : row
+    )))
+  }
+
   const reviewSupplementColumns = [
     {
       title: '状态',
@@ -1341,15 +1367,28 @@ const PerformanceGoalSetting: React.FC = () => {
       ),
     },
     {
-      title: '目标值/完成标准',
+      title: '目标/关键职责事项的完成情况',
       dataIndex: 'target_value',
       key: 'target_value',
       width: '25%',
-      render: (_: any, record: NewFlowPlanRow) => (
-        <Text type={record.kind === 'fixed' ? 'secondary' : undefined} style={{ whiteSpace: 'pre-wrap' }}>
-          {record.kind === 'fixed' ? '按固定说明执行' : (record.item.target_value || '-')}
-        </Text>
-      ),
+      render: (_: any, record: NewFlowPlanRow, idx: number) => {
+        if (record.kind === 'fixed') {
+          return <Text type="secondary">按固定说明执行</Text>
+        }
+        const error = getGoalFieldError(record.item, 'target_value', record.kind === 'kpi' ? 'quant' : 'action')
+        return renderFieldWithFeedback(
+          <TextArea
+            data-testid={`performance-goal-review-completion-${idx}`}
+            value={record.item.target_value}
+            onChange={e => handleReviewSupplementTargetChange(record.key, e.target.value)}
+            rows={2}
+            placeholder="填写上一季度实际完成情况、交付结果或完成说明"
+            status={error ? 'error' : undefined}
+            disabled={targetSettingReadonly}
+          />,
+          error
+        )
+      },
     },
   ]
 
@@ -1436,7 +1475,7 @@ const PerformanceGoalSetting: React.FC = () => {
               <Text type="secondary" style={{ display: 'block', fontSize: 'var(--font-size-xs)' }}>
                 {isNewFlow ? (
                   <>
-                    固定 {formatPercent(fixedWeightTotal)} / 可变 {formatPercent(variableWeightTotal)}
+                    KPI {formatPercent(quantWeightTotal)} / OKR {formatPercent(actionWeightTotal)}
                   </>
                 ) : (
                   <>
@@ -1512,7 +1551,7 @@ const PerformanceGoalSetting: React.FC = () => {
                   {formatPercent(reviewSupplementWeightTotal)}
                 </Tag>
                 <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
-                  已补录，仅展示，作为本期自评和评分依据
+                  填写完成情况，作为本期自评和评分依据
                 </Text>
               </Space>
             }
@@ -1542,8 +1581,8 @@ const PerformanceGoalSetting: React.FC = () => {
             marginBottom: 16,
           }}>
             {[
-              { label: '固定两项', value: formatPercent(fixedWeightTotal), color: 'var(--color-text-primary)' },
-              { label: '已填可变', value: formatPercent(variableWeightTotal), color: variableWeightTotal > 0 ? 'var(--color-primary)' : 'var(--color-text-secondary)' },
+              { label: 'KPI 权重', value: formatPercent(quantWeightTotal), color: quantWeightTotal > 0 ? 'var(--color-primary)' : 'var(--color-text-secondary)' },
+              { label: 'OKR 权重', value: formatPercent(actionWeightTotal), color: actionWeightTotal > 0 ? 'var(--color-success)' : 'var(--color-text-secondary)' },
               { label: '剩余权重', value: formatPercent(remainingWeight), color: remainingWeight === 0 ? 'var(--color-success)' : 'var(--color-warning)' },
               { label: '合计', value: formatPercent(totalWeight), color: Math.abs(totalWeight - 1) < 0.001 ? 'var(--color-success)' : 'var(--color-error)' },
             ].map(item => (

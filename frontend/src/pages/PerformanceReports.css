@@ -1,0 +1,318 @@
+.performanceReportFullWidth {
+  width: 100%;
+}
+
+.performanceReportFilterCard .ant-card-body {
+  padding-bottom: var(--space-3);
+}
+
+.performanceReportFilters {
+  row-gap: var(--space-3);
+}
+
+.performanceReportOverviewCard .ant-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.performanceReportOverview {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+  gap: var(--space-4);
+  align-items: stretch;
+}
+
+.performanceReportActivity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.performanceReportActivityHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  align-items: flex-start;
+}
+
+.performanceReportActivityHeader h3 {
+  margin: 2px 0 0;
+  color: var(--color-text-title);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  line-height: 28px;
+}
+
+.performanceReportActivityMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.performanceReportActivityMeta span {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-container);
+}
+
+.performanceReportActivitySummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.performanceReportMetric {
+  min-height: 112px;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+}
+
+.performanceReportMetric-primary {
+  border-left: 3px solid var(--color-primary);
+}
+
+.performanceReportMetric-success {
+  border-left: 3px solid var(--color-success);
+}
+
+.performanceReportMetric-warning {
+  border-left: 3px solid var(--color-warning);
+}
+
+.performanceReportMetric-danger {
+  border-left: 3px solid var(--color-error);
+}
+
+.performanceReportMetric-purple {
+  border-left: 3px solid var(--color-primary-light);
+}
+
+.performanceReportMetricHeader {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.performanceReportMetricIcon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-container);
+  color: var(--color-primary);
+  font-size: 18px;
+}
+
+.performanceReportMetric .ant-statistic-title {
+  margin-bottom: 2px;
+  color: var(--color-text-secondary);
+}
+
+.performanceReportMetric .ant-statistic-content {
+  color: var(--color-text-title);
+  font-size: 24px;
+  font-weight: var(--font-weight-bold);
+  line-height: 32px;
+}
+
+.performanceReportMetricDescription {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.performanceReportMetric .ant-progress {
+  margin-top: var(--space-3);
+}
+
+.performanceReportPanel {
+  min-height: 100%;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+}
+
+.performanceReportPanelHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  align-items: center;
+  margin-bottom: var(--space-3);
+}
+
+.performanceReportDistribution {
+  min-height: 152px;
+}
+
+.performanceReportDistributionItem {
+  width: 100%;
+}
+
+.performanceReportDistributionMeta,
+.performanceReportStageMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  align-items: center;
+  margin-bottom: var(--space-1);
+}
+
+.performanceReportDistributionName {
+  max-width: 260px;
+}
+
+.performanceReportInsightPanel {
+  min-height: 100%;
+}
+
+.performanceReportInsightList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.performanceReportInsight {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 72px;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-container);
+}
+
+.performanceReportInsight-success {
+  border-color: var(--color-success);
+}
+
+.performanceReportInsight-warning {
+  border-color: var(--color-warning);
+}
+
+.performanceReportInsight-danger {
+  border-color: var(--color-error);
+}
+
+.performanceReportInsight-purple {
+  border-color: var(--color-primary-light);
+}
+
+.performanceReportInsightDescription {
+  margin-top: var(--space-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.performanceReportInsightValue {
+  color: var(--color-text-title);
+  font-size: 20px;
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+.performanceReportStageList {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.performanceReportStageItem {
+  min-width: 0;
+}
+
+.performanceReportFocusList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.performanceReportFocusItem {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) minmax(74px, auto);
+  gap: var(--space-2);
+  align-items: center;
+  min-height: 48px;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-container);
+}
+
+.performanceReportFocusIndex {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.performanceReportFocusBody {
+  min-width: 0;
+}
+
+.performanceReportFocusMeta {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--font-size-sm);
+}
+
+.performanceReportFocusValue {
+  min-width: 74px;
+  text-align: right;
+}
+
+.performanceReportFocusProgress {
+  width: 110px;
+}
+
+.performanceReportTabsCard .ant-tabs-nav {
+  margin-bottom: var(--space-4);
+}
+
+@media (max-width: 1200px) {
+  .performanceReportOverview {
+    grid-template-columns: 1fr;
+  }
+
+  .performanceReportActivitySummary,
+  .performanceReportStageList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .performanceReportActivityHeader {
+    flex-direction: column;
+  }
+
+  .performanceReportActivitySummary,
+  .performanceReportInsightList,
+  .performanceReportStageList {
+    grid-template-columns: 1fr;
+  }
+
+  .performanceReportFocusItem {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .performanceReportFocusValue {
+    grid-column: 2;
+    text-align: left;
+  }
+}

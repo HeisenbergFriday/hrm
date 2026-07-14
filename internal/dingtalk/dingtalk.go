@@ -18,15 +18,15 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"gorm.io/gorm"
 )
 
 var (
-	appKey    string
-	appSecret string
-	corpID    string
-	token     string
-	tokenExp  time.Time
-	tokenMu   sync.Mutex
+	appKey     string
+	appSecret  string
+	corpID     string
+	tokenMu    sync.Mutex
+	tokenByOrg = make(map[string]accessTokenCacheEntry)
 )
 
 type AppConfig struct {
@@ -41,14 +41,27 @@ type AppConfig struct {
 	Status      string `json:"status"`
 }
 
-type cachedAccessToken struct {
-	token string
-	exp   time.Time
+var ErrUserNotNotifiable = errors.New("dingtalk user is not active/notifiable")
+
+type Config struct {
+	OrgID       string
+	AppKey      string
+	AppSecret   string
+	CorpID      string
+	AgentID     string
+	AppHomeURL  string
+	RedirectURI string
 }
 
-var accessTokenCache = make(map[string]cachedAccessToken)
+type accessTokenCacheEntry struct {
+	token  string
+	expiry time.Time
+}
 
-var ErrUserNotNotifiable = errors.New("dingtalk user is not active/notifiable")
+type userAccessTokenInfo struct {
+	AccessToken string
+	Raw         map[string]interface{}
+}
 
 func IsUserNotNotifiableError(err error) bool {
 	return errors.Is(err, ErrUserNotNotifiable)
@@ -93,6 +106,77 @@ func Init() error {
 }
 
 // GetCorpID 杩斿洖浼佷笟 CorpId锛屼緵鍓嶇 JS-SDK 浣跨敤
+func DefaultConfig() Config {
+	return Config{
+		OrgID:       database.DefaultOrganizationID,
+		AppKey:      firstNonEmpty(appKey, os.Getenv("DINGTALK_APP_KEY")),
+		AppSecret:   firstNonEmpty(appSecret, os.Getenv("DINGTALK_APP_SECRET")),
+		CorpID:      firstNonEmpty(corpID, os.Getenv("DINGTALK_CORP_ID")),
+		AgentID:     os.Getenv("DINGTALK_AGENT_ID"),
+		AppHomeURL:  firstNonEmpty(os.Getenv("DINGTALK_APP_HOME_URL"), os.Getenv("APP_BASE_URL"), os.Getenv("FRONTEND_BASE_URL")),
+		RedirectURI: os.Getenv("DINGTALK_REDIRECT_URI"),
+	}
+}
+
+func ConfigForOrgID(orgID string) (Config, error) {
+	orgID = database.NormalizeOrganizationID(orgID)
+	if database.DB != nil {
+		var org database.Organization
+		err := database.DB.Where("org_id = ? AND status = ? AND deleted_at IS NULL", orgID, "active").First(&org).Error
+		if err == nil {
+			return ConfigFromOrganization(org), nil
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return Config{}, err
+		}
+	}
+	if orgID == database.DefaultOrganizationID {
+		return DefaultConfig(), nil
+	}
+	return Config{}, fmt.Errorf("dingtalk organization %s not configured", orgID)
+}
+
+func ConfigFromOrganization(org database.Organization) Config {
+	return Config{
+		OrgID:       database.NormalizeOrganizationID(org.OrgID),
+		AppKey:      strings.TrimSpace(org.DingTalkAppKey),
+		AppSecret:   strings.TrimSpace(org.DingTalkSecret),
+		CorpID:      strings.TrimSpace(org.CorpID),
+		AgentID:     strings.TrimSpace(org.DingTalkAgentID),
+		AppHomeURL:  strings.TrimRight(strings.TrimSpace(org.AppHomeURL), "/"),
+		RedirectURI: strings.TrimSpace(org.RedirectURI),
+	}
+}
+
+func (cfg Config) normalized() Config {
+	cfg.OrgID = database.NormalizeOrganizationID(cfg.OrgID)
+	cfg.AppKey = strings.TrimSpace(cfg.AppKey)
+	cfg.AppSecret = strings.TrimSpace(cfg.AppSecret)
+	cfg.CorpID = strings.TrimSpace(cfg.CorpID)
+	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+	cfg.AppHomeURL = strings.TrimRight(strings.TrimSpace(cfg.AppHomeURL), "/")
+	cfg.RedirectURI = strings.TrimSpace(cfg.RedirectURI)
+	return cfg
+}
+
+func (cfg Config) NormalizedForAPI() Config {
+	return cfg.normalized()
+}
+
+func (cfg Config) cacheKey() string {
+	cfg = cfg.normalized()
+	return cfg.OrgID + "|" + cfg.AppKey
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func GetCorpID() string {
 	return corpID
 }
@@ -110,77 +194,65 @@ func InitWithConfig(cfg AppConfig) error {
 	return nil
 }
 
-func configuredValue(current, envName string) string {
-	if strings.TrimSpace(current) != "" {
-		return strings.TrimSpace(current)
-	}
-	return strings.TrimSpace(os.Getenv(envName))
+func configFromAppConfig(cfg AppConfig) Config {
+	return Config{
+		OrgID:       cfg.OrgID,
+		AppKey:      cfg.AppKey,
+		AppSecret:   cfg.AppSecret,
+		CorpID:      cfg.CorpID,
+		AgentID:     cfg.AgentID,
+		AppHomeURL:  cfg.AppHomeURL,
+		RedirectURI: cfg.RedirectURI,
+	}.normalized()
 }
 
-func DefaultAppConfig() AppConfig {
+func appConfigFromConfig(cfg Config) AppConfig {
+	cfg = cfg.normalized()
 	return AppConfig{
-		OrgID:       "default",
-		Name:        strings.TrimSpace(os.Getenv("DINGTALK_ORG_NAME")),
-		CorpID:      configuredValue(corpID, "DINGTALK_CORP_ID"),
-		AppKey:      configuredValue(appKey, "DINGTALK_APP_KEY"),
-		AppSecret:   configuredValue(appSecret, "DINGTALK_APP_SECRET"),
-		AgentID:     strings.TrimSpace(os.Getenv("DINGTALK_AGENT_ID")),
-		AppHomeURL:  strings.TrimSpace(os.Getenv("DINGTALK_APP_HOME_URL")),
-		RedirectURI: strings.TrimSpace(os.Getenv("DINGTALK_REDIRECT_URI")),
+		OrgID:       cfg.OrgID,
+		CorpID:      cfg.CorpID,
+		AppKey:      cfg.AppKey,
+		AppSecret:   cfg.AppSecret,
+		AgentID:     cfg.AgentID,
+		AppHomeURL:  cfg.AppHomeURL,
+		RedirectURI: cfg.RedirectURI,
 		Status:      "active",
 	}
 }
 
+func DefaultAppConfig() AppConfig {
+	cfg := appConfigFromConfig(DefaultConfig())
+	cfg.Name = strings.TrimSpace(os.Getenv("DINGTALK_ORG_NAME"))
+	return cfg
+}
+
 func ActiveAppConfigs() []AppConfig {
-	configs := []AppConfig{DefaultAppConfig()}
-	for _, cfg := range organizationConfigsFromEnv() {
-		status := strings.TrimSpace(strings.ToLower(cfg.Status))
-		if status != "" && status != "active" {
-			continue
-		}
-		cfg.OrgID = strings.TrimSpace(cfg.OrgID)
-		if cfg.OrgID == "" {
-			continue
-		}
-		configs = append(configs, cfg)
+	configs, err := ListActiveOrganizationConfigs()
+	if err != nil {
+		logrus.Warnf("list active DingTalk organization configs failed: %v", err)
+		return []AppConfig{DefaultAppConfig()}
 	}
-	return configs
+	result := make([]AppConfig, 0, len(configs))
+	for _, cfg := range configs {
+		result = append(result, appConfigFromConfig(cfg))
+	}
+	return result
 }
 
 func GetAppConfigForOrg(orgID string) (AppConfig, bool) {
-	requested := strings.TrimSpace(orgID)
-	if requested == "" {
-		requested = strings.TrimSpace(os.Getenv("DINGTALK_QR_DEFAULT_ORG_ID"))
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return AppConfig{}, false
 	}
-	if requested == "" || strings.EqualFold(requested, "default") {
-		return DefaultAppConfig(), true
-	}
-	for _, cfg := range organizationConfigsFromEnv() {
-		status := strings.TrimSpace(strings.ToLower(cfg.Status))
-		if status != "" && status != "active" {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(cfg.OrgID), requested) {
-			cfg.OrgID = strings.TrimSpace(cfg.OrgID)
-			return cfg, true
-		}
-	}
-	return DefaultAppConfig(), false
+	return appConfigFromConfig(cfg), true
 }
 
-func organizationConfigsFromEnv() []AppConfig {
-	raw := strings.TrimSpace(os.Getenv("DINGTALK_ORGANIZATIONS"))
-	raw = strings.Trim(raw, "'")
-	if raw == "" {
-		return nil
+func GetCorpIDForOrg(orgID string) string {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return ""
 	}
-
-	var configs []AppConfig
-	if err := json.Unmarshal([]byte(raw), &configs); err != nil {
-		logrus.Warnf("parse DINGTALK_ORGANIZATIONS failed: %v", err)
-		return nil
-	}
-	return configs
+	return cfg.normalized().CorpID
 }
 
 func GetConfiguredAppHomeURL() string {
@@ -195,6 +267,17 @@ func GetConfiguredAppHomeURL() string {
 	}
 
 	return ""
+}
+
+func GetConfiguredAppHomeURLForOrg(orgID string) string {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return ""
+	}
+	if homeURL := cfg.normalized().AppHomeURL; homeURL != "" {
+		return homeURL
+	}
+	return GetConfiguredAppHomeURL()
 }
 
 func GetAppHomeURL() string {
@@ -222,12 +305,51 @@ func BuildAppURL(appPath string) string {
 	return baseURL + "/" + strings.TrimLeft(appPath, "/")
 }
 
-func GetConfiguredRedirectURI() string {
-	if redirectURI := strings.TrimSpace(os.Getenv("DINGTALK_REDIRECT_URI")); redirectURI != "" {
+func buildCallbackURL(appHomeURL string) string {
+	appHomeURL = strings.TrimRight(strings.TrimSpace(appHomeURL), "/")
+	if appHomeURL == "" {
+		return ""
+	}
+	return appHomeURL + "/callback"
+}
+
+func normalizeConfiguredRedirectURI(redirectURI string) string {
+	redirectURI = strings.TrimSpace(redirectURI)
+	if redirectURI == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(redirectURI)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return redirectURI
 	}
 
+	if parsed.Path == "" || parsed.Path == "/" {
+		parsed.Path = "/callback"
+		parsed.RawPath = ""
+		return parsed.String()
+	}
+
+	return redirectURI
+}
+
+func GetConfiguredRedirectURI() string {
+	if redirectURI := strings.TrimSpace(os.Getenv("DINGTALK_REDIRECT_URI")); redirectURI != "" {
+		return normalizeConfiguredRedirectURI(redirectURI)
+	}
+
 	return ""
+}
+
+func GetConfiguredRedirectURIForOrg(orgID string) string {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return ""
+	}
+	if redirectURI := cfg.normalized().RedirectURI; redirectURI != "" {
+		return normalizeConfiguredRedirectURI(redirectURI)
+	}
+	return GetConfiguredRedirectURI()
 }
 
 func GetRedirectURI() string {
@@ -235,30 +357,152 @@ func GetRedirectURI() string {
 		return configured
 	}
 
-	return GetAppHomeURL() + "/callback"
+	return buildCallbackURL(GetAppHomeURL())
+}
+
+func ListActiveOrganizationConfigs() ([]Config, error) {
+	if database.DB == nil {
+		return []Config{DefaultConfig().normalized()}, nil
+	}
+
+	var orgs []database.Organization
+	if err := database.DB.
+		Where("status = ? AND deleted_at IS NULL", "active").
+		Order("org_id ASC").
+		Find(&orgs).Error; err != nil {
+		return nil, err
+	}
+
+	if len(orgs) == 0 {
+		return []Config{DefaultConfig().normalized()}, nil
+	}
+
+	configs := make([]Config, 0, len(orgs))
+	for _, org := range orgs {
+		configs = append(configs, ConfigFromOrganization(org).normalized())
+	}
+
+	return configs, nil
+}
+
+func sharedOAuthOrgID() string {
+	return strings.TrimSpace(os.Getenv("DINGTALK_SHARED_OAUTH_ORG_ID"))
+}
+
+func defaultOAuthLoginConfig() (Config, bool) {
+	cfg := DefaultConfig().normalized()
+	if cfg.AppKey == "" || cfg.AppSecret == "" {
+		return Config{}, false
+	}
+	return cfg, true
+}
+
+func sharedOAuthLoginConfigFromConfigs(configs []Config) (Config, error) {
+	if sharedOrgID := sharedOAuthOrgID(); sharedOrgID != "" && sharedOrgID != database.DefaultOrganizationID {
+		for _, cfg := range configs {
+			cfg = cfg.normalized()
+			if cfg.OrgID == sharedOrgID {
+				if cfg.AppKey == "" || cfg.AppSecret == "" {
+					return Config{}, fmt.Errorf("shared dingtalk oauth org %s is missing app credentials", sharedOrgID)
+				}
+				return cfg, nil
+			}
+		}
+		return Config{}, fmt.Errorf("shared dingtalk oauth org %s not found in active organizations", sharedOrgID)
+	}
+
+	if cfg, ok := defaultOAuthLoginConfig(); ok {
+		return cfg, nil
+	}
+
+	if len(configs) == 1 {
+		cfg := configs[0].normalized()
+		if cfg.AppKey == "" || cfg.AppSecret == "" {
+			return Config{}, fmt.Errorf("active organization %s is missing dingtalk oauth app credentials", cfg.OrgID)
+		}
+		return cfg, nil
+	}
+
+	if len(configs) > 1 {
+		shared := configs[0].normalized()
+		if shared.AppKey != "" && shared.AppSecret != "" {
+			allShared := true
+			for _, cfg := range configs[1:] {
+				if !oauthConfigsShareCredentials(shared, cfg) {
+					allShared = false
+					break
+				}
+			}
+			if allShared {
+				return shared, nil
+			}
+		}
+	}
+
+	return Config{}, fmt.Errorf("shared dingtalk oauth login config is required; set DINGTALK_APP_KEY/DINGTALK_APP_SECRET or DINGTALK_SHARED_OAUTH_ORG_ID")
+}
+
+func ResolveOAuthLoginConfig(orgID string) (Config, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID != "" {
+		return ConfigForOrgID(orgID)
+	}
+
+	configs, err := ListActiveOrganizationConfigs()
+	if err != nil {
+		return Config{}, err
+	}
+	if len(configs) == 0 {
+		if cfg, ok := defaultOAuthLoginConfig(); ok {
+			return cfg, nil
+		}
+		return DefaultConfig().normalized(), nil
+	}
+
+	return sharedOAuthLoginConfigFromConfigs(configs)
+}
+
+func oauthConfigsShareCredentials(left, right Config) bool {
+	left = left.normalized()
+	right = right.normalized()
+	return left.AppKey != "" &&
+		left.AppSecret != "" &&
+		left.AppKey == right.AppKey &&
+		left.AppSecret == right.AppSecret
 }
 
 // ===================== Access Token =====================
 
 // GetAccessToken 鑾峰彇浼佷笟鍐呴儴搴旂敤鐨?access_token锛堝甫缂撳瓨锛?
-func getAccessTokenForCredential(credentialAppKey, credentialAppSecret string) (string, error) {
-	credentialAppKey = strings.TrimSpace(credentialAppKey)
-	credentialAppSecret = strings.TrimSpace(credentialAppSecret)
-	if credentialAppKey == "" || credentialAppSecret == "" {
-		return "", fmt.Errorf("missing dingtalk app key or app secret")
-	}
+func GetAccessToken() (string, error) {
+	return getAccessTokenWithConfig(DefaultConfig())
+}
 
-	cacheKey := credentialAppKey + "|" + credentialAppSecret
+func GetAccessTokenForOrg(orgID string) (string, error) {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return "", err
+	}
+	return getAccessTokenWithConfig(cfg)
+}
+
+func getAccessTokenWithConfig(cfg Config) (string, error) {
+	cfg = cfg.normalized()
+	if cfg.AppKey == "" || cfg.AppSecret == "" {
+		return "", fmt.Errorf("missing dingtalk app credentials for org %s", cfg.OrgID)
+	}
 	tokenMu.Lock()
 	defer tokenMu.Unlock()
 
-	if cached, ok := accessTokenCache[cacheKey]; ok && cached.token != "" && time.Now().Before(cached.exp) {
+	// 缂撳瓨鏈夋晥
+	cacheKey := cfg.cacheKey()
+	if cached, ok := tokenByOrg[cacheKey]; ok && cached.token != "" && time.Now().Before(cached.expiry) {
 		return cached.token, nil
 	}
 
 	body := map[string]string{
-		"appKey":    credentialAppKey,
-		"appSecret": credentialAppSecret,
+		"appKey":    cfg.AppKey,
+		"appSecret": cfg.AppSecret,
 	}
 	resp, err := postJSON("https://api.dingtalk.com/v1.0/oauth2/accessToken", body, nil)
 	if err != nil {
@@ -275,22 +519,16 @@ func getAccessTokenForCredential(credentialAppKey, credentialAppSecret string) (
 		expireIn = v
 	}
 
-	expiresAt := time.Now().Add(time.Duration(expireIn-60) * time.Second)
-	accessTokenCache[cacheKey] = cachedAccessToken{token: accessToken, exp: expiresAt}
-	if credentialAppKey == appKey {
-		token = accessToken
-		tokenExp = expiresAt
+	tokenByOrg[cacheKey] = accessTokenCacheEntry{
+		token:  accessToken,
+		expiry: time.Now().Add(time.Duration(expireIn-60) * time.Second),
 	}
-	logrus.Info("dingtalk access_token fetched")
+	logrus.Infof("dingtalk access_token fetched org_id=%s", cfg.OrgID)
 	return accessToken, nil
 }
 
-func GetAccessToken() (string, error) {
-	return getAccessTokenForCredential(appKey, appSecret)
-}
-
 func GetAccessTokenForConfig(cfg AppConfig) (string, error) {
-	return getAccessTokenForCredential(cfg.AppKey, cfg.AppSecret)
+	return getAccessTokenWithConfig(configFromAppConfig(cfg))
 }
 
 // ===================== OAuth 鐧诲綍 =====================
@@ -301,72 +539,161 @@ func GetQRCode(state string) (string, error) {
 }
 
 func GetQRCodeWithRedirect(state, redirectURI string) (string, error) {
-	return GetQRCodeWithConfig(state, redirectURI, DefaultAppConfig())
+	return GetQRCodeWithRedirectForOrg(database.DefaultOrganizationID, state, redirectURI)
 }
 
-func GetQRCodeWithConfig(state, redirectURI string, cfg AppConfig) (string, error) {
-	clientID := strings.TrimSpace(cfg.AppKey)
-	if clientID == "" {
-		return "", fmt.Errorf("missing dingtalk app key")
+func GetQRCodeWithRedirectForConfig(cfg Config, state, redirectURI string) (string, error) {
+	cfg = cfg.normalized()
+	if cfg.AppKey == "" {
+		return "", fmt.Errorf("missing dingtalk app key for org %s", cfg.OrgID)
 	}
 	loginURL := fmt.Sprintf(
 		"https://login.dingtalk.com/oauth2/auth?redirect_uri=%s&response_type=code&client_id=%s&scope=openid%%20corpid&state=%s&prompt=consent",
 		url.QueryEscape(redirectURI),
-		clientID,
+		cfg.AppKey,
 		state,
 	)
 	return loginURL, nil
 }
 
-// GetUserAccessToken 鐢ㄦ巿鏉冪爜鎹㈠彇鐢ㄦ埛 token
-func GetUserAccessToken(code string) (string, error) {
-	return GetUserAccessTokenForConfig(code, DefaultAppConfig())
+func GetQRCodeWithConfig(state, redirectURI string, cfg AppConfig) (string, error) {
+	return GetQRCodeWithRedirectForConfig(configFromAppConfig(cfg), state, redirectURI)
 }
 
-func GetUserAccessTokenForConfig(code string, cfg AppConfig) (string, error) {
+func GetQRCodeWithRedirectForOrg(orgID, state, redirectURI string) (string, error) {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return "", err
+	}
+	return GetQRCodeWithRedirectForConfig(cfg, state, redirectURI)
+}
+
+// GetUserAccessToken 鐢ㄦ巿鏉冪爜鎹㈠彇鐢ㄦ埛 token
+func GetUserAccessToken(code string) (string, error) {
+	return GetUserAccessTokenForOrg(database.DefaultOrganizationID, code)
+}
+
+func getUserAccessTokenInfoWithConfig(cfg Config, code string) (userAccessTokenInfo, error) {
+	cfg = cfg.normalized()
+	if cfg.AppKey == "" || cfg.AppSecret == "" {
+		return userAccessTokenInfo{}, fmt.Errorf("missing dingtalk app credentials for org %s", cfg.OrgID)
+	}
 	body := map[string]string{
-		"clientId":     strings.TrimSpace(cfg.AppKey),
-		"clientSecret": strings.TrimSpace(cfg.AppSecret),
+		"clientId":     cfg.AppKey,
+		"clientSecret": cfg.AppSecret,
 		"code":         code,
 		"grantType":    "authorization_code",
 	}
 	resp, err := postJSON("https://api.dingtalk.com/v1.0/oauth2/userAccessToken", body, nil)
 	if err != nil {
-		return "", fmt.Errorf("鑾峰彇鐢ㄦ埛 access_token 澶辫触: %w", err)
+		return userAccessTokenInfo{}, fmt.Errorf("鑾峰彇鐢ㄦ埛 access_token 澶辫触: %w", err)
 	}
 
 	accessToken, ok := resp["accessToken"].(string)
 	if !ok {
-		return "", fmt.Errorf("鐢ㄦ埛 access_token 鍝嶅簲寮傚父: %v", resp)
+		return userAccessTokenInfo{}, fmt.Errorf("鐢ㄦ埛 access_token 鍝嶅簲寮傚父: %v", resp)
 	}
-	return accessToken, nil
+	return userAccessTokenInfo{AccessToken: accessToken, Raw: resp}, nil
+}
+
+func getUserAccessTokenWithConfig(cfg Config, code string) (string, error) {
+	info, err := getUserAccessTokenInfoWithConfig(cfg, code)
+	if err != nil {
+		return "", err
+	}
+	return info.AccessToken, nil
+}
+
+func GetUserAccessTokenForOrg(orgID, code string) (string, error) {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return "", err
+	}
+	return getUserAccessTokenWithConfig(cfg, code)
+}
+
+func GetUserAccessTokenForConfig(code string, cfg AppConfig) (string, error) {
+	return getUserAccessTokenWithConfig(configFromAppConfig(cfg), code)
 }
 
 // GetUserInfoByCode 閫氳繃鎺堟潈鐮佽幏鍙栫敤鎴蜂俊鎭紙鏂扮増 OAuth2锛岀敤浜庢壂鐮佺櫥褰曪級
 func GetUserInfoByCode(code string) (map[string]interface{}, error) {
-	return GetUserInfoByCodeForConfig(code, DefaultAppConfig())
+	return GetUserInfoByCodeForOrg(database.DefaultOrganizationID, code)
 }
 
-func GetUserInfoByCodeForConfig(code string, cfg AppConfig) (map[string]interface{}, error) {
-	userToken, err := GetUserAccessTokenForConfig(code, cfg)
+func getContactUserInfoWithUserToken(userToken string) (map[string]interface{}, error) {
+	headers := map[string]string{
+		"x-acs-dingtalk-access-token": userToken,
+	}
+	return getJSON("https://api.dingtalk.com/v1.0/contact/users/me", headers)
+}
+
+func GetUserInfoByCodeWithConfig(cfg Config, code string) (map[string]interface{}, error) {
+	// 1. 鍏堢敤 code 鎹㈠彇鐢ㄦ埛 access_token
+	tokenInfo, err := getUserAccessTokenInfoWithConfig(cfg, code)
 	if err != nil {
 		return nil, err
 	}
 
-	headers := map[string]string{
-		"x-acs-dingtalk-access-token": userToken,
-	}
-	resp, err := getJSON("https://api.dingtalk.com/v1.0/contact/users/me", headers)
+	// 2. 获取 OAuth 个人信息。当前钉钉扫码 OAuth 在部分企业内部应用场景只返回 unionId/openId。
+	resp, err := getContactUserInfoWithUserToken(tokenInfo.AccessToken)
 	if err != nil {
 		return nil, fmt.Errorf("鑾峰彇鐢ㄦ埛淇℃伅澶辫触: %w", err)
 	}
 
-	return resp, nil
+	return mergeDingTalkOAuthIdentityFields(resp, tokenInfo.Raw), nil
+}
+
+func mergeDingTalkOAuthIdentityFields(target, source map[string]interface{}) map[string]interface{} {
+	if target == nil {
+		target = map[string]interface{}{}
+	}
+	if len(source) == 0 {
+		return target
+	}
+
+	for _, key := range []string{
+		"corpId", "corpID", "corp_id", "corpid",
+		"associated_user_id", "associatedUserId", "userid", "userId",
+		"unionId", "unionid", "union_id",
+		"openId", "openid", "open_id",
+	} {
+		if existing, ok := target[key].(string); ok && strings.TrimSpace(existing) != "" {
+			continue
+		}
+		value, ok := source[key].(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			continue
+		}
+		target[key] = strings.TrimSpace(value)
+	}
+
+	return target
+}
+
+func GetUserInfoByCodeForOrg(orgID, code string) (map[string]interface{}, error) {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return nil, err
+	}
+	return GetUserInfoByCodeWithConfig(cfg, code)
+}
+
+func GetUserInfoByCodeForConfig(code string, cfg AppConfig) (map[string]interface{}, error) {
+	return GetUserInfoByCodeWithConfig(configFromAppConfig(cfg), code)
 }
 
 // GetUserIDByInAppCode 浼佷笟鍐呴儴搴旂敤鍏嶇櫥锛氶€氳繃鍏嶇櫥鐮佽幏鍙栦紒涓氬唴 userid
 func GetUserIDByInAppCode(code string) (string, error) {
-	return GetUserIDByInAppCodeForConfig(code, DefaultAppConfig())
+	return GetUserIDByInAppCodeForOrg(database.DefaultOrganizationID, code)
+}
+
+func GetUserIDByInAppCodeForOrg(orgID, code string) (string, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return "", err
+	}
+	return getUserIDByInAppCodeWithAccessToken(accessToken, code)
 }
 
 func GetUserIDByInAppCodeForConfig(code string, cfg AppConfig) (string, error) {
@@ -374,7 +701,10 @@ func GetUserIDByInAppCodeForConfig(code string, cfg AppConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return getUserIDByInAppCodeWithAccessToken(accessToken, code)
+}
 
+func getUserIDByInAppCodeWithAccessToken(accessToken, code string) (string, error) {
 	body := map[string]interface{}{
 		"code": code,
 	}
@@ -407,7 +737,15 @@ func GetUserIDByInAppCodeForConfig(code string, cfg AppConfig) (string, error) {
 
 // GetUserDetailByUserID 閫氳繃 userid 鑾峰彇鐢ㄦ埛璇︾粏淇℃伅锛圕ontact.User.Read锛?
 func GetUserDetailByUserID(userid string) (map[string]interface{}, error) {
-	return GetUserDetailByUserIDForConfig(userid, DefaultAppConfig())
+	return GetUserDetailByUserIDForOrg(database.DefaultOrganizationID, userid)
+}
+
+func GetUserDetailByUserIDForOrg(orgID, userid string) (map[string]interface{}, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
+	return getUserDetailByUserIDWithAccessToken(accessToken, userid)
 }
 
 func GetUserDetailByUserIDForConfig(userid string, cfg AppConfig) (map[string]interface{}, error) {
@@ -415,7 +753,10 @@ func GetUserDetailByUserIDForConfig(userid string, cfg AppConfig) (map[string]in
 	if err != nil {
 		return nil, err
 	}
+	return getUserDetailByUserIDWithAccessToken(accessToken, userid)
+}
 
+func getUserDetailByUserIDWithAccessToken(accessToken, userid string) (map[string]interface{}, error) {
 	body := map[string]interface{}{
 		"userid": userid,
 	}
@@ -442,7 +783,15 @@ func GetUserDetailByUserIDForConfig(userid string, cfg AppConfig) (map[string]in
 }
 
 func GetUserIDByUnionID(unionID string) (string, error) {
-	return GetUserIDByUnionIDForConfig(unionID, DefaultAppConfig())
+	return GetUserIDByUnionIDForOrg(database.DefaultOrganizationID, unionID)
+}
+
+func GetUserIDByUnionIDForOrg(orgID, unionID string) (string, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return "", err
+	}
+	return getUserIDByUnionIDWithAccessToken(accessToken, unionID)
 }
 
 func GetUserIDByUnionIDForConfig(unionID string, cfg AppConfig) (string, error) {
@@ -450,7 +799,10 @@ func GetUserIDByUnionIDForConfig(unionID string, cfg AppConfig) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	return getUserIDByUnionIDWithAccessToken(accessToken, unionID)
+}
 
+func getUserIDByUnionIDWithAccessToken(accessToken, unionID string) (string, error) {
 	body := map[string]interface{}{
 		"unionid": unionID,
 	}
@@ -514,7 +866,11 @@ type UserInfo struct {
 
 // SyncDepartments 鍚屾鎵€鏈夐儴闂?
 func SyncDepartments() ([]DeptInfo, error) {
-	accessToken, err := GetAccessToken()
+	return SyncDepartmentsForOrg(database.DefaultOrganizationID)
+}
+
+func SyncDepartmentsForOrg(orgID string) ([]DeptInfo, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -659,16 +1015,24 @@ func parseDeptInfo(result map[string]interface{}) DeptInfo {
 
 // SyncUsers 鍚屾鎸囧畾閮ㄩ棬鐨勬墍鏈夌敤鎴?
 func SyncUsers() ([]UserInfo, error) {
-	depts, err := SyncDepartments()
+	return SyncUsersForOrg(database.DefaultOrganizationID)
+}
+
+func SyncUsersForOrg(orgID string) ([]UserInfo, error) {
+	depts, err := SyncDepartmentsForOrg(orgID)
 	if err != nil {
 		return nil, fmt.Errorf("鍚屾鐢ㄦ埛鍓嶈幏鍙栭儴闂ㄥけ璐? %w", err)
 	}
-	return SyncUsersWithDepts(depts)
+	return SyncUsersWithDeptsForOrg(orgID, depts)
 }
 
 // SyncUsersWithDepts 浣跨敤宸叉湁閮ㄩ棬鍒楄〃鍚屾鎵€鏈夌敤鎴凤紝閬垮厤閲嶅璋冪敤 SyncDepartments
 func SyncUsersWithDepts(depts []DeptInfo) ([]UserInfo, error) {
-	accessToken, err := GetAccessToken()
+	return SyncUsersWithDeptsForOrg(database.DefaultOrganizationID, depts)
+}
+
+func SyncUsersWithDeptsForOrg(orgID string, depts []DeptInfo) ([]UserInfo, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -690,7 +1054,11 @@ func SyncUsersWithDepts(depts []DeptInfo) ([]UserInfo, error) {
 		logrus.Warnf("dingtalk user detail sync skipped partially: %v", err)
 	}
 	resolveManagerNames(userMap)
-	if err := enrichUsersWithHRMFields(accessToken, userMap); err != nil {
+	cfg, cfgErr := ConfigForOrgID(orgID)
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+	if err := enrichUsersWithHRMFieldsForOrg(accessToken, userMap, cfg); err != nil {
 		logrus.Warnf("dingtalk hrm field sync skipped: %v", err)
 	}
 	resolveManagerNames(userMap)
@@ -839,6 +1207,10 @@ type hrmRegularDates struct {
 }
 
 func enrichUsersWithHRMFields(accessToken string, users map[string]UserInfo) error {
+	return enrichUsersWithHRMFieldsForOrg(accessToken, users, DefaultConfig())
+}
+
+func enrichUsersWithHRMFieldsForOrg(accessToken string, users map[string]UserInfo, cfg Config) error {
 	if len(users) == 0 {
 		return nil
 	}
@@ -855,7 +1227,7 @@ func enrichUsersWithHRMFields(accessToken string, users map[string]UserInfo) err
 		if end > len(userIDs) {
 			end = len(userIDs)
 		}
-		dates, err := fetchHRMRegularDates(accessToken, userIDs[start:end])
+		dates, err := fetchHRMRegularDatesForOrg(accessToken, userIDs[start:end], cfg)
 		if err != nil {
 			return err
 		}
@@ -885,13 +1257,17 @@ func enrichUsersWithHRMFields(accessToken string, users map[string]UserInfo) err
 }
 
 func fetchHRMRegularDates(accessToken string, userIDs []string) (map[string]hrmRegularDates, error) {
+	return fetchHRMRegularDatesForOrg(accessToken, userIDs, DefaultConfig())
+}
+
+func fetchHRMRegularDatesForOrg(accessToken string, userIDs []string, cfg Config) (map[string]hrmRegularDates, error) {
 	result := make(map[string]hrmRegularDates)
 	if len(userIDs) == 0 {
 		return result, nil
 	}
 
 	body := map[string]interface{}{
-		"agentid":           getDingTalkAgentID(),
+		"agentid":           dingTalkAgentIDFromConfig(cfg),
 		"userid_list":       strings.Join(userIDs, ","),
 		"field_filter_list": strings.Join(configuredHRMFieldCodes(), ","),
 	}
@@ -955,7 +1331,14 @@ func fetchHRMRegularDates(accessToken string, userIDs []string) (map[string]hrmR
 }
 
 func getDingTalkAgentID() int64 {
-	raw := strings.TrimSpace(os.Getenv("DINGTALK_AGENT_ID"))
+	return dingTalkAgentIDFromConfig(DefaultConfig())
+}
+
+func dingTalkAgentIDFromConfig(cfg Config) int64 {
+	raw := strings.TrimSpace(cfg.AgentID)
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv("DINGTALK_AGENT_ID"))
+	}
 	if raw == "" {
 		return 1
 	}
@@ -1043,11 +1426,23 @@ type VacationType struct {
 }
 
 func ListVacationTypes(opUserID string) ([]VacationType, error) {
-	return ListVacationTypesForConfig(opUserID, DefaultAppConfig())
+	return ListVacationTypesForOrg(database.DefaultOrganizationID, opUserID)
+}
+
+func ListVacationTypesForOrg(orgID, opUserID string) ([]VacationType, error) {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return nil, err
+	}
+	return listVacationTypesWithConfig(cfg, opUserID)
 }
 
 func ListVacationTypesForConfig(opUserID string, cfg AppConfig) ([]VacationType, error) {
-	accessToken, err := GetAccessTokenForConfig(cfg)
+	return listVacationTypesWithConfig(configFromAppConfig(cfg), opUserID)
+}
+
+func listVacationTypesWithConfig(cfg Config, opUserID string) ([]VacationType, error) {
+	accessToken, err := getAccessTokenWithConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -1092,6 +1487,10 @@ func ListVacationTypesForConfig(opUserID string, cfg AppConfig) ([]VacationType,
 }
 
 func UpdateAnnualLeaveQuota(userID string, year int, days float64, reason string) error {
+	return UpdateAnnualLeaveQuotaForOrg(database.DefaultOrganizationID, userID, year, days, reason)
+}
+
+func UpdateAnnualLeaveQuotaForOrg(orgID, userID string, year int, days float64, reason string) error {
 	if days <= 0 {
 		return nil
 	}
@@ -1100,7 +1499,7 @@ func UpdateAnnualLeaveQuota(userID string, year int, days float64, reason string
 		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
 
-	leaveCode, hoursPerDay, err := resolveAnnualLeaveType(opUserID)
+	leaveCode, hoursPerDay, err := resolveAnnualLeaveTypeForOrg(orgID, opUserID)
 	if err != nil {
 		return err
 	}
@@ -1108,7 +1507,7 @@ func UpdateAnnualLeaveQuota(userID string, year int, days float64, reason string
 		hoursPerDay = getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8)
 	}
 
-	accessToken, err := GetAccessToken()
+	accessToken, err := GetAccessTokenForOrg(orgID)
 	if err != nil {
 		return err
 	}
@@ -1194,10 +1593,22 @@ func UpdateAnnualLeaveQuota(userID string, year int, days float64, reason string
 }
 
 func UpdateCompensatoryLeaveQuota(userID string, minutes int, workDate string, reason string) error {
-	return UpdateCompensatoryLeaveQuotaForConfig(DefaultAppConfig(), userID, minutes, workDate, reason)
+	return UpdateCompensatoryLeaveQuotaForOrg(database.DefaultOrganizationID, userID, minutes, workDate, reason)
+}
+
+func UpdateCompensatoryLeaveQuotaForOrg(orgID, userID string, minutes int, workDate string, reason string) error {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return err
+	}
+	return updateCompensatoryLeaveQuotaWithConfig(cfg, userID, minutes, workDate, reason)
 }
 
 func UpdateCompensatoryLeaveQuotaForConfig(cfg AppConfig, userID string, minutes int, workDate string, reason string) error {
+	return updateCompensatoryLeaveQuotaWithConfig(configFromAppConfig(cfg), userID, minutes, workDate, reason)
+}
+
+func updateCompensatoryLeaveQuotaWithConfig(cfg Config, userID string, minutes int, workDate string, reason string) error {
 	if minutes <= 0 {
 		return nil
 	}
@@ -1206,7 +1617,7 @@ func UpdateCompensatoryLeaveQuotaForConfig(cfg AppConfig, userID string, minutes
 		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
 
-	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveTypeForConfig(opUserID, cfg)
+	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveTypeWithConfig(cfg, opUserID)
 	if err != nil {
 		return err
 	}
@@ -1225,7 +1636,7 @@ func UpdateCompensatoryLeaveQuotaForConfig(cfg AppConfig, userID string, minutes
 	logrus.Infof("[comp-leave-sync] UpdateCompensatoryLeaveQuota userID=%s minutes=%d leaveCode=%s workDate=%s",
 		userID, minutes, leaveCode, workDate)
 
-	accessToken, err := GetAccessTokenForConfig(cfg)
+	accessToken, err := getAccessTokenWithConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -1263,10 +1674,22 @@ func UpdateCompensatoryLeaveQuotaForConfig(cfg AppConfig, userID string, minutes
 }
 
 func SetCompensatoryLeaveQuota(userID string, year int, totalMinutes int, reason string) error {
-	return SetCompensatoryLeaveQuotaForConfig(DefaultAppConfig(), userID, year, totalMinutes, reason)
+	return SetCompensatoryLeaveQuotaForOrg(database.DefaultOrganizationID, userID, year, totalMinutes, reason)
+}
+
+func SetCompensatoryLeaveQuotaForOrg(orgID, userID string, year int, totalMinutes int, reason string) error {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return err
+	}
+	return setCompensatoryLeaveQuotaWithConfig(cfg, userID, year, totalMinutes, reason)
 }
 
 func SetCompensatoryLeaveQuotaForConfig(cfg AppConfig, userID string, year int, totalMinutes int, reason string) error {
+	return setCompensatoryLeaveQuotaWithConfig(configFromAppConfig(cfg), userID, year, totalMinutes, reason)
+}
+
+func setCompensatoryLeaveQuotaWithConfig(cfg Config, userID string, year int, totalMinutes int, reason string) error {
 	if totalMinutes < 0 {
 		return fmt.Errorf("totalMinutes cannot be negative")
 	}
@@ -1274,14 +1697,14 @@ func SetCompensatoryLeaveQuotaForConfig(cfg AppConfig, userID string, year int, 
 	if opUserID == "" {
 		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
-	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveTypeForConfig(opUserID, cfg)
+	leaveCode, hoursPerDay, err := resolveCompensatoryLeaveTypeWithConfig(cfg, opUserID)
 	if err != nil {
 		return err
 	}
 	if hoursPerDay <= 0 {
 		hoursPerDay = getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8)
 	}
-	accessToken, err := GetAccessTokenForConfig(cfg)
+	accessToken, err := getAccessTokenWithConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -1445,15 +1868,27 @@ func getVacationQuotaByYear(accessToken, opUserID, userID, leaveCode string, yea
 // quotaPerDay / quotaPerHour 单位均为 1/100（例如 0 = 0天，100 = 1天，800 = 1天×8小时）。
 // year 决定生效的配额周期（start_time / end_time 自动设为该年 1-1 到 12-31）。
 func InitVacationQuota(userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, reason string) error {
-	return InitVacationQuotaForConfig(DefaultAppConfig(), userID, leaveCode, year, quotaPerDay, quotaPerHour, reason)
+	return InitVacationQuotaForOrg(database.DefaultOrganizationID, userID, leaveCode, year, quotaPerDay, quotaPerHour, reason)
+}
+
+func InitVacationQuotaForOrg(orgID, userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, reason string) error {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return err
+	}
+	return initVacationQuotaWithConfig(cfg, userID, leaveCode, year, quotaPerDay, quotaPerHour, reason)
 }
 
 func InitVacationQuotaForConfig(cfg AppConfig, userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, reason string) error {
+	return initVacationQuotaWithConfig(configFromAppConfig(cfg), userID, leaveCode, year, quotaPerDay, quotaPerHour, reason)
+}
+
+func initVacationQuotaWithConfig(cfg Config, userID, leaveCode string, year int, quotaPerDay, quotaPerHour int64, reason string) error {
 	opUserID := strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID"))
 	if opUserID == "" {
 		return fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
 	}
-	accessToken, err := GetAccessTokenForConfig(cfg)
+	accessToken, err := getAccessTokenWithConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -1493,15 +1928,20 @@ type cachedLeaveType struct {
 }
 
 var (
-	annualLeaveTypeCache         cachedLeaveType
+	annualLeaveTypeCache         = make(map[string]cachedLeaveType)
 	annualLeaveTypeCacheMu       sync.Mutex
-	compensatoryLeaveTypeCache   cachedLeaveType
+	compensatoryLeaveTypeCache   = make(map[string]cachedLeaveType)
 	compensatoryLeaveTypeCacheMu sync.Mutex
 )
 
 const defaultCompensatoryLeaveCode = "fd5600a2-d0df-4d9f-8022-7e5f0833130c"
 
 func resolveAnnualLeaveType(opUserID string) (string, float64, error) {
+	return resolveAnnualLeaveTypeForOrg(database.DefaultOrganizationID, opUserID)
+}
+
+func resolveAnnualLeaveTypeForOrg(orgID, opUserID string) (string, float64, error) {
+	orgID = database.NormalizeOrganizationID(orgID)
 	if code := strings.TrimSpace(os.Getenv("DINGTALK_ANNUAL_LEAVE_CODE")); code != "" {
 		return code, getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8), nil
 	}
@@ -1509,21 +1949,21 @@ func resolveAnnualLeaveType(opUserID string) (string, float64, error) {
 	annualLeaveTypeCacheMu.Lock()
 	defer annualLeaveTypeCacheMu.Unlock()
 
-	if annualLeaveTypeCache.leaveCode != "" && time.Now().Before(annualLeaveTypeCache.expiry) {
-		return annualLeaveTypeCache.leaveCode, annualLeaveTypeCache.hoursPerDay, nil
+	if cached := annualLeaveTypeCache[orgID]; cached.leaveCode != "" && time.Now().Before(cached.expiry) {
+		return cached.leaveCode, cached.hoursPerDay, nil
 	}
 
 	leaveName := strings.TrimSpace(os.Getenv("DINGTALK_ANNUAL_LEAVE_NAME"))
 	if leaveName == "" {
 		leaveName = "年假"
 	}
-	types, err := ListVacationTypes(opUserID)
+	types, err := ListVacationTypesForOrg(orgID, opUserID)
 	if err != nil {
 		return "", 0, err
 	}
 	for _, item := range types {
 		if item.LeaveName == leaveName {
-			annualLeaveTypeCache = cachedLeaveType{
+			annualLeaveTypeCache[orgID] = cachedLeaveType{
 				leaveCode:   item.LeaveCode,
 				hoursPerDay: item.HoursInPerDay,
 				expiry:      time.Now().Add(time.Hour),
@@ -1535,7 +1975,11 @@ func resolveAnnualLeaveType(opUserID string) (string, float64, error) {
 }
 
 func createCompensatoryLeaveType(opUserID, leaveName string) (string, error) {
-	return createCompensatoryLeaveTypeForConfig(opUserID, leaveName, DefaultAppConfig())
+	return createCompensatoryLeaveTypeForOrg(database.DefaultOrganizationID, opUserID, leaveName)
+}
+
+func createCompensatoryLeaveTypeForOrg(orgID, opUserID, leaveName string) (string, error) {
+	return CreateCustomLeaveTypeForOrg(orgID, opUserID, leaveName, false)
 }
 
 func createCompensatoryLeaveTypeForConfig(opUserID, leaveName string, cfg AppConfig) (string, error) {
@@ -1543,11 +1987,23 @@ func createCompensatoryLeaveTypeForConfig(opUserID, leaveName string, cfg AppCon
 }
 
 func CreateCustomLeaveType(opUserID, leaveName string, freedomLeave bool) (string, error) {
-	return CreateCustomLeaveTypeForConfig(opUserID, leaveName, freedomLeave, DefaultAppConfig())
+	return CreateCustomLeaveTypeForOrg(database.DefaultOrganizationID, opUserID, leaveName, freedomLeave)
+}
+
+func CreateCustomLeaveTypeForOrg(orgID, opUserID, leaveName string, freedomLeave bool) (string, error) {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return "", err
+	}
+	return createCustomLeaveTypeWithConfig(cfg, opUserID, leaveName, freedomLeave)
 }
 
 func CreateCustomLeaveTypeForConfig(opUserID, leaveName string, freedomLeave bool, cfg AppConfig) (string, error) {
-	accessToken, err := GetAccessTokenForConfig(cfg)
+	return createCustomLeaveTypeWithConfig(configFromAppConfig(cfg), opUserID, leaveName, freedomLeave)
+}
+
+func createCustomLeaveTypeWithConfig(cfg Config, opUserID, leaveName string, freedomLeave bool) (string, error) {
+	accessToken, err := getAccessTokenWithConfig(cfg)
 	if err != nil {
 		return "", err
 	}
@@ -1605,10 +2061,24 @@ func extractCreatedLeaveCode(resp map[string]interface{}) string {
 }
 
 func resolveCompensatoryLeaveType(opUserID string) (string, float64, error) {
-	return resolveCompensatoryLeaveTypeForConfig(opUserID, DefaultAppConfig())
+	return resolveCompensatoryLeaveTypeForOrg(database.DefaultOrganizationID, opUserID)
+}
+
+func resolveCompensatoryLeaveTypeForOrg(orgID, opUserID string) (string, float64, error) {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return "", 0, err
+	}
+	return resolveCompensatoryLeaveTypeWithConfig(cfg, opUserID)
 }
 
 func resolveCompensatoryLeaveTypeForConfig(opUserID string, cfg AppConfig) (string, float64, error) {
+	return resolveCompensatoryLeaveTypeWithConfig(configFromAppConfig(cfg), opUserID)
+}
+
+func resolveCompensatoryLeaveTypeWithConfig(cfg Config, opUserID string) (string, float64, error) {
+	cfg = cfg.normalized()
+	orgID := cfg.OrgID
 	if code := strings.TrimSpace(os.Getenv("DINGTALK_LIEU_LEAVE_CODE")); code != "" {
 		return code, getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8), nil
 	}
@@ -1622,8 +2092,8 @@ func resolveCompensatoryLeaveTypeForConfig(opUserID string, cfg AppConfig) (stri
 	compensatoryLeaveTypeCacheMu.Lock()
 	defer compensatoryLeaveTypeCacheMu.Unlock()
 
-	if compensatoryLeaveTypeCache.leaveCode != "" && time.Now().Before(compensatoryLeaveTypeCache.expiry) {
-		return compensatoryLeaveTypeCache.leaveCode, compensatoryLeaveTypeCache.hoursPerDay, nil
+	if cached := compensatoryLeaveTypeCache[orgID]; cached.leaveCode != "" && time.Now().Before(cached.expiry) {
+		return cached.leaveCode, cached.hoursPerDay, nil
 	}
 
 	leaveName := strings.TrimSpace(os.Getenv("DINGTALK_LIEU_LEAVE_NAME"))
@@ -1634,7 +2104,7 @@ func resolveCompensatoryLeaveTypeForConfig(opUserID string, cfg AppConfig) (stri
 		leaveName = "手动发放"
 	}
 
-	types, err := ListVacationTypesForConfig(opUserID, cfg)
+	types, err := listVacationTypesWithConfig(cfg, opUserID)
 	if err != nil {
 		return "", 0, err
 	}
@@ -1646,7 +2116,7 @@ func resolveCompensatoryLeaveTypeForConfig(opUserID string, cfg AppConfig) (stri
 			if item.HoursInPerDay > 0 {
 				hoursPerDay = item.HoursInPerDay
 			}
-			compensatoryLeaveTypeCache = cachedLeaveType{
+			compensatoryLeaveTypeCache[orgID] = cachedLeaveType{
 				leaveCode:   item.LeaveCode,
 				hoursPerDay: hoursPerDay,
 				expiry:      time.Now().Add(time.Hour),
@@ -1658,12 +2128,12 @@ func resolveCompensatoryLeaveTypeForConfig(opUserID string, cfg AppConfig) (stri
 
 	// 没有找到符合条件的假期类型，自动通过 API 创建一个
 	logrus.Infof("[leave-sync] no compensatory leave type found, creating one: name=%s", leaveName)
-	leaveCode, err := createCompensatoryLeaveTypeForConfig(opUserID, leaveName, cfg)
+	leaveCode, err := createCustomLeaveTypeWithConfig(cfg, opUserID, leaveName, false)
 	if err != nil {
 		// 如果创建失败，可能是因为已存在相同名称的假期类型
 		// 重新获取假期类型列表并查找已存在的假期类型
 		logrus.Warnf("[leave-sync] create leave type failed, trying to find existing one: %v", err)
-		types, err := ListVacationTypesForConfig(opUserID, cfg)
+		types, err := listVacationTypesWithConfig(cfg, opUserID)
 		if err != nil {
 			return "", 0, fmt.Errorf("auto-create compensatory leave type %q failed and cannot find existing one: %w", leaveName, err)
 		}
@@ -1673,7 +2143,7 @@ func resolveCompensatoryLeaveTypeForConfig(opUserID string, cfg AppConfig) (stri
 				if item.HoursInPerDay > 0 {
 					hoursPerDay = item.HoursInPerDay
 				}
-				compensatoryLeaveTypeCache = cachedLeaveType{
+				compensatoryLeaveTypeCache[orgID] = cachedLeaveType{
 					leaveCode:   item.LeaveCode,
 					hoursPerDay: hoursPerDay,
 					expiry:      time.Now().Add(time.Hour),
@@ -1684,7 +2154,7 @@ func resolveCompensatoryLeaveTypeForConfig(opUserID string, cfg AppConfig) (stri
 		}
 		return "", 0, fmt.Errorf("auto-create compensatory leave type %q failed: %w", leaveName, err)
 	}
-	compensatoryLeaveTypeCache = cachedLeaveType{
+	compensatoryLeaveTypeCache[orgID] = cachedLeaveType{
 		leaveCode:   leaveCode,
 		hoursPerDay: hoursPerDay,
 		expiry:      time.Now().Add(time.Hour),
@@ -2324,7 +2794,11 @@ type AttendanceRecord struct {
 
 // GetAttendance 鑾峰彇鑰冨嫟鏁版嵁
 func GetAttendance(userIDs []string, startDate, endDate string) ([]AttendanceRecord, error) {
-	accessToken, err := GetAccessToken()
+	return GetAttendanceForOrg(database.DefaultOrganizationID, userIDs, startDate, endDate)
+}
+
+func GetAttendanceForOrg(orgID string, userIDs []string, startDate, endDate string) ([]AttendanceRecord, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -2463,7 +2937,11 @@ type ApprovalInstance struct {
 
 // GetApprovals 鑾峰彇瀹℃壒瀹炰緥鍒楄〃
 func GetApprovals(processCode, startDate, endDate string) ([]ApprovalInstance, error) {
-	accessToken, err := GetAccessToken()
+	return GetApprovalsForOrg(database.DefaultOrganizationID, processCode, startDate, endDate)
+}
+
+func GetApprovalsForOrg(orgID, processCode, startDate, endDate string) ([]ApprovalInstance, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -2756,6 +3234,55 @@ func GetAttendanceGroups() ([]map[string]interface{}, error) {
 }
 
 // GetAttendanceGroup 鏌ヨ鍗曚釜鑰冨嫟缁勮鎯?
+func GetAttendanceGroupsForOrg(orgID string) ([]map[string]interface{}, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
+
+	var allGroups []map[string]interface{}
+	offset := 0
+
+	for {
+		body := map[string]interface{}{
+			"offset": offset,
+			"size":   10,
+		}
+		resp, err := postJSONOAPI(
+			fmt.Sprintf("https://oapi.dingtalk.com/topapi/attendance/getsimplegroups?access_token=%s", accessToken),
+			body,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("get attendance groups failed: %w", err)
+		}
+		if errcode, _ := resp["errcode"].(float64); errcode != 0 {
+			return nil, fmt.Errorf("get attendance groups failed: %s", dingTalkErrorMessage(resp, errcode))
+		}
+
+		result, ok := resp["result"].(map[string]interface{})
+		if !ok {
+			break
+		}
+		groups, ok := result["groups"].([]interface{})
+		if !ok || len(groups) == 0 {
+			break
+		}
+		for _, g := range groups {
+			if gm, ok := g.(map[string]interface{}); ok {
+				allGroups = append(allGroups, gm)
+			}
+		}
+		hasMore, _ := result["has_more"].(bool)
+		if !hasMore {
+			break
+		}
+		offset += 10
+	}
+
+	logrus.Infof("get attendance groups complete org=%s count=%d", database.NormalizeOrganizationID(orgID), len(allGroups))
+	return allGroups, nil
+}
+
 func GetAttendanceGroup(opUserID string, groupID int64) (map[string]interface{}, error) {
 	accessToken, err := GetAccessToken()
 	if err != nil {
@@ -2788,6 +3315,34 @@ func GetAttendanceGroup(opUserID string, groupID int64) (map[string]interface{},
 		return nil, fmt.Errorf("query attendance group failed: invalid result payload")
 	}
 	attGroupDetailMap.Store(groupID, attendanceGroupDetailCache{data: result, expiry: time.Now().Add(5 * time.Minute)})
+	return result, nil
+}
+
+func GetAttendanceGroupForOrg(orgID, opUserID string, groupID int64) (map[string]interface{}, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
+
+	body := map[string]interface{}{
+		"op_user_id": opUserID,
+		"group_id":   groupID,
+	}
+	resp, err := postJSONOAPI(
+		fmt.Sprintf("https://oapi.dingtalk.com/topapi/attendance/group/query?access_token=%s", accessToken),
+		body,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query attendance group failed: %w", err)
+	}
+	if errcode, _ := resp["errcode"].(float64); errcode != 0 {
+		return nil, fmt.Errorf("query attendance group failed: %s", dingTalkErrorMessage(resp, errcode))
+	}
+
+	result, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("query attendance group failed: invalid result payload")
+	}
 	return result, nil
 }
 
@@ -3113,9 +3668,13 @@ func GetAttendanceGroupRestClassID(group map[string]interface{}) int64 {
 }
 
 func resolveScheduleAsyncRestShiftID(opUserID string, groupID int64) int64 {
+	return resolveScheduleAsyncRestShiftIDForOrg(database.DefaultOrganizationID, opUserID, groupID)
+}
+
+func resolveScheduleAsyncRestShiftIDForOrg(orgID, opUserID string, groupID int64) int64 {
 	const dingTalkRestShiftSentinel int64 = 1
 
-	group, err := GetAttendanceGroup(opUserID, groupID)
+	group, err := GetAttendanceGroupForOrg(orgID, opUserID, groupID)
 	if err != nil {
 		logrus.Warnf("resolveScheduleAsyncRestShiftID: get group detail failed for %d: %v; fallback=%d", groupID, err, dingTalkRestShiftSentinel)
 		return dingTalkRestShiftSentinel
@@ -3247,6 +3806,56 @@ func GetShiftList() ([]map[string]interface{}, error) {
 	return cloneShiftList(allShifts), nil
 }
 
+func GetShiftListForOrg(orgID string) ([]map[string]interface{}, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
+
+	var allShifts []map[string]interface{}
+	cursor := 0
+
+	for {
+		body := map[string]interface{}{
+			"op_user_id": "",
+			"cursor":     cursor,
+		}
+		resp, err := postJSONOAPI(
+			fmt.Sprintf("https://oapi.dingtalk.com/topapi/attendance/shift/list?access_token=%s", accessToken),
+			body,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("get shifts failed: %w", err)
+		}
+		if errcode, _ := resp["errcode"].(float64); errcode != 0 {
+			return nil, fmt.Errorf("get shifts failed: %s", dingTalkErrorMessage(resp, errcode))
+		}
+
+		result, ok := resp["result"].(map[string]interface{})
+		if !ok {
+			break
+		}
+		shifts, ok := result["result"].([]interface{})
+		if !ok || len(shifts) == 0 {
+			break
+		}
+		for _, s := range shifts {
+			if sm, ok := s.(map[string]interface{}); ok {
+				allShifts = append(allShifts, sm)
+			}
+		}
+		hasMore, _ := result["has_more"].(bool)
+		if !hasMore {
+			break
+		}
+		nextCursor, _ := result["cursor"].(float64)
+		cursor = int(nextCursor)
+	}
+
+	logrus.Infof("get shifts complete org=%s count=%d", database.NormalizeOrganizationID(orgID), len(allShifts))
+	return cloneShiftList(allShifts), nil
+}
+
 func shiftListCacheKey() string {
 	return corpID + "|" + appKey
 }
@@ -3277,7 +3886,11 @@ func FindShiftByName(shifts []map[string]interface{}, name string) (int64, bool)
 
 // CreateShift 鍦ㄩ拤閽夊垱寤烘柊鐝
 func CreateShift(opUserID string, shiftName string, checkInTime string, checkOutTime string) (int64, error) {
-	accessToken, err := GetAccessToken()
+	return CreateShiftForOrg(database.DefaultOrganizationID, opUserID, shiftName, checkInTime, checkOutTime)
+}
+
+func CreateShiftForOrg(orgID, opUserID string, shiftName string, checkInTime string, checkOutTime string) (int64, error) {
+	accessToken, err := GetAccessTokenForOrg(orgID)
 	if err != nil {
 		return 0, err
 	}
@@ -3619,7 +4232,11 @@ func FindScheduleGroupID(groups []map[string]interface{}) (int64, error) {
 
 // SetAttendanceScheduleWithGroup 浣跨敤棰勮幏鍙栫殑鑰冨嫟缁?ID 璁剧疆鐢ㄦ埛鏌愬ぉ鐨勬帓鐝?
 func SetAttendanceScheduleWithGroup(opUserID string, userID string, workDate string, shiftID int64, groupID int64) error {
-	accessToken, err := GetAccessToken()
+	return SetAttendanceScheduleWithGroupForOrg(database.DefaultOrganizationID, opUserID, userID, workDate, shiftID, groupID)
+}
+
+func SetAttendanceScheduleWithGroupForOrg(orgID, opUserID string, userID string, workDate string, shiftID int64, groupID int64) error {
+	accessToken, err := GetAccessTokenForOrg(orgID)
 	if err != nil {
 		return err
 	}
@@ -3636,7 +4253,7 @@ func SetAttendanceScheduleWithGroup(opUserID string, userID string, workDate str
 		"shift_id":  shiftID,
 	}
 	if shiftID == 0 {
-		scheduleItem["shift_id"] = resolveScheduleAsyncRestShiftID(opUserID, groupID)
+		scheduleItem["shift_id"] = resolveScheduleAsyncRestShiftIDForOrg(orgID, opUserID, groupID)
 	}
 
 	body := map[string]interface{}{
@@ -3679,6 +4296,10 @@ type ValidationResult struct {
 
 // ValidateScheduleItems 校验排班项目
 func ValidateScheduleItems(opUserID string, items []ScheduleItem, groupID int64) *ValidationResult {
+	return ValidateScheduleItemsForOrg(database.DefaultOrganizationID, opUserID, items, groupID)
+}
+
+func ValidateScheduleItemsForOrg(orgID, opUserID string, items []ScheduleItem, groupID int64) *ValidationResult {
 	result := &ValidationResult{
 		Valid:   true,
 		Message: "",
@@ -3686,7 +4307,7 @@ func ValidateScheduleItems(opUserID string, items []ScheduleItem, groupID int64)
 	}
 
 	// 1. 校验考勤组是否存在且有效
-	group, err := GetAttendanceGroup(opUserID, groupID)
+	group, err := GetAttendanceGroupForOrg(orgID, opUserID, groupID)
 	if err != nil {
 		result.Valid = false
 		result.Message = "考勤组不存在或无效"
@@ -3790,12 +4411,16 @@ func containsShiftID(shiftIDs map[int64]struct{}, shiftID int64) bool {
 
 // BatchSetAttendanceSchedule 鎵归噺璁剧疆鎺掔彮锛屽皢澶氭潯鎺掔彮鎵撳寘鍒板崟娆?API 璇锋眰
 func BatchSetAttendanceSchedule(opUserID string, items []ScheduleItem, groupID int64) (successCount int, failedItems []ScheduleItem, err error) {
+	return BatchSetAttendanceScheduleForOrg(database.DefaultOrganizationID, opUserID, items, groupID)
+}
+
+func BatchSetAttendanceScheduleForOrg(orgID, opUserID string, items []ScheduleItem, groupID int64) (successCount int, failedItems []ScheduleItem, err error) {
 	if len(items) == 0 {
 		return 0, nil, nil
 	}
 
 	// 前置校验
-	validationResult := ValidateScheduleItems(opUserID, items, groupID)
+	validationResult := ValidateScheduleItemsForOrg(orgID, opUserID, items, groupID)
 	if !validationResult.Valid {
 		// 收集失败的项目
 		failedMap := make(map[string]bool)
@@ -3812,12 +4437,12 @@ func BatchSetAttendanceSchedule(opUserID string, items []ScheduleItem, groupID i
 		return 0, failedItems, fmt.Errorf("%s", validationResult.Message)
 	}
 
-	accessToken, err := GetAccessToken()
+	accessToken, err := GetAccessTokenForOrg(orgID)
 	if err != nil {
 		return 0, items, err
 	}
 
-	restShiftID := resolveScheduleAsyncRestShiftID(opUserID, groupID)
+	restShiftID := resolveScheduleAsyncRestShiftIDForOrg(orgID, opUserID, groupID)
 
 	// Split: work items (ShiftID>0) MUST be in a separate batch from rest items (ShiftID==0).
 	// DingTalk rejects the entire batch if any schedule entry is missing shift_id.
@@ -3909,7 +4534,11 @@ func BatchSetAttendanceSchedule(opUserID string, items []ScheduleItem, groupID i
 // SetAttendanceSchedule 璁剧疆鐢ㄦ埛鏌愬ぉ鐨勬帓鐝紙鍚戝悗鍏煎锛屽唴閮ㄤ細鏌ヨ鑰冨嫟缁勶級
 // shiftID > 0 琛ㄧず涓婄彮锛堜娇鐢ㄨ鐝锛夛紝shiftID == 0 琛ㄧず浼戞伅
 func SetAttendanceSchedule(opUserID string, userID string, workDate string, shiftID int64) error {
-	groups, err := GetAttendanceGroups()
+	return SetAttendanceScheduleForOrg(database.DefaultOrganizationID, opUserID, userID, workDate, shiftID)
+}
+
+func SetAttendanceScheduleForOrg(orgID, opUserID string, userID string, workDate string, shiftID int64) error {
+	groups, err := GetAttendanceGroupsForOrg(orgID)
 	if err != nil {
 		return fmt.Errorf("鑾峰彇鑰冨嫟缁勫け璐? %w", err)
 	}
@@ -3917,12 +4546,16 @@ func SetAttendanceSchedule(opUserID string, userID string, workDate string, shif
 	if err != nil {
 		return err
 	}
-	return SetAttendanceScheduleWithGroup(opUserID, userID, workDate, shiftID, groupID)
+	return SetAttendanceScheduleWithGroupForOrg(orgID, opUserID, userID, workDate, shiftID, groupID)
 }
 
 // SendCorpMessageToUser 发送企业内部消息通知到指定用户
 func SendCorpMessageToUser(userID, title, content string) error {
 	return sendCorpMessagePayloadToUser(userID, title, buildCorpMessagePayload(userID, title, content))
+}
+
+func SendCorpMessageToUserForOrg(orgID, userID, title, content string) error {
+	return sendCorpMessagePayloadToUserForOrg(orgID, userID, title, buildCorpMessagePayload(userID, title, content))
 }
 
 func SendCorpActionCardToUser(userID, title, content, actionTitle, actionURL string) error {
@@ -3932,7 +4565,18 @@ func SendCorpActionCardToUser(userID, title, content, actionTitle, actionURL str
 	return sendCorpMessagePayloadToUser(userID, title, buildCorpActionCardPayload(userID, title, content, actionTitle, actionURL))
 }
 
+func SendCorpActionCardToUserForOrg(orgID, userID, title, content, actionTitle, actionURL string) error {
+	if strings.TrimSpace(actionURL) == "" {
+		return SendCorpMessageToUserForOrg(orgID, userID, title, content)
+	}
+	return sendCorpMessagePayloadToUserForOrg(orgID, userID, title, buildCorpActionCardPayload(userID, title, content, actionTitle, actionURL))
+}
+
 func sendCorpMessagePayloadToUser(userID, title string, body map[string]interface{}) error {
+	return sendCorpMessagePayloadToUserForOrg(database.DefaultOrganizationID, userID, title, body)
+}
+
+func sendCorpMessagePayloadToUserForOrg(orgID, userID, title string, body map[string]interface{}) error {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return fmt.Errorf("userID is empty")
@@ -3940,8 +4584,13 @@ func sendCorpMessagePayloadToUser(userID, title string, body map[string]interfac
 	if !IsNotifiableUserID(userID) {
 		return fmt.Errorf("%w: %s", ErrUserNotNotifiable, userID)
 	}
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return err
+	}
 	body["userid_list"] = userID
-	accessToken, err := GetAccessToken()
+	body["agent_id"] = dingTalkAgentIDFromConfig(cfg)
+	accessToken, err := getAccessTokenWithConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -4035,21 +4684,33 @@ func IsNotifiableUserID(userID string) bool {
 		return true
 	}
 
-	var count int64
+	var user database.User
 	err := database.DB.
-		Model(&database.User{}).
-		Joins("JOIN employee_profiles ON employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
-		Where("users.deleted_at IS NULL").
-		Where("users.status = ?", "active").
-		Where("employee_profiles.profile_status = ?", "active").
-		Where("users.user_id = ?", trimmed).
-		Count(&count).Error
+		Select("user_id", "status").
+		Where("user_id = ? AND deleted_at IS NULL", trimmed).
+		First(&user).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		logrus.Infof("dingtalk notifiable user %s not found locally, allow send attempt", trimmed)
+		return true
+	}
 	if err != nil {
 		logrus.Warnf("check dingtalk notifiable user failed for %s: %v", trimmed, err)
 		return false
 	}
 
-	return count > 0
+	return isNotifiableUserStatus(user.Status)
+}
+
+func isNotifiableUserStatus(status string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	switch normalized {
+	case "", "active", "enabled", "normal", "onjob", "on_job", "在职", "试用", "正式":
+		return true
+	case "inactive", "exited", "disabled", "resigned", "terminated", "deleted", "removed", "leave", "left", "离职", "已离职", "禁用", "停用":
+		return false
+	default:
+		return true
+	}
 }
 
 func int64FromMap(values map[string]interface{}, key string) int64 {

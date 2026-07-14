@@ -35,6 +35,16 @@ jobs:
       - name: Download Go dependencies
         run: go mod download
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: tools/attendance_toolbox/requirements-runtime.txt
+
+      - name: Install attendance toolbox runtime dependencies
+        run: python -m pip install -r tools/attendance_toolbox/requirements-runtime.txt
+
       - name: Run backend tests
         run: go test ./internal/service/... ./internal/api/... -v
 

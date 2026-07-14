@@ -412,13 +412,16 @@ export default function EmployeeShiftConfig() {
                 size="small"
                 danger
                 icon={<DeleteOutlined />}
+                aria-label="恢复默认下班时间"
                 onClick={() =>
                   Modal.confirm({
                     title: `恢复 ${record.user_name} 为默认 18:30 下班？`,
                     onOk: () => deleteMutation.mutateAsync(record.user_id),
                   })
                 }
-              />
+              >
+                恢复
+              </Button>
             </Tooltip>
           )}
         </Space>
@@ -427,7 +430,7 @@ export default function EmployeeShiftConfig() {
   ]
 
   return (
-    <PageContainer title="员工下班时间配置" icon={<ClockCircleOutlined />} subtitle="为员工设置专属下班班次">
+    <PageContainer className="employee-shift-config-page" title="员工下班时间配置" icon={<ClockCircleOutlined />} subtitle="为员工设置专属下班班次">
       <Alert
         style={{ marginBottom: 'var(--space-4)' }}
         type="info"
@@ -442,7 +445,7 @@ export default function EmployeeShiftConfig() {
         }
       />
 
-      <div style={{ marginBottom: 'var(--space-3)', display: 'flex', gap: 'var(--space-2)' }}>
+      <div className="employee-shift-toolbar" style={{ marginBottom: 'var(--space-3)', display: 'flex', gap: 'var(--space-2)' }}>
         <Button type="primary" icon={<TeamOutlined />} disabled={selectedRowKeys.length === 0} onClick={handleBatchSet}>
           一站式设置(已选 {selectedRowKeys.length} 人)
         </Button>

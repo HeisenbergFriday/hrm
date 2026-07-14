@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Tree } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Tree, Space } from 'antd'
 import { KeyOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import PageContainer from '../components/PageContainer'
@@ -104,10 +104,14 @@ const Permission: React.FC = () => {
       title: '操作',
       key: 'action',
       render: (_: any, record: any) => (
-        <>
-          <Button icon={<EditOutlined />} size="small" onClick={() => handleEditRole(record)} />
-          <Button icon={<DeleteOutlined />} size="small" danger />
-        </>
+        <Space size={8}>
+          <Button icon={<EditOutlined />} size="small" aria-label="编辑角色" onClick={() => handleEditRole(record)}>
+            编辑
+          </Button>
+          <Button icon={<DeleteOutlined />} size="small" danger aria-label="删除角色">
+            删除
+          </Button>
+        </Space>
       )
     },
   ]

@@ -221,11 +221,20 @@ describe('PerformanceGoalSetting 交互测试', () => {
       })
     })
 
-    it('新流程目标计划页有补录记录时应同步展示上一季度补录区', async () => {
+    it('新流程目标计划页有补录记录时不再同步展示上一季度补录区', async () => {
+      const user = userEvent.setup()
       mockGetParticipant.mockResolvedValue({
         data: {
-          participant: makeParticipant({ status: 'target_set' }),
-          activity: { id: 1, flow_type: 'new', status: 'target_setting' },
+          participant: makeParticipant({ status: 'pending' }),
+          activity: {
+            id: 1,
+            flow_type: 'new',
+            activity_kind: 'goal_setting',
+            status: 'target_setting',
+            workflow_config: {
+              nodes: ['target_setting', 'target_approval', 'self_evaluation', 'manager_evaluation', 'department_evaluation', 'hr_confirmation', 'employee_confirmation', 'archive'],
+            },
+          },
         },
       })
       mockGetGoalRecords.mockResolvedValue(makeGoalRecords([
@@ -237,7 +246,7 @@ describe('PerformanceGoalSetting 交互测试', () => {
           item_name: '上一季度营收',
           item_definition: '上一季度营收目标',
           weight: 0.4,
-          target_value: '100',
+          target_value: '',
           attachments: [],
           approval_status: 'approved',
           sort_order: 0,
@@ -250,7 +259,7 @@ describe('PerformanceGoalSetting 交互测试', () => {
           item_name: '上一季度重点计划',
           item_definition: '上一季度重点计划说明',
           weight: 0.6,
-          target_value: '完成',
+          target_value: '',
           attachments: [],
           approval_status: 'approved',
           sort_order: 1,
@@ -275,7 +284,7 @@ describe('PerformanceGoalSetting 交互测试', () => {
           goal_type: 'okr',
           item_name: '下季度重点计划',
           item_definition: '下季度重点计划说明',
-          weight: 0.3,
+          weight: 0.6,
           target_value: '按期完成',
           attachments: [],
           approval_status: 'pending',
@@ -286,13 +295,33 @@ describe('PerformanceGoalSetting 交互测试', () => {
       render(React.createElement(PerformanceGoalSetting))
 
       await waitFor(() => {
-        expect(screen.getByText('上一季度考核指标补录')).toBeInTheDocument()
+        expect(screen.getAllByText('下季度目标计划').length).toBeGreaterThanOrEqual(1)
       })
-      expect(screen.getAllByText('下季度目标计划').length).toBeGreaterThanOrEqual(1)
-      expect(screen.getByText('上一季度营收')).toBeInTheDocument()
-      expect(screen.getByText('上一季度重点计划')).toBeInTheDocument()
+      expect(screen.queryByText('上一季度考核指标补录')).not.toBeInTheDocument()
+      expect(screen.queryByText('上一季度营收')).not.toBeInTheDocument()
+      expect(screen.queryByText('上一季度重点计划')).not.toBeInTheDocument()
       expect(screen.getByDisplayValue('下季度增长目标')).toBeInTheDocument()
       expect(screen.getByDisplayValue('下季度重点计划')).toBeInTheDocument()
+      expect(screen.getByText('KPI 权重')).toBeInTheDocument()
+      expect(screen.getByText('OKR 权重')).toBeInTheDocument()
+      expect(screen.queryByText('目标值/完成标准')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('performance-goal-quant-target-0')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('performance-goal-action-target-0')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('performance-goal-review-completion-0')).not.toBeInTheDocument()
+      expect(screen.queryByText('固定两项')).not.toBeInTheDocument()
+      expect(screen.queryByText(/固定.*可变/)).not.toBeInTheDocument()
+
+      await user.click(screen.getByTestId('performance-goal-save-draft'))
+
+      await waitFor(() => {
+        expect(mockBatchSaveGoalRecords).toHaveBeenCalled()
+      })
+      expect(mockBatchSaveReviewGoalRecords).not.toHaveBeenCalled()
+      const savedItems = mockBatchSaveGoalRecords.mock.calls[0][1].items
+      expect(savedItems).toEqual(expect.arrayContaining([
+        expect.objectContaining({ goal_phase: 'plan', goal_type: 'kpi', target_value: '' }),
+        expect.objectContaining({ goal_phase: 'plan', goal_type: 'okr', target_value: '' }),
+      ]))
     })
 
     it('量化指标详情字段应默认展开，可直接继续填写', async () => {
@@ -554,6 +583,63 @@ describe('PerformanceGoalSetting 交互测试', () => {
       await waitFor(() => {
         expect(screen.getAllByText('上一季度考核指标补录').length).toBeGreaterThan(0)
       })
+
+      await user.click(screen.getByTestId('performance-goal-save-draft'))
+
+      await waitFor(() => {
+        expect(mockBatchSaveReviewGoalRecords).toHaveBeenCalledWith(
+          101,
+          expect.objectContaining({ items: expect.any(Array) })
+        )
+      })
+      expect(mockBatchSaveGoalRecords).not.toHaveBeenCalled()
+    })
+
+    it('新流程目标审核阶段中已审核参与人仍可保存上一季度补录', async () => {
+      const user = userEvent.setup()
+      mockSearchParams = new URLSearchParams('phase=review')
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant({ status: 'target_set' }),
+          activity: { id: 1, flow_type: 'new', status: 'target_approval' },
+        },
+      })
+      mockGetGoalRecords.mockResolvedValue(makeGoalRecords([
+        {
+          id: 10,
+          section_type: 'quantitative',
+          goal_phase: 'review',
+          goal_type: 'kpi',
+          item_name: '上一季度营收',
+          item_definition: '上一季度营收目标',
+          weight: 0.5,
+          target_value: '100',
+          attachments: [],
+          approval_status: 'approved',
+          sort_order: 0,
+        },
+        {
+          id: 11,
+          section_type: 'key_action',
+          goal_phase: 'review',
+          goal_type: 'okr',
+          item_name: '上一季度重点计划',
+          item_definition: '上一季度重点计划说明',
+          weight: 0.5,
+          target_value: '完成',
+          attachments: [],
+          approval_status: 'approved',
+          sort_order: 1,
+        },
+      ]))
+
+      render(React.createElement(PerformanceGoalSetting))
+
+      await waitFor(() => {
+        expect(screen.getAllByText('上一季度考核指标补录').length).toBeGreaterThan(0)
+      })
+      expect(screen.queryByText('当前阶段不可补录')).not.toBeInTheDocument()
+      expect(screen.getByTestId('performance-goal-save-draft')).toBeEnabled()
 
       await user.click(screen.getByTestId('performance-goal-save-draft'))
 

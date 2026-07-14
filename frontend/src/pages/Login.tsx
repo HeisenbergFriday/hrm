@@ -1,23 +1,34 @@
 import React, { useEffect, useState } from 'react'
 import axios from 'axios'
-import { Alert, Button, Card, Divider, Form, Input, Modal, Radio, Select, Space, Spin, Typography, message } from 'antd'
+import { Alert, Button, Card, Divider, Form, Input, Radio, Select, Space, Spin, Typography, message } from 'antd'
 import { LoadingOutlined, LockOutlined, MobileOutlined, QrcodeOutlined, UserOutlined } from '@ant-design/icons'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
+import { orgAPI } from '../services/api'
 import {
+  alignAuthRedirectTargetWithOrg,
+  authOrgIDFromSearchParams,
+  authOrgIDFromSearchParamsOrStorage,
   authRedirectTargetFromLocation,
   normalizeAuthRedirectTarget,
+  rememberAuthOrgID,
   rememberAuthRedirect,
+  resolveAuthOrgID,
 } from '../utils/authRedirect'
-import { orgIdParams, rememberOrgId } from '../utils/org'
 
 const { Paragraph, Text, Title } = Typography
 
 interface OrganizationOption {
   org_id: string
   name: string
+  corp_id?: string
+  agent_id?: string
+}
+
+interface DingTalkDebugConfig {
+  org_id: string
   corp_id: string
-  agent_id: string
+  missing?: string[]
 }
 
 function isDingTalkEnv(): boolean {
@@ -57,19 +68,73 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [autoLogging, setAutoLogging] = useState(false)
   const [inAppStatus, setInAppStatus] = useState('')
-  const [orgModalVisible, setOrgModalVisible] = useState(false)
-  const [orgList, setOrgList] = useState<OrganizationOption[]>([])
-  const [selectedOrgId, setSelectedOrgId] = useState<string>('')
-  const [orgSelectLoading, setOrgSelectLoading] = useState(false)
-  const [pendingLoginMode, setPendingLoginMode] = useState<'qr' | 'inapp'>('qr')
   const [localLoginLoading, setLocalLoginLoading] = useState(false)
-  const [localOrgList, setLocalOrgList] = useState<OrganizationOption[]>([])
   const [form] = Form.useForm()
+  const [organizations, setOrganizations] = useState<OrganizationOption[]>([])
+  const [defaultQROrgID, setDefaultQROrgID] = useState('')
+  const [orgsLoading, setOrgsLoading] = useState(true)
   const location = useLocation()
   const [searchParams] = useSearchParams()
   const { login } = useAuthStore()
   const forceScanMode = searchParams.get('mode') === 'scan'
+  const inDingTalk = isDingTalkEnv()
+  const isQRCodeLogin = !inDingTalk || forceScanMode
+  const requestedOrgID = authOrgIDFromSearchParams(searchParams)
+  const rememberedOrgID = authOrgIDFromSearchParamsOrStorage(searchParams)
+  const [selectedOrgID, setSelectedOrgID] = useState(requestedOrgID || rememberedOrgID)
   const redirectTarget = normalizeAuthRedirectTarget(searchParams.get('redirect')) || authRedirectTargetFromLocation(location)
+  const fallbackOrgID = requestedOrgID || rememberedOrgID || (isQRCodeLogin ? defaultQROrgID : '')
+  const effectiveOrgID = resolveAuthOrgID(selectedOrgID, fallbackOrgID, organizations)
+  const needOrgSelection = organizations.length > 1
+  const requireOrgSelectionForQRCode = isQRCodeLogin && needOrgSelection
+  const requireOrgSelectionForInApp = inDingTalk && !forceScanMode && needOrgSelection
+  const showOrgSelection = needOrgSelection && (isQRCodeLogin || requireOrgSelectionForInApp)
+
+  // 加载企业列表：电脑扫码先选择本地企业，再用该企业配置发起钉钉 OAuth。
+  useEffect(() => {
+    setOrgsLoading(true)
+    orgAPI.getOrganizations()
+      .then((response: any) => {
+        const orgs = response?.data?.organizations || []
+        const nextDefaultQROrgID = response?.data?.default_qr_org_id || ''
+        setOrganizations(orgs)
+        setDefaultQROrgID(nextDefaultQROrgID)
+        if (orgs.length === 1) form.setFieldValue('org_id', orgs[0].org_id)
+      })
+      .catch(() => {
+        setOrganizations([])
+        setDefaultQROrgID('')
+      })
+      .finally(() => {
+        setOrgsLoading(false)
+      })
+  }, [form])
+
+  useEffect(() => {
+    const hasOrg = (value: string) => organizations.some((org) => org.org_id === value)
+
+    if (selectedOrgID && hasOrg(selectedOrgID)) {
+      return
+    }
+
+    if (fallbackOrgID && hasOrg(fallbackOrgID)) {
+      setSelectedOrgID(fallbackOrgID)
+      return
+    }
+
+    if (organizations.length === 1) {
+      setSelectedOrgID((currentOrgID) => currentOrgID || organizations[0].org_id)
+      return
+    }
+
+    if (organizations.length > 1 && selectedOrgID && !hasOrg(selectedOrgID)) {
+      setSelectedOrgID('')
+    }
+  }, [fallbackOrgID, organizations, selectedOrgID])
+
+  useEffect(() => {
+    if (effectiveOrgID) form.setFieldValue('org_id', effectiveOrgID)
+  }, [effectiveOrgID, form])
 
   useEffect(() => {
     const error = searchParams.get('error')
@@ -78,90 +143,23 @@ const Login: React.FC = () => {
     }
   }, [searchParams])
 
-  // 获取组织列表用于本地登录
   useEffect(() => {
-    const fetchOrgs = async () => {
-      try {
-        const response = await axios.get('/api/v1/auth/dingtalk/config')
-        const orgs: OrganizationOption[] = response.data.data.organizations || []
-        setLocalOrgList(orgs)
-        if (orgs.length > 0) {
-          form.setFieldsValue({ org_id: orgs[0].org_id })
-        }
-      } catch (err) {
-        console.error('获取组织列表失败', err)
-      }
-    }
-    void fetchOrgs()
-  }, [form])
+    if (effectiveOrgID) rememberAuthOrgID(effectiveOrgID)
+  }, [effectiveOrgID])
 
-  // 钉钉内自动免登：也需要先选择组织
-  useEffect(() => {
-    if (isDingTalkEnv() && !forceScanMode) {
-      void fetchOrganizationsAndSelect('inapp')
-    }
-  }, [forceScanMode])
-
-  // 获取组织列表，决定是否弹出选择框
-  const fetchOrganizationsAndSelect = async (mode: 'qr' | 'inapp') => {
-    setPendingLoginMode(mode)
-    setOrgSelectLoading(true)
-    try {
-      const response = await axios.get('/api/v1/auth/dingtalk/config', {
-        params: orgIdParams(),
-      })
-      const orgs: OrganizationOption[] = response.data.data.organizations || []
-      if (orgs.length === 0) {
-        message.error('暂无可用组织，请联系管理员配置')
-        return
-      }
-      if (orgs.length === 1) {
-        // 只有一个组织，直接登录
-        rememberOrgId(orgs[0].org_id)
-        if (mode === 'qr') {
-          await executeQRLogin(orgs[0].org_id)
-        } else {
-          await executeInAppLogin(orgs[0].org_id)
-        }
-        return
-      }
-      // 多个组织，弹出选择框
-      setOrgList(orgs)
-      setSelectedOrgId(orgs[0].org_id)
-      setOrgModalVisible(true)
-    } catch (err) {
-      message.error(getAxiosErrorMessage(err, '获取组织列表失败'))
-    } finally {
-      setOrgSelectLoading(false)
-    }
-  }
-
-  // 确认选择组织后执行登录
-  const handleOrgConfirm = async () => {
-    if (!selectedOrgId) {
-      message.warning('请选择一个组织')
+  const handleDingTalkQRLogin = async () => {
+    if (requireOrgSelectionForQRCode && !effectiveOrgID) {
+      message.warning('请先选择要登录的企业')
       return
     }
-    rememberOrgId(selectedOrgId)
-    setOrgModalVisible(false)
-    if (pendingLoginMode === 'qr') {
-      await executeQRLogin(selectedOrgId)
-    } else {
-      await executeInAppLogin(selectedOrgId)
-    }
-  }
 
-  const executeQRLogin = async (orgId: string) => {
     setLoading(true)
     rememberAuthRedirect(redirectTarget)
+    rememberAuthOrgID(effectiveOrgID)
     try {
-      const response = await axios.get('/api/v1/auth/dingtalk/qr/start', {
-        params: { org_id: orgId },
-        withCredentials: true,
-      })
+      const params = effectiveOrgID ? { org_id: effectiveOrgID } : undefined
+      const response = await axios.get('/api/v1/auth/dingtalk/qr/start', { params, withCredentials: true })
       const loginUrl = response.data.data.qr_code_url
-
-      console.info('[DingTalk QR] qr_code_url =', loginUrl)
 
       if (!loginUrl) {
         message.error('未获取到钉钉登录地址')
@@ -176,9 +174,15 @@ const Login: React.FC = () => {
     }
   }
 
-  const executeInAppLogin = async (orgId: string) => {
+  const handleDingTalkInAppLogin = async () => {
     if (!isDingTalkEnv()) {
       setInAppStatus('当前不在钉钉客户端内。')
+      return
+    }
+
+    if (!effectiveOrgID && needOrgSelection) {
+      setInAppStatus('请先选择要登录的企业')
+      message.warning('请先选择要登录的企业')
       return
     }
 
@@ -186,11 +190,10 @@ const Login: React.FC = () => {
     setInAppStatus('正在获取钉钉配置...')
 
     try {
-      const configRes = await axios.get('/api/v1/auth/dingtalk/config', {
-        params: orgId ? { org_id: orgId } : {},
-        withCredentials: true,
-      })
-      const { corp_id: corpId, missing } = configRes.data.data
+      const params = effectiveOrgID ? { org_id: effectiveOrgID } : undefined
+      const configRes = await axios.get('/api/v1/auth/dingtalk/config', { params, withCredentials: true })
+      const configData = configRes.data.data as DingTalkDebugConfig
+      const { corp_id: corpId, missing } = configData
       const dd = (window as any).dd
 
       if (!corpId || (Array.isArray(missing) && missing.includes('DINGTALK_CORP_ID'))) {
@@ -218,12 +221,13 @@ const Login: React.FC = () => {
             setInAppStatus('已拿到授权码，正在请求后端登录...')
             const response = await axios.post('/api/v1/auth/dingtalk/in-app', {
               code: result.code,
-              org_id: orgId,
+              org_id: effectiveOrgID || undefined,
             }, { withCredentials: true })
             const { user } = response.data.data
             login(user)
+            rememberAuthOrgID(user?.org_id || effectiveOrgID)
             message.success('登录成功', 0.6)
-            window.location.replace(redirectTarget || '/')
+            window.location.replace(alignAuthRedirectTargetWithOrg(redirectTarget, user?.org_id || effectiveOrgID))
           } catch (err) {
             const text = getAxiosErrorMessage(err, '钉钉内免登失败')
             console.error('[DingTalk InApp] login failed', err)
@@ -231,10 +235,8 @@ const Login: React.FC = () => {
             setInAppStatus(text)
             message.error(text)
             if (availableOrgs.length > 0) {
-              setPendingLoginMode('inapp')
-              setOrgList(availableOrgs)
-              setSelectedOrgId(availableOrgs[0].org_id)
-              setOrgModalVisible(true)
+              setOrganizations(availableOrgs)
+              setSelectedOrgID(availableOrgs.length === 1 ? availableOrgs[0].org_id : '')
             }
             setAutoLogging(false)
           }
@@ -256,14 +258,6 @@ const Login: React.FC = () => {
     }
   }
 
-  const handleDingTalkQRLogin = async () => {
-    await fetchOrganizationsAndSelect('qr')
-  }
-
-  const handleDingTalkInAppLogin = async () => {
-    await fetchOrganizationsAndSelect('inapp')
-  }
-
   // 本地密码登录
   const handleLocalLogin = async (values: { username: string; password: string; org_id: string }) => {
     setLocalLoginLoading(true)
@@ -275,14 +269,29 @@ const Login: React.FC = () => {
       }, { withCredentials: true })
       const { user } = response.data.data
       login(user)
+      rememberAuthOrgID(user?.org_id || values.org_id)
       message.success('登录成功', 0.6)
-      window.location.replace(redirectTarget || '/')
+      window.location.replace(alignAuthRedirectTargetWithOrg(redirectTarget, user?.org_id || values.org_id))
     } catch (err) {
       message.error(getAxiosErrorMessage(err, '登录失败，请检查用户名和密码'))
     } finally {
       setLocalLoginLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (orgsLoading) {
+      return
+    }
+
+    if (requireOrgSelectionForInApp && !effectiveOrgID) {
+      return
+    }
+
+    if (isDingTalkEnv() && !forceScanMode) {
+      void handleDingTalkInAppLogin()
+    }
+  }, [effectiveOrgID, forceScanMode, orgsLoading, requireOrgSelectionForInApp])
 
   if (autoLogging) {
     return (
@@ -300,12 +309,33 @@ const Login: React.FC = () => {
     )
   }
 
-  const inDingTalk = isDingTalkEnv()
-
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#f0f2f5' }}>
-      <Card title={<Title level={4} style={{ margin: 0 }}>钉钉一体化人事后台</Title>} style={{ width: 440 }}>
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <div className="login-page">
+      <Card title={<Title level={4} className="login-title">钉钉一体化人事后台</Title>} className="login-card">
+        <Space direction="vertical" size="middle" className="login-space">
+          {orgsLoading ? (
+            <div className="login-orgs-loading">
+              <Spin />
+            </div>
+          ) : showOrgSelection ? (
+            <div className="login-org-selector">
+              <Text strong>选择要登录的企业</Text>
+              <Radio.Group
+                className="login-org-radio"
+                value={selectedOrgID}
+                onChange={(e) => setSelectedOrgID(e.target.value)}
+              >
+                <Space direction="vertical" size="small" className="login-org-options">
+                  {organizations.map((org) => (
+                    <Radio key={org.org_id} value={org.org_id}>
+                      {org.name}
+                    </Radio>
+                  ))}
+                </Space>
+              </Radio.Group>
+            </div>
+          ) : null}
+
           <Alert
             type="info"
             showIcon
@@ -313,22 +343,35 @@ const Login: React.FC = () => {
             description={
               inDingTalk && !forceScanMode
                 ? '如果自动登录未成功，可以点击下方按钮重新发起免登。'
-                : '点击下方按钮后，电脑当前页面会跳到钉钉官方登录页。电脑前页面会跳到钉钉官方登录页，用手机扫码确认后，电脑会自动回跳进入项目。'
+                : '请先选择要登录的企业，跳到钉钉官方页后也请选择同一组织；不一致会被系统拦截。'
             }
           />
 
           <Paragraph style={{ marginBottom: 0 }}>
             {inDingTalk && !forceScanMode
-              ? '钉钉微应用首页应配置为应用根地址，例如 http://your-host:8080/ 。'
-              : '电脑扫码登录的回调地址需要配置到钉钉开放平台，并与当前访问地址一致。'}
+              ? '钉钉微应用首页应配置为应用根地址，手机端打开后会自动发起免登。'
+              : '电脑扫码登录会使用所选企业的钉钉应用配置，回调地址需要与当前访问地址一致。'}
           </Paragraph>
 
           {inDingTalk && !forceScanMode ? (
-            <Button type="primary" block icon={<MobileOutlined />} loading={orgSelectLoading} onClick={() => void handleDingTalkInAppLogin()}>
+            <Button
+              type="primary"
+              block
+              icon={<MobileOutlined />}
+              onClick={() => void handleDingTalkInAppLogin()}
+              disabled={requireOrgSelectionForInApp && !effectiveOrgID}
+            >
               重新发起钉钉免登
             </Button>
           ) : (
-            <Button type="primary" block loading={loading || orgSelectLoading} icon={<QrcodeOutlined />} onClick={() => void handleDingTalkQRLogin()}>
+            <Button
+              type="primary"
+              block
+              loading={loading}
+              icon={<QrcodeOutlined />}
+              onClick={() => void handleDingTalkQRLogin()}
+              disabled={loading || orgsLoading || (requireOrgSelectionForQRCode && !effectiveOrgID)}
+            >
               打开钉钉官方扫码登录页
             </Button>
           )}
@@ -357,7 +400,8 @@ const Login: React.FC = () => {
             >
               <Select
                 placeholder="请选择组织"
-                options={localOrgList.map((org) => ({
+                loading={orgsLoading}
+                options={organizations.map((org) => ({
                   value: org.org_id,
                   label: org.name || org.org_id,
                 }))}
@@ -388,37 +432,6 @@ const Login: React.FC = () => {
           </Form>
         </Space>
       </Card>
-
-      <Modal
-        title="选择加入的组织"
-        open={orgModalVisible}
-        onOk={() => void handleOrgConfirm()}
-        onCancel={() => setOrgModalVisible(false)}
-        okText="确认登录"
-        cancelText="取消"
-        confirmLoading={loading}
-      >
-        <div style={{ padding: '8px 0' }}>
-          <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-            请选择你要登录的企业组织：
-          </Paragraph>
-          <Radio.Group
-            value={selectedOrgId}
-            onChange={(e) => setSelectedOrgId(e.target.value)}
-            style={{ width: '100%' }}
-          >
-            <Space direction="vertical" style={{ width: '100%' }}>
-              {orgList.map((org) => (
-                <Radio key={org.org_id} value={org.org_id} style={{ width: '100%', padding: '8px 12px', border: '1px solid #d9d9d9', borderRadius: 6 }}>
-                  <div>
-                    <Text strong>{org.name || org.org_id}</Text>
-                  </div>
-                </Radio>
-              ))}
-            </Space>
-          </Radio.Group>
-        </div>
-      </Modal>
     </div>
   )
 }

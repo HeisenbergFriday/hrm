@@ -221,6 +221,10 @@ export const PERFORMANCE_PERMISSION_LABELS: Record<string, string> = {
   'performance:manager_eval:submit': '绩效主管评分',
   'performance:result:view': '绩效结果查看',
   'performance:hr_confirm:submit': '绩效HR确认',
+  'performance:department_eval:submit': '绩效部门/中心评估',
+  'performance:hr_review:submit': '绩效HR审核',
+  'performance:result_publish:manage': '绩效结果公布',
+  'performance:appeal:manage': '绩效申诉处理',
   'performance:assessment_manager:update': '考核上级调整',
   'performance:assessment_manager:batch_update': '批量考核上级调整',
 }

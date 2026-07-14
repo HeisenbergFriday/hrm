@@ -17,11 +17,14 @@ type DraftIndicatorItem = {
   name: string
   description: string
   weight: number
+  indicator_type?: MutengIndicatorType | string
   red_line_value?: string
   target_value?: string
   challenge_value?: string
   scoring_rule?: string
 }
+
+type MutengIndicatorType = 'okr' | 'kpi'
 
 type DepartmentOption = {
   department_id: string
@@ -74,6 +77,16 @@ const newActionItem = (): DraftIndicatorItem => ({
   target_value: '',
 })
 
+const newMutengItem = (indicatorType: MutengIndicatorType = 'okr', weight = 100): DraftIndicatorItem => ({
+  indicator_type: indicatorType,
+  name: '',
+  description: '',
+  weight,
+  target_value: '',
+})
+
+const getMutengSectionType = (indicatorType?: string) => indicatorType === 'kpi' ? 'quantitative' : 'key_action'
+
 export default function PerformanceIndicatorLibrary() {
   const navigate = useNavigate()
   const canManageIndicator = hasPermission(INDICATOR_MANAGE_PERMISSION)
@@ -86,6 +99,7 @@ export default function PerformanceIndicatorLibrary() {
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [selectedLib, setSelectedLib] = useState<ILibrary | null>(null)
+  const detailCardRef = useRef<HTMLDivElement | null>(null)
   const [items, setItems] = useState<PerformanceIndicatorItem[]>([])
   const [itemsLoading, setItemsLoading] = useState(false)
   const [departments, setDepartments] = useState<DepartmentOption[]>([])
@@ -102,9 +116,22 @@ export default function PerformanceIndicatorLibrary() {
   const [editingItemLoading, setEditingItemLoading] = useState(false)
   const [quantItems, setQuantItems] = useState<DraftIndicatorItem[]>([newQuantItem()])
   const [actionItems, setActionItems] = useState<DraftIndicatorItem[]>([newActionItem()])
+  const [mutengItems, setMutengItems] = useState<DraftIndicatorItem[]>([newMutengItem()])
   const [quantSearchResults, setQuantSearchResults] = useState<Record<number, any[]>>({})
   const [actionSearchResults, setActionSearchResults] = useState<Record<number, any[]>>({})
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const selectedCreateTemplateId = Form.useWatch('template_id', form)
+  const selectedCreateTemplate = templates.find(template => String(template.id) === String(selectedCreateTemplateId))
+  const isCreateMutengTemplate = selectedCreateTemplate?.flow_type === 'new'
+  const selectedLibTemplate = selectedLib
+    ? templates.find(template => String(template.id) === String(selectedLib.template_id))
+    : undefined
+  const isSelectedLibMutengTemplate = selectedLibTemplate?.flow_type === 'new'
+  const isEditingMutengItem = !!editingItem && isSelectedLibMutengTemplate
+  const createRuleText = isCreateMutengTemplate
+    ? '沐腾科技流程模版按 OKR/KPI 维护目标/关键职责事项，权重合计必须为 100%。'
+    : '量化指标权重合计 70%，关键行动权重合计 30%，总权重必须为 100%。'
+  const mutengWeightTotal = mutengItems.reduce((sum, item) => sum + (item.weight || 0), 0)
 
   const fetchLibraries = useCallback(async () => {
     setLoading(true)
@@ -156,6 +183,9 @@ export default function PerformanceIndicatorLibrary() {
     form.resetFields()
     setQuantItems([newQuantItem()])
     setActionItems([newActionItem()])
+    setMutengItems([newMutengItem()])
+    setQuantSearchResults({})
+    setActionSearchResults({})
   }
 
   const guardIndicatorManage = () => {
@@ -194,48 +224,79 @@ export default function PerformanceIndicatorLibrary() {
   const handleCreate = async (values: any) => {
     if (!guardIndicatorManage()) return
 
-    const totalWeight = [...quantItems, ...actionItems].reduce((sum, item) => sum + (item.weight || 0), 0)
-    const quantWeight = quantItems.reduce((sum, item) => sum + (item.weight || 0), 0)
-    const actionWeight = actionItems.reduce((sum, item) => sum + (item.weight || 0), 0)
+    const selectedTemplate = templates.find(template => String(template.id) === String(values.template_id))
+    const isMutengTemplate = selectedTemplate?.flow_type === 'new'
+    let payloadItems: any[] = []
 
-    if ([...quantItems, ...actionItems].some(item => !isValidWeight(item.weight))) {
-      message.error('权重必须为 5% 的倍数，且单项不低于 10%')
-      return
-    }
-    if (Math.abs(totalWeight - 100) > 0.001) {
-      message.error(`权重合计必须为 100%，当前为 ${totalWeight}%`)
-      return
-    }
-    if (Math.abs(quantWeight - 70) > 0.001) {
-      message.error(`量化指标权重必须为 70%，当前为 ${quantWeight}%`)
-      return
-    }
-    if (Math.abs(actionWeight - 30) > 0.001) {
-      message.error(`关键行动权重必须为 30%，当前为 ${actionWeight}%`)
-      return
-    }
-    if (quantItems.some(item => !item.name.trim() || !item.description.trim())) {
-      message.warning('请填写量化指标名称和指标定义及口径说明')
-      return
-    }
-    if (actionItems.some(item => !item.name.trim() || !item.description.trim() || !item.target_value?.trim())) {
-      message.warning('请填写关键行动名称、指标定义及口径说明和定性目标')
-      return
-    }
-    if (quantItems.some(item =>
-      !item.red_line_value?.trim() ||
-      !item.target_value?.trim() ||
-      !item.challenge_value?.trim() ||
-      !item.scoring_rule?.trim()
-    )) {
-      message.warning('请填写量化指标的红线值、目标值、挑战值和考核标准')
-      return
-    }
+    if (isMutengTemplate) {
+      const totalWeight = mutengItems.reduce((sum, item) => sum + (item.weight || 0), 0)
 
-    const payload = {
-      ...values,
-      template_id: Number(values.template_id),
-      items: [
+      if (mutengItems.some(item => !isValidWeight(item.weight))) {
+        message.error('权重必须为 5% 的倍数，且单项不低于 10%')
+        return
+      }
+      if (Math.abs(totalWeight - 100) > 0.001) {
+        message.error(`权重合计必须为 100%，当前为 ${totalWeight}%`)
+        return
+      }
+      if (mutengItems.some(item => !item.name.trim() || !item.description.trim() || !item.target_value?.trim())) {
+        message.warning('请填写目标/关键职责事项、说明和完成情况')
+        return
+      }
+
+      payloadItems = mutengItems.map((item, idx) => {
+        const indicatorType = item.indicator_type === 'kpi' ? 'kpi' : 'okr'
+        return {
+          section_type: getMutengSectionType(indicatorType),
+          indicator_type: indicatorType,
+          name: item.name,
+          description: item.description,
+          weight: item.weight,
+          target_value: item.target_value,
+          is_default: true,
+          sort_order: idx + 1,
+        }
+      })
+    } else {
+      const totalWeight = [...quantItems, ...actionItems].reduce((sum, item) => sum + (item.weight || 0), 0)
+      const quantWeight = quantItems.reduce((sum, item) => sum + (item.weight || 0), 0)
+      const actionWeight = actionItems.reduce((sum, item) => sum + (item.weight || 0), 0)
+
+      if ([...quantItems, ...actionItems].some(item => !isValidWeight(item.weight))) {
+        message.error('权重必须为 5% 的倍数，且单项不低于 10%')
+        return
+      }
+      if (Math.abs(totalWeight - 100) > 0.001) {
+        message.error(`权重合计必须为 100%，当前为 ${totalWeight}%`)
+        return
+      }
+      if (Math.abs(quantWeight - 70) > 0.001) {
+        message.error(`量化指标权重必须为 70%，当前为 ${quantWeight}%`)
+        return
+      }
+      if (Math.abs(actionWeight - 30) > 0.001) {
+        message.error(`关键行动权重必须为 30%，当前为 ${actionWeight}%`)
+        return
+      }
+      if (quantItems.some(item => !item.name.trim() || !item.description.trim())) {
+        message.warning('请填写量化指标名称和指标定义及口径说明')
+        return
+      }
+      if (actionItems.some(item => !item.name.trim() || !item.description.trim() || !item.target_value?.trim())) {
+        message.warning('请填写关键行动名称、指标定义及口径说明和定性目标')
+        return
+      }
+      if (quantItems.some(item =>
+        !item.red_line_value?.trim() ||
+        !item.target_value?.trim() ||
+        !item.challenge_value?.trim() ||
+        !item.scoring_rule?.trim()
+      )) {
+        message.warning('请填写量化指标的红线值、目标值、挑战值和考核标准')
+        return
+      }
+
+      payloadItems = [
         ...quantItems.map((item, idx) => ({
           section_type: 'quantitative',
           name: item.name,
@@ -257,7 +318,13 @@ export default function PerformanceIndicatorLibrary() {
           is_default: true,
           sort_order: quantItems.length + idx + 1,
         })),
-      ],
+      ]
+    }
+
+    const payload = {
+      ...values,
+      template_id: Number(values.template_id),
+      items: payloadItems,
     }
 
     setCreating(true)
@@ -317,6 +384,7 @@ export default function PerformanceIndicatorLibrary() {
     editItemForm.setFieldsValue({
       name: item.name,
       description: item.description,
+      indicator_type: item.indicator_type || (item.section_type === 'quantitative' ? 'kpi' : 'okr'),
       weight: item.weight ?? item.default_weight,
       red_line_value: item.red_line_value,
       target_value: item.target_value,
@@ -332,7 +400,16 @@ export default function PerformanceIndicatorLibrary() {
 
     setEditingItemLoading(true)
     try {
-      await performanceAPI.updateIndicatorItem(editingItem.id, values)
+      const payload = isEditingMutengItem
+        ? {
+          ...values,
+          indicator_type: values.indicator_type || editingItem.indicator_type || (editingItem.section_type === 'quantitative' ? 'kpi' : 'okr'),
+          red_line_value: '',
+          challenge_value: '',
+          scoring_rule: '',
+        }
+        : values
+      await performanceAPI.updateIndicatorItem(editingItem.id, payload)
       message.success('修改成功')
       setEditItemOpen(false)
       setEditingItem(null)
@@ -369,9 +446,22 @@ export default function PerformanceIndicatorLibrary() {
     }
   }
 
+  const scrollToDetailOnMobile = () => {
+    window.setTimeout(() => {
+      if (window.matchMedia('(max-width: 767.98px), (pointer: coarse)').matches) {
+        const target = detailCardRef.current
+        if (!target) return
+
+        const targetTop = target.getBoundingClientRect().top + window.scrollY - 62
+        window.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+      }
+    }, 180)
+  }
+
   const handleSelectLib = (record: ILibrary) => {
     setSelectedLib(record)
     fetchItems(record.id)
+    scrollToDetailOnMobile()
   }
 
   const updateQuantItem = (index: number, patch: Partial<DraftIndicatorItem>) => {
@@ -380,6 +470,10 @@ export default function PerformanceIndicatorLibrary() {
 
   const updateActionItem = (index: number, patch: Partial<DraftIndicatorItem>) => {
     setActionItems(prev => prev.map((item, idx) => idx === index ? { ...item, ...patch } : item))
+  }
+
+  const updateMutengItem = (index: number, patch: Partial<DraftIndicatorItem>) => {
+    setMutengItems(prev => prev.map((item, idx) => idx === index ? { ...item, ...patch } : item))
   }
 
   const searchIndicators = useCallback((keyword: string, resultsSetter: React.Dispatch<React.SetStateAction<Record<number, any[]>>>, rowIndex: number, sectionType: string) => {
@@ -524,14 +618,14 @@ export default function PerformanceIndicatorLibrary() {
       title: '操作', key: 'action', width: 110,
       render: (_: any, record: ILibrary) => (
         <Space size={4}>
-          <Button type="link" size="small" onClick={() => handleSelectLib(record)} style={{ padding: '0 4px' }}>查看</Button>
+          <Button type="link" size="small" onClick={() => handleSelectLib(record)}>查看</Button>
           {record.status === 'active' && canManageIndicator && (
             <Popconfirm title="确认归档该指标库？" onConfirm={() => handleArchive(record.id)}>
-              <Button type="link" size="small" danger style={{ padding: '0 4px' }}>归档</Button>
+              <Button type="link" size="small" danger>归档</Button>
             </Popconfirm>
           )}
           {record.status === 'active' && !canManageIndicator && renderIndicatorManageButton(
-            <Button type="link" size="small" danger style={{ padding: '0 4px' }}>归档</Button>
+            <Button type="link" size="small" danger>归档</Button>
           )}
         </Space>
       )
@@ -539,20 +633,26 @@ export default function PerformanceIndicatorLibrary() {
   ]
 
   const itemColumns = [
-    { title: '指标名称/重点计划', dataIndex: 'name', key: 'name' },
+    { title: isSelectedLibMutengTemplate ? '目标/关键职责事项' : '指标名称/重点计划', dataIndex: 'name', key: 'name' },
     {
       title: '类别',
       key: 'section_type',
       width: 90,
-      render: (_: any, record: PerformanceIndicatorItem) => (
-        <span>{
-          ({
-            quantitative: '量化指标',
-            key_action: '关键行动',
-            bonus_penalty: '附加项',
-          } as Record<string, string>)[record.section_type || record.indicator_type] || record.section_type || record.indicator_type || '-'
-        }</span>
-      )
+      render: (_: any, record: PerformanceIndicatorItem) => {
+        if (isSelectedLibMutengTemplate) {
+          const indicatorType = record.indicator_type || (record.section_type === 'quantitative' ? 'kpi' : 'okr')
+          return <Tag color={indicatorType === 'kpi' ? 'blue' : 'green'}>{indicatorType === 'kpi' ? 'KPI' : 'OKR'}</Tag>
+        }
+        return (
+          <span>{
+            ({
+              quantitative: '量化指标',
+              key_action: '关键行动',
+              bonus_penalty: '附加项',
+            } as Record<string, string>)[record.section_type || record.indicator_type] || record.section_type || record.indicator_type || '-'
+          }</span>
+        )
+      }
     },
     {
       title: '权重',
@@ -564,9 +664,10 @@ export default function PerformanceIndicatorLibrary() {
       }
     },
     {
-      title: '目标',
+      title: isSelectedLibMutengTemplate ? '完成情况' : '目标',
       key: 'target',
       render: (_: any, record: PerformanceIndicatorItem) => {
+        if (isSelectedLibMutengTemplate) return record.target_value || '-'
         if (record.section_type === 'quantitative') {
           return [record.red_line_value, record.target_value, record.challenge_value].filter(Boolean).join(' / ') || '-'
         }
@@ -578,14 +679,14 @@ export default function PerformanceIndicatorLibrary() {
       render: (_: any, record: PerformanceIndicatorItem) => (
         <Space size={8}>
           {renderIndicatorManageButton(
-            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditItem(record)} style={{ padding: 0, color: 'var(--color-primary)' }} />
+            <Button type="link" size="small" icon={<EditOutlined />} aria-label="编辑指标项" onClick={() => handleEditItem(record)} />
           )}
           {canManageIndicator ? (
             <Popconfirm title="确认删除该指标项？" onConfirm={() => handleDeleteItem(record.id)}>
-              <Button type="link" size="small" icon={<DeleteOutlined />} style={{ padding: 0, color: 'var(--color-error)' }} />
+              <Button type="link" size="small" icon={<DeleteOutlined />} danger aria-label="删除指标项" />
             </Popconfirm>
           ) : renderIndicatorManageButton(
-            <Button type="link" size="small" icon={<DeleteOutlined />} style={{ padding: 0, color: 'var(--color-error)' }} />
+            <Button type="link" size="small" icon={<DeleteOutlined />} danger aria-label="删除指标项" />
           )}
         </Space>
       )
@@ -594,6 +695,7 @@ export default function PerformanceIndicatorLibrary() {
 
   return (
     <PageContainer
+      className="performance-indicator-page"
       title="指标库管理"
       icon={<DatabaseOutlined />}
       subtitle="创建时一次性配置指标项，创建后的指标库仅支持查看与继承"
@@ -625,7 +727,7 @@ export default function PerformanceIndicatorLibrary() {
         color: 'var(--color-text-secondary)',
       }}>
         <strong style={{ color: 'var(--color-text-heading)' }}>创建规则：</strong>
-        量化指标权重合计 70%，关键行动权重合计 30%，总权重必须为 100%。
+        {createRuleText}
       </div>
       {!canManageIndicator && (
         <Alert
@@ -637,8 +739,9 @@ export default function PerformanceIndicatorLibrary() {
         />
       )}
 
-      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+      <div className="performance-indicator-layout" style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
         <PageCard
+          className="performance-indicator-list-card"
           title="指标库列表"
           style={{ flexShrink: 0 }}
           extra={
@@ -666,10 +769,11 @@ export default function PerformanceIndicatorLibrary() {
           />
         </PageCard>
 
+        <div ref={detailCardRef} className="performance-indicator-detail-anchor" style={{ flex: 1, minWidth: 0 }}>
         <PageCard
+          className="performance-indicator-detail-card"
           title="指标项"
           style={{
-            flex: 1,
             minWidth: 0,
           }}
         >
@@ -713,6 +817,7 @@ export default function PerformanceIndicatorLibrary() {
             </div>
           )}
         </PageCard>
+        </div>
       </div>
 
       <Modal
@@ -821,6 +926,150 @@ export default function PerformanceIndicatorLibrary() {
           </div>
         </Form>
 
+        {isCreateMutengTemplate ? (
+          <Card
+            size="small"
+            title={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 4, height: 18, borderRadius: 'var(--radius-xs)', background: 'linear-gradient(180deg, var(--color-primary), #6366f1)' }} />
+                <span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>目标/关键职责事项</span>
+                <span style={{
+                  background: mutengWeightTotal === 100 ? 'linear-gradient(135deg, var(--color-primary-bg), #dbeafe)' : '#fff1f0',
+                  color: mutengWeightTotal === 100 ? 'var(--color-primary)' : 'var(--color-error)',
+                  fontSize: 'var(--font-size-xs)',
+                  fontWeight: 'var(--font-weight-bold)',
+                  padding: '4px 12px',
+                  borderRadius: 'var(--radius-xl)',
+                  border: mutengWeightTotal === 100 ? '1px solid #c7d2fe' : '1px solid #ffccc7',
+                  letterSpacing: 0.3,
+                }}>
+                  权重合计 {mutengWeightTotal}%
+                </span>
+              </div>
+            }
+            style={{
+              marginTop: 10,
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid #e0e3ed',
+              boxShadow: '0 1px 6px rgba(0,0,0,0.05)',
+            }}
+            styles={{ header: { background: '#f5f6fb', borderBottom: '1px solid #eef0f6' } }}
+          >
+            <Table
+              dataSource={mutengItems}
+              rowKey={(_, idx) => `m-${idx}`}
+              pagination={false}
+              size="small"
+              bordered
+              columns={[
+                {
+                  title: '序号',
+                  width: 108,
+                  render: (_: any, __: any, idx: number) => {
+                    const indicatorType = mutengItems[idx].indicator_type === 'kpi' ? 'kpi' : 'okr'
+                    return (
+                      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                        <span style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)' }}>#{idx + 1}</span>
+                        <Select
+                          size="small"
+                          value={indicatorType}
+                          style={{ width: 78 }}
+                          options={[
+                            { value: 'okr', label: 'OKR' },
+                            { value: 'kpi', label: 'KPI' },
+                          ]}
+                          onChange={(value) => updateMutengItem(idx, { indicator_type: value })}
+                        />
+                      </Space>
+                    )
+                  }
+                },
+                {
+                  title: '目标/关键职责事项',
+                  width: 220,
+                  render: (_: any, __: any, idx: number) => (
+                    <Input
+                      value={mutengItems[idx].name}
+                      onChange={e => updateMutengItem(idx, { name: e.target.value })}
+                      placeholder="输入目标/关键职责事项"
+                    />
+                  )
+                },
+                {
+                  title: '权重',
+                  width: 100,
+                  render: (_: any, __: any, idx: number) => (
+                    <InputNumber min={10} max={100} step={5} value={mutengItems[idx].weight} onChange={value => updateMutengItem(idx, { weight: value || 0 })} addonAfter="%" style={{ width: '100%' }} />
+                  )
+                },
+                {
+                  title: (
+                    <Space direction="vertical" size={0}>
+                      <span>目标/关键职责事项说明</span>
+                      <span style={{ color: 'var(--color-error)', fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-medium)' }}>（若是 OKR 按 KR 填写，若是 KPI 按指标填写）</span>
+                    </Space>
+                  ),
+                  width: 330,
+                  render: (_: any, __: any, idx: number) => (
+                    <TextArea
+                      rows={3}
+                      value={mutengItems[idx].description}
+                      onChange={e => updateMutengItem(idx, { description: e.target.value })}
+                      placeholder={mutengItems[idx].indicator_type === 'kpi' ? '填写指标定义、计算口径或公式' : '填写 KR1、KR2 等关键结果'}
+                    />
+                  )
+                },
+                {
+                  title: '目标/关键职责事项的完成情况',
+                  render: (_: any, __: any, idx: number) => (
+                    <TextArea
+                      rows={3}
+                      value={mutengItems[idx].target_value}
+                      onChange={e => updateMutengItem(idx, { target_value: e.target.value })}
+                      placeholder="描述完成结果、交付物或完成标准"
+                    />
+                  )
+                },
+                {
+                  title: '',
+                  width: 48,
+                  render: (_: any, __: any, idx: number) => (
+                    <Button type="text" danger icon={<DeleteOutlined />} disabled={mutengItems.length <= 1} onClick={() => setMutengItems(prev => prev.filter((_, i) => i !== idx))} />
+                  )
+                }
+              ]}
+            />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+              <Button
+                type="dashed"
+                icon={<PlusOutlined />}
+                onClick={() => setMutengItems(prev => [...prev, newMutengItem('okr', 10)])}
+                style={{
+                  height: 40,
+                  color: '#15803d',
+                  borderColor: '#86efac',
+                  fontSize: 'var(--font-size-sm)',
+                }}
+              >
+                添加 OKR
+              </Button>
+              <Button
+                type="dashed"
+                icon={<PlusOutlined />}
+                onClick={() => setMutengItems(prev => [...prev, newMutengItem('kpi', 10)])}
+                style={{
+                  height: 40,
+                  color: 'var(--color-primary)',
+                  borderColor: '#a5b4fc',
+                  fontSize: 'var(--font-size-sm)',
+                }}
+              >
+                添加 KPI
+              </Button>
+            </div>
+          </Card>
+        ) : (
+          <>
         <Card
           size="small"
           title={
@@ -1034,6 +1283,8 @@ export default function PerformanceIndicatorLibrary() {
             添加关键行动
           </Button>
         </Card>
+          </>
+        )}
       </Modal>
 
       <Modal
@@ -1106,20 +1357,36 @@ export default function PerformanceIndicatorLibrary() {
         styles={{ mask: { backdropFilter: 'blur(4px)' } }}
       >
         <Form form={editItemForm} layout="vertical" onFinish={handleEditItemSubmit} style={{ marginTop: 16 }}>
-          <Form.Item name="name" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>指标名称</span>} rules={[{ required: true, message: '请输入指标名称' }]}>
+          {isEditingMutengItem && (
+            <Form.Item name="indicator_type" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>类型</span>}>
+              <Select
+                disabled
+                options={[
+                  { value: 'okr', label: 'OKR' },
+                  { value: 'kpi', label: 'KPI' },
+                ]}
+              />
+            </Form.Item>
+          )}
+          <Form.Item name="name" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>{isEditingMutengItem ? '目标/关键职责事项' : '指标名称'}</span>} rules={[{ required: true, message: isEditingMutengItem ? '请输入目标/关键职责事项' : '请输入指标名称' }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="description" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>指标定义及口径说明</span>}>
+          <Form.Item name="description" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>{isEditingMutengItem ? '目标/关键职责事项说明' : '指标定义及口径说明'}</span>}>
             <TextArea rows={2} />
           </Form.Item>
           <Row gutter={16}>
             <Col span={8}>
               <Form.Item name="weight" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>权重</span>}>
-                <InputNumber min={5} max={100} step={5} addonAfter="%" style={{ width: '100%' }} />
+                <InputNumber min={isEditingMutengItem ? 10 : 5} max={100} step={5} addonAfter="%" style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
-          {editingItem?.section_type === 'quantitative' && (
+          {isEditingMutengItem && (
+            <Form.Item name="target_value" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>目标/关键职责事项的完成情况</span>}>
+              <TextArea rows={3} />
+            </Form.Item>
+          )}
+          {!isEditingMutengItem && editingItem?.section_type === 'quantitative' && (
             <>
               <Row gutter={16}>
                 <Col span={8}>
@@ -1143,7 +1410,7 @@ export default function PerformanceIndicatorLibrary() {
               </Form.Item>
             </>
           )}
-          {editingItem?.section_type === 'key_action' && (
+          {!isEditingMutengItem && editingItem?.section_type === 'key_action' && (
             <Form.Item name="target_value" label={<span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text)' }}>定性目标</span>}>
               <TextArea rows={2} />
             </Form.Item>

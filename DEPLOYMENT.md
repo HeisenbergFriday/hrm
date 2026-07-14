@@ -21,7 +21,7 @@
 
 ```env
 PORT=8080
-DATABASE_URL=root:password@tcp(localhost:3306)/peopleops?charset=utf8mb4&parseTime=True&loc=Local
+DATABASE_URL=peopleops_app:<strong_mysql_password>@tcp(localhost:3306)/peopleops?charset=utf8mb4&parseTime=True&loc=Local
 REDIS_URL=localhost:6379
 REDIS_PASSWORD=
 
@@ -30,7 +30,7 @@ DINGTALK_APP_SECRET=your_app_secret
 DINGTALK_CORP_ID=dingxxxxxxxx
 DINGTALK_AGENT_ID=123456
 
-JWT_SECRET=replace_with_32+_chars_random_secret
+JWT_SECRET=<openssl_rand_base64_48>
 JWT_TTL_MINUTES=480
 AUTH_SESSION_VERSION=cookie-v1
 AUTH_COOKIE_SECURE=true
@@ -38,6 +38,8 @@ AUTH_COOKIE_SAMESITE=lax
 CLAMAV_ADDR=127.0.0.1:3310
 UPLOAD_REQUIRE_ANTIVIRUS=true
 ```
+
+上线前用 `openssl rand -base64 48` 生成 `JWT_SECRET` 和 `ADMIN_PASSWORD`，MySQL 使用专用低权限账号，不要复用 `root` 或示例密码。
 
 注意：
 
@@ -131,10 +133,11 @@ http://localhost:8080/
 如果使用钉钉扫码或钉钉内免登：
 
 1. 执行 `cd frontend && npm run build`。
-2. 用 Go 服务统一托管页面，例如 `http://your-host:8080/`。
-3. 钉钉微应用首页配置为 `http://your-host:8080/`。
-4. 钉钉 OAuth 回调地址配置为 `http://your-host:8080/callback`。
+2. 用 Go 服务统一托管页面，并按当前生产入口配置公网地址；如果 `http://hr.example.com/` 依赖宿主机 `8080` 对外可达，需要保持 Docker 端口映射为 `8080:8080`。
+3. 钉钉微应用首页按实际公网入口配置，例如 `http://hr.example.com/`；如果已完成 HTTPS 反向代理，则使用 `https://hr.example.com/`。
+4. 钉钉 OAuth 回调地址按实际公网入口配置，例如 `http://hr.example.com/callback`；如果已完成 HTTPS 反向代理，则使用 `https://hr.example.com/callback`。
 5. 不要把生产首页或回调地址配置成 `http://your-host:3000/...`，`3000` 只是本地 Vite 开发端口。
+6. 后续完成同机 Nginx、宝塔或负载均衡反向代理后，再考虑把容器 `8080` 绑定收敛到 `127.0.0.1`。
 
 ## 常见问题
 

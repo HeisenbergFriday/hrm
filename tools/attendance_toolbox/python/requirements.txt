@@ -1,0 +1,8 @@
+# Attendance Toolbox Python dependencies
+# Derived from D:\app\requirements.txt, Streamlit removed (HR uses React frontend)
+openpyxl>=3.1,<4
+xlrd>=2.0,<3
+numpy>=1.26,<2
+pandas>=2.2,<3
+lunardate>=0.2,<1
+chinesecalendar>=1.10,<2

@@ -5,7 +5,7 @@ import { menuPermissionKey } from '../config/menu'
 
 interface RouteGuardProps {
   menuKey: string
-  permissionCode?: string
+  permissionCode?: string | string[]
   children: React.ReactNode
 }
 
@@ -36,7 +36,11 @@ export default function RouteGuard({ menuKey, permissionCode, children }: RouteG
     )
   }
 
-  if (permissionCode && !permissions.includes(permissionCode)) {
+  const permissionCodes = Array.isArray(permissionCode)
+    ? permissionCode
+    : (permissionCode ? [permissionCode] : [])
+
+  if (permissionCodes.length > 0 && !permissionCodes.some(code => permissions.includes(code))) {
     return (
       <Result
         status="403"

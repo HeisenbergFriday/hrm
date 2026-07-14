@@ -1,16 +1,58 @@
 package database
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 )
+
+const DefaultOrganizationID = "default"
+
+func NormalizeOrganizationID(orgID string) string {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return DefaultOrganizationID
+	}
+	return orgID
+}
+
+func ScopedExternalID(orgID, externalID string) string {
+	externalID = strings.TrimSpace(externalID)
+	if externalID == "" {
+		return ""
+	}
+	orgID = NormalizeOrganizationID(orgID)
+	if orgID == DefaultOrganizationID {
+		return externalID
+	}
+	return orgID + ":" + externalID
+}
+
+// Organization represents one DingTalk enterprise and its data boundary.
+type Organization struct {
+	ID              uint                   `gorm:"primaryKey" json:"id"`
+	OrgID           string                 `gorm:"type:varchar(64);uniqueIndex;not null" json:"org_id"`
+	Name            string                 `gorm:"type:varchar(128);not null" json:"name"`
+	CorpID          string                 `gorm:"type:varchar(128);uniqueIndex" json:"corp_id"`
+	DingTalkAppKey  string                 `gorm:"type:varchar(128)" json:"dingtalk_app_key"`
+	DingTalkSecret  string                 `gorm:"type:varchar(256)" json:"-"`
+	DingTalkAgentID string                 `gorm:"type:varchar(64)" json:"dingtalk_agent_id"`
+	AppHomeURL      string                 `gorm:"type:varchar(512)" json:"app_home_url"`
+	RedirectURI     string                 `gorm:"type:varchar(512)" json:"redirect_uri"`
+	Status          string                 `gorm:"type:varchar(32);not null;default:'active';index" json:"status"`
+	Extension       map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt         `gorm:"index" json:"-"`
+}
 
 // User 用户模型
 type User struct {
 	ID            uint                   `gorm:"primaryKey" json:"id"`
 	OrgID         string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_org_user_id;uniqueIndex:idx_org_email" json:"org_id"` // 组织ID（多租户隔离）
 	UserID        string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_org_user_id" json:"user_id"`                                            // 钉钉用户ID
+	DingTalkUserID string                `gorm:"column:ding_talk_user_id;type:varchar(64);index" json:"dingtalk_user_id"`                                         // 钉钉 UserID（合并自综合分支，业务冗余字段）
 	Name          string                 `gorm:"type:varchar(128);not null" json:"name"`
 	Email         string                 `gorm:"type:varchar(128);uniqueIndex:idx_org_email" json:"email"`
 	Mobile        string                 `gorm:"type:varchar(32)" json:"mobile"`
@@ -32,6 +74,7 @@ type Department struct {
 	ID           uint                   `gorm:"primaryKey" json:"id"`
 	OrgID        string                 `gorm:"type:varchar(64);not null;default:'default';index:idx_org_dept_id,unique" json:"org_id"` // 组织ID（多租户隔离）
 	DepartmentID string                 `gorm:"type:varchar(64);not null;index:idx_org_dept_id,unique" json:"department_id"`            // 钉钉部门ID
+	DingTalkDepartmentID string          `gorm:"type:varchar(64);index" json:"dingtalk_department_id"`                                   // 钉钉部门ID（合并自综合分支）
 	Name         string                 `gorm:"type:varchar(128);not null" json:"name"`
 	ParentID     string                 `gorm:"type:varchar(64)" json:"parent_id"`
 	Order        int                    `gorm:"default:0" json:"order"`
@@ -109,7 +152,8 @@ type ApprovalTemplate struct {
 // Role 角色模型
 type Role struct {
 	ID          uint           `gorm:"primaryKey" json:"id"`
-	Name        string         `gorm:"type:varchar(64);not null" json:"name"`
+	OrgID       string         `gorm:"type:varchar(64);not null;default:'default';index;uniqueIndex:idx_roles_org_name" json:"org_id"` // 组织ID（多租户隔离）
+	Name        string         `gorm:"type:varchar(64);not null;uniqueIndex:idx_roles_org_name" json:"name"`
 	Description string         `gorm:"type:text" json:"description"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
@@ -151,7 +195,8 @@ type UserRole struct {
 // MenuPermission 角色菜单权限模型（每角色一条记录，menu_keys 为 JSON 数组）
 type MenuPermission struct {
 	ID        uint           `gorm:"primaryKey" json:"id"`
-	RoleID    uint           `gorm:"uniqueIndex;not null" json:"role_id"`
+	OrgID     string         `gorm:"type:varchar(64);not null;default:'default';index;uniqueIndex:idx_menu_permissions_org_role" json:"org_id"`
+	RoleID    uint           `gorm:"not null;uniqueIndex:idx_menu_permissions_org_role" json:"role_id"`
 	MenuKeys  string         `gorm:"type:text;not null" json:"menu_keys"` // JSON array: ["home","organization",...]
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -161,7 +206,8 @@ type MenuPermission struct {
 // DataPermission 角色数据权限模型（每角色一条记录）
 type DataPermission struct {
 	ID             uint           `gorm:"primaryKey" json:"id"`
-	RoleID         uint           `gorm:"uniqueIndex;not null" json:"role_id"`
+	OrgID          string         `gorm:"type:varchar(64);not null;default:'default';index;uniqueIndex:idx_data_permissions_org_role" json:"org_id"`
+	RoleID         uint           `gorm:"not null;uniqueIndex:idx_data_permissions_org_role" json:"role_id"`
 	Scope          string         `gorm:"type:varchar(32);not null;default:'all'" json:"scope"` // "all" or "department"
 	DepartmentKeys string         `gorm:"type:text" json:"department_keys"`                     // JSON array: ["dept1","dept2",...]
 	CreatedAt      time.Time      `json:"created_at"`
@@ -198,6 +244,7 @@ type SyncStatus struct {
 // IdempotencyRecord stores completed write responses for safe client retries.
 type IdempotencyRecord struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
+	OrgID          string    `gorm:"type:varchar(64);not null;default:'default';index" json:"org_id"`
 	Digest         string    `gorm:"type:char(64);uniqueIndex;not null" json:"-"`
 	IdempotencyKey string    `gorm:"type:varchar(128);not null;index" json:"idempotency_key"`
 	UserID         string    `gorm:"type:varchar(128);not null;index" json:"user_id"`
