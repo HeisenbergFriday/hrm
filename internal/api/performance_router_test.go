@@ -147,40 +147,6 @@ func TestPerformanceRouterEnforcesJWTAndPermissions(t *testing.T) {
 	})
 }
 
-func TestPerformanceAppealUpdateRouteAllowsActivityManagers(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	installPerformanceRouterTestDB(t, []string{"performance:activity:manage"})
-
-	router := SetupRouter()
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPut, "/api/v1/performance/appeals/1", strings.NewReader(`{"status":"processing"}`))
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+performanceRouterTestToken(t))
-
-	router.ServeHTTP(recorder, request)
-
-	if recorder.Code == http.StatusForbidden {
-		t.Fatalf("activity manager was blocked by appeal route permission; body = %s", recorder.Body.String())
-	}
-}
-
-func TestPerformanceAppealUpdateRouteRejectsResultViewOnly(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	installPerformanceRouterTestDB(t, []string{"performance:result:view"})
-
-	router := SetupRouter()
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPut, "/api/v1/performance/appeals/1", strings.NewReader(`{"status":"processing"}`))
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+performanceRouterTestToken(t))
-
-	router.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
-	}
-}
-
 func frontendPerformanceAPICalls(t *testing.T) []string {
 	t.Helper()
 

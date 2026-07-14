@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-14T01:16:27.211Z
-> Files: 124 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-14T01:29:31.005Z
+> Files: 126 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ./
 
@@ -48,7 +48,9 @@
 
 ## C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/
 
+- `MEMORY.md` (~60 tok)
 - `org-name-mu-teng.md` (~97 tok)
+- `security-merge-into-master.md` (~559 tok)
 
 ## api-docs/
 
@@ -129,7 +131,7 @@
 
 ## frontend/src/services/
 
-- `api.ts` — API routes: GET, POST, PUT, DELETE (89 endpoints) (~14072 tok)
+- `api.ts` — API routes: GET, POST, PUT, DELETE (89 endpoints) (~13722 tok)
 
 ## frontend/src/store/
 
@@ -164,7 +166,7 @@
 - `performance_handlers_coverage_test.go` — TestRefreshPerformanceParticipants_InvalidActivityID, TestRefreshPerformanceParticipants_Success, Te (~19426 tok)
 - `performance_handlers_test.go` — TestCreatePerformanceActivityHandlerMissingRequired, TestUpdatePerformanceActivityHandlerMissingRequ (~9419 tok)
 - `performance_handlers.go` (~35755 tok)
-- `performance_router_test.go` — TestPerformanceRouterCoversFrontendAPIPaths, TestPerformanceRouterRegistersCriticalRoutes, TestPerfo (~2922 tok)
+- `performance_router_test.go` — TestPerformanceRouterCoversFrontendAPIPaths, TestPerformanceRouterRegistersCriticalRoutes, TestPerfo (~2552 tok)
 - `router.go` — SetupRouter (~8142 tok)
 
 ## internal/cache/

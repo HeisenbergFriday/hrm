@@ -3193,3 +3193,7 @@
 | 09:16 | Edited frontend/src/pages/Login.tsx | CSS: withCredentials | ~75 |
 | 09:18 | Session end: 33 writes across 10 files (jwt.go, auth_context.go, models.go, router.go, handlers.go) | 13 reads | ~82043 tok |
 | 09:18 | Session end: 33 writes across 10 files (jwt.go, auth_context.go, models.go, router.go, handlers.go) | 13 reads | ~82043 tok |
+| 09:24 | Edited internal/api/performance_router_test.go | removed 35 lines | ~16 |
+| 09:26 | Created C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/security-merge-into-master.md | — | ~576 |
+| 09:26 | Edited C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/MEMORY.md | 1→2 lines | ~64 |
+| 09:29 | Edited frontend/src/services/api.ts | 24→27 lines | ~226 |
