@@ -2,14 +2,14 @@
   "version": 1,
   "created_at": "2026-05-25T06:54:29.374Z",
   "lifetime": {
-    "total_tokens_estimated": 9401341,
-    "total_reads": 2466,
-    "total_writes": 3275,
+    "total_tokens_estimated": 10003886,
+    "total_reads": 2565,
+    "total_writes": 3466,
     "total_sessions": 259,
-    "anatomy_hits": 1007,
-    "anatomy_misses": 1392,
-    "repeated_reads_blocked": 2189,
-    "estimated_savings_vs_bare_cli": 36888721
+    "anatomy_hits": 1076,
+    "anatomy_misses": 1414,
+    "repeated_reads_blocked": 2400,
+    "estimated_savings_vs_bare_cli": 42663108
   },
   "sessions": [
     {
@@ -36817,6 +36817,1691 @@
         "writes_count": 1,
         "repeated_reads_blocked": 0,
         "anatomy_lookups": 0
+      }
+    },
+    {
+      "id": "session-2026-07-13-1512",
+      "started": "2026-07-13T07:12:20.202Z",
+      "ended": "2026-07-13T10:04:18.178Z",
+      "reads": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 1560,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 1987,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 11124,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/shift_config_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/overtime_matching_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 36287,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 7939,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 2400,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 778,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 3905,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 98,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 183,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 53,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 61,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 51,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 254,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 715,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "action": "create"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 106,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 46,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 50,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 66281,
+        "output_tokens_estimated": 2192,
+        "reads_count": 11,
+        "writes_count": 17,
+        "repeated_reads_blocked": 22,
+        "anatomy_lookups": 8
+      }
+    },
+    {
+      "id": "session-2026-07-13-1512",
+      "started": "2026-07-13T07:12:20.202Z",
+      "ended": "2026-07-13T10:12:55.945Z",
+      "reads": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 1560,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 1987,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 11124,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/shift_config_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/overtime_matching_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 36287,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 7939,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 2400,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 778,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 3905,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 98,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 183,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 53,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 61,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 51,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 254,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 715,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "action": "create"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 106,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 46,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 50,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 66281,
+        "output_tokens_estimated": 2192,
+        "reads_count": 11,
+        "writes_count": 17,
+        "repeated_reads_blocked": 22,
+        "anatomy_lookups": 8
+      }
+    },
+    {
+      "id": "session-2026-07-13-1512",
+      "started": "2026-07-13T07:12:20.202Z",
+      "ended": "2026-07-13T10:38:03.900Z",
+      "reads": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 1560,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 1987,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 11124,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/shift_config_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/overtime_matching_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 36287,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 7939,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 2400,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 778,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 3905,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/test-server-ssh-entry.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 98,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 183,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 53,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 61,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 51,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 254,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 715,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "action": "create"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 106,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 46,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 50,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 66281,
+        "output_tokens_estimated": 2192,
+        "reads_count": 12,
+        "writes_count": 17,
+        "repeated_reads_blocked": 22,
+        "anatomy_lookups": 8
+      }
+    },
+    {
+      "id": "session-2026-07-13-1512",
+      "started": "2026-07-13T07:12:20.202Z",
+      "ended": "2026-07-13T10:46:42.324Z",
+      "reads": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 1560,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 1987,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 11124,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/shift_config_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/overtime_matching_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 36287,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 7939,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 2400,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 778,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 3905,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/test-server-ssh-entry.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 7777,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 98,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 183,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 53,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 61,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 51,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 254,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 715,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "action": "create"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 106,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 46,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 50,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 38,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 54,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 74058,
+        "output_tokens_estimated": 2439,
+        "reads_count": 13,
+        "writes_count": 21,
+        "repeated_reads_blocked": 25,
+        "anatomy_lookups": 9
+      }
+    },
+    {
+      "id": "session-2026-07-13-1512",
+      "started": "2026-07-13T07:12:20.202Z",
+      "ended": "2026-07-14T01:04:08.667Z",
+      "reads": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 1560,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 1987,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 11124,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/shift_config_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/overtime_matching_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 36287,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 9310,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 2400,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 778,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 3905,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/test-server-ssh-entry.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 7777,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 98,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 183,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 53,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 61,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 51,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 254,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 715,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "action": "create"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 106,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 46,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 50,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 38,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 54,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 670,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 47,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 20,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 75429,
+        "output_tokens_estimated": 3176,
+        "reads_count": 13,
+        "writes_count": 24,
+        "repeated_reads_blocked": 27,
+        "anatomy_lookups": 9
+      }
+    },
+    {
+      "id": "session-2026-07-13-1512",
+      "started": "2026-07-13T07:12:20.202Z",
+      "ended": "2026-07-14T01:15:14.461Z",
+      "reads": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 1560,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 1987,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 11124,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/shift_config_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/overtime_matching_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 36287,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 7984,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 2400,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 778,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 3905,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/test-server-ssh-entry.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 7777,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 98,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 183,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 53,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 61,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 51,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 254,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 715,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "action": "create"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 106,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 46,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 50,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 38,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 54,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 670,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 47,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 286,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 212,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 30,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 54,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 74103,
+        "output_tokens_estimated": 3835,
+        "reads_count": 13,
+        "writes_count": 29,
+        "repeated_reads_blocked": 29,
+        "anatomy_lookups": 9
+      }
+    },
+    {
+      "id": "session-2026-07-13-1512",
+      "started": "2026-07-13T07:12:20.202Z",
+      "ended": "2026-07-14T01:18:14.680Z",
+      "reads": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 1560,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 1987,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 11124,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/shift_config_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/overtime_matching_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 40186,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 7984,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 2400,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 778,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 3874,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/test-server-ssh-entry.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 7777,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 98,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 183,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 53,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 61,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 51,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 254,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 715,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "action": "create"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 106,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 46,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 50,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 38,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 54,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 670,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 47,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 286,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 212,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 30,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 54,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 46,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 73,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 75,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 77971,
+        "output_tokens_estimated": 4072,
+        "reads_count": 13,
+        "writes_count": 33,
+        "repeated_reads_blocked": 32,
+        "anatomy_lookups": 9
+      }
+    },
+    {
+      "id": "session-2026-07-13-1512",
+      "started": "2026-07-13T07:12:20.202Z",
+      "ended": "2026-07-14T01:18:38.605Z",
+      "reads": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 1560,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 1987,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 11124,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/shift_config_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/service/overtime_matching_service.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 40186,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 7984,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 2400,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 778,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 3874,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/test-server-ssh-entry.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 7777,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 98,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 183,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/jwt.go",
+          "tokens_estimated": 53,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 61,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/middleware/auth_context.go",
+          "tokens_estimated": 51,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/database/models.go",
+          "tokens_estimated": 254,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 49,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 27,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 715,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/handlers.go",
+          "tokens_estimated": 72,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/performance_router_test.go",
+          "tokens_estimated": 35,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/store/authStore.ts",
+          "tokens_estimated": 301,
+          "action": "create"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Callback.tsx",
+          "tokens_estimated": 31,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 106,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 46,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 50,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 60,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 38,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 54,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 78,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 670,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 47,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 20,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 286,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 212,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/internal/api/router.go",
+          "tokens_estimated": 30,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 54,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/App.tsx",
+          "tokens_estimated": 77,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 43,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 46,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 73,
+          "action": "edit"
+        },
+        {
+          "file": "d:/AITEAM/HR/frontend/src/pages/Login.tsx",
+          "tokens_estimated": 75,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 77971,
+        "output_tokens_estimated": 4072,
+        "reads_count": 13,
+        "writes_count": 33,
+        "repeated_reads_blocked": 32,
+        "anatomy_lookups": 9
       }
     }
   ],

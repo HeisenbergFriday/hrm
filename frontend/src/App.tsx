@@ -268,6 +268,7 @@ function App() {
         const orgId = resolveOrgId()
         const configRes = await axios.get('/api/v1/auth/dingtalk/config', {
           params: orgIdParams(),
+          withCredentials: true,
         })
         const { corp_id: corpId, missing } = configRes.data.data
         const dd = (window as any).dd
@@ -293,9 +294,9 @@ function App() {
               const response = await axios.post('/api/v1/auth/dingtalk/in-app', {
                 code: result.code,
                 org_id: orgId,
-              })
-              const { token, user } = response.data.data
-              login(user, token)
+              }, { withCredentials: true })
+              const { user } = response.data.data
+              login(user)
               message.success('登录成功', 0.6)
               setAutoLogging(false)
             } catch (err) {

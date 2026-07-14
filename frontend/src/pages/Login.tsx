@@ -157,6 +157,7 @@ const Login: React.FC = () => {
     try {
       const response = await axios.get('/api/v1/auth/dingtalk/qr/start', {
         params: { org_id: orgId },
+        withCredentials: true,
       })
       const loginUrl = response.data.data.qr_code_url
 
@@ -187,6 +188,7 @@ const Login: React.FC = () => {
     try {
       const configRes = await axios.get('/api/v1/auth/dingtalk/config', {
         params: orgId ? { org_id: orgId } : {},
+        withCredentials: true,
       })
       const { corp_id: corpId, missing } = configRes.data.data
       const dd = (window as any).dd
@@ -217,9 +219,9 @@ const Login: React.FC = () => {
             const response = await axios.post('/api/v1/auth/dingtalk/in-app', {
               code: result.code,
               org_id: orgId,
-            })
-            const { token, user } = response.data.data
-            login(user, token)
+            }, { withCredentials: true })
+            const { user } = response.data.data
+            login(user)
             message.success('登录成功', 0.6)
             window.location.replace(redirectTarget || '/')
           } catch (err) {
@@ -270,9 +272,9 @@ const Login: React.FC = () => {
         username: values.username,
         password: values.password,
         org_id: values.org_id,
-      })
-      const { token, user } = response.data.data
-      login(user, token)
+      }, { withCredentials: true })
+      const { user } = response.data.data
+      login(user)
       message.success('登录成功', 0.6)
       window.location.replace(redirectTarget || '/')
     } catch (err) {

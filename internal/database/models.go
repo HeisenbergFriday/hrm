@@ -195,6 +195,26 @@ type SyncStatus struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// IdempotencyRecord stores completed write responses for safe client retries.
+type IdempotencyRecord struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	Digest         string    `gorm:"type:char(64);uniqueIndex;not null" json:"-"`
+	IdempotencyKey string    `gorm:"type:varchar(128);not null;index" json:"idempotency_key"`
+	UserID         string    `gorm:"type:varchar(128);not null;index" json:"user_id"`
+	Method         string    `gorm:"type:varchar(16);not null" json:"method"`
+	Path           string    `gorm:"type:varchar(512);not null" json:"path"`
+	RequestHash    string    `gorm:"type:char(64);not null" json:"request_hash"`
+	Status         string    `gorm:"type:varchar(32);not null;index" json:"status"`
+	ResponseStatus int       `gorm:"default:0" json:"response_status"`
+	ContentType    string    `gorm:"type:varchar(128)" json:"content_type"`
+	ResponseBody   []byte    `gorm:"type:longblob" json:"-"`
+	Replayable     bool      `gorm:"default:true" json:"replayable"`
+	ErrorMessage   string    `gorm:"type:text" json:"error_message"`
+	ExpiresAt      time.Time `gorm:"index" json:"expires_at"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 // DingTalkBinding 钉钉绑定模型
 type DingTalkBinding struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
@@ -209,16 +229,18 @@ type DingTalkBinding struct {
 
 // UserSession 用户会话模型
 type UserSession struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	OrgID     string    `gorm:"type:varchar(64);index" json:"org_id"`
-	UserID    string    `gorm:"type:varchar(64);not null" json:"user_id"`            // 本地用户ID
-	SessionID string    `gorm:"type:varchar(128);unique;not null" json:"session_id"` // 会话ID
-	Token     string    `gorm:"type:varchar(512);not null" json:"token"`             // JWT token
-	ExpiresAt time.Time `gorm:"not null" json:"expires_at"`                          // 过期时间
-	IP        string    `gorm:"type:varchar(64)" json:"ip"`                          // 登录IP
-	UserAgent string    `gorm:"type:varchar(512)" json:"user_agent"`                 // 用户代理
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         uint       `gorm:"primaryKey" json:"id"`
+	OrgID      string     `gorm:"type:varchar(64);index" json:"org_id"`
+	UserID     string     `gorm:"type:varchar(64);not null" json:"user_id"`            // 本地用户ID
+	SessionID  string     `gorm:"type:varchar(128);unique;not null" json:"session_id"` // 会话ID
+	Token      string     `gorm:"type:varchar(512);not null" json:"token"`             // JWT token
+	ExpiresAt  time.Time  `gorm:"not null" json:"expires_at"`                          // 过期时间
+	IP         string     `gorm:"type:varchar(64)" json:"ip"`                          // 登录IP
+	UserAgent  string     `gorm:"type:varchar(512)" json:"user_agent"`                 // 用户代理
+	RevokedAt  *time.Time `gorm:"index" json:"revoked_at,omitempty"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // LoginLog 登录日志模型

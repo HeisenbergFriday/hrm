@@ -4244,9 +4244,203 @@
         "safety",
         "go"
       ],
-      "related_bugs": ["bug-255"],
+      "related_bugs": [
+        "bug-255"
+      ],
       "occurrences": 1,
       "last_seen": "2026-07-10T05:30:00.000Z"
+    },
+    {
+      "id": "bug-263",
+      "timestamp": "2026-07-13T09:52:36.945Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/middleware/jwt.go",
+      "root_cause": "7 lines replaced/restructured",
+      "fix": "Rewrote 15→9 lines (7 removed) | Also: <<<<<<< HEAD; c.Set(\"userID\", claims.UserID)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-13T09:53:17.700Z"
+    },
+    {
+      "id": "bug-264",
+      "timestamp": "2026-07-13T09:54:18.521Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/middleware/auth_context.go",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 7→4 lines (5 removed) | Also: <<<<<<< HEAD; err = db.Where(\"org_id = ? AND id = ? AND deleted_",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-13T09:54:33.576Z"
+    },
+    {
+      "id": "bug-265",
+      "timestamp": "2026-07-13T09:55:41.373Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/database/models.go",
+      "root_cause": "13 lines replaced/restructured",
+      "fix": "Rewrote 24→12 lines (13 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-13T09:55:41.373Z"
+    },
+    {
+      "id": "bug-266",
+      "timestamp": "2026-07-13T09:58:19.238Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/router.go",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 9→5 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-13T09:58:19.238Z"
+    },
+    {
+      "id": "bug-267",
+      "timestamp": "2026-07-13T10:00:26.271Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/handlers.go",
+      "root_cause": "7 lines replaced/restructured",
+      "fix": "Rewrote 13→7 lines (7 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-13T10:00:26.271Z"
+    },
+    {
+      "id": "bug-268",
+      "timestamp": "2026-07-13T10:02:33.765Z",
+      "error_message": "CSS fix: params",
+      "file": "frontend/src/pages/Callback.tsx",
+      "root_cause": "params: { code, state → orgId ? { code, state, org_id: orgId",
+      "fix": "Changed params: { code, state → orgId ? { code, state, org_id: orgId",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-13T10:02:33.766Z"
+    },
+    {
+      "id": "bug-269",
+      "timestamp": "2026-07-13T10:03:16.043Z",
+      "error_message": "CSS fix: withCredentials",
+      "file": "frontend/src/pages/Login.tsx",
+      "root_cause": "withCredentials: true → true,",
+      "fix": "Changed withCredentials: true → true,",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-13T10:03:32.950Z"
+    },
+    {
+      "id": "bug-270",
+      "timestamp": "2026-07-13T10:03:43.866Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/Login.tsx",
+      "root_cause": "6 lines replaced/restructured",
+      "fix": "Rewrote 11→5 lines (6 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-13T10:03:43.866Z"
+    },
+    {
+      "id": "bug-271",
+      "timestamp": "2026-07-13T10:44:13.759Z",
+      "error_message": "CSS fix: withCredentials",
+      "file": "frontend/src/App.tsx",
+      "root_cause": "withCredentials: true → true,",
+      "fix": "Changed withCredentials: true → true,",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-13T10:47:57.230Z"
+    },
+    {
+      "id": "bug-272",
+      "timestamp": "2026-07-13T10:44:23.731Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/App.tsx",
+      "root_cause": "6 lines replaced/restructured",
+      "fix": "Rewrote 12→6 lines (6 removed) | Also: <<<<<<< HEAD; =======",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-13T10:44:35.341Z"
+    },
+    {
+      "id": "bug-273",
+      "timestamp": "2026-07-14T01:06:51.496Z",
+      "error_message": "Wrong return value",
+      "file": "internal/api/router.go",
+      "root_cause": "Was returning: []string{\"http://localhost:5173\", \"http://localhos",
+      "fix": "Now returns: []string{",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-14T01:06:51.496Z"
+    },
+    {
+      "id": "bug-274",
+      "timestamp": "2026-07-14T01:29:31.060Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/services/api.ts",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 24→27 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-14T01:29:31.060Z"
     }
   ]
 }

@@ -138,7 +138,8 @@ func loadAuthContext(c *gin.Context) (*AuthContext, error) {
 
 func loadCurrentUser(db *gorm.DB, orgID, rawUserID string) (*database.User, string, error) {
 	var user database.User
-	err := db.Where("org_id = ? AND user_id = ? AND deleted_at IS NULL", orgID, rawUserID).First(&user).Error
+	// 多租户 + 安全：既按 org_id 隔离，又只认 active 用户
+	err := db.Where("org_id = ? AND user_id = ? AND status = ? AND deleted_at IS NULL", orgID, rawUserID, "active").First(&user).Error
 	if err == nil {
 		return &user, user.UserID, nil
 	}
@@ -146,7 +147,7 @@ func loadCurrentUser(db *gorm.DB, orgID, rawUserID string) (*database.User, stri
 		return nil, rawUserID, err
 	}
 	if looksNumericID(rawUserID) {
-		err = db.Where("org_id = ? AND id = ? AND deleted_at IS NULL", orgID, rawUserID).First(&user).Error
+		err = db.Where("org_id = ? AND id = ? AND status = ? AND deleted_at IS NULL", orgID, rawUserID, "active").First(&user).Error
 		if err == nil {
 			return &user, user.UserID, nil
 		}
