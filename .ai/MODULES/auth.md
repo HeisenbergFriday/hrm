@@ -103,32 +103,7 @@ type LoginLog struct {
 
 ## API 接口
 
-### POST /api/v1/auth/login
-账号密码登录
-
-Body：
-```json
-{
-    "username": "admin",
-    "password": "admin123"
-}
-```
-
-Response：
-```json
-{
-    "code": 200,
-    "message": "success",
-    "data": {
-        "user": {
-            "id": 1,
-            "user_id": "admin",
-            "name": "管理员"
-        },
-        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-    }
-}
-```
+当前前端只开放钉钉扫码登录和钉钉内免登；账号密码登录不作为当前业务入口。
 
 ### POST /api/v1/auth/logout
 登出
@@ -192,7 +167,8 @@ Response：
     "message": "success",
     "data": {
         "user": {...},
-        "token": "..."
+        "expires_at": "2026-07-01T18:00:00+08:00",
+        "auth_mode": "cookie"
     }
 }
 ```
@@ -226,11 +202,24 @@ Response：
 
 ```go
 type Claims struct {
-    UserID   string `json:"user_id"`
-    UserName string `json:"user_name"`
+    UserID    string `json:"user_id"`
+    UserDBID  string `json:"user_db_id,omitempty"`
+    UserName  string `json:"user_name"`
+    SessionID string `json:"session_id,omitempty"`
     jwt.RegisteredClaims
 }
 ```
+
+### 认证安全约束
+
+- `JWTAuth` 从 `Authorization: Bearer <token>` 或 HttpOnly Cookie 读取 token，不接受 URL query token。
+- JWT 验签后必须加载当前用户，并要求 `users.status = active` 且未删除；禁用用户不能登录，也不能继续使用未过期 token。
+- 登录成功会写入 `UserSession`，新 token 必须带 `session_id` 和当前 `session_version`；旧版缺少这些声明或版本不匹配的 token 会被拒绝，用户需重新登录。
+- 浏览器登录态通过 `peopleops_auth` HttpOnly Cookie 维护，写操作通过 `peopleops_csrf` + `X-CSRF-Token` 双提交校验。
+- JWT 默认有效期为 480 分钟，可通过 `JWT_TTL_MINUTES` 配置，代码会限制在 5-1440 分钟范围内。
+- 钉钉组织同步将用户置为非 active 时，会撤销该用户仍未撤销的服务端 session。
+- 文件访问 `/api/v1/files/:filename` 必须通过 Authorization header 或认证 Cookie 访问，前端使用授权 fetch + object URL 预览，不把主 JWT 拼进 URL。
+- 前端 `authStore` 不保存 JWT，只保存用户、菜单和权限状态；刷新页面后通过 `/auth/me` 和 HttpOnly Cookie 恢复会话。
 
 ### 中间件
 
@@ -287,7 +276,7 @@ func SomeHandler(c *gin.Context) {
 - 钉钉扫码登录
 - 钉钉内免登
 
-账号密码登录接口仍保留在后端和 `authAPI.login` 中，但当前登录页不再展示账号密码表单。
+账号密码登录不是当前业务入口，登录页只提供钉钉扫码和钉钉内免登。
 
 ### 钉钉免登流程
 
@@ -295,8 +284,8 @@ func SomeHandler(c *gin.Context) {
 
 1. 通过 User-Agent 判断是否在钉钉内
 2. 调用 `dd.runtime.permission.requestAuthCode()` 获取授权码
-3. 调用 `/api/v1/auth/dingtalk/in-app` 换取 token
-4. 存储到 `authStore`
+3. 调用 `/api/v1/auth/dingtalk/in-app` 建立服务端 session 和 HttpOnly Cookie
+4. 将返回的用户、菜单和权限状态写入 `authStore`
 
 ### 认证状态管理
 
@@ -305,25 +294,18 @@ func SomeHandler(c *gin.Context) {
 ```tsx
 interface AuthState {
     user: User | null;
-    token: string;
     isLoggedIn: boolean;
-    login: (user: User, token: string) => void;
+    login: (user: User) => void;
     logout: () => void;
 }
 
 export const useAuthStore = create<AuthState>()(
-    persist(
-        (set) => ({
-            user: null,
-            token: '',
-            isLoggedIn: false,
-            login: (user, token) => set({ user, token, isLoggedIn: true }),
-            logout: () => set({ user: null, token: '', isLoggedIn: false }),
-        }),
-        {
-            name: 'peopleops-auth',
-        }
-    )
+    (set) => ({
+        user: null,
+        isLoggedIn: false,
+        login: (user) => set({ user, isLoggedIn: true }),
+        logout: () => set({ user: null, isLoggedIn: false }),
+    })
 );
 ```
 
@@ -332,12 +314,10 @@ export const useAuthStore = create<AuthState>()(
 `frontend/src/services/api.ts`：
 
 ```tsx
-// 请求拦截：自动加 token
+// 请求拦截：Cookie 自动随请求发送，写操作补充 CSRF header
 api.interceptors.request.use((config) => {
-    const { token } = useAuthStore.getState();
-    if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-    }
+    config.withCredentials = true;
+    config.headers['X-CSRF-Token'] = readCookie('peopleops_csrf');
     return config;
 });
 
@@ -359,6 +339,10 @@ api.interceptors.response.use(
 ## 环境变量
 
 - `JWT_SECRET`：JWT 签名密钥
+- `JWT_TTL_MINUTES`：JWT 有效期分钟数，默认 480，限制 5-1440
+- `AUTH_SESSION_VERSION`：认证会话版本，默认 `cookie-v1`；变更该值可强制所有旧 token 失效
+- `AUTH_COOKIE_SECURE`：生产 HTTPS 部署建议设为 `true`
+- `AUTH_COOKIE_SAMESITE`：认证 Cookie SameSite 策略，默认 `lax`
 - `DINGTALK_APP_KEY`：钉钉应用 Key
 - `DINGTALK_APP_SECRET`：钉钉应用 Secret
 - `DINGTALK_CORP_ID`：钉钉企业 ID
@@ -369,10 +353,11 @@ api.interceptors.response.use(
 
 ## 常见问题
 
-### 登录后 token 无效
+### 登录后认证失效
 - 检查 `JWT_SECRET` 是否一致
-- 检查 token 是否过期
-- 检查 `Authorization` header 格式是否正确（`Bearer <token>`）
+- 检查 token 是否过期，或 `UserSession` 是否已撤销
+- 浏览器访问检查 `peopleops_auth` Cookie 是否存在、`AUTH_COOKIE_SECURE` 与 HTTPS 是否匹配
+- API 客户端访问检查 `Authorization` header 格式是否正确（`Bearer <token>`）
 
 ### 钉钉扫码登录失败
 - 检查 `DINGTALK_APP_KEY`、`DINGTALK_APP_SECRET`、`DINGTALK_CORP_ID`
@@ -385,7 +370,7 @@ api.interceptors.response.use(
 - 检查钉钉应用权限（需要"获取用户信息"权限）
 
 ### 401 错误
-- 检查 token 是否存在
-- 检查 token 是否过期
-- 检查 `Authorization` header 是否正确
+- 检查是否已扫码登录
+- 检查 `peopleops_auth` Cookie 或 `Authorization` header 是否存在
+- 检查 token 是否过期、是否缺少 `session_id`
 - 检查后端 JWT 中间件是否正常工作

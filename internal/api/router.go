@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path"
@@ -13,7 +14,8 @@ import (
 )
 
 func SetupRouter() *gin.Engine {
-	router := gin.Default()
+	router := gin.New()
+	router.Use(querySafeGinLogger(), gin.Recovery())
 	router.MaxMultipartMemory = 128 << 20 // 128 MiB，考勤数据处理需要上传多份 Excel
 
 	router.Use(securityHeaders())
@@ -22,21 +24,22 @@ func SetupRouter() *gin.Engine {
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     allowOrigins,
 		AllowOriginFunc:  allowOriginFunc,
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", middleware.HeaderCSRFToken, "X-Request-ID"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 	}))
 	router.Use(middleware.RequestMetrics())
 
 	router.GET("/health", HealthCheck)
-	router.GET("/api/v1/files/:filename", middleware.JWTAuthWithQuery(), ServeFile)
+	router.GET("/api/v1/files/:filename", middleware.JWTAuth(), ServeFile)
 
 	v1 := router.Group("/api/v1")
 	{
 		auth := v1.Group("/auth")
 		{
-			auth.POST("/logout", Logout)
+			auth.POST("/login", Login)
+			auth.POST("/logout", middleware.JWTAuth(), Logout)
 			auth.GET("/me", middleware.JWTAuth(), GetCurrentUser)
 
 			dingtalk := auth.Group("/dingtalk")
@@ -442,8 +445,31 @@ func resolveCORSConfig() ([]string, func(string) bool) {
 		return nil, func(string) bool { return false }
 	}
 
-	// 开发环境：允许 localhost 常见端口 + 任意 origin（局域网访问等）
-	return []string{"http://localhost:5173", "http://localhost:3000"}, func(origin string) bool { return true }
+	// 开发环境：仅允许 localhost 常见端口（安全加固：不再放行任意 origin）
+	return []string{
+		"http://localhost:5173",
+		"http://localhost:3000",
+		"http://127.0.0.1:5173",
+		"http://127.0.0.1:3000",
+	}, nil
+}
+
+// querySafeGinLogger 记录访问日志时使用 URL.EscapedPath()，避免把 query string（可能含 token）写入日志。
+func querySafeGinLogger() gin.HandlerFunc {
+	return gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+		requestPath := param.Path
+		if param.Request != nil && param.Request.URL != nil {
+			requestPath = param.Request.URL.EscapedPath()
+		}
+		return fmt.Sprintf("[GIN] %v | %3d | %13v | %15s | %-7s %s\n",
+			param.TimeStamp.Format("2006/01/02 - 15:04:05"),
+			param.StatusCode,
+			param.Latency,
+			param.ClientIP,
+			param.Method,
+			requestPath,
+		)
+	})
 }
 
 func registerFrontendRoutes(router *gin.Engine) {

@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  Typography, Button, Space, message, Spin, Row, Col, Table, Tag, Descriptions, Timeline, InputNumber, Form, Modal, Image, Card, Divider, Collapse
+  Typography, Button, Space, message, Spin, Row, Col, Table, Tag, Descriptions, Timeline, InputNumber, Form, Modal, Image, Card, Divider, Collapse, Empty
 } from 'antd'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
+import AuthorizedImage from '../components/AuthorizedImage'
 import { ArrowLeftOutlined, CheckCircleOutlined, LockOutlined, EditOutlined, PrinterOutlined, FileExcelOutlined, FileTextOutlined } from '@ant-design/icons'
-import { performanceAPI, PerformanceActivity, PerformanceGoalRecord, PerformanceParticipant } from '../services/api'
-import { withFileAccessToken } from '../utils/authFileUrl'
+import { performanceAPI, PerformanceActivity, PerformanceGoalRecord, PerformanceParticipant, PreviousPerformanceResult } from '../services/api'
+import { hasPermission } from '../utils/permission'
 
 const { Title, Text } = Typography
 
@@ -20,6 +21,58 @@ const SECTION_LABEL: Record<string, string> = {
   quantitative: '量化指标',
   key_action: '关键行动',
   bonus_penalty: '附加考核项'
+}
+
+const NEW_FLOW_RESULT_PROGRESS = [
+  { status: 'hr_confirmation', label: 'HR确认', pending: '待HR确认', current: 'HR确认中', done: 'HR已确认' },
+  { status: 'employee_confirmation', label: '员工确认', pending: '待员工确认', current: '员工确认中', done: '员工已确认' },
+  { status: 'archived', label: '锁定/归档', pending: '未锁定', current: '已锁定', done: '已锁定/归档' },
+]
+
+function getNewFlowResultProgressIndex(status?: string) {
+  if (status === 'locked' || status === 'result_confirmed') return NEW_FLOW_RESULT_PROGRESS.length - 1
+  const index = NEW_FLOW_RESULT_PROGRESS.findIndex(item => item.status === status)
+  return index >= 0 ? index : -1
+}
+
+type NewFlowResultProgressPhase = 'done' | 'current' | 'pending'
+
+function getNewFlowResultActivityProgressPhases(status?: string, minimumDoneIndex = -1): NewFlowResultProgressPhase[] {
+  const currentIndex = getNewFlowResultProgressIndex(status)
+  const phases = NEW_FLOW_RESULT_PROGRESS.map((_, index): NewFlowResultProgressPhase => {
+    if (currentIndex > index) return 'done'
+    if (currentIndex === index) return 'current'
+    return 'pending'
+  })
+  for (let index = 0; index <= minimumDoneIndex && index < phases.length; index += 1) {
+    phases[index] = 'done'
+  }
+  return phases
+}
+
+function isNewFlowResultPublishedParticipantStatus(status?: string) {
+  const normalized = String(status || '').trim()
+  return normalized === 'employee_confirmed' || normalized === 'result_confirmed' || normalized === 'locked'
+}
+
+export function getNewFlowResultProgressPhases(activityStatus?: string, progressStatusOverride?: string): NewFlowResultProgressPhase[] {
+  const override = String(progressStatusOverride || '').trim()
+  if (!override) {
+    return getNewFlowResultActivityProgressPhases(activityStatus)
+  }
+  if (override === 'manager_confirmed') {
+    return ['current', 'pending', 'pending']
+  }
+  if (override === 'hr_confirmed') {
+    return ['done', 'current', 'pending']
+  }
+  if (override === 'employee_confirmed') {
+    return ['done', 'done', 'pending']
+  }
+  if (isNewFlowResultPublishedParticipantStatus(override)) {
+    return getNewFlowResultActivityProgressPhases(activityStatus, 1)
+  }
+  return NEW_FLOW_RESULT_PROGRESS.map(() => 'pending')
 }
 
 function formatScore(value?: number) {
@@ -352,12 +405,12 @@ const ArchivePerformanceSheet: React.FC<ArchiveSheetProps> = ({ activity, partic
           </tr>
           <tr className="archive-level-label-row">
             <td colSpan={4}>个人绩效评定结果/等级</td>
-            <td colSpan={4}>绩效面谈进度</td>
+            <td colSpan={4}>员工确认状态</td>
             <td colSpan={3}>个人价值观等级(季度评)</td>
           </tr>
           <tr className="archive-level-value-row">
             <td colSpan={4} className="archive-level-cell">{participant?.final_level || participant?.suggested_level || '-'}</td>
-            <td colSpan={4}>{participant?.final_level === 'C' || participant?.final_level === 'D' ? '需完成绩效面谈' : '按需绩效面谈'}</td>
+            <td colSpan={4}>{participant?.employee_confirmed_at ? '员工已确认' : '员工待确认'}</td>
             <td colSpan={3} />
           </tr>
           <tr className="archive-sign-row">
@@ -513,7 +566,7 @@ const NewFlowPlanArchiveSheet: React.FC<ArchiveSheetProps> = ({ activity, partic
             <td colSpan={11}>下季度目标计划</td>
           </tr>
           <tr className="old-flow-note-row">
-            <td colSpan={11}>说明：权重总计100%，固定两项考核占比30%，还可填写70%权重。</td>
+            <td colSpan={11}>说明：下季度目标计划按 OKR/KPI 自定义填写，权重总计100%。</td>
           </tr>
           <tr className="old-flow-head-row">
             <th>序号</th>
@@ -1153,8 +1206,14 @@ const PerformanceResultView: React.FC = () => {
   const [records, setRecords] = useState<PerformanceGoalRecord[]>([])
   const [participant, setParticipant] = useState<PerformanceParticipant | null>(null)
   const [activity, setActivity] = useState<PerformanceActivity | null>(null)
+  const [progressStatusOverride, setProgressStatusOverride] = useState<string | undefined>(undefined)
+  const [previousResult, setPreviousResult] = useState<PreviousPerformanceResult | null>(null)
+  const [previousResultModalVisible, setPreviousResultModalVisible] = useState(false)
+  const [resultHidden, setResultHidden] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [confirmType, setConfirmType] = useState<'employee' | 'manager' | 'hr' | null>(null)
+  const [publishingResult, setPublishingResult] = useState(false)
+  const [triggeringInterview, setTriggeringInterview] = useState(false)
   const [bonusPenaltyModalVisible, setBonusPenaltyModalVisible] = useState(false)
   const [bonusPenaltyForm] = Form.useForm()
   const [savingBonusPenalty, setSavingBonusPenalty] = useState(false)
@@ -1163,6 +1222,10 @@ const PerformanceResultView: React.FC = () => {
   const loadData = useCallback(async () => {
     if (!participantId) return
     setLoading(true)
+    setResultHidden(false)
+    setProgressStatusOverride(undefined)
+    setPreviousResult(null)
+    setPreviousResultModalVisible(false)
     try {
       const [recordsRes, participantRes] = await Promise.all([
         performanceAPI.getGoalRecords(Number(participantId)),
@@ -1171,8 +1234,19 @@ const PerformanceResultView: React.FC = () => {
       setRecords(recordsRes.data?.items || [])
       setParticipant(participantRes.data?.participant || participantRes.data)
       setActivity(participantRes.data?.activity || null)
-    } catch {
-      message.error('加载数据失败')
+      setProgressStatusOverride(participantRes.data?.progress_status_override || undefined)
+      try {
+        const previousRes = await performanceAPI.getPreviousParticipantResult(Number(participantId))
+        setPreviousResult(previousRes.data || null)
+      } catch {
+        setPreviousResult(null)
+      }
+    } catch (err: any) {
+      if (err?.response?.data?.data?.result_hidden) {
+        setResultHidden(true)
+      } else {
+        message.error(err?.response?.data?.message || '加载数据失败')
+      }
     } finally {
       setLoading(false)
     }
@@ -1247,6 +1321,35 @@ const PerformanceResultView: React.FC = () => {
     }
 
     await doConfirm(type)
+  }
+
+  const handleOpenResultPublish = async () => {
+    if (!activity?.id) return
+    setPublishingResult(true)
+    try {
+      await performanceAPI.openResultPublish(activity.id)
+      message.success('结果公布已开启')
+      loadData()
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '开启结果公布失败')
+    } finally {
+      setPublishingResult(false)
+    }
+  }
+
+  const handleTriggerPerformanceInterview = async () => {
+    if (!participantId || !participant) return
+    const finalLevel = String(participant.final_level || participant.suggested_level || '').trim()
+    const interviewType = finalLevel === 'C' || finalLevel === 'D' ? 'required' : 'optional'
+    setTriggeringInterview(true)
+    try {
+      await performanceAPI.triggerPerformanceInterview(Number(participantId), interviewType)
+      message.success('绩效面谈通知已发送')
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '发起绩效面谈失败')
+    } finally {
+      setTriggeringInterview(false)
+    }
   }
 
   const waitForArchiveSheet = async () => {
@@ -1332,6 +1435,17 @@ const PerformanceResultView: React.FC = () => {
     )
   }
 
+  if (resultHidden) {
+    return (
+      <PageContainer data-testid="performance-result-hidden-page" title="绩效结果" style={{ padding: '24px 32px' }}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)} style={{ marginBottom: 24 }}>返回</Button>
+        <PageCard title="绩效结果">
+          <Empty description="绩效结果暂未公布" />
+        </PageCard>
+      </PageContainer>
+    )
+  }
+
   const isLocked = participant?.is_locked
   const status = participant?.status
   const isNewFlow = isNewPerformanceFlow(activity)
@@ -1339,17 +1453,172 @@ const PerformanceResultView: React.FC = () => {
     ? records.filter(record => isReviewGoalRecord(activity, record))
     : records
   const bonusRecords = records.filter(r => r.section_type === 'bonus_penalty')
+  const previousActivity = previousResult?.activity || null
+  const previousParticipant = previousResult?.participant || null
+  const previousRecords: PerformanceGoalRecord[] = Array.isArray(previousResult?.goal_records) ? previousResult.goal_records : []
+  const previousDisplayRecords = previousActivity
+    ? previousRecords.filter(record => isReviewGoalRecord(previousActivity, record))
+    : previousRecords
+  const previousBonusRecords = previousRecords.filter(record => record.section_type === 'bonus_penalty')
+  const previousVersions = Array.isArray(previousResult?.versions) ? previousResult.versions : []
+  const formatOptionalDecimal = (value?: number | null) =>
+    value === undefined || value === null ? '-' : formatDecimal(value)
+  const formatMetaValue = (value: unknown) => {
+    if (value === undefined || value === null || value === '') return '-'
+    if (typeof value === 'number') return formatDecimal(value)
+    return String(value)
+  }
+  const formatVersionChange = (meta?: Record<string, unknown>) => {
+    if (!meta) return '-'
+    const oldScore = formatMetaValue(meta.old_adjusted_score ?? meta.old_total_manager_score ?? meta.old_manager_score)
+    const newScore = formatMetaValue(meta.new_department_score)
+    const oldLevel = formatMetaValue(meta.old_final_level)
+    const newLevel = formatMetaValue(meta.new_final_level)
+    const reason = formatMetaValue(meta.reason)
+    const parts: string[] = []
+    if (oldScore !== '-' || newScore !== '-') parts.push(`原分数 ${oldScore}，调整为 ${newScore}`)
+    if (oldLevel !== '-' || newLevel !== '-') parts.push(`原等级 ${oldLevel}，调整为 ${newLevel}`)
+    if (reason !== '-') parts.push(`原因：${reason}`)
+    return parts.join('；') || '-'
+  }
+  const formatVersionReason = (record: {
+    adjust_reason?: string
+    confirm_comment?: string
+    manager_comment?: string
+    operation_meta?: Record<string, unknown>
+  }) => {
+    const change = formatVersionChange(record.operation_meta)
+    if (change !== '-') return change
+    return record.adjust_reason || record.confirm_comment || record.manager_comment || '-'
+  }
+  const previousPreviewColumns = [
+    { title: '事项', dataIndex: 'item_name', key: 'item_name' },
+    { title: '权重', dataIndex: 'weight', key: 'weight', width: 72, render: (v: number) => formatWeight(v) },
+    { title: '完成情况', dataIndex: 'actual_result', key: 'actual_result', render: (v: string) => v || '-' },
+    { title: '上级评分', dataIndex: 'manager_score', key: 'manager_score', width: 88, render: (v: number) => formatOptionalDecimal(v) },
+  ]
+  const previousDetailColumns = [
+    {
+      title: '类别',
+      dataIndex: 'section_type',
+      key: 'section_type',
+      width: 100,
+      render: (val: string) => (
+        <StatusTag color={val === 'quantitative' ? 'blue' : val === 'bonus_penalty' ? 'gold' : 'green'}>
+          {SECTION_LABEL[val] || val}
+        </StatusTag>
+      )
+    },
+    { title: '事项', dataIndex: 'item_name', key: 'item_name', width: 180, render: (v: string) => v || '-' },
+    {
+      title: '说明',
+      dataIndex: 'item_definition',
+      key: 'item_definition',
+      width: 240,
+      render: (v: string, record: PerformanceGoalRecord) => v || record.scoring_rule || '-'
+    },
+    { title: '权重', dataIndex: 'weight', key: 'weight', width: 80, render: (v: number) => formatWeight(v) },
+    {
+      title: '目标/标准',
+      key: 'target',
+      width: 180,
+      render: (_: unknown, record: PerformanceGoalRecord) => record.target_value || record.scoring_rule || '-'
+    },
+    { title: '完成情况', dataIndex: 'actual_result', key: 'actual_result', width: 180, render: (v: string) => v || '-' },
+    { title: '自评', dataIndex: 'self_score', key: 'self_score', width: 80, render: (v: number) => formatOptionalDecimal(v) },
+    { title: '上级评分', dataIndex: 'manager_score', key: 'manager_score', width: 90, render: (v: number) => formatOptionalDecimal(v) },
+    {
+      title: '加权得分',
+      key: 'weighted',
+      width: 90,
+      render: (_: unknown, record: PerformanceGoalRecord) => <Text strong>{getWeightedScore(record, 'manager').toFixed(1)}</Text>
+    }
+  ]
+  const previousBonusColumns = [
+    { title: '事项', dataIndex: 'item_name', key: 'item_name', width: 180, render: (v: string) => v || '-' },
+    { title: '权重', dataIndex: 'weight', key: 'weight', width: 80, render: (v: number) => formatWeight(v) },
+    { title: '完成情况', dataIndex: 'actual_result', key: 'actual_result', render: (v: string) => v || '-' },
+    { title: '自评', dataIndex: 'self_score', key: 'self_score', width: 80, render: (v: number) => formatOptionalDecimal(v) },
+    { title: '附加分', dataIndex: 'bonus_score', key: 'bonus_score', width: 90, render: (v: number) => formatOptionalDecimal(v) },
+  ]
+  const previousVersionColumns = [
+    { title: '类型', dataIndex: 'review_type', key: 'review_type', width: 130, render: (v: string) => v || '-' },
+    { title: '操作人', dataIndex: 'created_by', key: 'created_by', width: 120, render: (v: string) => v || '-' },
+    { title: '最终等级', dataIndex: 'final_level', key: 'final_level', width: 100, render: (v: string) => v || '-' },
+    { title: '上级评分', dataIndex: 'manager_score', key: 'manager_score', width: 100, render: (v: number) => formatOptionalDecimal(v) },
+    {
+      title: '调整留痕',
+      key: 'change',
+      render: (_: unknown, record: { adjust_reason?: string; confirm_comment?: string; manager_comment?: string; operation_meta?: Record<string, unknown> }) =>
+        formatVersionReason(record)
+    },
+    { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 120, render: (v: string) => formatDate(v) },
+  ]
 
   let confirmAction: { type: 'employee' | 'manager' | 'hr'; label: string } | null = null
-  if (status === 'manager_submitted' && !isLocked) {
-    confirmAction = { type: 'employee', label: '员工确认结果' }
-  } else if (status === 'employee_confirmed' && !isLocked) {
-    confirmAction = { type: 'manager', label: '主管确认并冻结' }
-  } else if (status === 'manager_recheck' && ['manager_confirmation', 'hr_confirmation'].includes(activity?.status || '') && !isLocked) {
-    confirmAction = { type: 'manager', label: '确认已查看' }
-  } else if (activity?.status === 'hr_confirmation' && status === 'manager_confirmed') {
-    confirmAction = { type: 'hr', label: 'HR确认' }
+  if (isNewFlow) {
+    if (activity?.status === 'hr_confirmation' && status === 'manager_confirmed' && hasPermission('performance:hr_confirm:submit')) {
+      confirmAction = { type: 'hr', label: 'HR确认' }
+    } else if (activity?.status === 'employee_confirmation' && status === 'hr_confirmed' && !isLocked) {
+      confirmAction = { type: 'employee', label: '员工确认结果' }
+    }
+  } else {
+    if (status === 'manager_submitted' && !isLocked) {
+      confirmAction = { type: 'employee', label: '员工确认结果' }
+    } else if (status === 'employee_confirmed' && !isLocked) {
+      confirmAction = { type: 'manager', label: '主管确认并冻结' }
+    } else if (status === 'manager_recheck' && ['manager_confirmation', 'hr_confirmation'].includes(activity?.status || '') && !isLocked) {
+      confirmAction = { type: 'manager', label: '确认已查看' }
+    } else if (activity?.status === 'hr_confirmation' && status === 'manager_confirmed') {
+      confirmAction = { type: 'hr', label: 'HR确认' }
+    }
   }
+  const newFlowProgressPhases = getNewFlowResultProgressPhases(activity?.status, progressStatusOverride)
+  const progressOverrideBlocksResultActions = Boolean(progressStatusOverride) && !isNewFlowResultPublishedParticipantStatus(progressStatusOverride)
+  const canOpenResultPublish = isNewFlow &&
+    activity?.status === 'hr_review' &&
+    (!progressStatusOverride || progressStatusOverride === 'hr_confirmed') &&
+    (hasPermission('performance:result_publish:manage') || hasPermission('performance:activity:manage'))
+  const canTriggerPerformanceInterview = isNewFlow &&
+    activity?.status === 'interview' &&
+    !progressOverrideBlocksResultActions &&
+    (hasPermission('performance:activity:manage') ||
+      hasPermission('performance:department_eval:submit') ||
+      hasPermission('performance:level_adjust:manage'))
+  const resultProgressItems = isNewFlow
+    ? NEW_FLOW_RESULT_PROGRESS.map((item, index) => ({
+      color: newFlowProgressPhases[index] === 'done' ? 'green' : newFlowProgressPhases[index] === 'current' ? 'blue' : 'gray',
+      children: newFlowProgressPhases[index] === 'done'
+        ? item.done
+        : newFlowProgressPhases[index] === 'current' ? item.current : item.pending,
+    }))
+    : [
+      {
+        color: participant?.employee_confirmed_at ? 'green' : 'gray',
+        children: participant?.employee_confirmed_at
+          ? `员工已确认 (${participant.employee_confirmed_at?.substring(0, 10)})`
+          : '待员工确认'
+      },
+      {
+        color: participant?.status === 'manager_recheck' ? 'orange' : participant?.manager_confirmed_at ? 'green' : 'gray',
+        children: participant?.status === 'manager_recheck'
+          ? '员工已修改自评，待主管复核'
+          : participant?.manager_confirmed_at
+          ? `主管已确认并冻结 (${participant.manager_confirmed_at?.substring(0, 10)})`
+          : '待主管确认并冻结'
+      },
+      {
+        color: participant?.hr_confirmed_at ? 'green' : 'gray',
+        children: participant?.hr_confirmed_at
+          ? `人力已确认 (${participant.hr_confirmed_at?.substring(0, 10)})`
+          : '待人力确认'
+      },
+      {
+        color: isLocked ? 'red' : 'gray',
+        children: isLocked ? '已冻结' : '未冻结',
+        dot: isLocked ? <LockOutlined /> : undefined
+      }
+    ]
 
   return (
     <PageContainer data-testid="performance-result-page" title="绩效结果" style={{ padding: '24px 32px' }}>
@@ -1422,9 +1691,9 @@ const PerformanceResultView: React.FC = () => {
                           <Image.PreviewGroup>
                             <Space wrap size={4}>
                               {attachments.map((url: string, idx: number) => (
-                                <Image
+                                <AuthorizedImage
                                   key={idx}
-                                  src={withFileAccessToken(url)}
+                                  src={url}
                                   width={48}
                                   height={48}
                                   style={{ objectFit: 'cover', borderRadius: 4 }}
@@ -1467,6 +1736,42 @@ const PerformanceResultView: React.FC = () => {
                 </PageCard>
               </Col>
             </Row>
+
+            {isNewFlow && previousResult && (
+              <PageCard title="上一周期结果">
+                {previousParticipant ? (
+                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <Descriptions column={{ xs: 1, sm: 3 }} size="small">
+                      <Descriptions.Item label="活动">{previousActivity?.name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="最终等级">
+                        <StatusTag color={LEVEL_COLOR[previousParticipant.final_level || ''] || 'default'}>
+                          {previousParticipant.final_level || '-'}
+                        </StatusTag>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="最终分">
+                        <Text strong>{formatDecimal(previousParticipant.adjusted_score || previousParticipant.total_manager_score || previousParticipant.manager_score)}</Text>
+                      </Descriptions.Item>
+                    </Descriptions>
+                    <Table
+                      dataSource={previousDisplayRecords.slice(0, 5)}
+                      columns={previousPreviewColumns}
+                      rowKey="id"
+                      pagination={false}
+                      size="small"
+                    />
+                    <Button
+                      type="link"
+                      style={{ paddingInline: 0 }}
+                      onClick={() => setPreviousResultModalVisible(true)}
+                    >
+                      查看完整上一周期结果
+                    </Button>
+                  </Space>
+                ) : (
+                  <Empty description={previousActivity ? '上一周期没有该员工绩效结果' : '暂无上一周期结果'} />
+                )}
+              </PageCard>
+            )}
           </Space>
         </Col>
 
@@ -1513,37 +1818,39 @@ const PerformanceResultView: React.FC = () => {
               )}
             </PageCard>
 
-            <PageCard title="确认进度">
-              <Timeline
-                items={[
-                  {
-                    color: participant?.employee_confirmed_at ? 'green' : 'gray',
-                    children: participant?.employee_confirmed_at
-                      ? `员工已确认 (${participant.employee_confirmed_at?.substring(0, 10)})`
-                      : '待员工确认'
-                  },
-                  {
-                    color: participant?.status === 'manager_recheck' ? 'orange' : participant?.manager_confirmed_at ? 'green' : 'gray',
-                    children: participant?.status === 'manager_recheck'
-                      ? '员工已修改自评，待主管复核'
-                      : participant?.manager_confirmed_at
-                      ? `主管已确认并冻结 (${participant.manager_confirmed_at?.substring(0, 10)})`
-                      : '待主管确认并冻结'
-                  },
-                  {
-                    color: participant?.hr_confirmed_at ? 'green' : 'gray',
-                    children: participant?.hr_confirmed_at
-                      ? `人力已确认 (${participant.hr_confirmed_at?.substring(0, 10)})`
-                      : '待人力确认'
-                  },
-                  {
-                    color: isLocked ? 'red' : 'gray',
-                    children: isLocked ? '已冻结' : '未冻结',
-                    dot: isLocked ? <LockOutlined /> : undefined
-                  }
-                ]}
-              />
-            </PageCard>
+            {!isNewFlow && (
+              <PageCard title="确认进度">
+                <Timeline items={resultProgressItems} />
+              </PageCard>
+            )}
+
+            {canOpenResultPublish && (
+              <Button
+                data-testid="performance-result-open-result-publish"
+                type="primary"
+                icon={<CheckCircleOutlined />}
+                loading={publishingResult}
+                onClick={handleOpenResultPublish}
+                block
+                size="large"
+              >
+                HR审核通过，开启结果公布
+              </Button>
+            )}
+
+            {canTriggerPerformanceInterview && (
+              <Button
+                data-testid="performance-result-trigger-interview"
+                type="primary"
+                icon={<FileTextOutlined />}
+                loading={triggeringInterview}
+                onClick={handleTriggerPerformanceInterview}
+                block
+                size="large"
+              >
+                发起绩效面谈
+              </Button>
+            )}
 
             {confirmAction && (
               <Button
@@ -1562,7 +1869,7 @@ const PerformanceResultView: React.FC = () => {
         </Col>
       </Row>
 
-      <Divider style={{ margin: '40px 0 24px' }} />
+      <Divider style={{ margin: '24px 0 16px' }} />
 
       <Collapse
         activeKey={archiveActiveKeys}
@@ -1590,6 +1897,91 @@ const PerformanceResultView: React.FC = () => {
           }
         ]}
       />
+
+      <Modal
+        title="完整上一周期结果"
+        open={previousResultModalVisible}
+        footer={null}
+        width={1120}
+        onCancel={() => setPreviousResultModalVisible(false)}
+      >
+        {previousParticipant ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
+              <Descriptions.Item label="活动">{previousActivity?.name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="员工">{previousParticipant.employee_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="最终等级">
+                <StatusTag color={LEVEL_COLOR[previousParticipant.final_level || ''] || 'default'}>
+                  {previousParticipant.final_level || '-'}
+                </StatusTag>
+              </Descriptions.Item>
+              <Descriptions.Item label="最终分">
+                {formatOptionalDecimal(previousParticipant.adjusted_score ?? previousParticipant.total_manager_score ?? previousParticipant.manager_score)}
+              </Descriptions.Item>
+              <Descriptions.Item label="部门/中心调整">
+                {previousParticipant.department_adjusted ? '已调整' : '未调整'}
+              </Descriptions.Item>
+              <Descriptions.Item label="调整原因">
+                {previousParticipant.department_adjust_reason || previousParticipant.adjust_reason || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="自评做得好的地方" span={2}>
+                {previousParticipant.self_evaluation_good || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="自评需要改进的地方" span={2}>
+                {previousParticipant.self_evaluation_improvement || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="上级评价做得好的地方" span={2}>
+                {previousParticipant.manager_evaluation_good || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="上级评价需要改进的地方" span={2}>
+                {previousParticipant.manager_evaluation_improvement || '-'}
+              </Descriptions.Item>
+            </Descriptions>
+
+            <Divider orientation="left">考核指标</Divider>
+            <Table
+              dataSource={previousDisplayRecords}
+              columns={previousDetailColumns}
+              rowKey="id"
+              pagination={false}
+              size="small"
+              bordered
+              scroll={{ x: 1100 }}
+              locale={{ emptyText: '暂无考核指标' }}
+            />
+
+            {previousBonusRecords.length > 0 && (
+              <>
+                <Divider orientation="left">附加考核项</Divider>
+                <Table
+                  dataSource={previousBonusRecords}
+                  columns={previousBonusColumns}
+                  rowKey="id"
+                  pagination={false}
+                  size="small"
+                  bordered
+                />
+              </>
+            )}
+
+            {previousVersions.length > 0 && (
+              <>
+                <Divider orientation="left">调整留痕</Divider>
+                <Table
+                  dataSource={previousVersions}
+                  columns={previousVersionColumns}
+                  rowKey="id"
+                  pagination={false}
+                  size="small"
+                  bordered
+                />
+              </>
+            )}
+          </Space>
+        ) : (
+          <Empty description={previousActivity ? '上一周期没有该员工绩效结果' : '暂无上一周期结果'} />
+        )}
+      </Modal>
 
       <Modal
         title="设置附加项分数"

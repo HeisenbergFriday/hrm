@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"peopleops/internal/database"
 
@@ -187,7 +188,7 @@ func performanceRouterTestToken(t *testing.T) string {
 	t.Helper()
 
 	t.Setenv("JWT_SECRET", "performance-router-test-secret-32chars")
-	token, _, err := generateToken(&database.User{ID: 1, UserID: "tester", Name: "Tester", OrgID: "default"})
+	token, _, err := signAuthToken(&database.User{ID: 1, UserID: "tester", Name: "Tester", OrgID: "default"}, "test-session")
 	if err != nil {
 		t.Fatalf("generate token: %v", err)
 	}
@@ -200,6 +201,7 @@ func installPerformanceRouterTestDB(t *testing.T, permissionCodes []string) {
 	originalDB := database.DB
 	database.DB = newAPIPerformanceImportStubDB(t,
 		apiPerformanceRouterUserResponse(),
+		apiPerformanceRouterSessionResponse(),
 		apiPerformanceRouterRolesResponse(permissionCodes),
 		apiPerformanceRouterPermissionsResponse(permissionCodes),
 		apiPerformanceRouterTableResponse("menu_permissions", []string{"id", "role_id", "menu_keys"}, nil),
@@ -208,6 +210,19 @@ func installPerformanceRouterTestDB(t *testing.T, permissionCodes []string) {
 	t.Cleanup(func() {
 		database.DB = originalDB
 	})
+}
+
+func apiPerformanceRouterSessionResponse() apiImportQueryResponse {
+	return apiImportQueryResponse{
+		match: func(query string, _ []driver.NamedValue) bool {
+			query = strings.ToLower(query)
+			return strings.Contains(query, "from `user_sessions`") || strings.Contains(query, "from user_sessions")
+		},
+		columns: []string{"id", "user_id", "session_id", "token", "expires_at"},
+		rows: [][]driver.Value{
+			{int64(1), "tester", "test-session", "test-token-hash", time.Now().Add(time.Hour)},
+		},
+	}
 }
 
 func apiPerformanceRouterUserResponse() apiImportQueryResponse {

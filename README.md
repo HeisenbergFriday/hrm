@@ -7,7 +7,7 @@
 - 钉钉是组织、部门、员工、考勤、审批等主数据来源。
 - 本地 MySQL 保存同步缓存和本系统扩展业务数据。
 - 后端可托管 `frontend/dist`，用于钉钉微应用或统一端口部署。
-- 当前支持账号密码登录、钉钉扫码登录和钉钉内免登。
+- 当前前端使用钉钉扫码登录和钉钉内免登；登录态通过服务端会话 + HttpOnly Cookie 维护。
 
 ## 技术栈
 
@@ -79,7 +79,13 @@ DINGTALK_APP_SECRET=your_app_secret
 DINGTALK_CORP_ID=dingxxxxxxxx
 DINGTALK_AGENT_ID=123456
 
-JWT_SECRET=your_jwt_secret
+JWT_SECRET=replace_with_32+_chars_random_secret
+JWT_TTL_MINUTES=480
+AUTH_SESSION_VERSION=cookie-v1
+AUTH_COOKIE_SECURE=true
+AUTH_COOKIE_SAMESITE=lax
+CLAMAV_ADDR=127.0.0.1:3310
+UPLOAD_REQUIRE_ANTIVIRUS=true
 ```
 
 ### 3. 启动后端
@@ -116,12 +122,14 @@ go run ./cmd/main.go
 
 构建后可从 `http://localhost:8080/` 访问前端页面。
 
-## 默认账号
+## 默认管理员账号
 
-首次启动并成功连接数据库后会创建默认管理员：
+首次启动并成功连接数据库后会创建管理员账号：
 
 - 用户名：`admin`
-- 密码：`admin123`
+- 密码：通过 `ADMIN_PASSWORD` 环境变量提供；如果未设置，系统会生成随机密码且不会打印到日志。
+
+部署时不要使用 `admin123`、`change_me` 等示例弱口令。生产环境应在启动前设置强随机 `ADMIN_PASSWORD`，或通过受控运维流程重置管理员密码。
 
 ## API 入口
 
@@ -129,7 +137,7 @@ go run ./cmd/main.go
 
 | 模块 | 当前主要接口 |
 |---|---|
-| 认证 | `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me` |
+| 认证 | `POST /api/v1/auth/logout`、`GET /api/v1/auth/me` |
 | 钉钉登录 | `GET /api/v1/auth/dingtalk/qr/start`、`POST /api/v1/auth/dingtalk/in-app`、`GET /api/v1/auth/dingtalk/callback`、`GET /api/v1/auth/dingtalk/config` |
 | 用户 | `GET /api/v1/users`、`GET /api/v1/users/:id`、`PUT /api/v1/users/:id` |
 | 部门 | `GET /api/v1/departments`、`GET /api/v1/departments/:id` |

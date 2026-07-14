@@ -1,27 +1,30 @@
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
 import { authRedirectTargetFromLocation, loginPathWithRedirect, rememberAuthRedirect } from '../utils/authRedirect'
+import { csrfHeadersForMethod } from '../utils/csrf'
 
 const api = axios.create({
   baseURL: '/api/v1',
   timeout: 10000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 })
 
+// 安全模型：token 存于 HttpOnly cookie，请求自动携带（withCredentials）。
+// 写操作需附带 CSRF token（双提交 cookie 方案），从 cookie 读取后放入请求头。
 api.interceptors.request.use(
   (config) => {
-    const token = useAuthStore.getState().token
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
+    for (const [key, value] of Object.entries(csrfHeadersForMethod(config.method))) {
+      config.headers[key] = value
     }
     return config
   },
   (error) => Promise.reject(error),
 )
 
-// 刷新菜单权限（通过 api 实例自动带 token，并用锁避免重复刷新）
+// 刷新菜单权限（通过 api 实例自动带认证 Cookie，并用锁避免重复刷新）
 let isRefreshingMenuKeys = false
 export function refreshMenuKeys() {
   if (isRefreshingMenuKeys) return
