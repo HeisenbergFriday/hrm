@@ -26,6 +26,8 @@ logs
 /build
 .gocache/
 frontend/dist/
+/frontend-dist.tar.gz
+/peopleops
 *.msi
 uploads/
 
@@ -40,6 +42,8 @@ frontend/node_modules/
 
 # Local tool configuration
 .claude/
+.codex/
+.merge-backup/
 
 # Scratch files
 .tmp/

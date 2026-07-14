@@ -25,6 +25,11 @@ func requireSyncOrgID(orgID string) string {
 	return orgID
 }
 
+func (r *SyncRepository) DB() *gorm.DB {
+	return r.db
+}
+
+// Upsert 更新或创建同步状态
 func (r *SyncRepository) Upsert(status *database.SyncStatus) error {
 	status.OrgID = requireSyncOrgID(status.OrgID)
 	return r.db.Clauses(clause.OnConflict{

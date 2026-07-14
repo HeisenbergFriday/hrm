@@ -889,8 +889,11 @@ func TestSendSelfEvalReminderHandlerNoRecipients(t *testing.T) {
 		gin.Params{{Key: "activity_id", Value: "1"}},
 		SendSelfEvalReminder,
 	)
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"pending":0`) || !strings.Contains(recorder.Body.String(), `"candidates":0`) {
+		t.Fatalf("body does not include reminder result counts: %s", recorder.Body.String())
 	}
 }
 
@@ -1203,6 +1206,11 @@ func TestShouldNotifyParticipant(t *testing.T) {
 			expected:    false,
 		},
 		{
+			name:        "result hidden",
+			participant: database.PerformanceParticipant{EmployeeID: "user-1", ResultHidden: true},
+			expected:    false,
+		},
+		{
 			name:        "inactive employee",
 			participant: database.PerformanceParticipant{EmployeeID: "user-1", EmployeeStatus: "inactive"},
 			expected:    false,
@@ -1489,4 +1497,315 @@ func TestVerifyPerformanceParticipantAccess(t *testing.T) {
 	if !verifyPerformanceParticipantAccess(adminCtx, participant, nil, nil, nil) {
 		t.Fatal("admin should bypass participant access check")
 	}
+}
+
+func TestRedactHiddenPerformanceResultFields(t *testing.T) {
+	score := 9.0
+	now := time.Now()
+	participant := &database.PerformanceParticipant{
+		SelfScore:                    8,
+		SelfLevel:                    "A",
+		SelfSummary:                  "self",
+		ManagerScore:                 9,
+		ManagerComment:               "manager",
+		SuggestedLevel:               "A",
+		FinalLevel:                   "S",
+		AdjustReason:                 "adjust",
+		TotalSelfScore:               8,
+		TotalManagerScore:            9,
+		BonusScore:                   1,
+		PenaltyScore:                 0.5,
+		AdjustedScore:                9.5,
+		DepartmentAdjusted:           true,
+		DepartmentFinalScore:         &score,
+		DepartmentFinalLevel:         "S",
+		DepartmentAdjustReason:       "department",
+		DepartmentAdjustedAt:         &now,
+		DepartmentAdjustedBy:         "hr",
+		ResultHidden:                 true,
+		ResultHiddenReason:           "hidden",
+		ResultHiddenAt:               &now,
+		ResultHiddenBy:               "hr",
+		EmployeeConfirmedAt:          &now,
+		EmployeeConfirmedBy:          "employee",
+		ManagerConfirmedAt:           &now,
+		ManagerConfirmedBy:           "manager",
+		HRConfirmedAt:                &now,
+		HRConfirmedBy:                "hr",
+		SelfEvaluationGood:           "good",
+		SelfEvaluationImprovement:    "improve",
+		ManagerEvaluationGood:        "mgood",
+		ManagerEvaluationImprovement: "mimprove",
+	}
+
+	redactHiddenPerformanceResultFields(participant)
+
+	if !participant.ResultHidden {
+		t.Fatalf("result hidden flag should be preserved")
+	}
+	if participant.FinalLevel != "" || participant.ManagerScore != 0 || participant.AdjustedScore != 0 {
+		t.Fatalf("result fields were not redacted: level=%q manager=%v adjusted=%v", participant.FinalLevel, participant.ManagerScore, participant.AdjustedScore)
+	}
+	if participant.DepartmentFinalScore != nil || participant.ResultHiddenReason != "" || participant.ManagerConfirmedAt != nil {
+		t.Fatalf("hidden metadata/confirmation fields were not redacted")
+	}
+}
+
+func TestDenyHiddenPerformanceResultForEmployeeAllowsHiddenResultViewPermission(t *testing.T) {
+	performanceHandlerUserTestDBWith(t,
+		apiPerformancePermissionCodesResponse("performance:hidden_result:view"),
+		apiPerformanceRolesResponse(),
+	)
+	c, recorder := performanceHandlerAdminContext(t)
+	c.Set("userID", "user-1")
+
+	blocked := denyHiddenPerformanceResultForEmployee(c, &database.PerformanceParticipant{
+		EmployeeID:   "user-1",
+		ResultHidden: true,
+	})
+
+	if blocked {
+		t.Fatalf("hidden result view permission should be allowed to view hidden result; body = %s", recorder.Body.String())
+	}
+}
+
+func TestDenyHiddenPerformanceResultForEmployeeBlocksPrivilegedNonHiddenViewOperator(t *testing.T) {
+	performanceHandlerUserTestDBWith(t,
+		apiPerformancePermissionCodesResponse("performance:activity:manage", "performance:result_publish:manage", "performance:result_visibility:manage"),
+		apiPerformanceRolesResponse(),
+	)
+	c, recorder := performanceHandlerAdminContext(t)
+	c.Set("userID", "user-1")
+
+	blocked := denyHiddenPerformanceResultForEmployee(c, &database.PerformanceParticipant{
+		EmployeeID:   "user-1",
+		ResultHidden: true,
+	})
+
+	if !blocked {
+		t.Fatalf("hidden result should be blocked without hidden result view permission even with performance permissions")
+	}
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+}
+
+func TestDenyHiddenPerformanceResultForEmployeeBlocksSelfWithoutPrivilege(t *testing.T) {
+	originalDB := database.DB
+	database.DB = nil
+	t.Cleanup(func() {
+		database.DB = originalDB
+	})
+	c, recorder := performanceHandlerAdminContext(t)
+	c.Set("userID", "user-1")
+
+	blocked := denyHiddenPerformanceResultForEmployee(c, &database.PerformanceParticipant{
+		EmployeeID:   "user-1",
+		ResultHidden: true,
+	})
+
+	if !blocked {
+		t.Fatalf("hidden self result should be blocked for non-privileged employee")
+	}
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"result_hidden":true`) {
+		t.Fatalf("body = %s, want result_hidden marker", recorder.Body.String())
+	}
+}
+
+func TestDenyHiddenPerformanceResultForEmployeeBlocksNonPrivilegedOperator(t *testing.T) {
+	originalDB := database.DB
+	database.DB = nil
+	t.Cleanup(func() {
+		database.DB = originalDB
+	})
+	c, recorder := performanceHandlerAdminContext(t)
+	c.Set("userID", "manager-1")
+
+	blocked := denyHiddenPerformanceResultForEmployee(c, &database.PerformanceParticipant{
+		EmployeeID:   "user-1",
+		ResultHidden: true,
+	})
+
+	if !blocked {
+		t.Fatalf("hidden result should be blocked for non-privileged operator")
+	}
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+}
+
+func TestGetPreviousParticipantResultRejectsHiddenPreviousResultForEmployee(t *testing.T) {
+	previousActivityID := uint(1)
+	performanceHandlerUserTestDBWith(t,
+		apiPerformancePermissionCodesResponse("performance:result:view"),
+		apiPerformanceRolesResponse(),
+		apiPerformanceDataPermissionAllResponse(),
+		apiPerformanceParticipantByIDResponse(2, "2", "user-1", false),
+		apiPerformanceActivityByIDResponse(2, "Q2 Review", "self_evaluation", "new", &previousActivityID),
+		apiPerformanceActivityByIDResponse(1, "Q1 Review", "locked", "new", nil),
+		apiPerformanceParticipantByActivityAndEmployeeResponse(1, "1", "user-1", true),
+		apiPerformanceGoalRecordsByParticipantResponse(1),
+		apiPerformanceReviewVersionsByParticipantResponse(1),
+		apiPerformanceGoalApprovalLogsResponse(nil),
+	)
+
+	c, recorder := performanceHandlerAdminContext(t)
+	c.Set("userID", "user-1")
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/performance/participants/2/previous-result", nil)
+	c.Params = gin.Params{{Key: "participant_id", Value: "2"}}
+
+	GetPreviousParticipantResult(c)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"result_hidden":true`) {
+		t.Fatalf("body = %s, want result_hidden marker", body)
+	}
+	if strings.Contains(body, `"final_level":"S"`) || strings.Contains(body, `"manager_score":9.5`) || strings.Contains(body, "hidden-achievement") {
+		t.Fatalf("hidden previous result leaked in body: %s", body)
+	}
+}
+
+func apiPerformancePermissionCodesResponse(codes ...string) apiImportQueryResponse {
+	rows := make([][]driver.Value, 0, len(codes))
+	for i, code := range codes {
+		rows = append(rows, []driver.Value{int64(i + 1), code, code})
+	}
+	return apiImportQueryResponse{
+		match: func(query string, _ []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			return strings.Contains(lower, "permissions") && strings.Contains(lower, "role_permissions")
+		},
+		columns: []string{"id", "name", "code"},
+		rows:    rows,
+	}
+}
+
+func apiPerformanceRolesResponse() apiImportQueryResponse {
+	return apiImportQueryResponse{
+		match: func(query string, _ []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			return strings.Contains(lower, "roles") && strings.Contains(lower, "user_roles")
+		},
+		columns: []string{"id", "name", "description"},
+		rows:    [][]driver.Value{{int64(1), "employee", "employee"}},
+	}
+}
+
+func apiPerformanceDataPermissionAllResponse() apiImportQueryResponse {
+	return apiImportQueryResponse{
+		match: func(query string, _ []driver.NamedValue) bool {
+			return strings.Contains(strings.ToLower(query), "data_permissions")
+		},
+		columns: []string{"id", "role_id", "scope", "department_keys"},
+		rows:    [][]driver.Value{{int64(1), int64(1), "all", "[]"}},
+	}
+}
+
+func apiPerformanceActivityByIDResponse(id uint, name, status, flowType string, previousReviewActivityID *uint) apiImportQueryResponse {
+	return apiImportQueryResponse{
+		match: func(query string, args []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			return strings.Contains(lower, "performance_activities") &&
+				!strings.Contains(lower, "count(") &&
+				apiImportArgsContain(args, id)
+		},
+		columns: []string{
+			"id", "name", "cycle_type", "start_date", "end_date", "status", "flow_type", "previous_review_activity_id",
+		},
+		rows: [][]driver.Value{{
+			int64(id), name, "quarterly", "2026-04-01", "2026-06-30", status, flowType, optionalUintDriverValue(previousReviewActivityID),
+		}},
+	}
+}
+
+func apiPerformanceParticipantByIDResponse(id uint, activityID, employeeID string, resultHidden bool) apiImportQueryResponse {
+	return apiImportQueryResponse{
+		match: func(query string, args []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			return strings.Contains(lower, "performance_participants") &&
+				!strings.Contains(lower, "count(") &&
+				!strings.Contains(lower, "activity_id =") &&
+				apiImportArgsContain(args, id)
+		},
+		columns: apiPerformanceHiddenParticipantColumns(),
+		rows: [][]driver.Value{{
+			int64(id), activityID, employeeID, "Alice", "dept-1", "Product", ptrString("manager-1"), ptrString("Manager Bob"),
+			"manager_submitted", "active", float64(8.5), float64(9.5), "S", float64(9.5), resultHidden, false,
+		}},
+	}
+}
+
+func apiPerformanceParticipantByActivityAndEmployeeResponse(id uint, activityID, employeeID string, resultHidden bool) apiImportQueryResponse {
+	return apiImportQueryResponse{
+		match: func(query string, args []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			return strings.Contains(lower, "performance_participants") &&
+				strings.Contains(lower, "activity_id") &&
+				strings.Contains(lower, "employee_id") &&
+				apiImportArgsContain(args, activityID) &&
+				apiImportArgsContain(args, employeeID)
+		},
+		columns: apiPerformanceHiddenParticipantColumns(),
+		rows: [][]driver.Value{{
+			int64(id), activityID, employeeID, "Alice", "dept-1", "Product", ptrString("manager-1"), ptrString("Manager Bob"),
+			"locked", "active", float64(8.5), float64(9.5), "S", float64(9.5), resultHidden, true,
+		}},
+	}
+}
+
+func apiPerformanceHiddenParticipantColumns() []string {
+	return []string{
+		"id", "activity_id", "employee_id", "employee_name", "department_id", "department_name",
+		"manager_id", "manager_name", "status", "employee_status",
+		"self_score", "manager_score", "final_level", "adjusted_score", "result_hidden", "is_locked",
+	}
+}
+
+func apiPerformanceGoalRecordsByParticipantResponse(participantID uint) apiImportQueryResponse {
+	return apiImportQueryResponse{
+		match: func(query string, args []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			return strings.Contains(lower, "performance_goal_records") && apiImportArgsContain(args, participantID)
+		},
+		columns: []string{"id", "activity_id", "participant_id", "section_type", "item_name", "actual_result", "manager_score"},
+		rows: [][]driver.Value{{
+			int64(1), "1", int64(participantID), "quantitative", "hidden-metric", "hidden-achievement", float64(9.5),
+		}},
+	}
+}
+
+func apiPerformanceReviewVersionsByParticipantResponse(participantID uint) apiImportQueryResponse {
+	return apiImportQueryResponse{
+		match: func(query string, args []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			return strings.Contains(lower, "performance_review_versions") && apiImportArgsContain(args, participantID)
+		},
+		columns: []string{"id", "participant_id", "activity_id", "review_type", "created_by", "manager_score", "final_level"},
+		rows: [][]driver.Value{{
+			int64(1), int64(participantID), "1", "manager", "manager-1", float64(9.5), "S",
+		}},
+	}
+}
+
+func apiImportArgsContain(args []driver.NamedValue, expected interface{}) bool {
+	expectedText := fmt.Sprint(expected)
+	for _, arg := range args {
+		if fmt.Sprint(arg.Value) == expectedText {
+			return true
+		}
+	}
+	return false
+}
+
+func optionalUintDriverValue(value *uint) driver.Value {
+	if value == nil {
+		return nil
+	}
+	return int64(*value)
 }

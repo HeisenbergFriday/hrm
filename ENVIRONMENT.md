@@ -10,13 +10,15 @@
 | `DATABASE_URL` | 是 | 无 | MySQL DSN，传给 `gorm.io/driver/mysql` |
 | `REDIS_URL` | 否 | 无 | Redis 地址，格式为 `host:port`，例如 `localhost:6379` |
 | `REDIS_PASSWORD` | 否 | 空 | Redis 密码 |
-| `JWT_SECRET` | 建议必填 | 代码默认值 | JWT 签名密钥 |
+| `JWT_SECRET` | 是 | 无 | JWT 签名密钥，建议使用 `openssl rand -base64 48` 生成 |
 
 ### MySQL DSN 示例
 
 ```env
-DATABASE_URL=root:password@tcp(localhost:3306)/peopleops?charset=utf8mb4&parseTime=True&loc=Local
+DATABASE_URL=peopleops_app:<strong_mysql_password>@tcp(localhost:3306)/peopleops?charset=utf8mb4&parseTime=True&loc=Local
 ```
+
+MySQL 建议使用专用低权限账号和强随机密码，不要在测试或生产环境复用 `root` 账号。
 
 启动时如果 MySQL 连接失败，后端会尝试按 DSN 中的库名创建数据库后重连。
 
@@ -40,8 +42,30 @@ REDIS_PASSWORD=
 | `DINGTALK_ADMIN_USER_ID` | 部分同步回写必填 | 钉钉管理员用户 ID |
 | `DINGTALK_REDIRECT_URI` | 扫码登录必填 | OAuth 回调地址，通常指向前端 `/callback` |
 | `DINGTALK_APP_HOME_URL` | 微应用必填 | 钉钉微应用首页地址 |
+| `DINGTALK_QR_DEFAULT_ORG_ID` | 多企业域名固定入口可选 | 电脑扫码未显式传 `org_id` 时写入 state 的默认本地企业 ID |
 | `APP_BASE_URL` | 可选 | 后端服务对外地址 |
 | `FRONTEND_BASE_URL` | 可选 | 前端服务对外地址 |
+
+## 考勤工具箱钉钉同步附加变量
+
+考勤工具箱里的“钉钉同步 / 花名册 / 异动流程”会优先读取以下变量作为审批流程编码；如果前端没有显式传参，就会回退到这些环境变量。
+
+| 变量名 | 必填 | 说明 |
+|---|---|---|
+| `DINGTALK_PROCESS_LEAVE` | 请假同步时必填 | 请假审批流程 code |
+| `DINGTALK_PROCESS_OVERTIME` | 加班同步时必填 | 加班审批流程 code |
+| `DINGTALK_PROCESS_ATTENDANCE_CORRECTION` | 补卡同步时必填 | 补卡审批流程 code |
+| `DINGTALK_PROCESS_POSITION_TRANSFER` | 花名册/异动流程同步时必填 | 岗位异动审批流程 code |
+
+## Linux / Docker 部署说明
+
+如果你在 Linux 上使用 `docker-compose.prod.yml` 部署，容器实际读取的是 `deploy/peopleops.env`，不是项目根目录的 `.env`。
+
+也就是说：
+
+- 修改本地 `.env` 后直接上传到服务器，通常不会自动生效
+- 需要修改服务器上的 `deploy/peopleops.env`
+- 修改后需要重建或重启容器，例如执行 `docker compose -f docker-compose.prod.yml up -d`
 
 ## 假期与调休同步变量
 
@@ -87,7 +111,7 @@ REDIS_PASSWORD=
 
 ```env
 PORT=8080
-DATABASE_URL=root:password@tcp(localhost:3306)/peopleops?charset=utf8mb4&parseTime=True&loc=Local
+DATABASE_URL=peopleops_app:<strong_mysql_password>@tcp(localhost:3306)/peopleops?charset=utf8mb4&parseTime=True&loc=Local
 REDIS_URL=localhost:6379
 REDIS_PASSWORD=
 
@@ -98,8 +122,9 @@ DINGTALK_AGENT_ID=123456
 DINGTALK_ADMIN_USER_ID=manager001
 DINGTALK_APP_HOME_URL=http://your-host:8080
 DINGTALK_REDIRECT_URI=http://your-host:8080/callback
+DINGTALK_QR_DEFAULT_ORG_ID=
 
-JWT_SECRET=change_me
+JWT_SECRET=<openssl_rand_base64_48>
 ```
 
 ## 钉钉地址配置建议

@@ -31,7 +31,6 @@ const E2E_BASE_URL = `http://localhost:${E2E_PORT}`
  */
 export default defineConfig({
   testDir: './tests/e2e',
-  testIgnore: ['**/warning-probe.spec.ts'],
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */

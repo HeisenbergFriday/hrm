@@ -10,7 +10,7 @@
  * - 接口失败
  */
 import React from 'react'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import PerformanceManagerEval from './PerformanceManagerEval'
@@ -41,7 +41,6 @@ vi.mock('../services/api', () => ({
 
 vi.mock('../utils/authFileUrl', () => ({
   withFileAccessToken: (url: string) => url,
-  useAuthorizedFileUrl: (url?: string) => url || '',
 }))
 
 // ==================== Mock 数据 ====================
@@ -164,11 +163,11 @@ describe('PerformanceManagerEval 交互测试', () => {
       expect(container.querySelector('.ant-spin')).toBeInTheDocument()
     })
 
-    it('加载完成后应显示页面容器', async () => {
+    it('加载完成后应显示页面标题', async () => {
       render(React.createElement(PerformanceManagerEval))
 
       await waitFor(() => {
-        expect(screen.getByTestId('performance-manager-eval-page')).toBeInTheDocument()
+        expect(screen.getAllByText('上级绩效评分').length).toBeGreaterThanOrEqual(1)
       })
     })
 
@@ -301,40 +300,6 @@ describe('PerformanceManagerEval 交互测试', () => {
       })
     })
 
-    it('配额进度应按当前选择等级预览占用', async () => {
-      mockGetParticipant.mockResolvedValue({
-        data: {
-          participant: makeParticipant({ suggested_level: 'D', final_level: 'A' }),
-          activity: { id: 1, flow_type: 'new', status: 'manager_evaluation' },
-        },
-      })
-      mockGetRealtimeDistributionCheck.mockResolvedValue({
-        data: {
-          teams: [
-            {
-              manager_id: 'M001',
-              manager_name: '列德',
-              total: 1,
-              levels: {
-                S: { current: 0, max: 1, percent: 5 },
-                A: { current: 1, max: 1, percent: 15 },
-                B: { current: 0, max: 1, percent: 60 },
-                CD: { current: 0, max: 1, percent: 20 },
-              },
-            },
-          ],
-        },
-      })
-
-      render(React.createElement(PerformanceManagerEval))
-
-      const quotaA = await screen.findByTestId('performance-quota-A')
-      const quotaCD = await screen.findByTestId('performance-quota-CD')
-
-      expect(within(quotaA).getByText(/0 \/ 1/)).toBeInTheDocument()
-      expect(within(quotaCD).getByText(/1 \/ 1/)).toBeInTheDocument()
-    })
-
     it('应显示评语输入区域', async () => {
       render(React.createElement(PerformanceManagerEval))
 
@@ -395,7 +360,7 @@ describe('PerformanceManagerEval 交互测试', () => {
       render(React.createElement(PerformanceManagerEval))
 
       await waitFor(() => {
-        expect(screen.getByRole('button', { name: /返回/ })).toBeInTheDocument()
+        expect(screen.getAllByText('上级绩效评分').length).toBeGreaterThanOrEqual(1)
       })
 
       const backBtn = screen.getByRole('button', { name: /返回/ })

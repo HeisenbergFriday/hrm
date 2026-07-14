@@ -375,6 +375,25 @@ func TestArchiveActivityFromLocked(t *testing.T) {
 	}
 }
 
+func TestArchiveActivityFromMutengResultPublish(t *testing.T) {
+	svc := newStubPerformanceService(t, mutengReviewScoringActivityResponse("result_publish", ""))
+	if err := svc.ArchiveActivity("1", "operator-1"); err != nil {
+		t.Fatalf("ArchiveActivity() from result_publish error = %v", err)
+	}
+}
+
+func TestPerformanceInterviewAndAppealMovedOutOfActivityFlow(t *testing.T) {
+	interviewSvc := newStubPerformanceService(t, mutengReviewScoringActivityResponse("result_publish", ""))
+	if err := interviewSvc.OpenPerformanceInterview("1", "operator-1"); err == nil || !strings.Contains(err.Error(), "独立模块") {
+		t.Fatalf("OpenPerformanceInterview() error = %v, want moved out message", err)
+	}
+
+	appealSvc := newStubPerformanceService(t, mutengReviewScoringActivityResponse("interview", ""))
+	if err := appealSvc.OpenPerformanceAppeal("1", "operator-1"); err == nil || !strings.Contains(err.Error(), "独立模块") {
+		t.Fatalf("OpenPerformanceAppeal() error = %v, want moved out message", err)
+	}
+}
+
 // ======================== StartActivity ========================
 
 func TestStartActivityFromDraftRefreshesAndTransitions(t *testing.T) {
@@ -736,6 +755,22 @@ func TestConfirmEmployeeResultWrongParticipantStatus(t *testing.T) {
 	}
 }
 
+func TestConfirmEmployeeResultRejectsWrongNewFlowActivityStatus(t *testing.T) {
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "manager_submitted", "", 0, 90, "A", false, nil, nil, nil),
+			},
+		},
+		newFlowPerformanceActivityResponse("result_publish", ""),
+	)
+	if err := svc.ConfirmEmployeeResult(1, "employee-1"); err == nil || !strings.Contains(err.Error(), "活动尚未进入员工确认阶段") {
+		t.Fatalf("ConfirmEmployeeResult() new flow error = %v, want employee confirmation stage rejection", err)
+	}
+}
+
 // ======================== ConfirmManagerResult ========================
 
 func TestConfirmManagerResultIdempotent(t *testing.T) {
@@ -805,6 +840,23 @@ func TestConfirmManagerResultWrongParticipantStatus(t *testing.T) {
 	}
 }
 
+func TestConfirmManagerResultRejectsNewFlow(t *testing.T) {
+	now := time.Now()
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "employee_confirmed", "", 0, 90, "A", false, now, nil, nil),
+			},
+		},
+		newFlowPerformanceActivityResponse("interview", ""),
+	)
+	if err := svc.ConfirmManagerResult(1, "manager-1"); err == nil || !strings.Contains(err.Error(), "不包含主管确认节点") {
+		t.Fatalf("ConfirmManagerResult() new flow error = %v, want manager confirmation node rejection", err)
+	}
+}
+
 // ======================== ConfirmHRResult ========================
 
 func TestConfirmHRResultIdempotent(t *testing.T) {
@@ -854,6 +906,23 @@ func TestConfirmHRResultWrongActivityStatus(t *testing.T) {
 	)
 	if err := svc.ConfirmHRResult(1, "hr-1"); err == nil {
 		t.Fatalf("ConfirmHRResult() wrong activity status expected error")
+	}
+}
+
+func TestConfirmHRResultRejectsWrongNewFlowActivityStatus(t *testing.T) {
+	now := time.Now()
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "manager_confirmed", "", 0, 90, "A", false, nil, now, nil),
+			},
+		},
+		newFlowPerformanceActivityResponse("appeal", ""),
+	)
+	if err := svc.ConfirmHRResult(1, "hr-1"); err == nil || !strings.Contains(err.Error(), "活动尚未进入") || !strings.Contains(err.Error(), "HR确认阶段") {
+		t.Fatalf("ConfirmHRResult() new flow error = %v, want HR confirmation stage rejection", err)
 	}
 }
 
@@ -2096,7 +2165,7 @@ func TestSubmitGoalApprovalRejectWithoutSubmit(t *testing.T) {
 				performanceParticipantStubRow(1, "pending", "", 0, 0, "", false, nil, nil, nil),
 			},
 		},
-		performanceActivityResponse("target_setting", ""),
+		performanceActivityResponse("target_approval", ""),
 		stubQueryResponse{
 			match:   stubTableMatcher("performance_goal_approval_logs"),
 			columns: []string{"id", "participant_id", "activity_id", "action", "version"},
@@ -2118,7 +2187,7 @@ func TestSubmitGoalApprovalApproveWithoutSubmit(t *testing.T) {
 				performanceParticipantStubRow(1, "pending", "", 0, 0, "", false, nil, nil, nil),
 			},
 		},
-		performanceActivityResponse("target_setting", ""),
+		performanceActivityResponse("target_approval", ""),
 		stubQueryResponse{
 			match:   stubTableMatcher("performance_goal_approval_logs"),
 			columns: []string{"id", "participant_id", "activity_id", "action", "version"},
@@ -2177,6 +2246,42 @@ func TestSubmitGoalApprovalLockedParticipant(t *testing.T) {
 	}
 }
 
+func TestSubmitGoalApprovalReviewBeforeTargetApproval(t *testing.T) {
+	tests := []struct {
+		name   string
+		action string
+	}{
+		{name: "approve", action: "approve"},
+		{name: "reject", action: "reject"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newStubPerformanceService(t,
+				stubQueryResponse{
+					match:   stubTableMatcher("performance_participants"),
+					columns: performanceParticipantStubColumns(),
+					rows: [][]driver.Value{
+						performanceParticipantStubRow(1, "target_pending_approval", "", 0, 0, "", false, nil, nil, nil),
+					},
+				},
+				performanceActivityResponse("target_setting", ""),
+				stubQueryResponse{
+					match:   stubTableMatcher("performance_goal_approval_logs"),
+					columns: []string{"id", "participant_id", "activity_id", "action", "version"},
+					rows: [][]driver.Value{
+						{int64(1), int64(1), "activity-1", "submit", int64(1)},
+					},
+				},
+			)
+			err := svc.SubmitGoalApproval(1, tt.action, "", "manager-1")
+			if err == nil || !strings.Contains(err.Error(), "当前活动状态不允许审核目标") {
+				t.Fatalf("SubmitGoalApproval(%s before target approval) expected stage error, got = %v", tt.action, err)
+			}
+		})
+	}
+}
+
 func TestSubmitGoalApprovalWrongActivityStatus(t *testing.T) {
 	svc := newStubPerformanceService(t,
 		stubQueryResponse{
@@ -2194,7 +2299,7 @@ func TestSubmitGoalApprovalWrongActivityStatus(t *testing.T) {
 		},
 	)
 	err := svc.SubmitGoalApproval(1, "submit", "", "employee-1")
-	if err == nil || !strings.Contains(err.Error(), "不允许进行目标审批") {
+	if err == nil || !strings.Contains(err.Error(), "当前活动状态不允许提交目标") {
 		t.Fatalf("SubmitGoalApproval(wrong activity status) expected error, got = %v", err)
 	}
 }
@@ -2303,8 +2408,12 @@ func TestSendHRConfirmRemindersNoPending(t *testing.T) {
 		columns: []string{"id", "activity_id", "status", "employee_id", "employee_name"},
 		rows:    nil,
 	})
-	if err := svc.SendHRConfirmReminders("activity-1"); err != nil {
+	result, err := svc.SendHRConfirmReminders("activity-1")
+	if err != nil {
 		t.Fatalf("SendHRConfirmReminders() no pending error = %v", err)
+	}
+	if result.Pending != 0 || result.Sent != 0 {
+		t.Fatalf("SendHRConfirmReminders() result = %#v, want empty result", result)
 	}
 }
 
@@ -2318,12 +2427,15 @@ func TestSendHRConfirmRemindersNoRecipient(t *testing.T) {
 			},
 		},
 		performanceActivityResponse("hr_confirmation", ""),
+		hrConfirmReminderRecipientsResponse(),
 	)
-	// activity CreatedBy is "creator-1" from the stub, which is non-empty and non-system
-	// This will try to send via dingtalk which will fail in test, but we test the logic path
-	err := svc.SendHRConfirmReminders("1")
-	// dingtalk will fail in test env, so we just check it doesn't panic
-	_ = err
+	result, err := svc.SendHRConfirmReminders("1")
+	if err != nil {
+		t.Fatalf("SendHRConfirmReminders(no recipient) error = %v, want nil", err)
+	}
+	if result.Pending != 1 || result.Candidates != 0 || result.Sent != 0 {
+		t.Fatalf("SendHRConfirmReminders() result = %#v, want no recipients", result)
+	}
 }
 
 // ======================== TriggerPerformanceInterview ========================
@@ -2964,13 +3076,16 @@ func TestRefreshPerformanceParticipantProfilePositionChanged(t *testing.T) {
 // ======================== ensureParticipantStageComplete edge cases ========================
 
 func TestEnsureParticipantStageCompleteNoActive(t *testing.T) {
-	svc := newStubPerformanceService(t, stubQueryResponse{
-		match:   stubTableMatcher("performance_participants"),
-		columns: []string{"id", "activity_id", "status"},
-		rows: [][]driver.Value{
-			{int64(1), "activity-1", "inactive"},
+	svc := newStubPerformanceService(t,
+		performanceActivityResponse("self_evaluation", ""),
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: []string{"id", "activity_id", "status"},
+			rows: [][]driver.Value{
+				{int64(1), "activity-1", "inactive"},
+			},
 		},
-	})
+	)
 	err := svc.ensureParticipantStageComplete("activity-1", "self_evaluation")
 	if err == nil || !strings.Contains(err.Error(), "没有可参与员工") {
 		t.Fatalf("ensureParticipantStageComplete() no active expected error, got = %v", err)
@@ -2978,28 +3093,34 @@ func TestEnsureParticipantStageCompleteNoActive(t *testing.T) {
 }
 
 func TestEnsureParticipantStageCompleteAllComplete(t *testing.T) {
-	svc := newStubPerformanceService(t, stubQueryResponse{
-		match:   stubTableMatcher("performance_participants"),
-		columns: []string{"id", "activity_id", "status"},
-		rows: [][]driver.Value{
-			{int64(1), "activity-1", "self_submitted"},
-			{int64(2), "activity-1", "manager_submitted"},
+	svc := newStubPerformanceService(t,
+		performanceActivityResponse("self_evaluation", ""),
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: []string{"id", "activity_id", "status"},
+			rows: [][]driver.Value{
+				{int64(1), "activity-1", "self_submitted"},
+				{int64(2), "activity-1", "manager_submitted"},
+			},
 		},
-	})
+	)
 	if err := svc.ensureParticipantStageComplete("activity-1", "self_evaluation"); err != nil {
 		t.Fatalf("ensureParticipantStageComplete() all complete error = %v", err)
 	}
 }
 
 func TestEnsureParticipantStageCompleteSomeIncomplete(t *testing.T) {
-	svc := newStubPerformanceService(t, stubQueryResponse{
-		match:   stubTableMatcher("performance_participants"),
-		columns: []string{"id", "activity_id", "status"},
-		rows: [][]driver.Value{
-			{int64(1), "activity-1", "self_submitted"},
-			{int64(2), "activity-1", "pending"},
+	svc := newStubPerformanceService(t,
+		performanceActivityResponse("self_evaluation", ""),
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: []string{"id", "activity_id", "status"},
+			rows: [][]driver.Value{
+				{int64(1), "activity-1", "self_submitted"},
+				{int64(2), "activity-1", "pending"},
+			},
 		},
-	})
+	)
 	err := svc.ensureParticipantStageComplete("activity-1", "self_evaluation")
 	if err == nil || !strings.Contains(err.Error(), "无法开启主管评分") || !strings.Contains(err.Error(), "目标尚未完成") {
 		t.Fatalf("ensureParticipantStageComplete() incomplete expected error, got = %v", err)
@@ -3007,16 +3128,19 @@ func TestEnsureParticipantStageCompleteSomeIncomplete(t *testing.T) {
 }
 
 func TestEnsureParticipantStageCompleteReportsAssessmentManagerIssue(t *testing.T) {
-	svc := newStubPerformanceService(t, stubQueryResponse{
-		match: stubTableMatcher("performance_participants"),
-		columns: []string{
-			"id", "activity_id", "employee_id", "employee_name", "status",
-			"manager_id", "manager_config_status",
+	svc := newStubPerformanceService(t,
+		performanceActivityResponse("target_setting", ""),
+		stubQueryResponse{
+			match: stubTableMatcher("performance_participants"),
+			columns: []string{
+				"id", "activity_id", "employee_id", "employee_name", "status",
+				"manager_id", "manager_config_status",
+			},
+			rows: [][]driver.Value{
+				{int64(1), "activity-1", "employee-1", "列德", "pending", nil, ManagerConfigPending},
+			},
 		},
-		rows: [][]driver.Value{
-			{int64(1), "activity-1", "employee-1", "列德", "pending", nil, ManagerConfigPending},
-		},
-	})
+	)
 	err := svc.ensureParticipantStageComplete("activity-1", "target_setting")
 	if err == nil ||
 		!strings.Contains(err.Error(), "无法开启自评") ||
@@ -3027,16 +3151,19 @@ func TestEnsureParticipantStageCompleteReportsAssessmentManagerIssue(t *testing.
 }
 
 func TestEnsureParticipantStageCompleteReportsTargetApprovalBeforeManagerIssue(t *testing.T) {
-	svc := newStubPerformanceService(t, stubQueryResponse{
-		match: stubTableMatcher("performance_participants"),
-		columns: []string{
-			"id", "activity_id", "employee_id", "employee_name", "status",
-			"manager_id", "manager_config_status",
+	svc := newStubPerformanceService(t,
+		performanceActivityResponse("target_setting", ""),
+		stubQueryResponse{
+			match: stubTableMatcher("performance_participants"),
+			columns: []string{
+				"id", "activity_id", "employee_id", "employee_name", "status",
+				"manager_id", "manager_config_status",
+			},
+			rows: [][]driver.Value{
+				{int64(1), "activity-1", "employee-1", "列德", "target_pending_approval", nil, ManagerConfigPending},
+			},
 		},
-		rows: [][]driver.Value{
-			{int64(1), "activity-1", "employee-1", "列德", "target_pending_approval", nil, ManagerConfigPending},
-		},
-	})
+	)
 	err := svc.ensureParticipantStageComplete("activity-1", "target_setting")
 	if err == nil ||
 		!strings.Contains(err.Error(), "无法开启自评") ||
@@ -3830,13 +3957,16 @@ func TestConfirmResultBoundaryBranches(t *testing.T) {
 	})
 
 	t.Run("employee idempotent", func(t *testing.T) {
-		svc := newStubPerformanceService(t, stubQueryResponse{
-			match:   stubTableMatcher("performance_participants"),
-			columns: performanceParticipantStubColumns(),
-			rows: [][]driver.Value{
-				performanceParticipantStubRow(1, "employee_confirmed", "", 0, 90, "A", false, now, nil, nil),
+		svc := newStubPerformanceService(t,
+			stubQueryResponse{
+				match:   stubTableMatcher("performance_participants"),
+				columns: performanceParticipantStubColumns(),
+				rows: [][]driver.Value{
+					performanceParticipantStubRow(1, "employee_confirmed", "", 0, 90, "A", false, now, nil, nil),
+				},
 			},
-		})
+			performanceActivityResponse("employee_confirmation", ""),
+		)
 		if err := svc.ConfirmEmployeeResult(1, "employee-1"); err != nil {
 			t.Fatalf("ConfirmEmployeeResult(idempotent) error = %v", err)
 		}
@@ -3968,13 +4098,16 @@ func TestConfirmResultBoundaryBranches(t *testing.T) {
 	})
 
 	t.Run("hr idempotent", func(t *testing.T) {
-		svc := newStubPerformanceService(t, stubQueryResponse{
-			match:   stubTableMatcher("performance_participants"),
-			columns: performanceParticipantStubColumns(),
-			rows: [][]driver.Value{
-				performanceParticipantStubRow(1, "hr_confirmed", "", 0, 90, "A", false, nil, now, now),
+		svc := newStubPerformanceService(t,
+			stubQueryResponse{
+				match:   stubTableMatcher("performance_participants"),
+				columns: performanceParticipantStubColumns(),
+				rows: [][]driver.Value{
+					performanceParticipantStubRow(1, "hr_confirmed", "", 0, 90, "A", false, nil, now, now),
+				},
 			},
-		})
+			performanceActivityResponse("hr_confirmation", ""),
+		)
 		if err := svc.ConfirmHRResult(1, "hr-1"); err != nil {
 			t.Fatalf("ConfirmHRResult(idempotent) error = %v", err)
 		}
@@ -4082,8 +4215,12 @@ func TestReminderServicesHandleNoRecipients(t *testing.T) {
 			rows:    nil,
 		},
 	)
-	if err := selfSvc.SendSelfEvalReminders("1"); err == nil {
-		t.Fatalf("SendSelfEvalReminders() should report no pending recipients")
+	selfResult, err := selfSvc.SendSelfEvalReminders("1")
+	if err != nil {
+		t.Fatalf("SendSelfEvalReminders() error = %v, want nil", err)
+	}
+	if selfResult.Pending != 0 || selfResult.Candidates != 0 {
+		t.Fatalf("SendSelfEvalReminders() result = %+v, want no pending recipients", selfResult)
 	}
 
 	managerSvc := newStubPerformanceService(t, stubQueryResponse{
@@ -4091,7 +4228,7 @@ func TestReminderServicesHandleNoRecipients(t *testing.T) {
 		columns: performanceParticipantStubColumns(),
 		rows:    nil,
 	})
-	if err := managerSvc.SendManagerEvalReminders("activity-1"); err != nil {
+	if _, err := managerSvc.SendManagerEvalReminders("activity-1"); err != nil {
 		t.Fatalf("SendManagerEvalReminders() error = %v", err)
 	}
 }

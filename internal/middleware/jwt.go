@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"peopleops/internal/database"
+	"peopleops/internal/requestmeta"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -25,10 +26,10 @@ const (
 )
 
 type Claims struct {
+	OrgID          string `json:"org_id"` // 组织ID（多租户）
 	UserID         string `json:"user_id"`
 	UserDBID       string `json:"user_db_id,omitempty"`
 	UserName       string `json:"user_name"`
-	OrgID          string `json:"org_id"` // 组织ID（多租户）
 	SessionID      string `json:"session_id,omitempty"`
 	SessionVersion string `json:"session_version,omitempty"`
 	jwt.RegisteredClaims
@@ -56,10 +57,6 @@ func SessionVersion() string {
 }
 
 func JWTAuth() gin.HandlerFunc {
-	return jwtAuth()
-}
-
-func JWTAuthWithQuery() gin.HandlerFunc {
 	return jwtAuth()
 }
 
@@ -100,17 +97,19 @@ func jwtAuth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-
 		// 多租户：JWT 必须携带 org_id。老 token（迁移前颁发）会被拒绝，前端应据此 code 引导重新登录。
-		orgID := strings.TrimSpace(claims.OrgID)
-		if orgID == "" {
+		if strings.TrimSpace(claims.OrgID) == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
-				"error": "token missing org_id, please re-login",
+				"error": "invalid session org: token missing org_id, please re-login",
 				"code":  "token_missing_org_id",
 			})
 			c.Abort()
 			return
 		}
+
+		orgID := database.NormalizeOrganizationID(claims.OrgID)
+		c.Set("orgID", orgID)
+		requestmeta.SetOrgID(c.Request.Context(), orgID)
 
 		user, err := activeUserForClaims(c, claims)
 		if err != nil {
@@ -124,6 +123,9 @@ func jwtAuth() gin.HandlerFunc {
 			return
 		}
 
+		orgID = database.NormalizeOrganizationID(user.OrgID)
+		c.Set("orgID", orgID)
+		requestmeta.SetOrgID(c.Request.Context(), orgID)
 		c.Set("userID", user.UserID)
 		c.Set("userDBID", fmt.Sprintf("%d", user.ID))
 		c.Set("userName", user.Name)
@@ -182,10 +184,11 @@ func activeUserForClaims(c *gin.Context, claims *Claims) (*database.User, error)
 	db := RequestDB(c)
 	userID := strings.TrimSpace(claims.UserID)
 	userDBID := strings.TrimSpace(claims.UserDBID)
+	orgID := database.NormalizeOrganizationID(claims.OrgID)
 
 	if userID != "" {
 		var user database.User
-		err := db.Where("user_id = ? AND status = ? AND deleted_at IS NULL", userID, "active").First(&user).Error
+		err := db.Where("org_id = ? AND user_id = ? AND status = ? AND deleted_at IS NULL", orgID, userID, "active").First(&user).Error
 		if err == nil {
 			return &user, nil
 		}
@@ -196,7 +199,7 @@ func activeUserForClaims(c *gin.Context, claims *Claims) (*database.User, error)
 
 	if userDBID != "" {
 		var user database.User
-		err := db.Where("id = ? AND status = ? AND deleted_at IS NULL", userDBID, "active").First(&user).Error
+		err := db.Where("org_id = ? AND id = ? AND status = ? AND deleted_at IS NULL", orgID, userDBID, "active").First(&user).Error
 		if err == nil {
 			return &user, nil
 		}
@@ -211,13 +214,14 @@ func activeUserForClaims(c *gin.Context, claims *Claims) (*database.User, error)
 func validateActiveSession(c *gin.Context, userID, sessionID string) error {
 	userID = strings.TrimSpace(userID)
 	sessionID = strings.TrimSpace(sessionID)
+	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
 	if userID == "" || sessionID == "" {
 		return gorm.ErrRecordNotFound
 	}
 
 	var session database.UserSession
 	return RequestDB(c).
-		Where("user_id = ? AND session_id = ? AND revoked_at IS NULL AND expires_at > ?", userID, sessionID, time.Now()).
+		Where("org_id = ? AND user_id = ? AND session_id = ? AND revoked_at IS NULL AND expires_at > ?", orgID, userID, sessionID, time.Now()).
 		First(&session).Error
 }
 

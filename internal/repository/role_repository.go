@@ -35,6 +35,14 @@ func (r *RoleRepository) Update(role *database.Role) error {
 	}).Error
 }
 
+func (r *RoleRepository) FindByID(roleID uint) (*database.Role, error) {
+	var role database.Role
+	if err := r.db.Where("id = ? AND deleted_at IS NULL", roleID).First(&role).Error; err != nil {
+		return nil, err
+	}
+	return &role, nil
+}
+
 func (r *RoleRepository) FindAll() ([]database.Role, int64, error) {
 	var roles []database.Role
 	var total int64
@@ -168,8 +176,9 @@ func NewMenuPermissionRepository(db *gorm.DB) *MenuPermissionRepository {
 }
 
 func (r *MenuPermissionRepository) FindByRoleID(roleID uint) (*database.MenuPermission, error) {
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 	var mp database.MenuPermission
-	err := r.db.Where("role_id = ? AND deleted_at IS NULL", roleID).First(&mp).Error
+	err := r.db.Where("org_id = ? AND role_id = ? AND deleted_at IS NULL", orgID, roleID).First(&mp).Error
 	if err != nil {
 		return nil, err
 	}
@@ -186,10 +195,11 @@ func (r *MenuPermissionRepository) FindByUserRole(orgID, userID string) ([]datab
 }
 
 func (r *MenuPermissionRepository) Save(roleID uint, menuKeys string) error {
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 	var existing database.MenuPermission
-	err := r.db.Where("role_id = ? AND deleted_at IS NULL", roleID).First(&existing).Error
+	err := r.db.Where("org_id = ? AND role_id = ? AND deleted_at IS NULL", orgID, roleID).First(&existing).Error
 	if err == gorm.ErrRecordNotFound {
-		mp := database.MenuPermission{RoleID: roleID, MenuKeys: menuKeys}
+		mp := database.MenuPermission{OrgID: orgID, RoleID: roleID, MenuKeys: menuKeys}
 		return r.db.Create(&mp).Error
 	}
 	if err != nil {
@@ -208,8 +218,9 @@ func NewDataPermissionRepository(db *gorm.DB) *DataPermissionRepository {
 }
 
 func (r *DataPermissionRepository) FindByRoleID(roleID uint) (*database.DataPermission, error) {
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 	var dp database.DataPermission
-	err := r.db.Where("role_id = ? AND deleted_at IS NULL", roleID).First(&dp).Error
+	err := r.db.Where("org_id = ? AND role_id = ? AND deleted_at IS NULL", orgID, roleID).First(&dp).Error
 	if err != nil {
 		return nil, err
 	}
@@ -217,10 +228,11 @@ func (r *DataPermissionRepository) FindByRoleID(roleID uint) (*database.DataPerm
 }
 
 func (r *DataPermissionRepository) Save(roleID uint, scope string, departmentKeys string) error {
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 	var existing database.DataPermission
-	err := r.db.Where("role_id = ? AND deleted_at IS NULL", roleID).First(&existing).Error
+	err := r.db.Where("org_id = ? AND role_id = ? AND deleted_at IS NULL", orgID, roleID).First(&existing).Error
 	if err == gorm.ErrRecordNotFound {
-		dp := database.DataPermission{RoleID: roleID, Scope: scope, DepartmentKeys: departmentKeys}
+		dp := database.DataPermission{OrgID: orgID, RoleID: roleID, Scope: scope, DepartmentKeys: departmentKeys}
 		return r.db.Create(&dp).Error
 	}
 	if err != nil {

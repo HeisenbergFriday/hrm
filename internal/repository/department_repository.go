@@ -105,6 +105,7 @@ func (r *DepartmentRepository) FindByParent(parentID string) ([]database.Departm
 // FindAllChildDepartmentIDs 递归查询指定部门及其所有子部门的 ID 列表
 func (r *DepartmentRepository) FindAllChildDepartmentIDs(parentDepartmentID string) ([]string, error) {
 	var departmentIDs []string
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 
 	// 使用递归 CTE 查询所有子部门；orgID 非空时在 anchor 与 recursive 子句同时限定，
 	// 避免同一 department_id 在多组织中重复出现导致跨企业串联。
@@ -132,16 +133,16 @@ func (r *DepartmentRepository) FindAllChildDepartmentIDs(parentDepartmentID stri
 		WITH RECURSIVE dept_tree AS (
 			SELECT department_id, parent_id
 			FROM departments
-			WHERE department_id = ?
+			WHERE org_id = ? AND department_id = ?
 			UNION ALL
 			SELECT d.department_id, d.parent_id
 			FROM departments d
-			INNER JOIN dept_tree dt ON d.parent_id = dt.department_id
+			INNER JOIN dept_tree dt ON d.org_id = ? AND d.parent_id = dt.department_id
 		)
 		SELECT department_id FROM dept_tree
 	`
 
-	err := r.db.Raw(query, parentDepartmentID).Scan(&departmentIDs).Error
+	err := r.db.Raw(query, orgID, parentDepartmentID, orgID).Scan(&departmentIDs).Error
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +152,7 @@ func (r *DepartmentRepository) FindAllChildDepartmentIDs(parentDepartmentID stri
 // FindAllChildDepartmentIDsByParentID 通过内部 ID 递归查询子部门
 func (r *DepartmentRepository) FindAllChildDepartmentIDsByParentID(parentID string) ([]string, error) {
 	var departmentIDs []string
+	orgID := database.CurrentOrganizationIDFromDB(r.db)
 
 	if r.orgID != "" {
 		query := `
@@ -176,16 +178,16 @@ func (r *DepartmentRepository) FindAllChildDepartmentIDsByParentID(parentID stri
 		WITH RECURSIVE dept_tree AS (
 			SELECT department_id, parent_id
 			FROM departments
-			WHERE parent_id = ?
+			WHERE org_id = ? AND parent_id = ?
 			UNION ALL
 			SELECT d.department_id, d.parent_id
 			FROM departments d
-			INNER JOIN dept_tree dt ON d.parent_id = dt.department_id
+			INNER JOIN dept_tree dt ON d.org_id = ? AND d.parent_id = dt.department_id
 		)
 		SELECT department_id FROM dept_tree
 	`
 
-	err := r.db.Raw(query, parentID).Scan(&departmentIDs).Error
+	err := r.db.Raw(query, orgID, parentID, orgID).Scan(&departmentIDs).Error
 	if err != nil {
 		return nil, err
 	}

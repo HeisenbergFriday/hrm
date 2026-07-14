@@ -5,8 +5,8 @@
  * - 页面渲染与 loading 状态
  * - 评分明细表格
  * - 绩效结果面板
- * - 确认进度 Timeline
- * - 确认按钮（员工/主管/HR）
+ * - 流程/确认进度 Timeline
+ * - 旧流程确认按钮（员工/主管/HR）
  * - 接口失败
  * - 打印/导出按钮
  */
@@ -15,6 +15,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import PerformanceResultView from './PerformanceResultView'
+import { hasPermission } from '../utils/permission'
 
 // ==================== Mocks ====================
 
@@ -24,6 +25,8 @@ const mockGetParticipant = vi.fn()
 const mockConfirmEmployeeResult = vi.fn()
 const mockConfirmManagerResult = vi.fn()
 const mockConfirmHRResult = vi.fn()
+const mockOpenResultPublish = vi.fn()
+const mockTriggerPerformanceInterview = vi.fn()
 const mockSetBonusPenaltyScore = vi.fn()
 
 vi.mock('react-router-dom', () => ({
@@ -38,12 +41,18 @@ vi.mock('../services/api', () => ({
     confirmEmployeeResult: (...args: any[]) => mockConfirmEmployeeResult(...args),
     confirmManagerResult: (...args: any[]) => mockConfirmManagerResult(...args),
     confirmHRResult: (...args: any[]) => mockConfirmHRResult(...args),
+    openResultPublish: (...args: any[]) => mockOpenResultPublish(...args),
+    triggerPerformanceInterview: (...args: any[]) => mockTriggerPerformanceInterview(...args),
     setBonusPenaltyScore: (...args: any[]) => mockSetBonusPenaltyScore(...args),
   },
 }))
 
 vi.mock('../utils/authFileUrl', () => ({
   withFileAccessToken: (url: string) => url,
+}))
+
+vi.mock('../utils/permission', () => ({
+  hasPermission: vi.fn(() => false),
 }))
 
 // ==================== Mock 数据 ====================
@@ -177,7 +186,8 @@ function setupDefaultMocks() {
       activity: {
         id: 1,
         name: '2026年Q2绩效',
-        status: 'manager_evaluation',
+        status: 'employee_confirmation',
+        flow_type: 'new',
         start_date: '2026-04-01',
         end_date: '2026-06-30',
         enable_bonus_score: false,
@@ -187,6 +197,8 @@ function setupDefaultMocks() {
   mockConfirmEmployeeResult.mockResolvedValue({})
   mockConfirmManagerResult.mockResolvedValue({})
   mockConfirmHRResult.mockResolvedValue({})
+  mockOpenResultPublish.mockResolvedValue({})
+  mockTriggerPerformanceInterview.mockResolvedValue({})
   mockSetBonusPenaltyScore.mockResolvedValue({})
 }
 
@@ -195,6 +207,7 @@ function setupDefaultMocks() {
 describe('PerformanceResultView 交互测试', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(hasPermission).mockImplementation(() => false)
     document.getElementById('performance-print-root')?.remove()
     setupDefaultMocks()
   })
@@ -278,38 +291,55 @@ describe('PerformanceResultView 交互测试', () => {
     })
   })
 
-  // ==================== 场景 4: 确认进度 ====================
-  describe('确认进度', () => {
-    it('应显示确认进度标题', async () => {
+  // ==================== 场景 4: 流程/确认进度 ====================
+  describe('流程/确认进度', () => {
+    it('沐腾新流程不再显示流程进度', async () => {
+      render(React.createElement(PerformanceResultView))
+
+      await waitFor(() => {
+        expect(screen.getByText('绩效结果查看')).toBeInTheDocument()
+      })
+      expect(screen.queryByText('流程进度')).not.toBeInTheDocument()
+      expect(screen.queryByText('HR已确认')).not.toBeInTheDocument()
+      expect(screen.queryByText('员工确认中')).not.toBeInTheDocument()
+    })
+
+    it('旧流程仍显示确认进度', async () => {
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant({ employee_confirmed_at: '2026-06-28T00:00:00Z' }),
+          activity: { id: 1, name: '测试', status: 'employee_confirmation', flow_type: 'old', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+        },
+      })
       render(React.createElement(PerformanceResultView))
 
       await waitFor(() => {
         expect(screen.getByText('确认进度')).toBeInTheDocument()
       })
-    })
-
-    it('应显示待确认状态', async () => {
-      render(React.createElement(PerformanceResultView))
-
-      await waitFor(() => {
-        expect(screen.getByText('待员工确认')).toBeInTheDocument()
-      })
-      expect(screen.getByText('待主管确认并冻结')).toBeInTheDocument()
+      expect(screen.getByText(/员工已确认/)).toBeInTheDocument()
     })
   })
 
-  // ==================== 场景 5: 确认按钮 ====================
-  describe('确认按钮', () => {
-    it('manager_submitted 状态应显示"员工确认结果"按钮', async () => {
+  // ==================== 场景 5: 旧流程确认按钮 ====================
+  describe('旧流程确认按钮', () => {
+    it('新流程 manager_submitted 状态不显示"员工确认结果"按钮', async () => {
       render(React.createElement(PerformanceResultView))
 
       await waitFor(() => {
-        expect(screen.getByTestId('performance-result-confirm-employee')).toBeInTheDocument()
+        expect(screen.getByText('绩效结果查看')).toBeInTheDocument()
       })
+      expect(screen.queryByTestId('performance-result-confirm-employee')).not.toBeInTheDocument()
     })
 
-    it('点击员工确认应调用 confirmEmployeeResult', async () => {
+    it('新流程员工确认阶段可调用员工确认', async () => {
       const user = userEvent.setup()
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant({ status: 'hr_confirmed', hr_confirmed_at: '2026-06-28T00:00:00Z' }),
+          activity: { id: 1, name: '测试', status: 'employee_confirmation', flow_type: 'new', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+        },
+      })
+
       render(React.createElement(PerformanceResultView))
 
       await waitFor(() => {
@@ -323,8 +353,57 @@ describe('PerformanceResultView 交互测试', () => {
       })
     })
 
-    it('员工确认成功后应显示成功消息', async () => {
+    it('HR权限在新流程HR确认阶段可确认结果', async () => {
       const user = userEvent.setup()
+      vi.mocked(hasPermission).mockImplementation((code: string) => code === 'performance:hr_confirm:submit')
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant({ status: 'manager_confirmed' }),
+          activity: { id: 1, name: '测试', status: 'hr_confirmation', flow_type: 'new', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+        },
+      })
+
+      render(React.createElement(PerformanceResultView))
+
+      const button = await screen.findByTestId('performance-result-confirm-hr')
+      expect(button).toHaveTextContent('HR确认')
+
+      await user.click(button)
+
+      await waitFor(() => {
+        expect(mockConfirmHRResult).toHaveBeenCalledWith(101)
+      })
+    })
+
+    it('旧流程点击员工确认应调用 confirmEmployeeResult', async () => {
+      const user = userEvent.setup()
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant(),
+          activity: { id: 1, name: '测试', status: 'employee_confirmation', flow_type: 'old', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+        },
+      })
+      render(React.createElement(PerformanceResultView))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('performance-result-confirm-employee')).toBeInTheDocument()
+      })
+
+      await user.click(screen.getByTestId('performance-result-confirm-employee'))
+
+      await waitFor(() => {
+        expect(mockConfirmEmployeeResult).toHaveBeenCalledWith(101)
+      })
+    })
+
+    it('旧流程员工确认成功后应显示成功消息', async () => {
+      const user = userEvent.setup()
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant(),
+          activity: { id: 1, name: '测试', status: 'employee_confirmation', flow_type: 'old', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+        },
+      })
       render(React.createElement(PerformanceResultView))
 
       await waitFor(() => {
@@ -342,7 +421,7 @@ describe('PerformanceResultView 交互测试', () => {
       mockGetParticipant.mockResolvedValue({
         data: {
           participant: makeParticipant({ status: 'employee_confirmed', employee_confirmed_at: '2026-06-01' }),
-          activity: { id: 1, name: '测试', status: 'manager_evaluation', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+          activity: { id: 1, name: '测试', status: 'manager_confirmation', flow_type: 'old', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
         },
       })
 
@@ -358,7 +437,7 @@ describe('PerformanceResultView 交互测试', () => {
       mockGetParticipant.mockResolvedValue({
         data: {
           participant: makeParticipant({ status: 'employee_confirmed', employee_confirmed_at: '2026-06-01' }),
-          activity: { id: 1, name: '测试', status: 'manager_evaluation', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+          activity: { id: 1, name: '测试', status: 'manager_confirmation', flow_type: 'old', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
         },
       })
 
@@ -393,6 +472,12 @@ describe('PerformanceResultView 交互测试', () => {
     it('确认失败应显示错误消息', async () => {
       const user = userEvent.setup()
       mockConfirmEmployeeResult.mockRejectedValue({ response: { data: { message: '确认失败' } } })
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant(),
+          activity: { id: 1, name: '测试', status: 'employee_confirmation', flow_type: 'old', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+        },
+      })
 
       render(React.createElement(PerformanceResultView))
 
@@ -470,6 +555,12 @@ describe('PerformanceResultView 交互测试', () => {
 
     it('未展开归档面板时点击导出 Excel 应自动展开并下载', async () => {
       const user = userEvent.setup()
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant(),
+          activity: { id: 1, name: '测试', status: 'manager_evaluation', flow_type: 'old', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+        },
+      })
       const createObjectURL = vi.fn(() => 'blob:archive')
       const revokeObjectURL = vi.fn()
       Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
@@ -511,6 +602,12 @@ describe('PerformanceResultView 交互测试', () => {
   describe('归档模板', () => {
     it('旧流程应显示 PARTB 个人绩效归档表', async () => {
       const user = userEvent.setup()
+      mockGetParticipant.mockResolvedValue({
+        data: {
+          participant: makeParticipant(),
+          activity: { id: 1, name: '测试', status: 'manager_evaluation', flow_type: 'old', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+        },
+      })
       render(React.createElement(PerformanceResultView))
 
       await waitFor(() => {

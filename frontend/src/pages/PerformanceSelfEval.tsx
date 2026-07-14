@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Typography, Form, Input, InputNumber, Button, Space,
-  message, Spin, Row, Col, Table, Alert
+  message, Spin, Row, Col, Table, Alert, Tooltip
 } from 'antd'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -11,7 +11,7 @@ import { ArrowLeftOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { performanceAPI, PerformanceActivity, PerformanceGoalRecord, PerformanceParticipant } from '../services/api'
 import AttachmentUpload from '../components/AttachmentUpload'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { TextArea } = Input
 
 function isReviewGoalRecord(activity: PerformanceActivity | null, record: PerformanceGoalRecord) {
@@ -210,12 +210,54 @@ const PerformanceSelfEval: React.FC = () => {
     }
   }
 
+  const renderClampedText = (value?: string, lines = 2) => {
+    const text = String(value || '').trim()
+    if (!text) return <Text type="secondary">-</Text>
+    return (
+      <Tooltip title={text}>
+        <Text
+          style={{
+            display: '-webkit-box',
+            WebkitLineClamp: lines,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+            whiteSpace: 'normal',
+            fontSize: 'var(--font-size-xs)',
+            lineHeight: '20px',
+          }}
+        >
+          {text}
+        </Text>
+      </Tooltip>
+    )
+  }
+
+  const renderRuleText = (label: string, value?: string) => {
+    if (!value) return null
+    return (
+      <Tooltip title={`${label}: ${value}`}>
+        <Text
+          style={{
+            display: 'block',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontSize: 'var(--font-size-xs)',
+            lineHeight: '20px',
+          }}
+        >
+          {label}: {value}
+        </Text>
+      </Tooltip>
+    )
+  }
+
   const columns = [
     {
       title: '指标名称',
       dataIndex: 'item_name',
       key: 'item_name',
-      width: 150,
+      width: 220,
       render: (val: string, record: any, idx: number) => {
         const prev = idx > 0 ? formItems[idx - 1] : null
         const showDivider = idx === 0 || (prev && prev.section_type !== record?.section_type)
@@ -224,14 +266,27 @@ const PerformanceSelfEval: React.FC = () => {
           <>
             <Form.Item name={['items', idx, 'record_id']} hidden><Input /></Form.Item>
             <Form.Item name={['items', idx, 'weight']} hidden><Input /></Form.Item>
-            <div>
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
               {showDivider && (
                 <StatusTag color={isQuant ? 'blue' : 'green'} style={{ marginBottom: 4 }}>
                   {isQuant ? '量化指标' : '关键行动'}
                 </StatusTag>
               )}
-              <Text strong>{val}</Text>
-            </div>
+              <Tooltip title={val}>
+                <Text
+                  strong
+                  style={{
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                    whiteSpace: 'normal',
+                  }}
+                >
+                  {val}
+                </Text>
+              </Tooltip>
+            </Space>
           </>
         )
       }
@@ -246,30 +301,27 @@ const PerformanceSelfEval: React.FC = () => {
     {
       title: '目标',
       key: 'target',
-      width: 180,
+      width: 260,
       render: (_: any, record: any) => {
         if (record.section_type === 'quantitative') {
           return (
-            <div style={{ fontSize: 'var(--font-size-xs)' }}>
-              {record.red_line_value && <div>红线: {record.red_line_value}</div>}
-              {record.target_value && <div>目标: {record.target_value}</div>}
-              {record.challenge_value && <div>挑战: {record.challenge_value}</div>}
-              {record.scoring_rule && <div>考核: {record.scoring_rule}</div>}
+            <div>
+              {renderRuleText('红线', record.red_line_value)}
+              {renderRuleText('目标', record.target_value)}
+              {renderRuleText('挑战', record.challenge_value)}
+              {record.scoring_rule && renderClampedText(`考核: ${record.scoring_rule}`, 2)}
+              {!record.red_line_value && !record.target_value && !record.challenge_value && !record.scoring_rule && <Text type="secondary">-</Text>}
             </div>
           )
         }
         const qualitativeTarget = record.target_value || record.scoring_rule
-        return (
-          <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
-            {qualitativeTarget ? (qualitativeTarget.length > 50 ? qualitativeTarget.substring(0, 50) + '...' : qualitativeTarget) : '-'}
-          </Text>
-        )
+        return renderClampedText(qualitativeTarget, 2)
       }
     },
     {
       title: '实际达成结果',
       key: 'actual_result',
-      width: 250,
+      width: 360,
       render: (_: any, __: any, idx: number) => (
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <Form.Item name={['items', idx, 'actual_result']} style={{ margin: 0 }}
@@ -305,16 +357,21 @@ const PerformanceSelfEval: React.FC = () => {
   }
 
   return (
-    <PageContainer data-testid="performance-self-eval-page" title="绩效自评">
-      <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
-        <Title level={4} style={{ margin: 0 }}>绩效自评</Title>
-        <Text type="secondary">{isNewFlow ? '0-10 分制' : '0-120 分制'}</Text>
-        <Text>自评总分：</Text>
-        <Text data-testid="performance-self-total-score-inline" strong style={{ fontSize: 20, color: 'var(--color-info)' }}>
-          {totalSelfScore}
-        </Text>
-      </Space>
+    <PageContainer
+      data-testid="performance-self-eval-page"
+      title="绩效自评"
+      subtitle={
+        <Space size={8} wrap>
+          <Text type="secondary">{isNewFlow ? '0-10 分制' : '0-120 分制'}</Text>
+          <Text type="secondary">自评总分：</Text>
+          <Text data-testid="performance-self-total-score" strong style={{ fontSize: 20, color: 'var(--color-info)', lineHeight: '24px' }}>
+            {totalSelfScore}
+          </Text>
+          <Text type="secondary">{isNewFlow ? '满分 10' : '满分 120'}</Text>
+        </Space>
+      }
+      extra={<Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>}
+    >
 
       {showSelfEvalCountdown && (
         <Alert
@@ -352,14 +409,10 @@ const PerformanceSelfEval: React.FC = () => {
       <Form form={form} onValuesChange={handleValuesChange} layout="vertical">
         <PageCard
           title="指标评分"
-          extra={
-            <Space>
-              <Text type="secondary">实时总分</Text>
-              <Text strong style={{ color: 'var(--color-info)', fontSize: 18 }}>{totalSelfScore}</Text>
-            </Space>
-          }
+          size="small"
+          styles={{ body: { padding: 16 } }}
         >
-          <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 10 }}>
             自评总分按每项自评得分 × 权重自动汇总，附加考核项不计入总分。
           </Text>
           {missingReviewRecords && (
@@ -386,12 +439,14 @@ const PerformanceSelfEval: React.FC = () => {
             pagination={false}
             size="small"
             bordered
+            tableLayout="fixed"
+            scroll={{ x: 1010 }}
             locale={{ emptyText: missingReviewRecords ? '缺少上一季度绩效考核指标' : undefined }}
           />
         </PageCard>
 
         {bonusRecords.length > 0 && (
-          <PageCard title="附加考核项" style={{ marginTop: 16 }}>
+          <PageCard title="附加考核项" size="small" style={{ marginTop: 16 }} styles={{ body: { padding: 16 } }}>
             <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
               附加分仅作为参考或激励依据，不计入总分
             </Text>
@@ -429,28 +484,16 @@ const PerformanceSelfEval: React.FC = () => {
           </PageCard>
         )}
 
-        <PageCard title="系统自动计算" style={{ marginTop: 16 }}>
-          <Row gutter={16}>
-            <Col span={8}>
-              <Text>自评总分：</Text>
-              <Text data-testid="performance-self-total-score" strong style={{ fontSize: 24, color: 'var(--color-info)' }}>{totalSelfScore}</Text>
-              <Text type="secondary" style={{ marginLeft: 8 }}>
-                {isNewFlow ? '满分 10' : '满分 120'}
-              </Text>
-            </Col>
-          </Row>
-        </PageCard>
-
-        <PageCard title="员工自我评价" style={{ marginTop: 16 }}>
+        <PageCard title="员工自我评价" size="small" style={{ marginTop: 16 }} styles={{ body: { padding: 16 } }}>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="evaluation_good" label="做得好的地方">
-                <TextArea data-testid="performance-self-good" rows={4} placeholder="请描述本周期做得好的地方" />
+                <TextArea data-testid="performance-self-good" rows={3} placeholder="请描述本周期做得好的地方" />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="evaluation_improvement" label="需要改进的地方">
-                <TextArea data-testid="performance-self-improvement" rows={4} placeholder="请描述需要改进的地方" />
+                <TextArea data-testid="performance-self-improvement" rows={3} placeholder="请描述需要改进的地方" />
               </Form.Item>
             </Col>
           </Row>

@@ -4,8 +4,12 @@ import { CloseCircleOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
-import { consumeAuthRedirect } from '../utils/authRedirect'
-import { resolveOrgId } from '../utils/org'
+import {
+  alignAuthRedirectTargetWithOrg,
+  directAuthOrgIDFromSearchParams,
+  consumeAuthRedirect,
+  rememberAuthOrgID,
+} from '../utils/authRedirect'
 
 function isDingTalkEnv(): boolean {
   return /DingTalk/i.test(navigator.userAgent)
@@ -22,19 +26,37 @@ function getAxiosErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
+const pendingCallbackRequests = new Map<string, Promise<any>>()
+
+function requestDingTalkCallbackOnce(callbackKey: string, params: Record<string, string | undefined>) {
+  const pendingRequest = pendingCallbackRequests.get(callbackKey)
+  if (pendingRequest) return pendingRequest
+
+  const request = axios.get('/api/v1/auth/dingtalk/callback', {
+    params,
+    withCredentials: true,
+  }).finally(() => {
+    pendingCallbackRequests.delete(callbackKey)
+  })
+  pendingCallbackRequests.set(callbackKey, request)
+  return request
+}
+
 const Callback: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { login } = useAuthStore()
+  const requestedOrgID = directAuthOrgIDFromSearchParams(searchParams)
+  const loginPath = requestedOrgID
+    ? `/login?mode=scan&org_id=${encodeURIComponent(requestedOrgID)}`
+    : '/login?mode=scan'
 
   useEffect(() => {
     const handleCallback = async () => {
       const code = searchParams.get('code')
       const state = searchParams.get('state')
-      const orgId = resolveOrgId()
-
       if (!code) {
         if (isDingTalkEnv()) {
           navigate(consumeAuthRedirect() || '/', { replace: true })
@@ -45,17 +67,17 @@ const Callback: React.FC = () => {
         return
       }
 
+      const callbackKey = state || code
+
       try {
-        const response = await axios.get('/api/v1/auth/dingtalk/callback', {
-          params: orgId ? { code, state, org_id: orgId } : { code, state },
-          withCredentials: true,
-        })
+        const response = await requestDingTalkCallbackOnce(callbackKey, { code, state, org_id: requestedOrgID || undefined })
 
         if (response.data.code === 200) {
           const { user } = response.data.data
           login(user)
+          rememberAuthOrgID(user?.org_id)
           message.success('登录成功', 0.6)
-          navigate(consumeAuthRedirect() || '/', { replace: true })
+          navigate(alignAuthRedirectTargetWithOrg(consumeAuthRedirect(), user?.org_id), { replace: true })
           return
         }
 
@@ -68,23 +90,23 @@ const Callback: React.FC = () => {
     }
 
     void handleCallback()
-  }, [searchParams, navigate, login])
+  }, [searchParams, navigate, login, requestedOrgID])
 
   if (loading) {
     return (
-      <div style={{ minHeight: '100vh', background: '#f0f2f5' }} />
+      <div className="callback-page" />
     )
   }
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#f0f2f5' }}>
+    <div className="callback-page">
       <Result
         status="error"
         icon={<CloseCircleOutlined />}
         title="登录失败"
         subTitle={error}
         extra={[
-          <Button type="primary" key="login" onClick={() => navigate('/login?mode=scan', { replace: true })}>
+          <Button type="primary" key="login" onClick={() => navigate(loginPath, { replace: true })}>
             返回扫码页
           </Button>,
         ]}

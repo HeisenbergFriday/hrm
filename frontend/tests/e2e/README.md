@@ -52,8 +52,6 @@ npm run test:e2e:report
 | submits self evaluation and manager evaluation with mocked auto scoring | 员工自评提交 → 主管自动评分 → 主管评价提交 |
 | confirms a performance result from the result page | 结果页员工确认 |
 
-`warning-probe.spec.ts` 为诊断用例，探测 `useForm` 警告；默认配置会排除它，不计入主流程 E2E 结论。需要诊断时可临时调整 Playwright 配置单独运行，不要用诊断探针结果代替主流程通过结论。
-
 ## 测试数据
 
 所有 fixture（活动、参与人、目标记录、分布检查等）定义在 `performance.spec.ts` 顶部，

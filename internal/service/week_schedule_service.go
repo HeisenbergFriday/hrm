@@ -431,7 +431,8 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 	}
 
 	// 2. 获取班次列表，找到第一个正常工作班次
-	shifts, err := dingtalk.GetShiftList()
+	orgID := orgIDFromDB(s.db)
+	shifts, err := dingtalk.GetShiftListForOrg(orgID)
 	if err != nil {
 		return nil, fmt.Errorf("获取班次列表失败: %w", err)
 	}
@@ -449,7 +450,7 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 	}
 
 	// 3. 预取考勤组 ID（避免在循环内重复调用 GetAttendanceGroups）
-	groups, err := dingtalk.GetAttendanceGroups()
+	groups, err := dingtalk.GetAttendanceGroupsForOrg(orgID)
 	if err != nil {
 		return nil, fmt.Errorf("获取考勤组失败: %w", err)
 	}
@@ -556,7 +557,7 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 		}
 	}
 
-	successCount, failedItems, batchErr := dingtalk.BatchSetAttendanceSchedule(opUserID, items, scheduleGroupID)
+	successCount, failedItems, batchErr := dingtalk.BatchSetAttendanceScheduleForOrg(orgID, opUserID, items, scheduleGroupID)
 
 	status := "success"
 	message := fmt.Sprintf("成功同步 %d 条排班", successCount)

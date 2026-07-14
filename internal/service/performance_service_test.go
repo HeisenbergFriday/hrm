@@ -42,6 +42,189 @@ func TestPerformanceLevelByScoreBoundaries(t *testing.T) {
 	}
 }
 
+func TestNormalizePerformanceParticipantStatus(t *testing.T) {
+	status, err := normalizePerformanceParticipantStatus(" manager_submitted ")
+	if err != nil {
+		t.Fatalf("normalizePerformanceParticipantStatus() error = %v", err)
+	}
+	if status != "manager_submitted" {
+		t.Fatalf("status = %q, want manager_submitted", status)
+	}
+
+	if _, err := normalizePerformanceParticipantStatus("unknown"); err == nil {
+		t.Fatalf("unknown participant status should be rejected")
+	}
+}
+
+func TestRequirePerformanceReason(t *testing.T) {
+	reason, err := requirePerformanceReason("  调整组织口径  ", "原因不能为空")
+	if err != nil {
+		t.Fatalf("requirePerformanceReason() error = %v", err)
+	}
+	if reason != "调整组织口径" {
+		t.Fatalf("reason = %q, want trimmed reason", reason)
+	}
+	if _, err := requirePerformanceReason(" ", "原因不能为空"); err == nil {
+		t.Fatalf("blank reason should be rejected")
+	}
+}
+
+func TestResetParticipantProgressArtifactsForStatusClearsDownstreamFields(t *testing.T) {
+	now := time.Now()
+	departmentScore := 9.1
+	participant := &database.PerformanceParticipant{
+		Status:                 "result_confirmed",
+		TotalManagerScore:      7,
+		BonusScore:             1,
+		PenaltyScore:           0.5,
+		AdjustedScore:          9.1,
+		SuggestedLevel:         "B",
+		FinalLevel:             "A",
+		AdjustReason:           "department adjusted",
+		DepartmentAdjusted:     true,
+		DepartmentFinalScore:   &departmentScore,
+		DepartmentFinalLevel:   "A",
+		DepartmentAdjustReason: "department adjusted",
+		DepartmentAdjustedAt:   &now,
+		DepartmentAdjustedBy:   "u1",
+		HRConfirmedAt:          &now,
+		HRConfirmedBy:          "hr1",
+		ConfirmedAt:            &now,
+		ConfirmedBy:            "publisher",
+		IsLocked:               true,
+		LockedAt:               &now,
+		LockedBy:               "locker",
+		ForceLocked:            true,
+		ForceLockedReason:      "overdue",
+	}
+
+	resetFields := resetParticipantProgressArtifactsForStatus(participant, "manager_submitted")
+	resetFieldSet := map[string]bool{}
+	for _, field := range resetFields {
+		resetFieldSet[field] = true
+	}
+
+	if !resetFieldSet["department_evaluation"] || !resetFieldSet["hr_review"] || !resetFieldSet["locked"] {
+		t.Fatalf("reset fields = %#v, want department/hr/locked reset", resetFields)
+	}
+	if participant.DepartmentAdjusted || participant.DepartmentFinalScore != nil || participant.DepartmentFinalLevel != "" || participant.DepartmentAdjustedAt != nil || participant.DepartmentAdjustedBy != "" {
+		t.Fatalf("department evaluation artifacts should be cleared: %#v", participant)
+	}
+	if participant.HRConfirmedAt != nil || participant.HRConfirmedBy != "" || participant.ConfirmedAt != nil || participant.ConfirmedBy != "" {
+		t.Fatalf("confirmation artifacts should be cleared: %#v", participant)
+	}
+	if participant.IsLocked || participant.LockedAt != nil || participant.LockedBy != "" || participant.ForceLocked || participant.ForceLockedReason != "" {
+		t.Fatalf("lock artifacts should be cleared: %#v", participant)
+	}
+	if participant.FinalLevel != "B" {
+		t.Fatalf("FinalLevel = %q, want suggested level B", participant.FinalLevel)
+	}
+	if participant.AdjustedScore != 7.5 {
+		t.Fatalf("AdjustedScore = %v, want 7.5", participant.AdjustedScore)
+	}
+}
+
+func TestCanSaveNewFlowPlanAfterTargetSetting(t *testing.T) {
+	activity := &database.PerformanceActivity{FlowType: PerformanceFlowNew, Status: "manager_evaluation"}
+	participant := &database.PerformanceParticipant{Status: "pending"}
+	if !canSaveNewFlowPlanAfterTargetSetting(activity, participant) {
+		t.Fatalf("new flow pending participant should be allowed to save plan after target setting")
+	}
+
+	activity.Status = "target_approval"
+	if !canSaveNewFlowPlanAfterTargetSetting(activity, participant) {
+		t.Fatalf("new flow pending participant should be allowed to save plan during target approval")
+	}
+
+	participant.Status = "target_set"
+	if canSaveNewFlowPlanAfterTargetSetting(activity, participant) {
+		t.Fatalf("approved target should not be reopened")
+	}
+
+	participant.Status = "pending"
+	activity.FlowType = PerformanceFlowOld
+	if canSaveNewFlowPlanAfterTargetSetting(activity, participant) {
+		t.Fatalf("old flow should not use late plan saving")
+	}
+}
+
+func TestDefaultPerformanceWorkflowConfigNewFlowMatchesMutengProcess(t *testing.T) {
+	config := defaultPerformanceWorkflowConfig(PerformanceFlowNew)
+	nodes, ok := config["nodes"].([]string)
+	if !ok {
+		t.Fatalf("nodes type = %T, want []string", config["nodes"])
+	}
+	want := []string{
+		"target_setting",
+		"target_approval",
+		"self_evaluation",
+		"manager_evaluation",
+		"department_evaluation",
+		"hr_review",
+		"result_publish",
+		"archive",
+	}
+	if !reflect.DeepEqual(nodes, want) {
+		t.Fatalf("new flow nodes = %#v, want %#v", nodes, want)
+	}
+}
+
+func TestNormalizePerformanceActivityKindDefaultsOnlyNewCreation(t *testing.T) {
+	kind, err := normalizePerformanceActivityKind(PerformanceFlowNew, "", true)
+	if err != nil {
+		t.Fatalf("normalizePerformanceActivityKind() error = %v", err)
+	}
+	if kind != PerformanceActivityKindGoalSetting {
+		t.Fatalf("new activity default kind = %q, want %q", kind, PerformanceActivityKindGoalSetting)
+	}
+
+	kind, err = normalizePerformanceActivityKind(PerformanceFlowNew, "", false)
+	if err != nil {
+		t.Fatalf("normalizePerformanceActivityKind(no default) error = %v", err)
+	}
+	if kind != "" {
+		t.Fatalf("existing empty kind = %q, want empty for historical compatibility", kind)
+	}
+
+	kind, err = normalizePerformanceActivityKind(PerformanceFlowOld, PerformanceActivityKindReviewScoring, true)
+	if err != nil {
+		t.Fatalf("old flow kind normalization error = %v", err)
+	}
+	if kind != "" {
+		t.Fatalf("old flow kind = %q, want empty", kind)
+	}
+}
+
+func TestActivityKindWorkflowAndGoalPhase(t *testing.T) {
+	goalActivity := &database.PerformanceActivity{FlowType: PerformanceFlowNew, ActivityKind: PerformanceActivityKindGoalSetting}
+	applyActivityKindWorkflowDefaults(goalActivity)
+	goalNodes, ok := goalActivity.WorkflowConfig["nodes"].([]string)
+	if !ok {
+		t.Fatalf("goal activity nodes type = %T", goalActivity.WorkflowConfig["nodes"])
+	}
+	wantGoalNodes := []string{"target_setting", "target_approval", "archive"}
+	if !reflect.DeepEqual(goalNodes, wantGoalNodes) {
+		t.Fatalf("goal activity nodes = %#v, want %#v", goalNodes, wantGoalNodes)
+	}
+	if phase := targetSettingGoalPhaseForActivity(goalActivity); phase != PerformanceGoalPhasePlan {
+		t.Fatalf("goal setting phase = %q, want plan", phase)
+	}
+
+	reviewActivity := &database.PerformanceActivity{FlowType: PerformanceFlowNew, ActivityKind: PerformanceActivityKindReviewScoring}
+	applyActivityKindWorkflowDefaults(reviewActivity)
+	reviewNodes, ok := reviewActivity.WorkflowConfig["nodes"].([]string)
+	if !ok {
+		t.Fatalf("review activity nodes type = %T", reviewActivity.WorkflowConfig["nodes"])
+	}
+	wantReviewNodes := []string{"target_setting", "self_evaluation", "manager_evaluation", "department_evaluation", "hr_review", "result_publish", "archive"}
+	if !reflect.DeepEqual(reviewNodes, wantReviewNodes) {
+		t.Fatalf("review activity nodes = %#v, want %#v", reviewNodes, wantReviewNodes)
+	}
+	if phase := targetSettingGoalPhaseForActivity(reviewActivity); phase != PerformanceGoalPhaseReview {
+		t.Fatalf("review scoring phase = %q, want review", phase)
+	}
+}
+
 func TestPerformanceLevelByRuleConfigNewFlowBoundaries(t *testing.T) {
 	tests := []struct {
 		score float64
@@ -64,7 +247,7 @@ func TestPerformanceLevelByRuleConfigNewFlowBoundaries(t *testing.T) {
 	}
 }
 
-func TestNormalizeNewPerformanceGoalRecordsAddsLockedFixedItems(t *testing.T) {
+func TestNormalizeNewPerformanceGoalRecordsDoesNotInjectFixedItems(t *testing.T) {
 	records := []GoalRecordRequest{
 		{
 			ID:           12,
@@ -85,24 +268,27 @@ func TestNormalizeNewPerformanceGoalRecordsAddsLockedFixedItems(t *testing.T) {
 			GoalType:    "kpi",
 			ItemName:    "销售额",
 			Weight:      0.7,
+			TargetValue: "100万",
 		},
 	}
 
 	got := normalizeNewPerformanceGoalRecords(records, "plan")
-	if len(got) != 3 {
-		t.Fatalf("normalizeNewPerformanceGoalRecords() length = %d, want 3", len(got))
+	if len(got) != 1 {
+		t.Fatalf("normalizeNewPerformanceGoalRecords() length = %d, want 1", len(got))
 	}
-	if got[0].FixedKey != "manager_arrangement" || !got[0].IsFixed || got[0].ItemName != "上级安排事项完成情况" || got[0].Weight != 0.15 {
-		t.Fatalf("first fixed item not locked to default: %#v", got[0])
+	if got[0].ItemName != "销售额" || got[0].GoalType != "kpi" || got[0].Weight != 0.7 {
+		t.Fatalf("variable item order/content changed: %#v", got[0])
 	}
-	if got[0].ID != 12 || got[0].ActualResult != "done" || got[0].SelfScore != 8 || got[0].ManagerScore != 9 || !reflect.DeepEqual(got[0].Attachments, []string{"file-1"}) || got[0].SortOrder != 7 {
-		t.Fatalf("first fixed item did not preserve editable fields: %#v", got[0])
+	if got[0].GoalPhase != "plan" || got[0].IsFixed || got[0].FixedKey != "" {
+		t.Fatalf("new flow plan item should stay variable plan item: %#v", got[0])
 	}
-	if got[1].FixedKey != "values_discipline" || !got[1].IsFixed || got[1].Weight != 0.15 {
-		t.Fatalf("second fixed item missing or malformed: %#v", got[1])
+	if got[0].TargetValue != "" {
+		t.Fatalf("new flow plan item should clear target value: %#v", got[0])
 	}
-	if got[2].ItemName != "销售额" || got[2].GoalType != "kpi" || got[2].Weight != 0.7 {
-		t.Fatalf("variable item order/content changed: %#v", got[2])
+
+	reviewGot := normalizeNewPerformanceGoalRecords(records, "review")
+	if len(reviewGot) != 1 || reviewGot[0].TargetValue != "100万" || reviewGot[0].GoalPhase != "review" {
+		t.Fatalf("new flow review supplement item should keep target value: %#v", reviewGot)
 	}
 }
 
@@ -154,6 +340,43 @@ func TestGetDistributionCheckUsesNewFlowActivityDefaults(t *testing.T) {
 	}
 	if got := check.Distribution["S"]; got.ExpectedPercent != 5 || got.ExpectedCount != 1 || got.ActualCount != 2 {
 		t.Fatalf("S distribution = %#v, want 5%% expectedCount=1 actualCount=2", got)
+	}
+}
+
+func TestGetDistributionCheckPrefersSuggestedLevelDuringManagerEvaluation(t *testing.T) {
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_activities"),
+			columns: []string{"id", "name", "cycle_type", "status", "flow_type"},
+			rows: [][]driver.Value{
+				{int64(1), "Q2", "quarterly", "manager_evaluation", PerformanceFlowNew},
+			},
+		},
+		stubQueryResponse{
+			match: stubTableMatcher("performance_participants"),
+			columns: []string{
+				"id", "activity_id", "status", "final_level", "suggested_level", "department_adjusted", "department_final_level",
+			},
+			rows: [][]driver.Value{
+				{int64(1), "activity-1", "manager_submitted", "A", "D", false, ""},
+			},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_distribution_rules"),
+			columns: []string{"id", "activity_id", "level", "distribution_percent", "description"},
+			rows:    nil,
+		},
+	)
+
+	check, err := svc.GetDistributionCheck("activity-1")
+	if err != nil {
+		t.Fatalf("GetDistributionCheck() error = %v", err)
+	}
+	if got := check.Distribution["A"].ActualCount; got != 0 {
+		t.Fatalf("A actual count = %d, want 0", got)
+	}
+	if got := check.Distribution["D"].ActualCount; got != 1 {
+		t.Fatalf("D actual count = %d, want 1", got)
 	}
 }
 
@@ -584,6 +807,107 @@ func TestActivityIncludesUser(t *testing.T) {
 	if activityIncludesUser(&database.PerformanceActivity{TargetEmployeeIDs: []string{"user-2"}, TargetDepartmentIDs: []string{"dept-1"}}, user) {
 		t.Fatalf("employee scope should override department scope")
 	}
+}
+
+func TestActivityIncludesUserInDepartmentUsesSnapshotDepartment(t *testing.T) {
+	user := database.User{UserID: "user-1", DepartmentID: "current-dept"}
+	activity := &database.PerformanceActivity{TargetDepartmentIDs: []string{"snapshot-dept"}}
+
+	if !activityIncludesUserInDepartment(activity, user, "snapshot-dept") {
+		t.Fatalf("snapshot department should include user")
+	}
+	if activityIncludesUserInDepartment(activity, user, "current-dept") {
+		t.Fatalf("current department should not include user when snapshot department differs")
+	}
+	employeeScoped := &database.PerformanceActivity{
+		TargetEmployeeIDs:   []string{"user-1"},
+		TargetDepartmentIDs: []string{"other-dept"},
+	}
+	if !activityIncludesUserInDepartment(employeeScoped, user, "snapshot-dept") {
+		t.Fatalf("explicit employee scope should still include user")
+	}
+}
+
+func TestPerformanceOrgSnapshotForUserUsesTransferHistory(t *testing.T) {
+	user := database.User{
+		UserID:       "user-1",
+		DepartmentID: "dept-c",
+		Position:     "Current Position",
+	}
+	transfers := []database.EmployeeTransfer{
+		{
+			ID:                1,
+			UserID:            "user-1",
+			OldDepartmentID:   "dept-a",
+			OldDepartmentName: "Dept A",
+			OldPosition:       "Role A",
+			NewDepartmentID:   "dept-b",
+			NewDepartmentName: "Dept B",
+			NewPosition:       "Role B",
+			TransferDate:      "2026-01-01",
+			Status:            "approved",
+		},
+		{
+			ID:                2,
+			UserID:            "user-1",
+			OldDepartmentID:   "dept-b",
+			OldDepartmentName: "Dept B",
+			OldPosition:       "Role B",
+			NewDepartmentID:   "dept-c",
+			NewDepartmentName: "Dept C",
+			NewPosition:       "Role C",
+			TransferDate:      "2026-06-01",
+			Status:            "approved",
+		},
+		{
+			ID:                3,
+			UserID:            "user-1",
+			OldDepartmentID:   "dept-c",
+			OldDepartmentName: "Dept C",
+			OldPosition:       "Role C",
+			NewDepartmentID:   "dept-d",
+			NewDepartmentName: "Dept D",
+			NewPosition:       "Role D",
+			TransferDate:      "2026-07-01",
+			Status:            "pending",
+		},
+	}
+
+	asOfMarch := mustPerformanceTestDate(t, "2026-03-31")
+	snapshot := performanceOrgSnapshotForUser(user, transfers, asOfMarch, true, nil)
+	if snapshot.DepartmentID != "dept-b" || snapshot.DepartmentName != "Dept B" || snapshot.Position != "Role B" {
+		t.Fatalf("March snapshot = %#v, want dept-b/Dept B/Role B", snapshot)
+	}
+
+	beforeTransfers := mustPerformanceTestDate(t, "2025-12-31")
+	snapshot = performanceOrgSnapshotForUser(user, transfers, beforeTransfers, true, nil)
+	if snapshot.DepartmentID != "dept-a" || snapshot.DepartmentName != "Dept A" || snapshot.Position != "Role A" {
+		t.Fatalf("pre-transfer snapshot = %#v, want dept-a/Dept A/Role A", snapshot)
+	}
+
+	afterPendingTransfer := mustPerformanceTestDate(t, "2026-08-01")
+	snapshot = performanceOrgSnapshotForUser(user, transfers, afterPendingTransfer, true, nil)
+	if snapshot.DepartmentID != "dept-c" || snapshot.DepartmentName != "Dept C" || snapshot.Position != "Role C" {
+		t.Fatalf("pending transfer should be ignored, snapshot = %#v", snapshot)
+	}
+}
+
+func TestParsePerformanceSnapshotDateRejectsInvalidDate(t *testing.T) {
+	if _, _, err := parsePerformanceSnapshotDate("2026/06/30"); err == nil {
+		t.Fatalf("invalid snapshot date should return error")
+	}
+	if _, ok, err := parsePerformanceSnapshotDate(""); err != nil || ok {
+		t.Fatalf("empty snapshot date = ok %v err %v, want ok false nil err", ok, err)
+	}
+}
+
+func mustPerformanceTestDate(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.ParseInLocation("2006-01-02", value, time.Local)
+	if err != nil {
+		t.Fatalf("parse test date %s: %v", value, err)
+	}
+	return parsed
 }
 
 func TestNewPerformanceParticipantFromUser(t *testing.T) {
@@ -1039,37 +1363,46 @@ func TestGetDistributionCheckUsesRulesAndIgnoresInactive(t *testing.T) {
 
 func TestEnsureParticipantStageCompleteWithDatabaseRows(t *testing.T) {
 	now := time.Now()
-	completeSvc := newStubPerformanceService(t, stubQueryResponse{
-		match:   stubTableMatcher("performance_participants"),
-		columns: []string{"id", "activity_id", "status", "employee_confirmed_at"},
-		rows: [][]driver.Value{
-			{int64(1), "activity-1", "employee_confirmed", now},
-			{int64(2), "activity-1", "manager_confirmed", nil},
-			{int64(3), "activity-1", "inactive", nil},
+	completeSvc := newStubPerformanceService(t,
+		performanceActivityResponse("employee_confirmation", ""),
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: []string{"id", "activity_id", "status", "employee_confirmed_at"},
+			rows: [][]driver.Value{
+				{int64(1), "activity-1", "employee_confirmed", now},
+				{int64(2), "activity-1", "manager_confirmed", nil},
+				{int64(3), "activity-1", "inactive", nil},
+			},
 		},
-	})
+	)
 	if err := completeSvc.ensureParticipantStageComplete("activity-1", "employee_confirmation"); err != nil {
 		t.Fatalf("complete employee confirmation stage error = %v", err)
 	}
 
-	incompleteSvc := newStubPerformanceService(t, stubQueryResponse{
-		match:   stubTableMatcher("performance_participants"),
-		columns: []string{"id", "activity_id", "status", "employee_confirmed_at"},
-		rows: [][]driver.Value{
-			{int64(1), "activity-1", "employee_confirmed", nil},
+	incompleteSvc := newStubPerformanceService(t,
+		performanceActivityResponse("employee_confirmation", ""),
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: []string{"id", "activity_id", "status", "employee_confirmed_at"},
+			rows: [][]driver.Value{
+				{int64(1), "activity-1", "employee_confirmed", nil},
+			},
 		},
-	})
+	)
 	if err := incompleteSvc.ensureParticipantStageComplete("activity-1", "employee_confirmation"); err == nil {
 		t.Fatalf("missing confirmation timestamp should block stage completion")
 	}
 
-	emptySvc := newStubPerformanceService(t, stubQueryResponse{
-		match:   stubTableMatcher("performance_participants"),
-		columns: []string{"id", "activity_id", "status"},
-		rows: [][]driver.Value{
-			{int64(1), "activity-1", "inactive"},
+	emptySvc := newStubPerformanceService(t,
+		performanceActivityResponse("employee_confirmation", ""),
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: []string{"id", "activity_id", "status"},
+			rows: [][]driver.Value{
+				{int64(1), "activity-1", "inactive"},
+			},
 		},
-	})
+	)
 	if err := emptySvc.ensureParticipantStageComplete("activity-1", "employee_confirmation"); err == nil {
 		t.Fatalf("only ignored participants should block stage completion")
 	}
@@ -1387,6 +1720,24 @@ func stubTableMatcher(table string) func(string, []driver.NamedValue) bool {
 	table = strings.ToLower(table)
 	return func(query string, _ []driver.NamedValue) bool {
 		return strings.Contains(strings.ToLower(query), table)
+	}
+}
+
+func hrConfirmReminderRecipientsResponse(userIDs ...string) stubQueryResponse {
+	rows := make([][]driver.Value, 0, len(userIDs))
+	for _, userID := range userIDs {
+		rows = append(rows, []driver.Value{userID, userID + " name"})
+	}
+	return stubQueryResponse{
+		match: func(query string, _ []driver.NamedValue) bool {
+			lower := strings.ToLower(query)
+			return strings.Contains(lower, "users") &&
+				strings.Contains(lower, "user_roles") &&
+				strings.Contains(lower, "role_permissions") &&
+				strings.Contains(lower, "permissions")
+		},
+		columns: []string{"user_id", "name"},
+		rows:    rows,
 	}
 }
 
