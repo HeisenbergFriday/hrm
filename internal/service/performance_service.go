@@ -36,8 +36,10 @@ type PerformanceService struct {
 
 const (
 	performanceReminderStageSelfEval       = "self_evaluation"
+	performanceReminderStageManagerEval    = "manager_evaluation"
 	performanceReminderStageManagerRecheck = "manager_recheck"
 	performanceReminderChannelDing         = "dingtalk"
+	performanceReminderKeyManagerEvalReady = "participant_self_submitted"
 	performanceReminderKeyManagerRecheck   = "self_edit_after_manager_confirm"
 	managerRecheckNotificationWindow       = time.Hour
 )
@@ -392,6 +394,50 @@ func isMutengReviewScoringActivity(activity *database.PerformanceActivity) bool 
 
 func isExplicitMutengActivityKind(activity *database.PerformanceActivity) bool {
 	return isMutengGoalSettingActivity(activity) || isMutengReviewScoringActivity(activity)
+}
+
+// mutengTargetWorkflowOpen reports whether an employee can still submit or
+// approve targets in the Muteng participant-level pipeline. Once the target
+// phase is opened, one participant must not be blocked by another participant's
+// progress.
+func mutengTargetWorkflowOpen(activity *database.PerformanceActivity) bool {
+	if !isNewPerformanceFlow(activity) || activity == nil {
+		return false
+	}
+	switch strings.TrimSpace(activity.Status) {
+	case "target_setting", "target_approval", "self_evaluation", "manager_evaluation",
+		"department_evaluation", "hr_review", "result_publish", "interview", "appeal",
+		"employee_confirmation", "manager_confirmation", "hr_confirmation", "result_confirmed":
+		return true
+	default:
+		return false
+	}
+}
+
+// mutengReviewPipelineOpen treats the activity status as the administrator's
+// self-evaluation gate. All later stages are driven by each participant's own
+// status, so historical aggregate stage values remain compatible.
+func mutengReviewPipelineOpen(activity *database.PerformanceActivity) bool {
+	if !isNewPerformanceFlow(activity) || activity == nil || isMutengGoalSettingActivity(activity) {
+		return false
+	}
+	switch strings.TrimSpace(activity.Status) {
+	case "self_evaluation", "manager_evaluation", "department_evaluation", "hr_review",
+		"result_publish", "interview", "appeal", "employee_confirmation",
+		"manager_confirmation", "hr_confirmation", "result_confirmed":
+		return true
+	default:
+		return false
+	}
+}
+
+func mutengPublishedParticipantStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "hr_confirmed", "locked", "result_confirmed":
+		return true
+	default:
+		return false
+	}
 }
 
 func isCompletedPerformanceActivityStatus(status string) bool {
@@ -2401,6 +2447,10 @@ func (s *PerformanceService) newPerformanceParticipantForActivity(activity *data
 	if activity != nil {
 		participant.SnapshotSource = strings.TrimSpace(activity.SnapshotSource)
 		participant.SnapshotAsOfDate = strings.TrimSpace(activity.SnapshotAsOfDate)
+		if isNewPerformanceFlow(activity) {
+			participant.ResultHidden = true
+			participant.ResultHiddenReason = "system:unpublished"
+		}
 	}
 	if strings.TrimSpace(participant.SnapshotSource) == "" {
 		participant.SnapshotSource = "current_user"
@@ -3114,10 +3164,21 @@ func (s *PerformanceService) DepartmentAdjustParticipantResult(participantID uin
 
 	var updated database.PerformanceParticipant
 	var version database.PerformanceReviewVersion
+	var notifyActivity database.PerformanceActivity
+	shouldNotifyHR := false
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		participant, _, err := s.loadNewFlowParticipantForUpdate(tx, participantID)
+		participant, activity, err := s.loadNewFlowParticipantForUpdate(tx, participantID)
 		if err != nil {
 			return err
+		}
+		if !mutengReviewPipelineOpen(activity) {
+			return fmt.Errorf("当前活动尚未开启员工自评，活动状态为: %s", activity.Status)
+		}
+		previousStatus := strings.TrimSpace(participant.Status)
+		switch strings.TrimSpace(participant.Status) {
+		case "manager_submitted", "manager_confirmed":
+		default:
+			return fmt.Errorf("当前参与人尚未完成上级评分或已进入后续节点，参与人状态为: %s", participant.Status)
 		}
 		now := time.Now()
 		oldFinalLevel := participant.FinalLevel
@@ -3185,10 +3246,21 @@ func (s *PerformanceService) DepartmentAdjustParticipantResult(participantID uin
 			return err
 		}
 		updated = *participant
+		if previousStatus != "manager_confirmed" {
+			notifyActivity = *activity
+			shouldNotifyHR = true
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, nil, err
+	}
+	if shouldNotifyHR {
+		go func() {
+			if err := s.notifyHRReviewReady(notifyActivity, updated); err != nil {
+				logrus.Warnf("notify HR review ready failed: %v", err)
+			}
+		}()
 	}
 	return &updated, &version, nil
 }
@@ -4970,33 +5042,18 @@ func (s *PerformanceService) OpenSelfEvaluation(activityID, userID string) error
 		if isMutengGoalSettingActivity(activity) {
 			return errors.New("目标设定活动不进入自评，请完成目标审核后锁定归档")
 		}
-		if isMutengReviewScoringActivity(activity) {
-			if activity.Status != "target_setting" {
-				return errors.New("状态冲突：评分活动需先完成目标承接/补录，再开启自评")
-			}
-			if err := s.syncPreviousPlanRecordsForNewFlowActivity(activity, userID); err != nil {
-				return err
-			}
-			if err := s.ensureNewFlowReviewRecordsReady(activity); err != nil {
-				return err
-			}
-			if err := s.ensureParticipantStageComplete(activityID, "target_setting"); err != nil {
-				return err
-			}
-			return s.actRepo.UpdateStatus(activityID, "self_evaluation", userID)
+		if mutengReviewPipelineOpen(activity) {
+			return nil
 		}
-		if activity.Status != "target_approval" {
-			return errors.New("状态冲突：沐腾科技流程需先完成目标审核，再开启自评")
+		if activity.Status != "target_setting" && activity.Status != "target_approval" {
+			return errors.New("状态冲突：需先开启目标填写，再开启员工自评")
 		}
 		if err := s.syncPreviousPlanRecordsForNewFlowActivity(activity, userID); err != nil {
 			return err
 		}
-		if err := s.ensureNewFlowReviewRecordsReady(activity); err != nil {
-			return err
-		}
-		if err := s.ensureParticipantStageComplete(activityID, "target_approval"); err != nil {
-			return err
-		}
+		// Muteng participants progress independently. Missing targets or review
+		// records block only that participant when they submit self evaluation;
+		// they no longer block the administrator from opening the phase.
 		return s.actRepo.UpdateStatus(activityID, "self_evaluation", userID)
 	}
 	if activity.Status != "target_setting" {
@@ -5026,16 +5083,10 @@ func (s *PerformanceService) OpenTargetApproval(activityID, userID string) error
 	if isMutengReviewScoringActivity(activity) {
 		return errors.New("评分活动不包含目标审核节点，请完成目标承接/补录后开启自评")
 	}
-	if activity.Status == "target_approval" {
+	if activity.Status == "target_approval" || activity.Status == "target_setting" {
 		return nil
 	}
-	if activity.Status != "target_setting" {
-		return errors.New("状态冲突：只有目标拟定阶段可以开启目标审核")
-	}
-	if err := s.ensureTargetDraftingSubmitted(activityID); err != nil {
-		return err
-	}
-	return s.actRepo.UpdateStatus(activityID, "target_approval", userID)
+	return errors.New("状态冲突：需先开启目标填写，目标提交后会自动进入上级审核")
 }
 
 // OpenManagerEvaluation 开启主管评分阶段（self_evaluation -> manager_evaluation）
@@ -5043,6 +5094,12 @@ func (s *PerformanceService) OpenManagerEvaluation(activityID, userID string) er
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
 		return errors.New("活动不存在")
+	}
+	if isNewPerformanceFlow(activity) {
+		if mutengReviewPipelineOpen(activity) {
+			return nil
+		}
+		return errors.New("状态冲突：请先由管理员开启员工自评")
 	}
 	if activity.Status != "self_evaluation" {
 		return errors.New("状态冲突：只有自评阶段活动可以开启主管评分")
@@ -5170,26 +5227,10 @@ func (s *PerformanceService) OpenDepartmentEvaluation(activityID, userID string)
 	if !isNewPerformanceFlow(activity) {
 		return errors.New("只有沐腾科技流程模版可以开启部门/中心评估")
 	}
-	if activity.Status == "department_evaluation" {
+	if mutengReviewPipelineOpen(activity) {
 		return nil
 	}
-	if activity.Status != "manager_evaluation" {
-		return errors.New("状态冲突：只有上级评估阶段可以开启部门/中心评估")
-	}
-	if err := s.syncSelfFinalAssessmentsForActivity(activityID, userID); err != nil {
-		return err
-	}
-	if err := s.ensureParticipantStageComplete(activityID, "manager_evaluation"); err != nil {
-		return err
-	}
-	check, err := s.GetDistributionCheck(activityID)
-	if err != nil {
-		return err
-	}
-	if !check.Passed {
-		return errors.New("强制分布不合规，无法开启部门/中心评估")
-	}
-	return s.actRepo.UpdateStatus(activityID, "department_evaluation", userID)
+	return errors.New("状态冲突：请先由管理员开启员工自评，主管提交后会自动进入部门评分")
 }
 
 // OpenManagerConfirmation 开启主管确认阶段（小铁文娱流程：employee_confirmation -> manager_confirmation）
@@ -5225,16 +5266,10 @@ func (s *PerformanceService) OpenHRReview(activityID, userID string) error {
 	if !isMutengReviewScoringActivity(activity) && (activity.Status == "department_evaluation" || activity.Status == "hr_confirmation") {
 		return s.OpenHRConfirmation(activityID, userID)
 	}
-	if activity.Status == "hr_review" {
+	if mutengReviewPipelineOpen(activity) {
 		return nil
 	}
-	if activity.Status != "department_evaluation" {
-		return errors.New("状态冲突：只有部门/中心评估阶段可以开启HR审核")
-	}
-	if err := s.ensureParticipantStageComplete(activityID, "department_evaluation"); err != nil {
-		return err
-	}
-	return s.actRepo.UpdateStatus(activityID, "hr_review", userID)
+	return errors.New("状态冲突：请先由管理员开启员工自评，部门评分后会自动进入HR审核")
 }
 
 // OpenHRConfirmation 开启HR确认阶段
@@ -5278,16 +5313,10 @@ func (s *PerformanceService) OpenResultPublish(activityID, userID string) error 
 	if !isNewPerformanceFlow(activity) {
 		return errors.New("只有沐腾科技流程模版可以开启结果公布")
 	}
-	if activity.Status == "result_publish" {
+	if mutengReviewPipelineOpen(activity) {
 		return nil
 	}
-	if activity.Status != "hr_review" {
-		return errors.New("状态冲突：只有HR审核阶段可以开启结果公布")
-	}
-	if err := s.ensureParticipantStageComplete(activityID, "hr_review"); err != nil {
-		return err
-	}
-	return s.actRepo.UpdateStatus(activityID, "result_publish", userID)
+	return errors.New("状态冲突：请先由管理员开启员工自评，HR审核后结果会自动公布")
 }
 
 // OpenPerformanceInterview 旧的绩效活动主流程面谈阶段入口。
@@ -5380,6 +5409,63 @@ func (s *PerformanceService) countActiveParticipants(activityID string) (int64, 
 		return 0, err
 	}
 	return count, nil
+}
+
+// maybeCompleteMutengActivity only updates the aggregate activity lifecycle.
+// Participant actions never wait for this aggregation: each employee advances
+// independently through target approval, scoring, HR review and publication.
+func (s *PerformanceService) maybeCompleteMutengActivity(tx *gorm.DB, activityID, userID string) error {
+	if tx == nil {
+		tx = s.db
+	}
+	var activity database.PerformanceActivity
+	if err := s.scopeOrg(tx, "org_id").Where("id = ? AND deleted_at IS NULL", activityID).First(&activity).Error; err != nil {
+		return err
+	}
+	if !isNewPerformanceFlow(&activity) || isCompletedPerformanceActivityStatus(activity.Status) {
+		return nil
+	}
+
+	base := s.scopeOrg(tx.Model(&database.PerformanceParticipant{}), "org_id").
+		Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList())
+	var activeCount int64
+	if err := base.Count(&activeCount).Error; err != nil {
+		return err
+	}
+	if activeCount == 0 {
+		return nil
+	}
+
+	nextStatus := ""
+	var incompleteCount int64
+	if isMutengGoalSettingActivity(&activity) {
+		completedStatuses := []string{
+			"target_set", "self_submitted", "manager_submitted", "manager_confirmed",
+			"hr_confirmed", "locked", "result_confirmed",
+		}
+		if err := base.Where("status NOT IN ?", completedStatuses).Count(&incompleteCount).Error; err != nil {
+			return err
+		}
+		if incompleteCount == 0 {
+			nextStatus = "locked"
+		}
+	} else {
+		if err := base.Where("status NOT IN ?", []string{"hr_confirmed", "locked", "result_confirmed"}).Count(&incompleteCount).Error; err != nil {
+			return err
+		}
+		if incompleteCount == 0 {
+			nextStatus = "result_publish"
+		}
+	}
+	if nextStatus == "" || activity.Status == nextStatus {
+		return nil
+	}
+	return s.scopeOrg(tx.Model(&database.PerformanceActivity{}), "org_id").
+		Where("id = ? AND deleted_at IS NULL", activityID).
+		Updates(map[string]interface{}{
+			"status":     nextStatus,
+			"updated_by": normalizePerformanceOperatorID(userID),
+		}).Error
 }
 
 func (s *PerformanceService) ensureTargetDraftingSubmitted(activityID string) error {
@@ -6286,7 +6372,10 @@ func (s *PerformanceService) ConfirmManagerResult(participantID uint, userID str
 
 // ConfirmHRResult HR确认结果
 func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	var notifyActivity database.PerformanceActivity
+	var notifyParticipant database.PerformanceParticipant
+	shouldNotifyParticipant := false
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var p database.PerformanceParticipant
 		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").Where("id = ? AND deleted_at IS NULL", participantID).First(&p).Error; err != nil {
 			return errors.New("参与人不存在")
@@ -6298,16 +6387,21 @@ func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) 
 		isNewFlow := isNewPerformanceFlow(&activity)
 		expectedActivityStatus := "hr_confirmation"
 		stageLabel := "HR确认"
-		if isMutengReviewScoringActivity(&activity) {
-			expectedActivityStatus = "hr_review"
+		if isNewFlow {
+			if isMutengGoalSettingActivity(&activity) {
+				return errors.New("目标设定活动不包含HR审核节点")
+			}
+			expectedActivityStatus = ""
 			stageLabel = "HR审核"
-		} else if isMutengGoalSettingActivity(&activity) {
-			return errors.New("目标设定活动不包含HR审核节点")
 		}
 		if p.Status == "hr_confirmed" || p.Status == "locked" {
 			return nil
 		}
-		if activity.Status != expectedActivityStatus {
+		if isNewFlow {
+			if !mutengReviewPipelineOpen(&activity) {
+				return fmt.Errorf("状态冲突：活动尚未开启员工自评，无法进行%s", stageLabel)
+			}
+		} else if activity.Status != expectedActivityStatus {
 			return fmt.Errorf("状态冲突：活动尚未进入%s阶段", stageLabel)
 		}
 		if p.Status != "manager_confirmed" {
@@ -6342,10 +6436,43 @@ func (s *PerformanceService) ConfirmHRResult(participantID uint, userID string) 
 		p.HRConfirmedAt = &now
 		p.HRConfirmedBy = userID
 		p.Status = "hr_confirmed"
+		if isNewFlow {
+			// Muteng HR review and result publication are one atomic action.
+			p.ConfirmedAt = &now
+			p.ConfirmedBy = userID
+			if strings.TrimSpace(p.ResultHiddenReason) == "system:unpublished" {
+				p.ResultHidden = false
+				p.ResultHiddenReason = ""
+				p.ResultHiddenAt = nil
+				p.ResultHiddenBy = ""
+			}
+		}
 		p.UpdatedBy = userID
 
-		return tx.Save(p).Error
+		if err := tx.Save(&p).Error; err != nil {
+			return err
+		}
+		if isNewFlow {
+			if err := s.maybeCompleteMutengActivity(tx, p.ActivityID, userID); err != nil {
+				return err
+			}
+			notifyActivity = activity
+			notifyParticipant = p
+			shouldNotifyParticipant = true
+		}
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if shouldNotifyParticipant {
+		go func() {
+			if err := s.notifyParticipantResultPublished(notifyActivity, notifyParticipant); err != nil {
+				logrus.Warnf("notify participant result published failed: %v", err)
+			}
+		}()
+	}
+	return nil
 }
 
 // SendSelfEvalReminders 发送自评提醒给未提交的参与者
@@ -6686,6 +6813,133 @@ func (s *PerformanceService) createPerformanceReminderLogWithStage(activityID st
 		SentAt:        &now,
 	}
 	return s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&log).Error
+}
+
+func (s *PerformanceService) notifyManagerSelfEvaluationSubmitted(activity database.PerformanceActivity, participant database.PerformanceParticipant) error {
+	activityID := strings.TrimSpace(participant.ActivityID)
+	managerID := ptrStringValue(participant.ManagerID)
+	if activityID == "" || managerID == "" {
+		return nil
+	}
+	alreadySent, err := s.hasRecentPerformanceReminderLog(
+		activityID,
+		participant.ID,
+		performanceReminderStageManagerEval,
+		performanceReminderKeyManagerEvalReady,
+		time.Unix(0, 0),
+	)
+	if err != nil || alreadySent {
+		return err
+	}
+
+	now := time.Now()
+	title := "员工自评已提交"
+	content := fmt.Sprintf("员工 %s 已提交绩效自评，请进行上级评分。\n绩效活动：%s", participant.EmployeeName, activity.Name)
+	status := "sent"
+	errorMessage := ""
+	if err := sendPerformanceActionCardToUser(managerID, title, content, "去评分", PerformanceManagerEvalURL(activityID, participant.ID)); err != nil {
+		errorMessage = err.Error()
+		if dingtalk.IsUserNotNotifiableError(err) {
+			status = "skipped"
+			logrus.Infof("skip manager evaluation notice to non-notifiable user %s: %v", managerID, err)
+		} else {
+			status = "failed"
+			logrus.Warnf("send manager evaluation notice to %s failed: %v", managerID, err)
+		}
+	}
+	return s.createPerformanceReminderLogWithStage(
+		activityID,
+		participant,
+		performanceReminderStageManagerEval,
+		performanceReminderKeyManagerEvalReady,
+		"workflow",
+		status,
+		errorMessage,
+		now,
+	)
+}
+
+func (s *PerformanceService) notifyManagerGoalApprovalReady(activity database.PerformanceActivity, participant database.PerformanceParticipant) error {
+	managerID := ptrStringValue(participant.ManagerID)
+	if managerID == "" {
+		return nil
+	}
+	content := fmt.Sprintf("员工 %s 已提交绩效目标，请进行目标审核。\n绩效活动：%s", participant.EmployeeName, activity.Name)
+	if err := sendPerformanceActionCardToUser(managerID, "绩效目标待审核", content, "去审核", PerformanceGoalSettingURL(participant.ActivityID, participant.ID)); err != nil {
+		if dingtalk.IsUserNotNotifiableError(err) {
+			logrus.Infof("skip target approval notice to non-notifiable user %s: %v", managerID, err)
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *PerformanceService) notifyDepartmentEvaluationReady(activity database.PerformanceActivity, participant database.PerformanceParticipant) error {
+	recipients := make(map[string]struct{})
+	for _, candidate := range s.departmentManagerCandidateIDs(participant.DepartmentID) {
+		userID := strings.TrimSpace(candidate.userID)
+		if userID != "" {
+			recipients[userID] = struct{}{}
+		}
+	}
+	var firstErr error
+	for userID := range recipients {
+		content := fmt.Sprintf("员工 %s 的上级评分已完成，请进行部门/中心评估。\n绩效活动：%s", participant.EmployeeName, activity.Name)
+		if err := sendPerformanceActionCardToUser(userID, "绩效部门评分待办", content, "去处理", PerformanceOverviewURL(participant.ActivityID)); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logrus.Infof("skip department evaluation notice to non-notifiable user %s: %v", userID, err)
+				continue
+			}
+			logrus.Warnf("send department evaluation notice to %s failed: %v", userID, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+func (s *PerformanceService) notifyHRReviewReady(activity database.PerformanceActivity, participant database.PerformanceParticipant) error {
+	recipients, err := s.findHRConfirmReminderRecipients(activity.OrgID)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, recipient := range recipients {
+		userID := strings.TrimSpace(recipient.UserID)
+		if userID == "" {
+			continue
+		}
+		content := fmt.Sprintf("员工 %s 的部门/中心评分已完成，请进行HR审核。\n绩效活动：%s", participant.EmployeeName, activity.Name)
+		if err := sendPerformanceActionCardToUser(userID, "绩效HR审核待办", content, "去处理", PerformanceOverviewURL(participant.ActivityID)); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				logrus.Infof("skip HR review notice to non-notifiable user %s: %v", userID, err)
+				continue
+			}
+			logrus.Warnf("send HR review notice to %s failed: %v", userID, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+func (s *PerformanceService) notifyParticipantResultPublished(activity database.PerformanceActivity, participant database.PerformanceParticipant) error {
+	employeeID := strings.TrimSpace(participant.EmployeeID)
+	if employeeID == "" {
+		return nil
+	}
+	content := fmt.Sprintf("您的绩效结果已完成HR审核并公布。\n绩效活动：%s\n绩效面谈和绩效申诉已同时开放。", activity.Name)
+	if err := sendPerformanceActionCardToUser(employeeID, "绩效结果已公布", content, "查看结果", PerformanceResultURL(participant.ActivityID, participant.ID)); err != nil {
+		if dingtalk.IsUserNotNotifiableError(err) {
+			logrus.Infof("skip result publication notice to non-notifiable user %s: %v", employeeID, err)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *PerformanceService) notifyManagerSelfEvaluationRecheck(activity database.PerformanceActivity, participant database.PerformanceParticipant) error {
@@ -7295,7 +7549,11 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 	var participantStatus string
 	switch action {
 	case "submit":
-		if activity.Status != "target_setting" && !canSaveNewFlowPlanAfterTargetSetting(activity, participant) {
+		if isNewPerformanceFlow(activity) {
+			if !mutengTargetWorkflowOpen(activity) {
+				return fmt.Errorf("当前活动尚未开启目标填写，活动状态为: %s", activity.Status)
+			}
+		} else if activity.Status != "target_setting" && !canSaveNewFlowPlanAfterTargetSetting(activity, participant) {
 			return fmt.Errorf("当前活动状态不允许提交目标，活动状态为: %s", activity.Status)
 		}
 		// 员工提交目标
@@ -7305,7 +7563,11 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 		targetStatus = "pending"
 		participantStatus = "target_pending_approval"
 	case "approve":
-		if activity.Status != "target_approval" {
+		if isNewPerformanceFlow(activity) {
+			if !mutengTargetWorkflowOpen(activity) {
+				return fmt.Errorf("当前活动状态不允许审核目标，活动状态为: %s", activity.Status)
+			}
+		} else if activity.Status != "target_approval" {
 			return fmt.Errorf("当前活动状态不允许审核目标，活动状态为: %s", activity.Status)
 		}
 		// 上级审批通过
@@ -7315,7 +7577,11 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 		targetStatus = "approved"
 		participantStatus = "target_set"
 	case "reject":
-		if activity.Status != "target_approval" {
+		if isNewPerformanceFlow(activity) {
+			if !mutengTargetWorkflowOpen(activity) {
+				return fmt.Errorf("当前活动状态不允许审核目标，活动状态为: %s", activity.Status)
+			}
+		} else if activity.Status != "target_approval" {
 			return fmt.Errorf("当前活动状态不允许审核目标，活动状态为: %s", activity.Status)
 		}
 		// 上级驳回
@@ -7372,7 +7638,22 @@ func (s *PerformanceService) SubmitGoalApproval(participantID uint, action, comm
 		approvalLog.Version = latestLog.Version + 1
 	}
 
-	return s.approvalRepo.Create(approvalLog)
+	if err := s.approvalRepo.Create(approvalLog); err != nil {
+		return err
+	}
+	if action == "submit" && isNewPerformanceFlow(activity) {
+		notifyParticipant := *participant
+		notifyParticipant.Status = participantStatus
+		go func() {
+			if err := s.notifyManagerGoalApprovalReady(*activity, notifyParticipant); err != nil {
+				logrus.Warnf("notify manager target approval ready failed: %v", err)
+			}
+		}()
+	}
+	if action == "approve" && isNewPerformanceFlow(activity) {
+		return s.maybeCompleteMutengActivity(s.db, participant.ActivityID, userID)
+	}
+	return nil
 }
 
 // GetManagerGoals 获取上级下发的目标
@@ -7614,6 +7895,7 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 	var notifyActivity database.PerformanceActivity
 	var notifyParticipant database.PerformanceParticipant
 	shouldNotifyManager := false
+	notifyManagerRecheck := false
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var participant database.PerformanceParticipant
 		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
@@ -7632,7 +7914,18 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 		if participant.IsLocked && !isSelfEditAfterManagerConfirm(participant) {
 			return fmt.Errorf("该参与人的绩效结果已锁定，无法提交自评")
 		}
-		if !canEditSelfEvaluationInActivity(activity.Status) {
+		if isNewPerformanceFlow(&activity) {
+			if !mutengReviewPipelineOpen(&activity) {
+				return fmt.Errorf("当前活动尚未开启员工自评，活动状态为: %s", activity.Status)
+			}
+			switch strings.TrimSpace(participant.Status) {
+			case "target_set", "self_submitted", "manager_submitted", "manager_confirmed", "manager_recheck":
+				// Participant-level progression allows employees who are ready to
+				// continue while colleagues remain in earlier stages.
+			default:
+				return fmt.Errorf("当前参与人状态不允许提交自评，参与人状态为: %s", participant.Status)
+			}
+		} else if !canEditSelfEvaluationInActivity(activity.Status) {
 			return fmt.Errorf("当前活动状态不允许提交自评，活动状态为: %s", activity.Status)
 		}
 		if activity.Status == "self_evaluation" {
@@ -7706,14 +7999,18 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 		participant.SelfSummary = strings.TrimSpace(strings.Join([]string{evaluationGood, evaluationImprovement}, "\n"))
 		participant.SelfEvaluationGood = strings.TrimSpace(evaluationGood)
 		participant.SelfEvaluationImprovement = strings.TrimSpace(evaluationImprovement)
-		shouldNotifyManager = isSelfEditAfterManagerConfirm(previousParticipant)
-		if shouldNotifyManager {
+		notifyManagerRecheck = !isNewPerformanceFlow(&activity) && isSelfEditAfterManagerConfirm(previousParticipant)
+		shouldNotifyManager = notifyManagerRecheck || (isNewPerformanceFlow(&activity) && strings.TrimSpace(previousParticipant.Status) != "self_submitted")
+		if notifyManagerRecheck {
 			participant.Status = "manager_recheck"
 			participant.IsLocked = false
 			participant.LockedAt = nil
 			participant.LockedBy = ""
 			participant.ManagerConfirmedAt = nil
 			participant.ManagerConfirmedBy = ""
+		} else if isNewPerformanceFlow(&activity) {
+			participant.Status = "self_submitted"
+			resetParticipantProgressArtifactsForStatus(&participant, "self_submitted")
 		} else {
 			participant.Status = selfEvaluationStatusAfterSubmit(previousParticipant)
 		}
@@ -7750,8 +8047,14 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 	}
 	if shouldNotifyManager {
 		go func() {
-			if err := s.notifyManagerSelfEvaluationRecheck(notifyActivity, notifyParticipant); err != nil {
-				logrus.Warnf("notify manager self evaluation recheck failed: %v", err)
+			var err error
+			if notifyManagerRecheck {
+				err = s.notifyManagerSelfEvaluationRecheck(notifyActivity, notifyParticipant)
+			} else {
+				err = s.notifyManagerSelfEvaluationSubmitted(notifyActivity, notifyParticipant)
+			}
+			if err != nil {
+				logrus.Warnf("notify manager after self evaluation submission failed: %v", err)
 			}
 		}()
 	}
@@ -7759,7 +8062,10 @@ func (s *PerformanceService) SubmitGoalSelfEvaluation(participantID uint, items 
 }
 
 func (s *PerformanceService) SubmitGoalManagerEvaluation(participantID uint, items []GoalManagerEvaluationItem, bonusItems []GoalManagerEvaluationItem, suggestedLevel, evaluationGood, evaluationImprovement, userID string) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	var notifyActivity database.PerformanceActivity
+	var notifyParticipant database.PerformanceParticipant
+	shouldNotifyDepartment := false
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var participant database.PerformanceParticipant
 		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
 			return fmt.Errorf("参与人不存在: %w", err)
@@ -7769,15 +8075,25 @@ func (s *PerformanceService) SubmitGoalManagerEvaluation(participantID uint, ite
 		if err := s.scopeOrg(tx, "org_id").Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
 			return fmt.Errorf("绩效活动不存在: %w", err)
 		}
+		previousStatus := strings.TrimSpace(participant.Status)
 
-		isManagerRecheckSubmission := isManagerRecheckParticipant(participant)
+		isManagerRecheckSubmission := !isNewPerformanceFlow(&activity) && isManagerRecheckParticipant(participant)
 		if isHRFinalizedParticipant(participant) {
 			return fmt.Errorf("HR已确认或结果已锁定，无法提交上级评分")
 		}
 		if participant.IsLocked && !isManagerRecheckSubmission {
 			return fmt.Errorf("该参与人的绩效结果已锁定，无法提交上级评分")
 		}
-		if isManagerRecheckSubmission {
+		if isNewPerformanceFlow(&activity) {
+			if !mutengReviewPipelineOpen(&activity) {
+				return fmt.Errorf("当前活动尚未开启员工自评，活动状态为: %s", activity.Status)
+			}
+			switch strings.TrimSpace(participant.Status) {
+			case "self_submitted", "manager_submitted", "manager_recheck":
+			default:
+				return fmt.Errorf("当前参与人尚未提交自评或已进入后续节点，参与人状态为: %s", participant.Status)
+			}
+		} else if isManagerRecheckSubmission {
 			if activity.Status != "manager_confirmation" && activity.Status != "hr_confirmation" {
 				return fmt.Errorf("当前活动状态不允许主管复核，活动状态为: %s", activity.Status)
 			}
@@ -7916,8 +8232,27 @@ func (s *PerformanceService) SubmitGoalManagerEvaluation(participantID uint, ite
 				meta["rechecked_after_self_edit"] = true
 			}
 		}
-		return tx.Create(version).Error
+		if err := tx.Create(version).Error; err != nil {
+			return err
+		}
+		if isNewPerformanceFlow(&activity) && previousStatus != "manager_submitted" {
+			notifyActivity = activity
+			notifyParticipant = participant
+			shouldNotifyDepartment = true
+		}
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if shouldNotifyDepartment {
+		go func() {
+			if err := s.notifyDepartmentEvaluationReady(notifyActivity, notifyParticipant); err != nil {
+				logrus.Warnf("notify department evaluation ready failed: %v", err)
+			}
+		}()
+	}
+	return nil
 }
 
 func (s *PerformanceService) SetCompanyFinance(activityID, revenueSign, description, remark, userID string) (*database.PerformanceCompanyFinance, error) {
@@ -8186,7 +8521,7 @@ func (s *PerformanceService) findHRConfirmReminderRecipients(activityOrgID strin
 		Joins("JOIN user_roles ON user_roles.user_id = users.user_id AND user_roles.deleted_at IS NULL").
 		Joins("JOIN role_permissions ON role_permissions.role_id = user_roles.role_id AND role_permissions.deleted_at IS NULL").
 		Joins("JOIN permissions ON permissions.id = role_permissions.permission_id AND permissions.deleted_at IS NULL").
-		Where("permissions.code IN ?", []string{"performance:hr_confirm:submit", "performance:activity:manage"}).
+		Where("permissions.code IN ?", []string{"performance:hr_confirm:submit", "performance:hr_review:submit", "performance:activity:manage"}).
 		Where("user_roles.org_id = ?", orgID).
 		Where("users.org_id = ?", orgID).
 		Where("users.deleted_at IS NULL").

@@ -1,6 +1,6 @@
 ---
 purpose: 绩效管理模块业务规则说明
-last_updated: 2026-07-01
+last_updated: 2026-07-15
 source_of_truth:
   - internal/api/performance_handlers.go（绩效相关 handler）
   - internal/service/performance_service.go（绩效服务）
@@ -40,8 +40,16 @@ update_when:
 - 旧流程状态流：`draft → target_setting → self_evaluation → manager_evaluation → employee_confirmation → manager_confirmation → hr_confirmation → locked → archived`
 - 沐腾科技历史混合活动状态流（空 `activity_kind`，仅兼容存量）：`draft → target_setting → target_approval → self_evaluation → manager_evaluation → department_evaluation → hr_confirmation → employee_confirmation → locked → archived`
 - 沐腾科技新模型目标设定活动（`goal_setting`）：`draft → target_setting → target_approval → locked/archived`
-- 沐腾科技新模型评分活动（`review_scoring`）：`draft/target_setting → self_evaluation → manager_evaluation → department_evaluation → hr_review → result_publish → archived`
-- 沐腾科技新模型评分活动包含员工自评、上级评估、部门/中心评估、HR审核、结果公布；结果公布完成后主绩效考核即完成，可直接归档；不包含旧流程的主管结果确认、HR确认、员工确认节点。
+- 沐腾科技新模型评分活动（`review_scoring`）：管理员仅手动开启双门槛，后续按**参与人独立流水线**推进；活动汇总状态仅用于展示/生命周期，不阻塞个人。
+- **沐腾参与人独立流转（`flow_type=new`，2026-07 起）**：
+  - 管理员只手动开启两个活动门槛：`target_setting`（目标填写）、`self_evaluation`（员工自评）。
+  - 门槛开启后，单个参与人独立流转，不等待其他参与人：`目标提交 → 上级目标审核`；`自评提交 → 上级评分`；`上级评分 → 部门/中心评分`；`部门评分 → HR审核`；`HR审核 → 结果立即公布`。
+  - 删除新版“员工确认”节点；HR 审核事务内原子设置 `hr_confirmed` + `ConfirmedAt/By`，仅解除 `system:unpublished`，结果立即对本人公布。
+  - HR 审核后，该参与人的绩效面谈与申诉**同时开放**（跟进模块按参与人 `hr_confirmed/locked/result_confirmed` 判断，不再要求活动进入 `result_publish`）。
+  - 活动汇总状态：评分活动最后一名有效参与人完成 HR 审核后汇总为 `result_publish`；目标设定活动所有有效参与人目标审核完成后汇总为 `locked`。`inactive` / `removed_from_scope` 不计入完成标准。
+  - 人工屏蔽原因必须保留；幂等调用不得破坏已完成数据；`goal_setting` 不得进入评分/HR 流程。
+  - 历史迁移（启动时 `migrateMutengParticipantPipeline`，仅处理进行中 `flow_type=new`，`locked/archived` 不动）：`employee_confirmed → hr_confirmed`（沿用历史确认时间/人员并视为已公布）；`manager_recheck → self_submitted` 并解除锁定；未公布补 `ResultHidden=true + system:unpublished`；已 `hr_confirmed` 且原因为 `system:unpublished` 时解除系统屏蔽；部分完成 → 活动 `self_evaluation`，全部完成 → `result_publish`；`goal_setting` 的 `target_approval → target_setting`。
+- 沐腾科技新模型评分活动包含员工自评、上级评估、部门/中心评估、HR审核；HR 审核即公布，主考核可在全部人完成后汇总 `result_publish` 并归档；不包含旧流程的主管结果确认、HR确认、员工确认节点。
 - 沐腾科技新模型评分活动创建/编辑时只配置自评时间和主管评分时间，不再配置 `result_confirm_start_at` / `result_confirm_end_at`；这两个字段仅用于旧流程和历史混合活动兼容。
 - 沐腾科技流程的目标审核默认由考核上级（参与人 `manager_id`，来源为员工 `manager_user_id`）处理；具备 `performance:activity:manage` 或 `performance:hr_review:submit` 的管理员/HR 可代审目标审核。目标审核通过后不自动开启自评，由管理员手动开启绩效考核阶段。
 - 旧流程主管确认参与人结果时立即冻结该参与人的绩效结果；HR 确认只作为后续确认/归档节点，不再作为冻结前置条件。
@@ -370,9 +378,10 @@ draft → target_setting → self_evaluation → manager_evaluation → employee
 沐腾科技流程：
 
 ```
-goal_setting：draft → target_setting → target_approval → locked/archived
-review_scoring：draft/target_setting → self_evaluation → manager_evaluation → department_evaluation → hr_review → result_publish → archived
-历史混合活动：draft → target_setting → target_approval → self_evaluation → manager_evaluation → department_evaluation → hr_confirmation → employee_confirmation → locked → archived
+goal_setting：draft → target_setting（管理员开启）→ 参与人独立目标审核 → 全部完成后活动汇总 locked/archived
+review_scoring：draft → target_setting（管理员开启）→ self_evaluation（管理员开启）→ 参与人独立流水线 → 最后一人 HR 审核后活动汇总 result_publish → archived
+  活动层双门槛后，不再要求管理员按阶段推进 manager_evaluation / department_evaluation / hr_review / result_publish
+历史混合活动（迁移前）：draft → target_setting → target_approval → self_evaluation → manager_evaluation → department_evaluation → hr_confirmation → employee_confirmation → locked → archived
 ```
 
 ### Participant 状态流
@@ -383,11 +392,15 @@ review_scoring：draft/target_setting → self_evaluation → manager_evaluation
 pending → target_pending_approval → target_rejected → target_set → self_submitted → manager_submitted → employee_confirmed → manager_confirmed → manager_recheck → hr_confirmed / locked → inactive / removed_from_scope
 ```
 
-沐腾科技流程：
+沐腾科技流程（参与人独立流水线）：
 
 ```
-pending → target_pending_approval → target_rejected → target_set → self_submitted → manager_submitted → manager_confirmed（部门/中心评估完成）→ hr_confirmed（HR审核完成）→ result_confirmed / locked → inactive / removed_from_scope
-历史混合活动仍可能出现 employee_confirmed 状态。
+pending → target_pending_approval → target_rejected → target_set
+  → self_submitted → manager_submitted → manager_confirmed（部门/中心评估完成）
+  → hr_confirmed（HR审核完成 = 结果立即公布，面谈/申诉同时开放）
+  → result_confirmed / locked
+  → inactive / removed_from_scope（不计入活动汇总完成标准）
+历史迁移：employee_confirmed → hr_confirmed；manager_recheck → self_submitted（解锁）
 ```
 
 ### 状态推进规则
@@ -950,7 +963,7 @@ HR审核/确认结果。沐腾新模型 `review_scoring` 在 `hr_review` 阶段�
 
 功能：
 - 个人评分明细、附加考核项、自评与上级评价展示
-- 旧流程展示员工、主管、人力三级确认进度与确认操作；沐腾新模型评分活动不展示结果页流程进度，不提供主管确认、HR确认、员工确认结果操作；绩效面谈、绩效申诉由独立模块体现；历史混合活动仍兼容 HR确认与员工确认
+- 旧流程展示员工、主管、人力三级确认进度与确认操作；沐腾新模型评分活动展示“结果状态”时间线（HR审核、结果公布、面谈开放、申诉开放），不提供员工/主管/HR 三级确认按钮；HR 审核后结果立即公布，面谈与申诉同时开放；历史混合活动迁移后按新独立流水线处理
 - Excel 风格”个人绩效考核表”归档展示
 - 归档/导出模板按流程区分：旧流程使用 PARTB 个人绩效模板；新流程使用“上季度指标完成情况 + 下季度目标计划”模板
 - 新流程同一活动内按 `goal_phase` 区分：`review` 为上一季度/本期绩效考核记录，`plan` 为下一季度目标计划；开启新流程活动时会尝试从上一期活动的 `plan` 承接为本期 `review`
@@ -994,9 +1007,10 @@ HR审核/确认结果。沐腾新模型 `review_scoring` 在 `hr_review` 阶段�
 - 检查钉钉通知是否正常发送
 
 ### 沐腾科技流程阶段卡住
-- 检查目标拟定、目标审核、自评、上级评估、部门/中心评估、HR审核、结果公布等前置阶段是否全部完成
-- 新模型评分活动：部门/中心评估后进入 HR审核，HR审核完成后进入结果公布，结果公布后主考核完成，可直接归档；绩效面谈、绩效申诉由独立模块处理
-- 历史混合活动：部门评分后进入 HR确认，HR确认完成后进入员工确认，不进入旧流程主管确认
+- 先确认管理员是否已开启两个门槛：目标填写（`target_setting`）、员工自评（`self_evaluation`）
+- 沐腾按参与人独立推进，不要用“全员完成某阶段”去卡单人：目标审核/上级评分/部门评分/HR审核均看该参与人状态
+- 新模型评分活动：部门评分完成后该人即可 HR 审核；HR 审核后该人结果立即公布，面谈与申诉同时开放；活动仅在最后一人完成后汇总 `result_publish` 并可归档
+- 若某人结果仍屏蔽：区分 `system:unpublished`（未 HR 审核）与人工屏蔽（`manual:*`，HR 审核也不会自动解除）
 
 ### 目标设定审批失败
 - 检查目标权重是否合计为 100%

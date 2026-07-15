@@ -9,20 +9,27 @@ import (
 )
 
 func TestPerformanceFollowupAllowed(t *testing.T) {
+	participant := &database.PerformanceParticipant{Status: "manager_submitted"}
 	allowedStatuses := []string{"result_publish", "result_confirmed", "locked", "archived", "interview", "appeal"}
 	for _, status := range allowedStatuses {
-		if !performanceFollowupAllowed(&database.PerformanceActivity{Status: status}) {
+		if !performanceFollowupAllowed(participant, &database.PerformanceActivity{Status: status}) {
 			t.Fatalf("performanceFollowupAllowed(%q) = false, want true", status)
 		}
 	}
 
 	blockedStatuses := []string{"draft", "target_setting", "self_evaluation", "manager_evaluation", "hr_review", ""}
 	for _, status := range blockedStatuses {
-		if performanceFollowupAllowed(&database.PerformanceActivity{Status: status}) {
+		if performanceFollowupAllowed(participant, &database.PerformanceActivity{Status: status}) {
 			t.Fatalf("performanceFollowupAllowed(%q) = true, want false", status)
 		}
 	}
-	if performanceFollowupAllowed(nil) {
+	if !performanceFollowupAllowed(
+		&database.PerformanceParticipant{Status: "hr_confirmed"},
+		&database.PerformanceActivity{FlowType: PerformanceFlowNew, Status: "self_evaluation"},
+	) {
+		t.Fatal("published Muteng participant should be allowed to use follow-up modules")
+	}
+	if performanceFollowupAllowed(nil, nil) {
 		t.Fatal("performanceFollowupAllowed(nil) = true, want false")
 	}
 }

@@ -526,11 +526,10 @@ const PERSONAL_ENTRY_ACTIVITY_STATUSES = [
 const PERSONAL_TARGET_STATUSES = ['pending', 'target_pending_approval', 'target_rejected', 'target_set']
 const PERSONAL_SELF_EVAL_STATUSES = ['target_set', 'self_submitted']
 const PERSONAL_RESULT_STATUSES = ['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed']
-const NEW_FLOW_RESULT_ACTIVITY_STATUSES = ['result_publish', 'interview', 'appeal', 'locked', 'result_confirmed', 'archived']
-const MUTENG_RESULT_VISIBILITY_ACTIVITY_STATUSES = ['department_evaluation', 'hr_review', 'result_publish', 'interview', 'appeal', 'locked', 'result_confirmed', 'archived']
 const SELF_EVAL_EDITABLE_ACTIVITY_STATUSES = ['self_evaluation', 'manager_evaluation', 'department_evaluation', 'hr_review', 'result_publish', 'interview', 'appeal', 'employee_confirmation', 'manager_confirmation', 'hr_confirmation', 'result_confirmed']
 const SELF_EVAL_EDITABLE_PARTICIPANT_STATUSES = ['target_set', 'self_submitted', 'manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed']
 const MUTENG_LATE_TARGET_ACTIVITY_STATUSES = ['target_approval', 'self_evaluation', 'manager_evaluation', 'department_evaluation', 'hr_review', 'result_publish', 'interview', 'appeal', 'hr_confirmation', 'employee_confirmation', 'locked', 'result_confirmed', 'archived']
+const MUTENG_REVIEW_PIPELINE_ACTIVITY_STATUSES = ['self_evaluation', 'manager_evaluation', 'department_evaluation', 'hr_review', 'result_publish', 'interview', 'appeal', 'employee_confirmation', 'manager_confirmation', 'hr_confirmation', 'result_confirmed']
 const ACTIVITY_STATUS_FILTER_GROUPS: Record<string, string[]> = {
   [ACTIVITY_STATUS_FILTER_IN_PROGRESS]: IN_PROGRESS_ACTIVITY_STATUSES,
   [ACTIVITY_STATUS_FILTER_CONFIRMED]: CONFIRMED_ACTIVITY_STATUSES,
@@ -546,6 +545,18 @@ function isMutengGoalSettingActivity(activity?: PerformanceActivity | null) {
 
 function isSeparatedMutengReviewActivity(activity?: PerformanceActivity | null) {
   return activity?.flow_type === 'new' && String(activity?.activity_kind || '').trim() === 'review_scoring'
+}
+
+function isMutengReviewPipelineOpen(activity?: PerformanceActivity | null) {
+  return activity?.flow_type === 'new' && !isMutengGoalSettingActivity(activity) && MUTENG_REVIEW_PIPELINE_ACTIVITY_STATUSES.includes(String(activity?.status || '').trim())
+}
+
+function isMutengTargetWorkflowOpen(activity?: PerformanceActivity | null) {
+  return activity?.flow_type === 'new' && !['draft', 'locked', 'archived'].includes(String(activity?.status || '').trim())
+}
+
+function isMutengResultPublished(record?: PerformanceParticipant | null) {
+  return ['hr_confirmed', 'locked', 'result_confirmed'].includes(String(record?.status || '').trim())
 }
 
 function canOpenTargetPlan(activity: PerformanceActivity | null | undefined, participant: PerformanceParticipant | null | undefined) {
@@ -632,8 +643,8 @@ const MUTENG_PARTICIPANT_STATUS_MAP: Record<string, { label: string; color: stri
   self_submitted: { label: '自评已提交', color: 'processing' },
   manager_submitted: { label: '主管评分已完成', color: 'warning' },
   manager_confirmed: { label: '部门评分已完成', color: 'orange' },
-  hr_confirmed: { label: 'HR审核已完成', color: 'purple' },
-  employee_confirmed: { label: '员工已确认', color: 'blue' },
+  hr_confirmed: { label: '结果已公布', color: 'success' },
+  employee_confirmed: { label: '结果已公布', color: 'success' },
   locked: { label: '已锁定', color: 'orange' },
   result_confirmed: { label: '结果已确认', color: 'success' },
   inactive: { label: '已离职', color: 'error' },
@@ -654,14 +665,13 @@ const MUTENG_PARTICIPANT_PROGRESS_STATUSES: PerformanceParticipantStatus[] = [
   'manager_submitted',
   'manager_confirmed',
   'hr_confirmed',
-  'employee_confirmed',
   'result_confirmed',
 ]
 
 const MUTENG_PARTICIPANT_PROGRESS_STATUS_SET = new Set<string>(MUTENG_PARTICIPANT_PROGRESS_STATUSES)
 
 const MUTENG_PARTICIPANT_PROGRESS_STATUS_ALIASES: Partial<Record<PerformanceParticipantStatus, PerformanceParticipantStatus>> = {
-  employee_confirmed: 'manager_submitted',
+  employee_confirmed: 'hr_confirmed',
   manager_recheck: 'manager_submitted',
   locked: 'result_confirmed',
 }
@@ -686,11 +696,11 @@ const MUTENG_ACTIVITY_FLOW = [
   { status: 'target_setting', label: '目标拟定' },
   { status: 'target_approval', label: '目标审核' },
   { status: 'self_evaluation', label: '自评' },
-  { status: 'manager_evaluation', label: '主管评分' },
-  { status: 'department_evaluation', label: '部门评分' },
-  { status: 'hr_confirmation', label: 'HR确认' },
-  { status: 'employee_confirmation', label: '员工确认' },
-  { status: 'archived', label: '锁定/归档' },
+  { status: 'manager_evaluation', label: '上级评估' },
+  { status: 'department_evaluation', label: '部门/中心评估' },
+  { status: 'hr_review', label: 'HR审核' },
+  { status: 'result_publish', label: '结果公布' },
+  { status: 'archived', label: '归档' },
 ]
 
 const MUTENG_GOAL_SETTING_ACTIVITY_FLOW = [
@@ -738,6 +748,9 @@ function getActivityStatusMeta(activity?: PerformanceActivity | null) {
   if (activity?.flow_type !== 'new') return meta
   if (activity.status === 'target_setting') {
     return { ...meta, label: isSeparatedMutengReviewActivity(activity) ? '目标承接/补录' : '目标拟定' }
+  }
+  if (activity.status === 'self_evaluation' && !isMutengGoalSettingActivity(activity)) {
+    return { ...meta, label: '绩效考核进行中' }
   }
   if (activity.status === 'manager_evaluation') return { ...meta, label: '主管评分' }
   return meta
@@ -1081,17 +1094,15 @@ const ParticipantActions = React.memo(function ParticipantActions({
       )
     }
     if (
-      ['department_evaluation', 'hr_confirmation', 'employee_confirmation', 'locked', 'archived', 'hr_review', 'result_publish', 'interview', 'appeal'].includes(activityStatus || '') &&
+      isMutengReviewPipelineOpen(activity) &&
+      ['manager_submitted', 'manager_confirmed'].includes(record.status) &&
       hasAnyPermission('performance:department_eval:submit', 'performance:level_adjust:manage', 'performance:activity:manage')
     ) {
       items.push(
         <Button key="department-eval" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-department-eval-${record.id}`} onClick={openDepartmentEvaluationModal}>部门评分</Button>,
       )
     }
-    if (
-      MUTENG_RESULT_VISIBILITY_ACTIVITY_STATUSES.includes(activityStatus || '') &&
-      hasPermission('performance:result_visibility:manage')
-    ) {
+    if (isMutengResultPublished(record) && hasPermission('performance:result_visibility:manage')) {
       items.push(
         <Button key="visibility" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-visibility-${record.id}`} onClick={openResultVisibilityModal}>
           {record.result_hidden ? '解除屏蔽' : '屏蔽'}
@@ -1143,8 +1154,11 @@ const ParticipantActions = React.memo(function ParticipantActions({
     )
   }
 
-  const canSelfEvaluateRecord = SELF_EVAL_EDITABLE_ACTIVITY_STATUSES.includes(activityStatus || '') &&
-    SELF_EVAL_EDITABLE_PARTICIPANT_STATUSES.includes(record.status)
+  const canSelfEvaluateRecord = (
+    isMutengFlow
+      ? isMutengReviewPipelineOpen(activity)
+      : SELF_EVAL_EDITABLE_ACTIVITY_STATUSES.includes(activityStatus || '')
+  ) && SELF_EVAL_EDITABLE_PARTICIPANT_STATUSES.includes(record.status)
 
   if (canOpenTargetPlan(activity, record) && hasPermission('performance:goal:manage')) {
     const isSeparatedReviewActivity = isSeparatedMutengReviewActivity(activity)
@@ -1172,7 +1186,11 @@ const ParticipantActions = React.memo(function ParticipantActions({
     )
   }
 
-  if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && hasPermission('performance:manager_eval:submit')) {
+  if (
+    (isMutengFlow ? isMutengReviewPipelineOpen(activity) : activityStatus === 'manager_evaluation') &&
+    ['self_submitted', 'manager_submitted', 'manager_recheck'].includes(record.status) &&
+    hasPermission('performance:manager_eval:submit')
+  ) {
     const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
     links.push(
       managerEvalBlockedReason ? (
@@ -1206,7 +1224,10 @@ const ParticipantActions = React.memo(function ParticipantActions({
     )
   }
 
-  if (['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && hasPermission('performance:result:view')) {
+  if (
+    (isMutengFlow ? isMutengResultPublished(record) : ['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status)) &&
+    hasPermission('performance:result:view')
+  ) {
     links.push(
       <Button key="result" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-result-${record.id}`}
         onClick={() => navigateTo(`/performance-result/${activityId}/${record.id}`)}
@@ -1222,7 +1243,7 @@ const ParticipantActions = React.memo(function ParticipantActions({
     )
   }
 
-  const canReviewByHR = activityStatus === 'hr_review' && record.status === 'manager_confirmed' && hasAnyPermission('performance:hr_review:submit', 'performance:activity:manage')
+  const canReviewByHR = isMutengFlow && isMutengReviewPipelineOpen(activity) && record.status === 'manager_confirmed' && hasAnyPermission('performance:hr_review:submit', 'performance:activity:manage')
   const canConfirmByHR = activityStatus === 'hr_confirmation' && record.status === 'manager_confirmed' && hasPermission('performance:hr_confirm:submit')
   if (canReviewByHR || canConfirmByHR) {
     const hrActionLabel = canReviewByHR ? 'HR审核' : 'HR确认'
@@ -1241,7 +1262,11 @@ const ParticipantActions = React.memo(function ParticipantActions({
     )
   }
 
-  if (activityStatus === 'target_approval' && record.status === 'target_pending_approval' && hasAnyPermission('performance:goal:manage', 'performance:hr_review:submit', 'performance:activity:manage')) {
+  if (
+    (isMutengFlow ? isMutengTargetWorkflowOpen(activity) : activityStatus === 'target_approval') &&
+    record.status === 'target_pending_approval' &&
+    hasAnyPermission('performance:goal:manage', 'performance:hr_review:submit', 'performance:activity:manage')
+  ) {
     links.push(
       <Button key="approve" size="small" type="link" style={{ ...participantActionButtonStyle, color: 'var(--color-info)' }} data-testid={`performance-participant-approve-${record.id}`}
         onClick={async () => {
@@ -2029,18 +2054,6 @@ const PerformanceOverview: React.FC = () => {
   const renderDetailActivityManageButton = useCallback((button: React.ReactElement) =>
     renderHiddenPermissionButton('performance:activity:manage', button), [renderHiddenPermissionButton])
 
-  const renderDetailAnyPermissionButton = useCallback((permissionCodes: string[], button: React.ReactElement) =>
-    hasAnyPermission(...permissionCodes) ? button : null, [])
-
-  const renderDetailResultPublishButton = useCallback((button: React.ReactElement) =>
-    renderDetailAnyPermissionButton(['performance:activity:manage', 'performance:result_publish:manage'], button), [renderDetailAnyPermissionButton])
-
-  const renderDetailDepartmentEvalButton = useCallback((button: React.ReactElement) =>
-    renderDetailAnyPermissionButton(['performance:activity:manage', 'performance:department_eval:submit'], button), [renderDetailAnyPermissionButton])
-
-  const renderDetailHRReviewButton = useCallback((button: React.ReactElement) =>
-    renderDetailAnyPermissionButton(['performance:activity:manage', 'performance:department_eval:submit', 'performance:hr_review:submit'], button), [renderDetailAnyPermissionButton])
-
   const renderDetailDistributionButton = useCallback((button: React.ReactElement) =>
     renderHiddenPermissionButton('performance:distribution:manage', button), [renderHiddenPermissionButton])
 
@@ -2215,6 +2228,17 @@ const PerformanceOverview: React.FC = () => {
         { title: '已锁定', value: summary.locked_count || 0, color: '#b45309', bg: '#fef3c7' },
       ]
     }
+    if (isMutengFlow) {
+      const countStatus = (...statuses: string[]) => participants.filter(record => statuses.includes(record.status)).length
+      return [
+        { title: '参与人数', value: summary.total_participants, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
+        { title: '待员工自评', value: countStatus('target_set'), color: '#64748b', bg: '#f1f5f9' },
+        { title: '待上级评分', value: countStatus('self_submitted', 'manager_recheck'), color: '#0369a1', bg: '#e0f2fe' },
+        { title: '待部门评分', value: countStatus('manager_submitted'), color: '#b45309', bg: '#fef3c7' },
+        { title: '待HR审核', value: countStatus('manager_confirmed'), color: '#7e22ce', bg: '#f3e8ff' },
+        { title: '结果已公布', value: countStatus('hr_confirmed', 'employee_confirmed', 'locked', 'result_confirmed'), color: 'var(--color-success)', bg: '#dcfce7' },
+      ]
+    }
     const employeeConfirmedCount = (summary.employee_confirmed_count || 0)
     return [
       { title: '参与人数', value: summary.total_participants, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
@@ -2295,52 +2319,35 @@ const PerformanceOverview: React.FC = () => {
       }
     }
     if (activity.status === 'target_setting') {
-      actions.push(activityManage(
-        isSeparatedMutengReviewActivity(activity)
-          ? <Button key="open-self-evaluation" type="primary" size="small" data-testid={`performance-detail-open-self-${activity.id}`} onClick={() => handleActivityAction('open-self-evaluation', activity)}>开启自评</Button>
-          : isMutengFlow
-          ? <Button key="open-target-approval" type="primary" size="small" data-testid={`performance-detail-open-target-approval-${activity.id}`} onClick={() => handleActivityAction('open-target-approval', activity)}>开启目标审核</Button>
-          : <Button key="open-self-evaluation" type="primary" size="small" data-testid={`performance-detail-open-self-${activity.id}`} onClick={() => handleActivityAction('open-self-evaluation', activity)}>开启自评</Button>,
-      ))
+      if (!isMutengGoalSettingActivity(activity)) {
+        actions.push(activityManage(
+          <Button key="open-self-evaluation" type="primary" size="small" data-testid={`performance-detail-open-self-${activity.id}`} onClick={() => handleActivityAction('open-self-evaluation', activity)}>开启自评</Button>,
+        ))
+      }
     }
-    if (isMutengGoalSettingActivity(activity) && activity.status === 'target_approval') {
-      actions.push(activityManage(<Button key="lock" type="primary" danger size="small" data-testid={`performance-detail-lock-${activity.id}`} onClick={() => handleActivityAction('lock', activity)}>锁定活动</Button>))
-    } else if (isMutengFlow && activity.status === 'target_approval') {
+    if (isMutengFlow && !isMutengGoalSettingActivity(activity) && activity.status === 'target_approval') {
       actions.push(activityManage(<Button key="open-self-evaluation" type="primary" size="small" data-testid={`performance-detail-open-self-${activity.id}`} onClick={() => handleActivityAction('open-self-evaluation', activity)}>开启自评</Button>))
     }
-    if (activity.status === 'self_evaluation') {
+    if (isMutengFlow && isMutengReviewPipelineOpen(activity)) {
+      actions.push(
+        activityManage(<Button key="send-self-reminder" size="small" data-testid={`performance-detail-remind-self-${activity.id}`} onClick={() => handleSendSelfEvalReminder(activity)}>提醒自评</Button>),
+        renderDetailDistributionButton(<Button key="distribution" size="small" data-testid={`performance-detail-distribution-${activity.id}`} onClick={() => setDistributionModalVisible(true)}>强制分布</Button>),
+        renderDetailManagerEvalButton(<Button key="batch-eval" size="small" data-testid={`performance-detail-batch-eval-${activity.id}`} onClick={openBatchEvalModal}>批量评分</Button>),
+        activityManage(<Button key="send-manager-reminder" size="small" data-testid={`performance-detail-remind-manager-${activity.id}`} onClick={() => handleSendManagerEvalReminder(activity)}>提醒评分</Button>),
+      )
+    } else if (activity.status === 'self_evaluation') {
       actions.push(
         activityManage(<Button key="open-manager-evaluation" type="primary" size="small" data-testid={`performance-detail-open-manager-${activity.id}`} onClick={() => handleActivityAction('open-manager-evaluation', activity)}>开启主管评分</Button>),
         activityManage(<Button key="send-self-reminder" size="small" data-testid={`performance-detail-remind-self-${activity.id}`} onClick={() => handleSendSelfEvalReminder(activity)}>提醒自评</Button>),
       )
     }
-    if (activity.status === 'manager_evaluation') {
+    if (!isMutengFlow && activity.status === 'manager_evaluation') {
       actions.push(
-        isMutengFlow
-          ? renderDetailDepartmentEvalButton(<Button key="open-department-evaluation" type="primary" size="small" data-testid={`performance-detail-open-department-${activity.id}`} onClick={() => handleActivityAction('open-department-evaluation', activity)}>开启部门评分</Button>)
-          : activityManage(<Button key="open-employee-confirmation" type="primary" size="small" data-testid={`performance-detail-open-employee-confirm-${activity.id}`} onClick={() => handleActivityAction('open-employee-confirmation', activity)}>开启员工确认</Button>),
+        activityManage(<Button key="open-employee-confirmation" type="primary" size="small" data-testid={`performance-detail-open-employee-confirm-${activity.id}`} onClick={() => handleActivityAction('open-employee-confirmation', activity)}>开启员工确认</Button>),
         renderDetailDistributionButton(<Button key="distribution" size="small" data-testid={`performance-detail-distribution-${activity.id}`} onClick={() => setDistributionModalVisible(true)}>强制分布</Button>),
         renderDetailManagerEvalButton(<Button key="batch-eval" size="small" data-testid={`performance-detail-batch-eval-${activity.id}`} onClick={openBatchEvalModal}>批量评分</Button>),
         activityManage(<Button key="send-manager-reminder" size="small" data-testid={`performance-detail-remind-manager-${activity.id}`} onClick={() => handleSendManagerEvalReminder(activity)}>提醒评分</Button>),
       )
-    }
-    if (isMutengFlow && activity.status === 'department_evaluation') {
-      actions.push(
-        renderDetailHRReviewButton(<Button key="open-hr-review" type="primary" size="small" data-testid={`performance-detail-open-hr-review-${activity.id}`} onClick={() => handleActivityAction('open-hr-review', activity)}>开启HR审核</Button>),
-        renderDetailDistributionButton(<Button key="distribution" size="small" data-testid={`performance-detail-distribution-${activity.id}`} onClick={() => setDistributionModalVisible(true)}>强制分布</Button>),
-      )
-    }
-    if (isMutengFlow && !isSeparatedMutengActivity(activity) && activity.status === 'hr_confirmation') {
-      actions.push(
-        activityManage(<Button key="send-hr-reminder" size="small" data-testid={`performance-detail-remind-hr-${activity.id}`} onClick={() => handleSendHRConfirmReminder(activity)}>提醒HR确认</Button>),
-        activityManage(<Button key="open-employee-confirmation" type="primary" size="small" data-testid={`performance-detail-open-employee-confirm-${activity.id}`} onClick={() => handleActivityAction('open-employee-confirmation', activity)}>开启员工确认</Button>),
-      )
-    }
-    if (isMutengFlow && !isSeparatedMutengActivity(activity) && activity.status === 'employee_confirmation') {
-      actions.push(activityManage(<Button key="lock" type="primary" danger size="small" data-testid={`performance-detail-lock-${activity.id}`} onClick={() => handleActivityAction('lock', activity)}>锁定活动</Button>))
-    }
-    if (isMutengFlow && activity.status === 'hr_review') {
-      actions.push(renderDetailResultPublishButton(<Button key="open-result-publish" type="primary" size="small" data-testid={`performance-detail-open-result-publish-${activity.id}`} onClick={() => handleActivityAction('open-result-publish', activity)}>开启结果公布</Button>))
     }
     if (!isMutengFlow && activity.status === 'employee_confirmation') {
       actions.push(activityManage(<Button key="open-manager-confirmation" type="primary" size="small" data-testid={`performance-detail-open-manager-confirm-${activity.id}`} onClick={() => handleActivityAction('open-manager-confirmation', activity)}>开启主管确认</Button>))
@@ -2468,8 +2475,7 @@ const PerformanceOverview: React.FC = () => {
 
     const canViewNewFlowResult = activity.flow_type === 'new' &&
       !isMutengGoalSettingActivity(activity) &&
-      NEW_FLOW_RESULT_ACTIVITY_STATUSES.includes(activity.status) &&
-      ['manager_submitted', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'employee_confirmed', 'locked', 'result_confirmed'].includes(participant.status)
+      isMutengResultPublished(participant)
     const canViewLegacyResult = activity.flow_type !== 'new' && PERSONAL_RESULT_STATUSES.includes(participant.status)
 
     if (participant.result_hidden && (canViewLegacyResult || canViewNewFlowResult)) {
@@ -2477,10 +2483,7 @@ const PerformanceOverview: React.FC = () => {
     }
 
     if (canViewLegacyResult || canViewNewFlowResult) {
-      const resultLabel = (
-        (activity.flow_type !== 'new' && activity.status === 'employee_confirmation' && participant.status === 'manager_submitted') ||
-        (activity.flow_type === 'new' && !isSeparatedMutengActivity(activity) && activity.status === 'employee_confirmation' && participant.status === 'hr_confirmed')
-      )
+      const resultLabel = activity.flow_type !== 'new' && activity.status === 'employee_confirmation' && participant.status === 'manager_submitted'
         ? '确认结果'
         : '查看结果'
       return renderPermissionButton(
@@ -2737,7 +2740,7 @@ const PerformanceOverview: React.FC = () => {
     const links: React.ReactNode[] = []
     const linkStyle = { fontSize: 'var(--font-size-sm)', padding: '0 2px' }
 
-    if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status)) {
+    if ((isMutengTargetWorkflowOpen(currentActivity) || activityStatus === 'target_setting') && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status)) {
       links.push(renderPermissionButton(
         'performance:goal:manage',
         <Button key="target" size="small" type="link" style={linkStyle} onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}`)}>目标</Button>,
@@ -2763,7 +2766,7 @@ const PerformanceOverview: React.FC = () => {
       ))
     }
 
-    if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status)) {
+    if ((isMutengReviewPipelineOpen(currentActivity) || activityStatus === 'manager_evaluation') && ['self_submitted', 'manager_submitted', 'manager_recheck'].includes(record.status)) {
       const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
       links.push(renderPermissionButton(
         'performance:manager_eval:submit',
@@ -2915,7 +2918,7 @@ const PerformanceOverview: React.FC = () => {
           <Button key="manager" size="small" type="link" style={linkStyle} onClick={() => openAssessmentManagerModal(record)}>调上级</Button>,
         ))
 
-        if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && !hasPermission('performance:goal:manage')) {
+        if ((isMutengTargetWorkflowOpen(currentActivity) || activityStatus === 'target_setting') && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && !hasPermission('performance:goal:manage')) {
           links.push(renderPermissionButton('performance:goal:manage', <Button key="target-disabled" size="small" type="link" style={linkStyle}>目标</Button>))
         }
         const canSelfEvaluateRecord = SELF_EVAL_EDITABLE_ACTIVITY_STATUSES.includes(activityStatus || '') &&
@@ -2923,13 +2926,15 @@ const PerformanceOverview: React.FC = () => {
         if (canSelfEvaluateRecord && !hasPermission('performance:self_eval:submit')) {
           links.push(renderPermissionButton('performance:self_eval:submit', <Button key="self-disabled" size="small" type="link" style={linkStyle}>自评</Button>))
         }
-        if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && !hasPermission('performance:manager_eval:submit')) {
+        if ((isMutengReviewPipelineOpen(currentActivity) || activityStatus === 'manager_evaluation') && ['self_submitted', 'manager_submitted', 'manager_recheck'].includes(record.status) && !hasPermission('performance:manager_eval:submit')) {
           links.push(renderPermissionButton('performance:manager_eval:submit', <Button key="mgr-disabled" size="small" type="link" style={linkStyle}>评分</Button>))
         }
-        if (['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && !hasPermission('performance:result:view')) {
+        if ((currentActivity?.flow_type === 'new' ? isMutengResultPublished(record) : PERSONAL_RESULT_STATUSES.includes(record.status)) && !hasPermission('performance:result:view')) {
           links.push(renderPermissionButton('performance:result:view', <Button key="result-disabled" size="small" type="link" style={linkStyle}>结果</Button>))
         }
-        if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && !hasPermission('performance:hr_confirm:submit')) {
+        if (currentActivity?.flow_type === 'new' && isMutengReviewPipelineOpen(currentActivity) && record.status === 'manager_confirmed' && !hasAnyPermission('performance:hr_review:submit', 'performance:activity:manage')) {
+          links.push(renderPermissionButton('performance:hr_review:submit', <Button key="hr-review-disabled" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }}>HR审核</Button>))
+        } else if (currentActivity?.flow_type !== 'new' && currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && !hasPermission('performance:hr_confirm:submit')) {
           links.push(renderPermissionButton('performance:hr_confirm:submit', <Button key="hr-confirm-disabled" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }}>HR确认</Button>))
         }
         if (record.status === 'target_pending_approval' && !hasPermission('performance:goal:manage')) {
@@ -2938,7 +2943,7 @@ const PerformanceOverview: React.FC = () => {
         }
 
         // 目标设定：活动必须处于 target_setting 状态，且参与人状态允许
-        if (activityStatus === 'target_setting' && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && hasPermission('performance:goal:manage')) {
+        if ((isMutengTargetWorkflowOpen(currentActivity) || activityStatus === 'target_setting') && ['pending', 'target_pending_approval', 'target_rejected', 'target_set'].includes(record.status) && hasPermission('performance:goal:manage')) {
           links.push(
             <Button key="target" size="small" type="link" style={linkStyle} data-testid={`performance-participant-target-${record.id}`}
               onClick={() => navigate(`/performance-goal-setting/${activityId}/${record.id}`)}
@@ -2967,7 +2972,7 @@ const PerformanceOverview: React.FC = () => {
           )
         }
         // 主管评分：活动必须处于 manager_evaluation 状态，且参与人状态允许
-        if (activityStatus === 'manager_evaluation' && ['self_submitted', 'manager_submitted'].includes(record.status) && hasPermission('performance:manager_eval:submit')) {
+        if ((isMutengReviewPipelineOpen(currentActivity) || activityStatus === 'manager_evaluation') && ['self_submitted', 'manager_submitted', 'manager_recheck'].includes(record.status) && hasPermission('performance:manager_eval:submit')) {
           const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
           links.push(
             managerEvalBlockedReason ? (
@@ -3003,14 +3008,28 @@ const PerformanceOverview: React.FC = () => {
             )
           }
         }
-        if (['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status) && hasPermission('performance:result:view')) {
+        if ((currentActivity?.flow_type === 'new' ? isMutengResultPublished(record) : PERSONAL_RESULT_STATUSES.includes(record.status)) && hasPermission('performance:result:view')) {
           links.push(
             <Button key="result" size="small" type="link" style={linkStyle} data-testid={`performance-participant-result-${record.id}`}
               onClick={() => navigate(`/performance-result/${activityId}/${record.id}`)}
             >结果</Button>
           )
         }
-        if (currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && hasPermission('performance:hr_confirm:submit')) {
+        if (currentActivity?.flow_type === 'new' && isMutengReviewPipelineOpen(currentActivity) && record.status === 'manager_confirmed' && hasAnyPermission('performance:hr_review:submit', 'performance:activity:manage')) {
+          links.push(
+            <Button key="hr-review" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }} data-testid={`performance-participant-hr-confirm-${record.id}`}
+              onClick={async () => {
+                try {
+                  await performanceAPI.confirmHRResult(record.id)
+                  message.success('HR审核完成，结果已公布')
+                  if (currentActivity) loadActivityDetail(currentActivity)
+                } catch (err: any) {
+                  message.error(err?.response?.data?.message || 'HR审核失败')
+                }
+              }}
+            >HR审核</Button>
+          )
+        } else if (currentActivity?.flow_type !== 'new' && currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && hasPermission('performance:hr_confirm:submit')) {
           links.push(
             <Button key="hr-confirm" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }} data-testid={`performance-participant-hr-confirm-${record.id}`}
               onClick={async () => {

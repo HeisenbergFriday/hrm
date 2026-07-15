@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"golang.org/x/crypto/bcrypt"
@@ -1237,6 +1238,9 @@ func migrate() error {
 	if err := migratePerformanceParticipantAssessmentManagerSchema(); err != nil {
 		return err
 	}
+	if err := migrateMutengParticipantPipeline(); err != nil {
+		return err
+	}
 
 	return cleanupDeletedWeekScheduleRules()
 }
@@ -1311,6 +1315,214 @@ func migratePerformanceParticipantAssessmentManagerSchema() error {
 		return err
 	}
 	return nil
+}
+
+// migrateMutengParticipantPipeline converts in-progress Muteng activities from
+// the historical aggregate stage flow to participant-level progression. It is
+// intentionally idempotent and leaves locked/archived activities untouched.
+func migrateMutengParticipantPipeline() error {
+	if !DB.Migrator().HasTable(&PerformanceActivity{}) || !DB.Migrator().HasTable(&PerformanceParticipant{}) {
+		return nil
+	}
+
+	activeStatuses := mutengParticipantPipelineActiveActivityStatuses()
+	var activities []PerformanceActivity
+	if err := DB.Where("flow_type = ? AND status IN ? AND deleted_at IS NULL", "new", activeStatuses).
+		Find(&activities).Error; err != nil {
+		return err
+	}
+
+	for i := range activities {
+		activity := activities[i]
+		if err := DB.Transaction(func(tx *gorm.DB) error {
+			var participants []PerformanceParticipant
+			if err := tx.Where("activity_id = ? AND deleted_at IS NULL", activity.ID).Find(&participants).Error; err != nil {
+				return err
+			}
+
+			now := time.Now()
+			activeCount := 0
+			completedCount := 0
+			for j := range participants {
+				participant := &participants[j]
+				result := buildMutengParticipantPipelineUpdates(mutengParticipantPipelineInput{
+					Status:              participant.Status,
+					ResultHidden:        participant.ResultHidden,
+					ResultHiddenReason:  participant.ResultHiddenReason,
+					HRConfirmedAt:       participant.HRConfirmedAt,
+					HRConfirmedBy:       participant.HRConfirmedBy,
+					EmployeeConfirmedAt: participant.EmployeeConfirmedAt,
+					EmployeeConfirmedBy: participant.EmployeeConfirmedBy,
+					ConfirmedAt:         participant.ConfirmedAt,
+					ConfirmedBy:         participant.ConfirmedBy,
+				}, now)
+				if result.CountedActive {
+					activeCount++
+				}
+				if result.CountedCompleted {
+					completedCount++
+				}
+				if len(result.Updates) == 0 {
+					continue
+				}
+				if err := tx.Model(&PerformanceParticipant{}).Where("id = ?", participant.ID).Updates(result.Updates).Error; err != nil {
+					return err
+				}
+			}
+
+			nextStatus := migrateMutengActivityAggregateStatus(activity.ActivityKind, activity.Status, activeCount, completedCount)
+			if nextStatus != activity.Status {
+				return tx.Model(&PerformanceActivity{}).Where("id = ?", activity.ID).Updates(map[string]interface{}{
+					"status":     nextStatus,
+					"updated_by": "system:muteng-participant-pipeline",
+				}).Error
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mutengParticipantPipelineActiveActivityStatuses() []string {
+	return []string{
+		"target_setting", "target_approval", "self_evaluation", "manager_evaluation",
+		"department_evaluation", "hr_review", "employee_confirmation",
+		"manager_confirmation", "hr_confirmation", "result_publish",
+	}
+}
+
+// mutengParticipantPipelineInput is the minimal participant snapshot used by the
+// pure migration mapper. Keeping it pure lets unit tests cover the historical
+// status remaps without a live database.
+type mutengParticipantPipelineInput struct {
+	Status              string
+	ResultHidden        bool
+	ResultHiddenReason  string
+	HRConfirmedAt       *time.Time
+	HRConfirmedBy       string
+	EmployeeConfirmedAt *time.Time
+	EmployeeConfirmedBy string
+	ConfirmedAt         *time.Time
+	ConfirmedBy         string
+}
+
+type mutengParticipantPipelineResult struct {
+	Status           string
+	Updates          map[string]interface{}
+	CountedActive    bool
+	CountedCompleted bool
+}
+
+// buildMutengParticipantPipelineUpdates maps one participant into the new
+// Muteng independent-pipeline shape. Semantics must stay identical to the
+// original migration:
+//   - inactive / removed_from_scope are ignored for aggregate completion
+//   - employee_confirmed becomes hr_confirmed (already published historically)
+//   - manager_recheck becomes self_submitted and unlocks
+//   - only system:unpublished is auto-cleared on published participants
+//   - manual hide reasons are preserved
+//   - unfinished participants without a hide flag receive system:unpublished
+func buildMutengParticipantPipelineUpdates(participant mutengParticipantPipelineInput, now time.Time) mutengParticipantPipelineResult {
+	status := strings.TrimSpace(participant.Status)
+	if status == "inactive" || status == "removed_from_scope" {
+		return mutengParticipantPipelineResult{}
+	}
+
+	result := mutengParticipantPipelineResult{
+		Status:        status,
+		Updates:       map[string]interface{}{},
+		CountedActive: true,
+	}
+
+	if status == "employee_confirmed" {
+		// Historical Muteng employee confirmation happened only after
+		// HR confirmation, so it is equivalent to a published result.
+		status = "hr_confirmed"
+		result.Status = status
+		result.Updates["status"] = status
+		if participant.HRConfirmedAt == nil {
+			publishedAt := participant.EmployeeConfirmedAt
+			if publishedAt == nil {
+				publishedAt = participant.ConfirmedAt
+			}
+			if publishedAt == nil {
+				publishedAt = &now
+			}
+			result.Updates["hr_confirmed_at"] = publishedAt
+		}
+		if strings.TrimSpace(participant.HRConfirmedBy) == "" {
+			result.Updates["hr_confirmed_by"] = firstNonEmptyString(participant.EmployeeConfirmedBy, participant.ConfirmedBy, "system")
+		}
+	}
+	if status == "manager_recheck" {
+		status = "self_submitted"
+		result.Status = status
+		result.Updates["status"] = status
+		result.Updates["is_locked"] = false
+		result.Updates["locked_at"] = nil
+		result.Updates["locked_by"] = ""
+	}
+	if status == "hr_confirmed" {
+		result.CountedCompleted = true
+		if participant.ResultHidden && strings.TrimSpace(participant.ResultHiddenReason) == "system:unpublished" {
+			result.Updates["result_hidden"] = false
+			result.Updates["result_hidden_reason"] = ""
+			result.Updates["result_hidden_at"] = nil
+			result.Updates["result_hidden_by"] = ""
+		}
+		if participant.ConfirmedAt == nil {
+			publishedAt := participant.HRConfirmedAt
+			if value, ok := result.Updates["hr_confirmed_at"].(*time.Time); ok {
+				publishedAt = value
+			}
+			if publishedAt == nil {
+				publishedAt = &now
+			}
+			result.Updates["confirmed_at"] = publishedAt
+			// Keep original firstNonEmptyString argument order for confirmed_by.
+			result.Updates["confirmed_by"] = firstNonEmptyString(participant.HRConfirmedBy, participant.EmployeeConfirmedBy, participant.ConfirmedBy, "system")
+		}
+	} else if status == "locked" || status == "result_confirmed" {
+		result.CountedCompleted = true
+	} else if !participant.ResultHidden {
+		result.Updates["result_hidden"] = true
+		result.Updates["result_hidden_reason"] = "system:unpublished"
+	}
+
+	if len(result.Updates) > 0 {
+		result.Updates["updated_by"] = "system:muteng-participant-pipeline"
+	}
+	return result
+}
+
+// migrateMutengActivityAggregateStatus decides the display/lifecycle activity
+// status after participant remaps. It never blocks individual progress.
+func migrateMutengActivityAggregateStatus(activityKind, currentStatus string, activeCount, completedCount int) string {
+	nextStatus := strings.TrimSpace(currentStatus)
+	if strings.TrimSpace(activityKind) == "goal_setting" {
+		if nextStatus == "target_approval" {
+			return "target_setting"
+		}
+		return nextStatus
+	}
+	if activeCount > 0 && completedCount == activeCount {
+		return "result_publish"
+	}
+	if nextStatus != "target_setting" {
+		return "self_evaluation"
+	}
+	return nextStatus
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func migratePerformanceReviewVersionSchema() error {
@@ -1463,8 +1675,60 @@ func migrateMultitenantUniqueIndexes() error {
 	if err := createIndexIfMissing("sync_statuses", "idx_org_sync_type", true, "org_id", "type"); err != nil {
 		return err
 	}
+	if err := migrateApprovalsOrgProcessUniqueIndex(); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+// migrateApprovalsOrgProcessUniqueIndex 将 approvals.process_id 单列唯一索引
+// 收口为 (org_id, process_id) 复合唯一，避免跨企业 process_id 冲突。
+func migrateApprovalsOrgProcessUniqueIndex() error {
+	if DB == nil || !DB.Migrator().HasTable(&Approval{}) {
+		return nil
+	}
+
+	// 历史空 org_id 先归一到 default，避免建复合唯一索引失败。
+	if err := DB.Exec(`
+		UPDATE approvals
+		SET org_id = 'default'
+		WHERE org_id IS NULL OR org_id = ''
+	`).Error; err != nil {
+		return err
+	}
+
+	// 探测并删除 process_id 单列唯一索引（GORM/历史命名可能不同）。
+	type indexRow struct {
+		IndexName string
+	}
+	var rows []indexRow
+	if err := DB.Raw(`
+		SELECT INDEX_NAME AS index_name
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'approvals'
+		  AND NON_UNIQUE = 0
+		  AND INDEX_NAME <> 'PRIMARY'
+		GROUP BY INDEX_NAME
+		HAVING COUNT(*) = 1
+		   AND MAX(COLUMN_NAME) = 'process_id'
+	`).Scan(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := dropIndexIfExists("approvals", row.IndexName); err != nil {
+			return err
+		}
+	}
+	// 兼容常见固定命名。
+	for _, name := range []string{"uni_approvals_process_id", "process_id", "idx_approvals_process_id"} {
+		if err := dropIndexIfExists("approvals", name); err != nil {
+			return err
+		}
+	}
+
+	return createIndexIfMissing("approvals", "idx_approvals_org_process", true, "org_id", "process_id")
 }
 
 func dropIndexIfExists(table, indexName string) error {
