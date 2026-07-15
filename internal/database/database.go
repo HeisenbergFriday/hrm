@@ -1166,7 +1166,6 @@ func migrate() error {
 		&Attendance{},
 		&Approval{},
 		&ApprovalTemplate{},
-		&DingTalkEventLog{},
 		&Role{},
 		&Permission{},
 		&RolePermission{},
