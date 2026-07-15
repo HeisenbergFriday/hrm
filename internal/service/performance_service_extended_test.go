@@ -904,8 +904,8 @@ func TestConfirmHRResultWrongActivityStatus(t *testing.T) {
 		},
 		performanceActivityResponse("self_evaluation", ""),
 	)
-	if err := svc.ConfirmHRResult(1, "hr-1"); err == nil {
-		t.Fatalf("ConfirmHRResult() wrong activity status expected error")
+	if err := svc.ConfirmHRResult(1, "hr-1"); err == nil || !strings.Contains(err.Error(), "尚未进入HR确认阶段") {
+		t.Fatalf("ConfirmHRResult() old flow error = %v, want aggregate HR confirmation stage rejection", err)
 	}
 }
 
@@ -919,10 +919,10 @@ func TestConfirmHRResultRejectsWrongNewFlowActivityStatus(t *testing.T) {
 				performanceParticipantStubRow(1, "manager_confirmed", "", 0, 90, "A", false, nil, now, nil),
 			},
 		},
-		newFlowPerformanceActivityResponse("appeal", ""),
+		newFlowPerformanceActivityResponse("draft", ""),
 	)
-	if err := svc.ConfirmHRResult(1, "hr-1"); err == nil || !strings.Contains(err.Error(), "活动尚未进入") || !strings.Contains(err.Error(), "HR确认阶段") {
-		t.Fatalf("ConfirmHRResult() new flow error = %v, want HR confirmation stage rejection", err)
+	if err := svc.ConfirmHRResult(1, "hr-1"); err == nil || !strings.Contains(err.Error(), "尚未开启员工自评") {
+		t.Fatalf("ConfirmHRResult() new flow error = %v, want self-evaluation gate rejection", err)
 	}
 }
 

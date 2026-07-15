@@ -331,31 +331,37 @@ describe('PerformanceResultView 交互测试', () => {
       expect(screen.queryByTestId('performance-result-confirm-employee')).not.toBeInTheDocument()
     })
 
-    it('新流程员工确认阶段可调用员工确认', async () => {
-      const user = userEvent.setup()
+    it('新流程HR审核后同时显示结果公布、面谈和申诉开放', async () => {
       mockGetParticipant.mockResolvedValue({
         data: {
-          participant: makeParticipant({ status: 'hr_confirmed', hr_confirmed_at: '2026-06-28T00:00:00Z' }),
-          activity: { id: 1, name: '测试', status: 'employee_confirmation', flow_type: 'new', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
+          participant: makeParticipant({
+            status: 'hr_confirmed',
+            hr_confirmed_at: '2026-06-28T00:00:00Z',
+            confirmed_at: '2026-06-28T00:00:00Z',
+          }),
+          activity: { id: 1, name: '测试', status: 'result_publish', flow_type: 'new', start_date: '2026-04-01', end_date: '2026-06-30', enable_bonus_score: false },
         },
       })
 
       render(React.createElement(PerformanceResultView))
 
       await waitFor(() => {
-        expect(screen.getByTestId('performance-result-confirm-employee')).toBeInTheDocument()
+        expect(screen.getByText('结果状态')).toBeInTheDocument()
       })
-
-      await user.click(screen.getByTestId('performance-result-confirm-employee'))
-
-      await waitFor(() => {
-        expect(mockConfirmEmployeeResult).toHaveBeenCalledWith(101)
-      })
+      expect(screen.getByText(/HR审核已完成/)).toBeInTheDocument()
+      expect(screen.getByText(/结果已公布/)).toBeInTheDocument()
+      expect(screen.getByText('绩效面谈已开放')).toBeInTheDocument()
+      expect(screen.getByText('绩效申诉已开放')).toBeInTheDocument()
+      expect(screen.queryByText('确认进度')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('performance-result-confirm-employee')).not.toBeInTheDocument()
     })
 
-    it('HR权限在新流程HR确认阶段可确认结果', async () => {
-      const user = userEvent.setup()
-      vi.mocked(hasPermission).mockImplementation((code: string) => code === 'performance:hr_confirm:submit')
+    it('新流程不提供员工、主管或HR三级确认按钮', async () => {
+      vi.mocked(hasPermission).mockImplementation((code: string) => [
+        'performance:employee_confirm:submit',
+        'performance:manager_confirm:submit',
+        'performance:hr_confirm:submit',
+      ].includes(code))
       mockGetParticipant.mockResolvedValue({
         data: {
           participant: makeParticipant({ status: 'manager_confirmed' }),
@@ -365,14 +371,12 @@ describe('PerformanceResultView 交互测试', () => {
 
       render(React.createElement(PerformanceResultView))
 
-      const button = await screen.findByTestId('performance-result-confirm-hr')
-      expect(button).toHaveTextContent('HR确认')
-
-      await user.click(button)
-
       await waitFor(() => {
-        expect(mockConfirmHRResult).toHaveBeenCalledWith(101)
+        expect(screen.getByText('绩效结果查看')).toBeInTheDocument()
       })
+      expect(screen.queryByTestId('performance-result-confirm-employee')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('performance-result-confirm-manager')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('performance-result-confirm-hr')).not.toBeInTheDocument()
     })
 
     it('旧流程点击员工确认应调用 confirmEmployeeResult', async () => {

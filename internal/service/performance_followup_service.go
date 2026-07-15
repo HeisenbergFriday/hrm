@@ -119,7 +119,7 @@ func (s *PerformanceFollowupService) ArrangeInterview(payload PerformanceIntervi
 	if err != nil {
 		return nil, err
 	}
-	if !performanceFollowupAllowed(activity) {
+	if !performanceFollowupAllowed(participant, activity) {
 		return nil, errors.New("绩效结果公布后才能安排面谈")
 	}
 
@@ -219,7 +219,7 @@ func (s *PerformanceFollowupService) SubmitAppeal(payload PerformanceAppealPaylo
 	if err != nil {
 		return nil, err
 	}
-	if !performanceFollowupAllowed(activity) {
+	if !performanceFollowupAllowed(participant, activity) {
 		return nil, errors.New("绩效结果公布后才能提交申诉")
 	}
 
@@ -720,9 +720,12 @@ func applyInterviewPayload(record *database.PerformanceInterviewRecord, payload 
 	}
 }
 
-func performanceFollowupAllowed(activity *database.PerformanceActivity) bool {
-	if activity == nil {
+func performanceFollowupAllowed(participant *database.PerformanceParticipant, activity *database.PerformanceActivity) bool {
+	if participant == nil || activity == nil {
 		return false
+	}
+	if isNewPerformanceFlow(activity) && mutengPublishedParticipantStatus(participant.Status) {
+		return true
 	}
 	switch strings.TrimSpace(activity.Status) {
 	case "result_publish", "result_confirmed", "locked", "archived", "interview", "appeal":

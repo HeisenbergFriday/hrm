@@ -406,7 +406,7 @@ describe('PerformanceOverview 组件交互测试', () => {
   })
 
   describe('沐腾科技 HR审核动作', () => {
-    it('HR权限可在活动详情中开启HR审核', async () => {
+    it('HR权限按参与人独立审核，不再开启活动级HR审核', async () => {
       const user = userEvent.setup()
       const activity = {
         ...MOCK_ACTIVITIES[0],
@@ -427,27 +427,38 @@ describe('PerformanceOverview 组件交互测试', () => {
       })
       mockGetParticipants.mockResolvedValue({
         data: {
-          items: [{
-            id: 701,
-            employee_name: 'Alice',
-            department_name: 'Product',
-            position: 'Specialist',
-            status: 'manager_submitted',
-            manager_config_status: 'CONFIGURED',
-            manager_id: 'M001',
-          }],
-          total: 1,
+          items: [
+            {
+              id: 701,
+              employee_name: 'Alice',
+              department_name: 'Product',
+              position: 'Specialist',
+              status: 'manager_confirmed',
+              manager_config_status: 'CONFIGURED',
+              manager_id: 'M001',
+            },
+            {
+              id: 702,
+              employee_name: 'Bob',
+              department_name: 'Product',
+              position: 'Specialist',
+              status: 'self_submitted',
+              manager_config_status: 'CONFIGURED',
+              manager_id: 'M001',
+            },
+          ],
+          total: 2,
         },
       })
       mockGetResultSummary.mockResolvedValue({
         data: {
-          total_participants: 1,
-          self_submitted_count: 1,
+          total_participants: 2,
+          self_submitted_count: 2,
           manager_submitted_count: 1,
           result_confirmed_count: 0,
         },
       })
-      mockOpenHRReview.mockResolvedValue({ data: { message: 'ok' } })
+      mockConfirmHRResult.mockResolvedValue({ data: { message: 'ok' } })
 
       renderOverview()
       await waitFor(() => {
@@ -455,15 +466,17 @@ describe('PerformanceOverview 组件交互测试', () => {
       })
 
       await openActivityDetail(user, 7)
-      const hrReviewButton = await screen.findByTestId('performance-detail-open-hr-review-7')
+      expect(screen.queryByTestId('performance-detail-open-hr-review-7')).not.toBeInTheDocument()
+      const hrReviewButton = await screen.findByTestId('performance-participant-hr-confirm-701')
+      expect(screen.queryByTestId('performance-participant-hr-confirm-702')).not.toBeInTheDocument()
       await user.click(hrReviewButton)
 
       await waitFor(() => {
-        expect(mockOpenHRReview).toHaveBeenCalledWith(7)
+        expect(mockConfirmHRResult).toHaveBeenCalledWith(701)
       })
     })
 
-    it('结果公布前的HR审核阶段可提前设置屏蔽', async () => {
+    it('系统未公布的参与人不显示手工屏蔽，已公布参与人才显示', async () => {
       const user = userEvent.setup()
       const activity = {
         ...MOCK_ACTIVITIES[0],
@@ -484,24 +497,38 @@ describe('PerformanceOverview 组件交互测试', () => {
       })
       mockGetParticipants.mockResolvedValue({
         data: {
-          items: [{
-            id: 801,
-            employee_name: 'Alice',
-            department_name: 'Product',
-            position: 'Specialist',
-            status: 'manager_submitted',
-            manager_config_status: 'CONFIGURED',
-            manager_id: 'M001',
-          }],
-          total: 1,
+          items: [
+            {
+              id: 801,
+              employee_name: 'Alice',
+              department_name: 'Product',
+              position: 'Specialist',
+              status: 'manager_confirmed',
+              result_hidden: true,
+              result_hidden_reason: 'system:unpublished',
+              manager_config_status: 'CONFIGURED',
+              manager_id: 'M001',
+            },
+            {
+              id: 802,
+              employee_name: 'Bob',
+              department_name: 'Product',
+              position: 'Specialist',
+              status: 'hr_confirmed',
+              result_hidden: false,
+              manager_config_status: 'CONFIGURED',
+              manager_id: 'M001',
+            },
+          ],
+          total: 2,
         },
       })
       mockGetResultSummary.mockResolvedValue({
         data: {
-          total_participants: 1,
-          self_submitted_count: 1,
+          total_participants: 2,
+          self_submitted_count: 2,
           manager_submitted_count: 1,
-          result_confirmed_count: 0,
+          result_confirmed_count: 1,
         },
       })
 
@@ -512,7 +539,8 @@ describe('PerformanceOverview 组件交互测试', () => {
 
       await openActivityDetail(user, 8)
 
-      expect(await screen.findByTestId('performance-participant-visibility-801')).toBeInTheDocument()
+      expect(screen.queryByTestId('performance-participant-visibility-801')).not.toBeInTheDocument()
+      expect(await screen.findByTestId('performance-participant-visibility-802')).toBeInTheDocument()
     })
 
     it('只有结果公布权限但没有屏蔽管理权限时不显示屏蔽按钮', async () => {
@@ -1505,7 +1533,7 @@ describe('PerformanceOverview 组件交互测试', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/performance-goal-setting/9/201')
     })
 
-    it('目标审核未开启时不应显示通过和驳回操作', async () => {
+    it('目标提交后立即显示通过和驳回操作', async () => {
       const user = userEvent.setup()
       mockGetActivities.mockResolvedValue({
         data: {
@@ -1548,8 +1576,8 @@ describe('PerformanceOverview 组件交互测试', () => {
       await user.click(screen.getByTestId('performance-activity-view-11'))
 
       await screen.findByTestId('performance-participant-target-211')
-      expect(screen.queryByTestId('performance-participant-approve-211')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('performance-participant-reject-211')).not.toBeInTheDocument()
+      expect(screen.getByTestId('performance-participant-approve-211')).toBeInTheDocument()
+      expect(screen.getByTestId('performance-participant-reject-211')).toBeInTheDocument()
     })
 
     it('已归档的沐腾目标设定活动仍应保留目标入口', async () => {
@@ -1663,7 +1691,8 @@ describe('PerformanceOverview 组件交互测试', () => {
       await waitFor(() => {
         expect(screen.getAllByText('主管评分已完成').length).toBeGreaterThanOrEqual(1)
       })
-      expect(screen.getByText('已主管评分')).toBeInTheDocument()
+      expect(screen.getAllByText('主管评分已完成').length).toBeGreaterThanOrEqual(1)
+      expect(screen.queryByText('已主管评分')).not.toBeInTheDocument()
       expect(screen.queryByText('已评分')).not.toBeInTheDocument()
 
       await user.click(screen.getByTestId('performance-participant-progress-301'))
@@ -1678,9 +1707,9 @@ describe('PerformanceOverview 组件交互测试', () => {
       await user.click(select)
 
       await waitFor(() => {
-        expect(screen.getByText('HR审核已完成')).toBeInTheDocument()
+        expect(screen.getAllByText('结果已公布').length).toBeGreaterThanOrEqual(1)
       })
-      expect(screen.getAllByText('员工已确认').length).toBeGreaterThanOrEqual(1)
+      expect(screen.queryByText('员工已确认')).not.toBeInTheDocument()
       expect(screen.queryByText('待领导复核')).not.toBeInTheDocument()
       expect(screen.queryByText('已离职')).not.toBeInTheDocument()
       expect(screen.queryByText('已移除')).not.toBeInTheDocument()

@@ -1341,20 +1341,13 @@ const PerformanceResultView: React.FC = () => {
   const bonusRecords = records.filter(r => r.section_type === 'bonus_penalty')
 
 	let confirmAction: { type: 'employee' | 'manager' | 'hr'; label: string } | null = null
-	if (
-		isNewFlow &&
-		activity?.status === 'employee_confirmation' &&
-		['hr_confirmed', 'manager_confirmed', 'result_confirmed'].includes(status || '') &&
-		!isLocked
-	) {
+	if (!isNewFlow && status === 'manager_submitted' && !isLocked) {
 		confirmAction = { type: 'employee', label: '员工确认结果' }
-	} else if (!isNewFlow && status === 'manager_submitted' && !isLocked) {
-		confirmAction = { type: 'employee', label: '员工确认结果' }
-  } else if (status === 'employee_confirmed' && !isLocked) {
+	} else if (!isNewFlow && status === 'employee_confirmed' && !isLocked) {
     confirmAction = { type: 'manager', label: '主管确认并冻结' }
-  } else if (status === 'manager_recheck' && ['manager_confirmation', 'hr_confirmation'].includes(activity?.status || '') && !isLocked) {
+  } else if (!isNewFlow && status === 'manager_recheck' && ['manager_confirmation', 'hr_confirmation'].includes(activity?.status || '') && !isLocked) {
     confirmAction = { type: 'manager', label: '确认已查看' }
-  } else if (activity?.status === 'hr_confirmation' && status === 'manager_confirmed') {
+  } else if (!isNewFlow && activity?.status === 'hr_confirmation' && status === 'manager_confirmed') {
     confirmAction = { type: 'hr', label: 'HR确认' }
   }
 
@@ -1520,37 +1513,66 @@ const PerformanceResultView: React.FC = () => {
               )}
             </PageCard>
 
-            <PageCard title="确认进度">
-              <Timeline
-                items={[
-                  {
-                    color: participant?.employee_confirmed_at ? 'green' : 'gray',
-                    children: participant?.employee_confirmed_at
-                      ? `员工已确认 (${participant.employee_confirmed_at?.substring(0, 10)})`
-                      : '待员工确认'
-                  },
-                  {
-                    color: participant?.status === 'manager_recheck' ? 'orange' : participant?.manager_confirmed_at ? 'green' : 'gray',
-                    children: participant?.status === 'manager_recheck'
-                      ? '员工已修改自评，待主管复核'
-                      : participant?.manager_confirmed_at
-                      ? `主管已确认并冻结 (${participant.manager_confirmed_at?.substring(0, 10)})`
-                      : '待主管确认并冻结'
-                  },
-                  {
-                    color: participant?.hr_confirmed_at ? 'green' : 'gray',
-                    children: participant?.hr_confirmed_at
-                      ? `人力已确认 (${participant.hr_confirmed_at?.substring(0, 10)})`
-                      : '待人力确认'
-                  },
-                  {
-                    color: isLocked ? 'red' : 'gray',
-                    children: isLocked ? '已冻结' : '未冻结',
-                    dot: isLocked ? <LockOutlined /> : undefined
-                  }
-                ]}
-              />
-            </PageCard>
+            {isNewFlow ? (
+              <PageCard title="结果状态">
+                <Timeline
+                  items={[
+                    {
+                      color: participant?.hr_confirmed_at ? 'green' : 'gray',
+                      children: participant?.hr_confirmed_at
+                        ? `HR审核已完成 (${participant.hr_confirmed_at.substring(0, 10)})`
+                        : '待HR审核'
+                    },
+                    {
+                      color: participant?.hr_confirmed_at ? 'green' : 'gray',
+                      children: participant?.hr_confirmed_at
+                        ? `结果已公布 (${(participant.confirmed_at || participant.hr_confirmed_at).substring(0, 10)})`
+                        : '结果未公布'
+                    },
+                    {
+                      color: participant?.hr_confirmed_at ? 'blue' : 'gray',
+                      children: participant?.hr_confirmed_at ? '绩效面谈已开放' : '绩效面谈未开放'
+                    },
+                    {
+                      color: participant?.hr_confirmed_at ? 'blue' : 'gray',
+                      children: participant?.hr_confirmed_at ? '绩效申诉已开放' : '绩效申诉未开放'
+                    }
+                  ]}
+                />
+              </PageCard>
+            ) : (
+              <PageCard title="确认进度">
+                <Timeline
+                  items={[
+                    {
+                      color: participant?.employee_confirmed_at ? 'green' : 'gray',
+                      children: participant?.employee_confirmed_at
+                        ? `员工已确认 (${participant.employee_confirmed_at?.substring(0, 10)})`
+                        : '待员工确认'
+                    },
+                    {
+                      color: participant?.status === 'manager_recheck' ? 'orange' : participant?.manager_confirmed_at ? 'green' : 'gray',
+                      children: participant?.status === 'manager_recheck'
+                        ? '员工已修改自评，待主管复核'
+                        : participant?.manager_confirmed_at
+                        ? `主管已确认并冻结 (${participant.manager_confirmed_at?.substring(0, 10)})`
+                        : '待主管确认并冻结'
+                    },
+                    {
+                      color: participant?.hr_confirmed_at ? 'green' : 'gray',
+                      children: participant?.hr_confirmed_at
+                        ? `人力已确认 (${participant.hr_confirmed_at?.substring(0, 10)})`
+                        : '待人力确认'
+                    },
+                    {
+                      color: isLocked ? 'red' : 'gray',
+                      children: isLocked ? '已冻结' : '未冻结',
+                      dot: isLocked ? <LockOutlined /> : undefined
+                    }
+                  ]}
+                />
+              </PageCard>
+            )}
 
             {confirmAction && (
               <Button

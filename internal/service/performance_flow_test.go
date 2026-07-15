@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
 	"peopleops/internal/database"
 )
 
@@ -308,7 +309,7 @@ func TestPublishCloseArchiveAndLockActivityFlows(t *testing.T) {
 	}
 }
 
-func TestOpenSelfEvaluationRejectsNewFlowWithoutReviewRecords(t *testing.T) {
+func TestOpenSelfEvaluationAllowsParticipantLevelReadiness(t *testing.T) {
 	svc := newStubPerformanceService(t,
 		newFlowPerformanceActivityResponse("target_approval", ""),
 		stubQueryResponse{
@@ -321,9 +322,361 @@ func TestOpenSelfEvaluationRejectsNewFlowWithoutReviewRecords(t *testing.T) {
 		performanceGoalRecordResponse(),
 	)
 
-	err := svc.OpenSelfEvaluation("activity-1", "operator-1")
-	if err == nil || !strings.Contains(err.Error(), "缺少上一季度绩效考核指标") {
-		t.Fatalf("OpenSelfEvaluation(new flow without review records) expected missing review records error, got = %v", err)
+	if err := svc.OpenSelfEvaluation("activity-1", "operator-1"); err != nil {
+		t.Fatalf("OpenSelfEvaluation(new flow with participant-level readiness) error = %v", err)
+	}
+}
+
+func TestConfirmHRResultAdvancesMutengParticipantWithoutWaitingForPeers(t *testing.T) {
+	tests := []struct {
+		name                string
+		incompletePeerCount int64
+		wantAggregateStatus string
+	}{
+		{
+			name:                "another participant is still scoring",
+			incompletePeerCount: 1,
+		},
+		{
+			name:                "last participant completes HR review",
+			incompletePeerCount: 0,
+			wantAggregateStatus: "result_publish",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now()
+			participantColumns := append(performanceParticipantStubColumns(), "department_adjusted_at", "result_hidden", "result_hidden_reason")
+			participantRow := append(
+				performanceParticipantStubRow(1, "manager_confirmed", "", 0, 90, "A", false, nil, nil, nil),
+				now,
+				true,
+				"system:unpublished",
+			)
+			svc := newStubPerformanceService(t,
+				stubQueryResponse{
+					match: func(query string, _ []driver.NamedValue) bool {
+						lower := strings.ToLower(query)
+						return strings.Contains(lower, "performance_participants") &&
+							strings.Contains(lower, "count(*)") && strings.Count(lower, "not in") >= 2
+					},
+					columns: []string{"count(*)"},
+					rows:    [][]driver.Value{{tt.incompletePeerCount}},
+				},
+				stubQueryResponse{
+					match: func(query string, _ []driver.NamedValue) bool {
+						lower := strings.ToLower(query)
+						return strings.Contains(lower, "performance_participants") &&
+							strings.Contains(lower, "count(*)") && strings.Count(lower, "not in") == 1
+					},
+					columns: []string{"count(*)"},
+					rows:    [][]driver.Value{{int64(2)}},
+				},
+				stubQueryResponse{
+					match: func(query string, _ []driver.NamedValue) bool {
+						lower := strings.ToLower(query)
+						return strings.Contains(lower, "performance_participants") && !strings.Contains(lower, "count(*)")
+					},
+					columns: participantColumns,
+					rows:    [][]driver.Value{participantRow},
+				},
+				mutengReviewScoringActivityResponse("self_evaluation", ""),
+			)
+
+			aggregateStatus := ""
+			callbackName := "test:muteng-aggregate:" + strings.ReplaceAll(tt.name, " ", "-")
+			if err := svc.db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+				if tx.Statement.Table != "performance_activities" {
+					return
+				}
+				if values, ok := tx.Statement.Dest.(map[string]interface{}); ok {
+					aggregateStatus, _ = values["status"].(string)
+				}
+			}); err != nil {
+				t.Fatalf("register update callback: %v", err)
+			}
+
+			originalSender := sendPerformanceActionCardToUser
+			notified := make(chan struct{}, 1)
+			sendPerformanceActionCardToUser = func(_, _, _, _, _ string) error {
+				notified <- struct{}{}
+				return nil
+			}
+			defer func() { sendPerformanceActionCardToUser = originalSender }()
+
+			if err := svc.ConfirmHRResult(1, "hr-1"); err != nil {
+				t.Fatalf("ConfirmHRResult() error = %v", err)
+			}
+			select {
+			case <-notified:
+			case <-time.After(time.Second):
+				t.Fatal("result publication notification was not sent")
+			}
+			if aggregateStatus != tt.wantAggregateStatus {
+				t.Fatalf("aggregate activity status update = %q, want %q", aggregateStatus, tt.wantAggregateStatus)
+			}
+		})
+	}
+}
+
+func TestMutengParticipantIndependentGateHelpers(t *testing.T) {
+	oldFlow := &database.PerformanceActivity{FlowType: PerformanceFlowOld, Status: "self_evaluation"}
+	if mutengTargetWorkflowOpen(oldFlow) || mutengReviewPipelineOpen(oldFlow) {
+		t.Fatal("old flow must not use Muteng independent gates")
+	}
+
+	goalSetting := &database.PerformanceActivity{
+		FlowType:     PerformanceFlowNew,
+		ActivityKind: PerformanceActivityKindGoalSetting,
+		Status:       "self_evaluation",
+	}
+	if !mutengTargetWorkflowOpen(goalSetting) {
+		t.Fatal("goal_setting should allow target workflow after target phase is open")
+	}
+	if mutengReviewPipelineOpen(goalSetting) {
+		t.Fatal("goal_setting must never open review/HR pipeline")
+	}
+
+	reviewDraft := &database.PerformanceActivity{
+		FlowType:     PerformanceFlowNew,
+		ActivityKind: PerformanceActivityKindReviewScoring,
+		Status:       "draft",
+	}
+	if mutengTargetWorkflowOpen(reviewDraft) || mutengReviewPipelineOpen(reviewDraft) {
+		t.Fatal("draft review activity must stay closed until admin opens gates")
+	}
+
+	reviewTargetSetting := &database.PerformanceActivity{
+		FlowType:     PerformanceFlowNew,
+		ActivityKind: PerformanceActivityKindReviewScoring,
+		Status:       "target_setting",
+	}
+	if !mutengTargetWorkflowOpen(reviewTargetSetting) {
+		t.Fatal("target_setting should open target workflow")
+	}
+	if mutengReviewPipelineOpen(reviewTargetSetting) {
+		t.Fatal("target_setting must not open review pipeline")
+	}
+
+	// After self-evaluation is opened, every later historical aggregate status
+	// still allows individual target/review progression without waiting peers.
+	for _, status := range []string{
+		"self_evaluation", "manager_evaluation", "department_evaluation", "hr_review",
+		"result_publish", "employee_confirmation", "manager_confirmation", "hr_confirmation",
+	} {
+		activity := &database.PerformanceActivity{
+			FlowType:     PerformanceFlowNew,
+			ActivityKind: PerformanceActivityKindReviewScoring,
+			Status:       status,
+		}
+		if !mutengTargetWorkflowOpen(activity) {
+			t.Fatalf("mutengTargetWorkflowOpen(%q) = false, want true", status)
+		}
+		if !mutengReviewPipelineOpen(activity) {
+			t.Fatalf("mutengReviewPipelineOpen(%q) = false, want true", status)
+		}
+	}
+
+	for _, status := range []string{"hr_confirmed", "locked", "result_confirmed"} {
+		if !mutengPublishedParticipantStatus(status) {
+			t.Fatalf("mutengPublishedParticipantStatus(%q) = false, want true", status)
+		}
+	}
+	if mutengPublishedParticipantStatus("manager_confirmed") {
+		t.Fatal("manager_confirmed is not published yet")
+	}
+}
+
+func TestMutengParticipantStageGatesDoNotRequireAggregateStage(t *testing.T) {
+	// Target approve uses participant readiness + target gate, not activity=target_approval.
+	// Use empty activity_kind (historical hybrid / goal plan path) so scoring activities
+	// that intentionally skip goal approval are not mixed into this gate check.
+	approveSvc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "performance_participants") &&
+					strings.Contains(lower, "count(*)")
+			},
+			columns: []string{"count(*)"},
+			rows:    [][]driver.Value{{int64(1)}},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "target_pending_approval", "", 0, 0, "", false, nil, nil, nil),
+			},
+		},
+		newFlowPerformanceActivityResponse("self_evaluation", ""),
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_goal_approval_logs"),
+			columns: []string{"id", "participant_id", "activity_id", "action", "version"},
+			rows: [][]driver.Value{
+				{int64(9), int64(1), "activity-1", "submit", int64(1)},
+			},
+		},
+		activeUserResponse("manager-1", "Boss"),
+	)
+	if err := approveSvc.SubmitGoalApproval(1, "approve", "ok", "manager-1"); err != nil {
+		t.Fatalf("SubmitGoalApproval(approve while peers may lag) error = %v", err)
+	}
+
+	// Department evaluation accepts a ready participant while activity remains on self_evaluation.
+	level := "A"
+	score := 90.0
+	deptSvc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "manager_submitted", "", 0, 90, "A", false, nil, nil, nil),
+			},
+		},
+		mutengReviewScoringActivityResponse("self_evaluation", ""),
+	)
+	if _, _, err := deptSvc.DepartmentAdjustParticipantResult(1, level, &score, "确认不调整", "dept-1"); err != nil {
+		t.Fatalf("DepartmentAdjustParticipantResult(independent) error = %v", err)
+	}
+
+	// Self-eval and manager-eval gates reject closed Muteng activity, accept open pipeline.
+	closedSelfSvc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "target_set", "", 0, 0, "", false, nil, nil, nil),
+			},
+		},
+		mutengReviewScoringActivityResponse("target_setting", ""),
+	)
+	if err := closedSelfSvc.SubmitGoalSelfEvaluation(1, nil, nil, "good", "improve", "user-1"); err == nil || !strings.Contains(err.Error(), "尚未开启员工自评") {
+		t.Fatalf("self eval before open error = %v, want self-evaluation gate rejection", err)
+	}
+
+	// Old flow still requires aggregate manager_evaluation for manager scoring.
+	oldManagerSvc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "self_submitted", "", 80, 0, "", false, nil, nil, nil),
+			},
+		},
+		performanceActivityResponse("self_evaluation", ""),
+		performanceGoalRecordResponse(
+			performanceGoalRecordRow(10, "quantitative", "Revenue", 1),
+		),
+	)
+	if err := oldManagerSvc.SubmitGoalManagerEvaluation(1, []GoalManagerEvaluationItem{
+		{RecordID: 10, ManagerScore: 90},
+	}, nil, "A", "good", "improve", "manager-1"); err == nil || !strings.Contains(err.Error(), "不允许提交主管评分") {
+		t.Fatalf("old flow manager eval error = %v, want aggregate stage rejection", err)
+	}
+}
+
+func TestConfirmHRResultPreservesManualHideAndIsIdempotentForMuteng(t *testing.T) {
+	now := time.Now()
+	participantColumns := append(performanceParticipantStubColumns(), "department_adjusted_at", "result_hidden", "result_hidden_reason")
+	participantRow := append(
+		performanceParticipantStubRow(1, "manager_confirmed", "", 0, 90, "A", false, nil, nil, nil),
+		now,
+		true,
+		"manual:privacy",
+	)
+
+	var hiddenAfterSave *bool
+	var hiddenReasonAfterSave string
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "performance_participants") &&
+					strings.Contains(lower, "count(*)") && strings.Count(lower, "not in") >= 2
+			},
+			columns: []string{"count(*)"},
+			rows:    [][]driver.Value{{int64(1)}},
+		},
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "performance_participants") &&
+					strings.Contains(lower, "count(*)") && strings.Count(lower, "not in") == 1
+			},
+			columns: []string{"count(*)"},
+			rows:    [][]driver.Value{{int64(2)}},
+		},
+		stubQueryResponse{
+			match: func(query string, _ []driver.NamedValue) bool {
+				lower := strings.ToLower(query)
+				return strings.Contains(lower, "performance_participants") && !strings.Contains(lower, "count(*)")
+			},
+			columns: participantColumns,
+			rows:    [][]driver.Value{participantRow},
+		},
+		mutengReviewScoringActivityResponse("self_evaluation", ""),
+	)
+	if err := svc.db.Callback().Update().Before("gorm:update").Register("test:muteng-manual-hide", func(tx *gorm.DB) {
+		if tx.Statement.Table != "performance_participants" {
+			return
+		}
+		if participant, ok := tx.Statement.Dest.(*database.PerformanceParticipant); ok {
+			hidden := participant.ResultHidden
+			hiddenAfterSave = &hidden
+			hiddenReasonAfterSave = participant.ResultHiddenReason
+		}
+	}); err != nil {
+		t.Fatalf("register update callback: %v", err)
+	}
+
+	originalSender := sendPerformanceActionCardToUser
+	sendPerformanceActionCardToUser = func(_, _, _, _, _ string) error { return nil }
+	defer func() { sendPerformanceActionCardToUser = originalSender }()
+
+	if err := svc.ConfirmHRResult(1, "hr-1"); err != nil {
+		t.Fatalf("ConfirmHRResult(manual hide) error = %v", err)
+	}
+	if hiddenAfterSave == nil || !*hiddenAfterSave || hiddenReasonAfterSave != "manual:privacy" {
+		t.Fatalf("manual hide was altered: hidden=%v reason=%q", hiddenAfterSave, hiddenReasonAfterSave)
+	}
+
+	// Idempotent path: already hr_confirmed returns nil without requiring activity aggregate stage.
+	idempotentSvc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "hr_confirmed", "", 0, 90, "A", false, nil, now, now),
+			},
+		},
+		mutengReviewScoringActivityResponse("self_evaluation", ""),
+	)
+	if err := idempotentSvc.ConfirmHRResult(1, "hr-1"); err != nil {
+		t.Fatalf("ConfirmHRResult(muteng idempotent) error = %v", err)
+	}
+}
+
+func TestConfirmHRResultRejectsMutengGoalSettingActivity(t *testing.T) {
+	now := time.Now()
+	svc := newStubPerformanceService(t,
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_participants"),
+			columns: performanceParticipantStubColumns(),
+			rows: [][]driver.Value{
+				performanceParticipantStubRow(1, "manager_confirmed", "", 0, 90, "A", false, nil, now, nil),
+			},
+		},
+		stubQueryResponse{
+			match:   stubTableMatcher("performance_activities"),
+			columns: []string{"id", "name", "cycle_type", "status", "flow_type", "activity_kind", "hr_confirm_deadline", "created_by"},
+			rows: [][]driver.Value{
+				{int64(1), "Q2 Plan", "quarterly", "target_setting", PerformanceFlowNew, PerformanceActivityKindGoalSetting, "", "creator-1"},
+			},
+		},
+	)
+	if err := svc.ConfirmHRResult(1, "hr-1"); err == nil || !strings.Contains(err.Error(), "目标设定活动不包含HR审核节点") {
+		t.Fatalf("ConfirmHRResult(goal_setting) error = %v, want goal-setting rejection", err)
 	}
 }
 
