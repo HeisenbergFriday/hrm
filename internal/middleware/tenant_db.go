@@ -30,6 +30,7 @@ func CurrentOrgID(c *gin.Context) (string, error) {
 // TenantDB 返回一个租户上下文 DB：在 RequestDB 的基础上，把当前 orgID 写入 context，
 // 供 repository/service 层通过 requestmeta.TenantID 读取。TenantDB 只做上下文携带，
 // 不给 SQL 自动追加 org 条件；租户过滤仍在严格 repository 内显式完成。
+// 同时回写 RequestInfo.OrgID，保证 CurrentOrganizationIDFromDB 与旧路径一致。
 func TenantDB(c *gin.Context) (*gorm.DB, error) {
 	orgID, err := CurrentOrgID(c)
 	if err != nil {
@@ -39,7 +40,9 @@ func TenantDB(c *gin.Context) (*gorm.DB, error) {
 	if db == nil {
 		return nil, errors.New("middleware: request DB not available")
 	}
-	ctx := requestmeta.WithTenant(db.Statement.Context, orgID)
+	ctx := db.Statement.Context
+	requestmeta.SetOrgID(ctx, orgID)
+	ctx = requestmeta.WithTenant(ctx, orgID)
 	return db.WithContext(ctx), nil
 }
 

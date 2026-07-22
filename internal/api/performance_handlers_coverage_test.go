@@ -512,7 +512,7 @@ func TestSubmitReviewSelfEvaluationBranches(t *testing.T) {
 			apiPerformanceRouterPermissionsResponse([]string{"performance:other"}),
 		)
 		c, recorder := performanceCoverageUserContext(t, "user-1")
-		c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/performance/participants/1/review-self-evaluation", strings.NewReader(`{"self_content_json":{"content":"done"}}`))
+		c.Request = performanceTestRequest(http.MethodPost, "/api/v1/performance/participants/1/review-self-evaluation", strings.NewReader(`{"self_content_json":{"content":"done"}}`))
 		c.Request.Header.Set("Content-Type", "application/json")
 		c.Params = gin.Params{{Key: "participant_id", Value: "1"}}
 
@@ -1480,13 +1480,15 @@ func performanceCoverageUserContext(t *testing.T, userID string) (*gin.Context, 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Set("userID", userID)
+	c.Set("orgID", database.DefaultOrganizationID)
+	c.Request = performanceTestRequest(http.MethodGet, "/", nil)
 	return c, recorder
 }
 
 func performPerformanceHandlerRequestAs(t *testing.T, userID, method, path, body string, params gin.Params, handler func(*gin.Context)) *httptest.ResponseRecorder {
 	t.Helper()
 	c, recorder := performanceCoverageUserContext(t, userID)
-	c.Request = httptest.NewRequest(method, path, strings.NewReader(body))
+	c.Request = performanceTestRequest(method, path, strings.NewReader(body))
 	if body != "" {
 		c.Request.Header.Set("Content-Type", "application/json")
 	}

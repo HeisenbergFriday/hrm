@@ -26,6 +26,7 @@ import (
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
 	"peopleops/internal/middleware"
+	"peopleops/internal/repository"
 	"peopleops/internal/requestmeta"
 	"peopleops/internal/service"
 	"sort"
@@ -3847,6 +3848,7 @@ func SyncApproval(c *gin.Context) {
 
 	// 写入数据库
 	count := 0
+	approvalRepo := repository.NewApprovalRepositoryWithOrgID(middleware.RequestDB(c), orgID)
 	for _, inst := range instances {
 		createTime, _ := time.Parse("2006-01-02 15:04:05", inst.CreateTime)
 		finishTime, _ := time.Parse("2006-01-02 15:04:05", inst.FinishTime)
@@ -3862,6 +3864,7 @@ func SyncApproval(c *gin.Context) {
 		}
 
 		approval := &database.Approval{
+			OrgID:         orgID,
 			ProcessID:     inst.ProcessInstanceID,
 			Title:         inst.Title,
 			ApplicantID:   inst.OriginatorUserID,
@@ -3876,19 +3879,13 @@ func SyncApproval(c *gin.Context) {
 			},
 		}
 
-		// Upsert by process_id
-		var existing database.Approval
-		if err := middleware.RequestDB(c).Where("process_id = ?", inst.ProcessInstanceID).First(&existing).Error; err != nil {
-			middleware.RequestDB(c).Create(approval)
-		} else {
-			existing.Status = inst.Status
-			existing.FinishTime = finishTime
-			existing.Content = content
-			existing.Extension = map[string]interface{}{
-				"result":       inst.Result,
-				"process_code": req.ProcessCode,
-			}
-			middleware.RequestDB(c).Save(&existing)
+		if err := approvalRepo.UpsertByOrgProcessID(approval); err != nil {
+			updateSyncStatus(syncService, orgID, "approvals", "failed", err.Error())
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    http.StatusInternalServerError,
+				Message: "保存审批失败: " + err.Error(),
+			})
+			return
 		}
 		count++
 	}
@@ -5055,6 +5052,11 @@ func GetDingTalkShifts(c *gin.Context) {
 		Name string `json:"name"`
 	}
 
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+
 	catalogs, catalogErr := service.NewShiftConfigService(middleware.RequestDB(c)).ListShiftCatalogs()
 	if catalogErr == nil && len(catalogs) > 0 {
 		items := make([]ShiftItem, 0, len(catalogs))
@@ -5072,7 +5074,6 @@ func GetDingTalkShifts(c *gin.Context) {
 		return
 	}
 
-	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
 	shifts, err := dingtalk.GetShiftListForOrg(orgID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -5102,16 +5103,19 @@ func GetDingTalkShifts(c *gin.Context) {
 
 // DebugAttendanceGroups 返回所有考勤组及其班次详情，用于诊断休息班次 ID
 func DebugAttendanceGroups(c *gin.Context) {
-	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
-	if opUserID == "" {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	opUserID, err := dingtalk.ResolveAdminUserID(orgID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
-			Message: "未配置 DINGTALK_ADMIN_USER_ID",
+			Message: err.Error(),
 		})
 		return
 	}
 
-	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
 	groups, err := dingtalk.GetAttendanceGroupsForOrg(orgID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -5164,7 +5168,7 @@ func DebugAttendanceGroups(c *gin.Context) {
 					"shift_name": shiftNameMap[sid],
 				})
 			}
-			restID := dingtalk.GetAttendanceGroupRestClassID(detail)
+			restID := dingtalk.GetAttendanceGroupRestClassIDForOrg(orgID, detail)
 			info.RawKeys = append(info.RawKeys, fmt.Sprintf("detected_rest_shift_id=%d", restID))
 		}
 		result = append(result, info)
@@ -5179,6 +5183,11 @@ func DebugAttendanceGroups(c *gin.Context) {
 
 // CreateDingTalkShift 在钉钉创建新班次
 func CreateDingTalkShift(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+
 	var input struct {
 		Name         string `json:"name" binding:"required"`
 		CheckInTime  string `json:"check_in_time" binding:"required"`
@@ -5192,16 +5201,15 @@ func CreateDingTalkShift(c *gin.Context) {
 		return
 	}
 
-	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
-	if opUserID == "" {
+	opUserID, err := dingtalk.ResolveAdminUserID(orgID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
-			Message: "未配置 DINGTALK_ADMIN_USER_ID",
+			Message: err.Error(),
 		})
 		return
 	}
 
-	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
 	shiftID, err := dingtalk.CreateShiftForOrg(orgID, opUserID, input.Name, input.CheckInTime, input.CheckOutTime)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{

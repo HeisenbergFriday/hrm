@@ -199,13 +199,13 @@ type PerformanceDistributionException struct {
 // PerformanceReminderLog records automatic reminder rounds and prevents duplicate sends.
 type PerformanceReminderLog struct {
 	ID            uint       `gorm:"primaryKey" json:"id"`
-	OrgID         string     `gorm:"type:varchar(64);not null;default:'default';index" json:"org_id"`
-	ActivityID    string     `gorm:"type:varchar(64);not null;index;uniqueIndex:idx_perf_reminder_round"`
-	ParticipantID uint       `gorm:"not null;index;uniqueIndex:idx_perf_reminder_round"`
+	OrgID         string     `gorm:"type:varchar(64);not null;default:'default';index;uniqueIndex:idx_perf_reminder_org_round,priority:1" json:"org_id"`
+	ActivityID    string     `gorm:"type:varchar(64);not null;index;uniqueIndex:idx_perf_reminder_org_round,priority:2"`
+	ParticipantID uint       `gorm:"not null;index;uniqueIndex:idx_perf_reminder_org_round,priority:3"`
 	EmployeeID    string     `gorm:"type:varchar(64);not null;index"`
-	Stage         string     `gorm:"type:varchar(32);not null;index;uniqueIndex:idx_perf_reminder_round"`
-	ReminderKey   string     `gorm:"type:varchar(64);not null;index;uniqueIndex:idx_perf_reminder_round"`
-	ReminderDate  string     `gorm:"type:varchar(32);not null;index;uniqueIndex:idx_perf_reminder_round"`
+	Stage         string     `gorm:"type:varchar(32);not null;index;uniqueIndex:idx_perf_reminder_org_round,priority:4"`
+	ReminderKey   string     `gorm:"type:varchar(64);not null;index;uniqueIndex:idx_perf_reminder_org_round,priority:5"`
+	ReminderDate  string     `gorm:"type:varchar(32);not null;index;uniqueIndex:idx_perf_reminder_org_round,priority:6"`
 	Channel       string     `gorm:"type:varchar(32);not null;default:'dingtalk'" json:"channel"`
 	Status        string     `gorm:"type:varchar(32);not null;default:'sent'" json:"status"`
 	ErrorMessage  string     `gorm:"type:text" json:"error_message"`

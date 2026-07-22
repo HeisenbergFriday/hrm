@@ -31,20 +31,21 @@ func ScopedExternalID(orgID, externalID string) string {
 
 // Organization represents one DingTalk enterprise and its data boundary.
 type Organization struct {
-	ID              uint                   `gorm:"primaryKey" json:"id"`
-	OrgID           string                 `gorm:"type:varchar(64);uniqueIndex;not null" json:"org_id"`
-	Name            string                 `gorm:"type:varchar(128);not null" json:"name"`
-	CorpID          string                 `gorm:"type:varchar(128);uniqueIndex" json:"corp_id"`
-	DingTalkAppKey  string                 `gorm:"type:varchar(128)" json:"dingtalk_app_key"`
-	DingTalkSecret  string                 `gorm:"type:varchar(256)" json:"-"`
-	DingTalkAgentID string                 `gorm:"type:varchar(64)" json:"dingtalk_agent_id"`
-	AppHomeURL      string                 `gorm:"type:varchar(512)" json:"app_home_url"`
-	RedirectURI     string                 `gorm:"type:varchar(512)" json:"redirect_uri"`
-	Status          string                 `gorm:"type:varchar(32);not null;default:'active';index" json:"status"`
-	Extension       map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
-	CreatedAt       time.Time              `json:"created_at"`
-	UpdatedAt       time.Time              `json:"updated_at"`
-	DeletedAt       gorm.DeletedAt         `gorm:"index" json:"-"`
+	ID                  uint                   `gorm:"primaryKey" json:"id"`
+	OrgID               string                 `gorm:"type:varchar(64);uniqueIndex;not null" json:"org_id"`
+	Name                string                 `gorm:"type:varchar(128);not null" json:"name"`
+	CorpID              string                 `gorm:"type:varchar(128);uniqueIndex" json:"corp_id"`
+	DingTalkAppKey      string                 `gorm:"type:varchar(128)" json:"dingtalk_app_key"`
+	DingTalkSecret      string                 `gorm:"type:varchar(256)" json:"-"`
+	DingTalkAgentID     string                 `gorm:"type:varchar(64)" json:"dingtalk_agent_id"`
+	DingTalkAdminUserID string                 `gorm:"type:varchar(64)" json:"dingtalk_admin_user_id"`
+	AppHomeURL          string                 `gorm:"type:varchar(512)" json:"app_home_url"`
+	RedirectURI         string                 `gorm:"type:varchar(512)" json:"redirect_uri"`
+	Status              string                 `gorm:"type:varchar(32);not null;default:'active';index" json:"status"`
+	Extension           map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
+	CreatedAt           time.Time              `json:"created_at"`
+	UpdatedAt           time.Time              `json:"updated_at"`
+	DeletedAt           gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
 // User 用户模型
@@ -57,7 +58,7 @@ type User struct {
 	Email         string                 `gorm:"type:varchar(128);uniqueIndex:idx_org_email" json:"email"`
 	Mobile        string                 `gorm:"type:varchar(32)" json:"mobile"`
 	Password      string                 `gorm:"type:varchar(256)" json:"-"` // 密码哈希，JSON 不输出
-	DepartmentID  string                 `gorm:"type:varchar(64);not null" json:"department_id"`
+	DepartmentID string                 `gorm:"type:varchar(64);not null" json:"department_id"`
 	Position      string                 `gorm:"type:varchar(128)" json:"position"`
 	Avatar        string                 `gorm:"type:varchar(256)" json:"avatar"`
 	Status        string                 `gorm:"type:varchar(32);not null" json:"status"`
@@ -117,8 +118,8 @@ type Attendance struct {
 // Approval 审批模型
 type Approval struct {
 	ID            uint                   `gorm:"primaryKey" json:"id"`
-	OrgID         string                 `gorm:"type:varchar(64);index" json:"org_id"`
-	ProcessID     string                 `gorm:"type:varchar(64);unique;not null" json:"process_id"` // 钉钉审批流程ID
+	OrgID         string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_approvals_org_process,priority:1;index" json:"org_id"`
+	ProcessID     string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_approvals_org_process,priority:2" json:"process_id"` // 钉钉审批实例 ID
 	Title         string                 `gorm:"type:varchar(256);not null" json:"title"`
 	ApplicantID   string                 `gorm:"type:varchar(64);not null" json:"applicant_id"`
 	ApplicantName string                 `gorm:"type:varchar(128);not null" json:"applicant_name"`

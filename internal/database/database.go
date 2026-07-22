@@ -171,6 +171,27 @@ func CurrentOrganizationIDFromDB(db *gorm.DB) string {
 	return DefaultOrganizationID
 }
 
+// RequireOrganizationIDFromDB returns the tenant org from the DB session and fails closed
+// when no explicit organization is present. Unlike CurrentOrganizationIDFromDB it never
+// invents "default" for an empty context.
+func RequireOrganizationIDFromDB(db *gorm.DB) (string, error) {
+	if db == nil || db.Statement == nil {
+		return "", fmt.Errorf("missing organization context")
+	}
+	if info := requestmeta.FromContext(db.Statement.Context); info != nil {
+		if orgID := strings.TrimSpace(info.OrgID); orgID != "" {
+			return NormalizeOrganizationID(orgID), nil
+		}
+		return "", fmt.Errorf("missing organization context")
+	}
+	if tenantID, err := requestmeta.TenantID(db.Statement.Context); err == nil {
+		if orgID := strings.TrimSpace(tenantID); orgID != "" {
+			return NormalizeOrganizationID(orgID), nil
+		}
+	}
+	return "", fmt.Errorf("missing organization context")
+}
+
 func statementHasOrganizationField(db *gorm.DB) bool {
 	return db != nil &&
 		db.Statement != nil &&
@@ -304,9 +325,50 @@ func migrateSyncStatusOrganizationScope() error {
 	return ensureCompositeUniqueIndex("sync_statuses", "idx_sync_statuses_org_type", "org_id", "type")
 }
 
+const (
+	performanceReminderTableName       = "performance_reminder_logs"
+	performanceReminderLegacyIndexName = "idx_perf_reminder_round"
+	performanceReminderOrgIndexName    = "idx_perf_reminder_org_round"
+)
+
+func migratePerformanceReminderOrganizationScope() error {
+	exists, err := tableExists(performanceReminderTableName)
+	if err != nil || !exists {
+		return err
+	}
+	hasOldIndex, err := indexExists(performanceReminderTableName, performanceReminderLegacyIndexName)
+	if err != nil {
+		return err
+	}
+	if hasOldIndex {
+		if err := DB.Exec(fmt.Sprintf("DROP INDEX %s ON %s", quoteIdentifier(performanceReminderLegacyIndexName), quoteIdentifier(performanceReminderTableName))).Error; err != nil {
+			return err
+		}
+	}
+	return ensureCompositeUniqueIndex(
+		performanceReminderTableName,
+		performanceReminderOrgIndexName,
+		"org_id",
+		"activity_id",
+		"participant_id",
+		"stage",
+		"reminder_key",
+		"reminder_date",
+	)
+}
+
 func migrateRolePermissionOrganizationScope() error {
 	if !DB.Migrator().HasTable(&Role{}) {
 		return nil
+	}
+	// Remove the legacy global role-name uniqueness before cloning role templates
+	// into each organization. The replacement still rejects duplicate names inside
+	// one organization, while allowing different organizations to use the same name.
+	if err := dropUniqueIndexesForColumn("roles", "name", "idx_roles_org_name"); err != nil {
+		return err
+	}
+	if err := ensureCompositeUniqueIndex("roles", "idx_roles_org_name", "org_id", "name"); err != nil {
+		return err
 	}
 
 	if DB.Migrator().HasTable(&UserRole{}) && DB.Migrator().HasTable(&User{}) {
@@ -345,12 +407,6 @@ func migrateRolePermissionOrganizationScope() error {
 		}
 	}
 
-	if err := dropUniqueIndexesForColumn("roles", "name", "idx_roles_org_name"); err != nil {
-		return err
-	}
-	if err := ensureCompositeUniqueIndex("roles", "idx_roles_org_name", "org_id", "name"); err != nil {
-		return err
-	}
 	if err := dropUniqueIndexesForColumn("user_roles", "user_id", "idx_user_roles_org_user"); err != nil {
 		return err
 	}
@@ -1216,9 +1272,6 @@ func migrate() error {
 	if err := migrateUserMobileUniqueIndex(); err != nil {
 		return err
 	}
-	if err := migrateRoleNameUniqueIndex(); err != nil {
-		return err
-	}
 	if err := migrateOrganizationData(); err != nil {
 		return err
 	}
@@ -1226,6 +1279,9 @@ func migrate() error {
 		return err
 	}
 	if err := migrateSyncStatusOrganizationScope(); err != nil {
+		return err
+	}
+	if err := migratePerformanceReminderOrganizationScope(); err != nil {
 		return err
 	}
 
@@ -1872,55 +1928,6 @@ func migrateUserMobileUniqueIndex() error {
 		lowerErr := strings.ToLower(err.Error())
 		if strings.Contains(lowerErr, "duplicate entry") || strings.Contains(lowerErr, "duplicate key name") {
 			log.Printf("[migrate] 跳过创建 uni_users_mobile: %v", err)
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func migrateRoleNameUniqueIndex() error {
-	if !DB.Migrator().HasTable(&Role{}) {
-		return nil
-	}
-
-	var indexCount int64
-	if err := DB.Raw(`
-		SELECT COUNT(*)
-		FROM information_schema.STATISTICS
-		WHERE TABLE_SCHEMA = DATABASE()
-		  AND TABLE_NAME = 'roles'
-		  AND INDEX_NAME = 'uni_roles_name'
-	`).Scan(&indexCount).Error; err != nil {
-		return err
-	}
-	if indexCount > 0 {
-		return nil
-	}
-
-	type duplicateRoleName struct {
-		Name  string
-		Count int64
-	}
-	var duplicates []duplicateRoleName
-	if err := DB.Raw(`
-		SELECT name, COUNT(*) AS count
-		FROM roles
-		GROUP BY name
-		HAVING COUNT(*) > 1
-		LIMIT 5
-	`).Scan(&duplicates).Error; err != nil {
-		return err
-	}
-	if len(duplicates) > 0 {
-		log.Printf("[migrate] 跳过创建 uni_roles_name，发现 %d 个重复角色名样本，请先清理历史 roles.name 数据", len(duplicates))
-		return nil
-	}
-
-	if err := DB.Exec("CREATE UNIQUE INDEX `uni_roles_name` ON `roles` (`name`)").Error; err != nil {
-		lowerErr := strings.ToLower(err.Error())
-		if strings.Contains(lowerErr, "duplicate entry") || strings.Contains(lowerErr, "duplicate key name") {
-			log.Printf("[migrate] 跳过创建 uni_roles_name: %v", err)
 			return nil
 		}
 		return err
@@ -2614,7 +2621,7 @@ func findLiedeAdminUsers() ([]User, error) {
 
 	if adminUserID := strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID")); adminUserID != "" {
 		var envMatches []User
-		if err := DB.Where("deleted_at IS NULL AND user_id = ?", adminUserID).
+		if err := DB.Where("deleted_at IS NULL AND org_id = ? AND user_id = ?", DefaultOrganizationID, adminUserID).
 			Order("FIELD(org_id, 'default', 'xiaotie', 'muteng') DESC, id ASC").
 			Find(&envMatches).Error; err != nil {
 			return nil, err

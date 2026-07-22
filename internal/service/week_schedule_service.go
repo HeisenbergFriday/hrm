@@ -419,9 +419,13 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 		weeks = 4
 	}
 
-	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
-	if opUserID == "" {
-		return nil, fmt.Errorf("未配置 DINGTALK_ADMIN_USER_ID 环境变量")
+	orgID, err := requireOrgIDFromDB(s.db)
+	if err != nil {
+		return nil, err
+	}
+	opUserID, err := dingtalk.ResolveAdminUserID(orgID)
+	if err != nil {
+		return nil, err
 	}
 
 	// 1. 获取所有活跃用户
@@ -431,7 +435,6 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 	}
 
 	// 2. 获取班次列表，找到第一个正常工作班次
-	orgID := orgIDFromDB(s.db)
 	shifts, err := dingtalk.GetShiftListForOrg(orgID)
 	if err != nil {
 		return nil, fmt.Errorf("获取班次列表失败: %w", err)
@@ -587,6 +590,10 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 
 // SyncFromDingTalk 从钉钉读取排班数据，推断大小周配置
 func (s *WeekScheduleService) SyncFromDingTalk() (*WeekSyncResult, error) {
+	orgID, err := requireOrgIDFromDB(s.db)
+	if err != nil {
+		return nil, err
+	}
 	// 1. 获取活跃用户（取第一个作为样本）
 	var users []database.User
 	if err := s.db.Where("status = ? AND user_id != ?", "active", "admin").Limit(5).Find(&users).Error; err != nil {
@@ -616,7 +623,7 @@ func (s *WeekScheduleService) SyncFromDingTalk() (*WeekSyncResult, error) {
 			continue
 		}
 		dateStr := d.Format("2006-01-02")
-		schedules, err := dingtalk.GetScheduleListBatchByDay(userIDs, dateStr)
+		schedules, err := dingtalk.GetScheduleListBatchByDayForOrg(orgID, userIDs, dateStr)
 		if err != nil {
 			logrus.Warnf("批量获取 %s 排班失败: %v", dateStr, err)
 			continue
@@ -690,6 +697,10 @@ func (s *WeekScheduleService) SyncFromDingTalk() (*WeekSyncResult, error) {
 
 // GetSyncLogs 获取同步日志
 func (s *WeekScheduleService) SyncFromDingTalkConservative() (*WeekSyncResult, error) {
+	orgID, err := requireOrgIDFromDB(s.db)
+	if err != nil {
+		return nil, err
+	}
 	var users []database.User
 	if err := s.db.Where("status = ? AND user_id != ?", "active", "admin").Find(&users).Error; err != nil {
 		return nil, fmt.Errorf("query active users failed: %w", err)
@@ -725,7 +736,7 @@ func (s *WeekScheduleService) SyncFromDingTalkConservative() (*WeekSyncResult, e
 		}
 
 		dateStr := d.Format("2006-01-02")
-		schedules, err := fetchScheduleListBatchByDayChunked(userIDs, dateStr)
+		schedules, err := fetchScheduleListBatchByDayChunked(orgID, userIDs, dateStr)
 		if err != nil {
 			logrus.Warnf("fetch saturday schedules failed for %s: %v", dateStr, err)
 			continue
@@ -786,7 +797,7 @@ func (s *WeekScheduleService) SyncFromDingTalkConservative() (*WeekSyncResult, e
 	}, nil
 }
 
-func fetchScheduleListBatchByDayChunked(userIDs []string, workDate string) ([]map[string]interface{}, error) {
+func fetchScheduleListBatchByDayChunked(orgID string, userIDs []string, workDate string) ([]map[string]interface{}, error) {
 	if len(userIDs) == 0 {
 		return nil, nil
 	}
@@ -799,7 +810,7 @@ func fetchScheduleListBatchByDayChunked(userIDs []string, workDate string) ([]ma
 			end = len(userIDs)
 		}
 
-		items, err := dingtalk.GetScheduleListBatchByDay(userIDs[start:end], workDate)
+		items, err := dingtalk.GetScheduleListBatchByDayForOrg(orgID, userIDs[start:end], workDate)
 		if err != nil {
 			return nil, err
 		}

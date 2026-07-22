@@ -81,11 +81,22 @@ func Idempotency() gin.HandlerFunc {
 		method := strings.ToUpper(c.Request.Method)
 		route := idempotencyRoute(c)
 		requestHash := hashRequest(method, route, c.Request.URL.RawQuery, body)
-		digest := hashDigest(userID, method, route, key)
+		orgID, orgErr := resolveIdempotencyOrgID(c)
+		if orgErr != nil {
+			// Authenticated requests without org must fail closed — never share
+			// the default tenant's idempotency namespace or invent a tenant.
+			c.Header(HeaderIdempotencyStatus, "invalid")
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing organization context for idempotency"})
+			c.Abort()
+			return
+		}
+		// digest 纳入 org_id，避免跨组织同一 user/key 互撞。
+		digest := hashDigest(orgID, userID, method, route, key)
 
 		cleanupExpiredIdempotencyRecords(db, now)
 
 		record := &database.IdempotencyRecord{
+			OrgID:          orgID,
 			Digest:         digest,
 			IdempotencyKey: key,
 			UserID:         userID,
@@ -232,7 +243,7 @@ func claimIdempotencyRecord(db *gorm.DB, record *database.IdempotencyRecord) (*d
 	}
 
 	var existing database.IdempotencyRecord
-	if err := db.Where("digest = ?", record.Digest).First(&existing).Error; err != nil {
+	if err := db.Where("org_id = ? AND digest = ?", record.OrgID, record.Digest).First(&existing).Error; err != nil {
 		return nil, false, err
 	}
 	if !existing.ExpiresAt.IsZero() && time.Now().After(existing.ExpiresAt) {
@@ -244,7 +255,7 @@ func claimIdempotencyRecord(db *gorm.DB, record *database.IdempotencyRecord) (*d
 		} else if !isDuplicateKeyError(err) {
 			return nil, false, err
 		}
-		if err := db.Where("digest = ?", record.Digest).First(&existing).Error; err != nil {
+		if err := db.Where("org_id = ? AND digest = ?", record.OrgID, record.Digest).First(&existing).Error; err != nil {
 			return nil, false, err
 		}
 	}
@@ -303,6 +314,36 @@ func idempotencyUserID(c *gin.Context) string {
 		return "auth:" + hashString(auth)
 	}
 	return "anonymous:" + c.ClientIP()
+}
+
+// unauthenticatedIdempotencyOrg is a non-tenant digest namespace for anonymous
+// requests that still send Idempotency-Key. It must NOT equal any real org_id
+// (including "default") so anonymous keys cannot collide with tenant business rows.
+const unauthenticatedIdempotencyOrg = "__unauthenticated__"
+
+// resolveIdempotencyOrgID returns the org dimension for idempotency digests.
+// - JWT/context org present → use it
+// - authenticated (userID set) but missing org → error (fail-closed)
+// - anonymous → non-tenant sentinel (not "default")
+func resolveIdempotencyOrgID(c *gin.Context) (string, error) {
+	if c == nil {
+		return "", errors.New("missing organization context")
+	}
+	if orgID, err := CurrentOrgID(c); err == nil && strings.TrimSpace(orgID) != "" {
+		return database.NormalizeOrganizationID(orgID), nil
+	}
+	if value, ok := c.Get("orgID"); ok {
+		if orgID, ok := value.(string); ok && strings.TrimSpace(orgID) != "" {
+			return database.NormalizeOrganizationID(orgID), nil
+		}
+	}
+	// Authenticated but unbound: never fall back to default tenant.
+	if value, ok := c.Get("userID"); ok {
+		if userID, ok := value.(string); ok && strings.TrimSpace(userID) != "" {
+			return "", errors.New("missing organization context")
+		}
+	}
+	return unauthenticatedIdempotencyOrg, nil
 }
 
 func idempotencyRoute(c *gin.Context) string {
