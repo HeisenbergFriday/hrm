@@ -56,10 +56,8 @@ func SetupRouter() *gin.Engine {
 	router.Use(middleware.RequestMetrics())
 
 	router.GET("/health", HealthCheck)
-	// Performance attachments and other shared uploads are read by several modules.
-	// Authentication is required here; feature permissions remain on the business
-	// records that expose the opaque file URL.
-	router.GET("/api/v1/files/:filename", middleware.JWTAuth(), ServeFile)
+	// 文件下载：JWT + TenantContext，按 org 元数据鉴权（与 authRequired 一致）
+	router.GET("/api/v1/files/:filename", middleware.JWTAuth(), middleware.TenantContext(), ServeFile)
 
 	v1 := router.Group("/api/v1")
 	{
@@ -108,13 +106,17 @@ func SetupRouter() *gin.Engine {
 				users.PUT("/:id", middleware.RequirePermission("user_manage"), UpdateUser)
 			}
 
-			// Department selectors are shared by attendance, performance indicators,
-			// performance reports, and week scheduling. Keep the route authenticated
-			// and let GetScopedDepartments enforce the caller's organization/data scope.
 			departments := authRequired.Group("/departments")
 			{
-				departments.GET("", GetScopedDepartments)
-				departments.GET("/:id", GetDepartment)
+				// 部门枚举需 org 读能力或业务菜单，禁止任意登录用户无门闩枚举
+				departments.GET("", middleware.RequirePermissionOrMenu(
+					[]string{"org:read", "user_manage", "permission_manage", "attendance_manage"},
+					orgReadMenus,
+				), GetScopedDepartments)
+				departments.GET("/:id", middleware.RequirePermissionOrMenu(
+					[]string{"org:read", "user_manage", "permission_manage", "attendance_manage"},
+					orgReadMenus,
+				), GetDepartment)
 			}
 
 			sync := authRequired.Group("/sync")
@@ -163,8 +165,8 @@ func SetupRouter() *gin.Engine {
 				attendance.GET("/toolbox/defaults", middleware.RequirePermissionOrMenu([]string{"attendance_manage", "attendance_toolbox_operate"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxDefaults)
 				attendance.POST("/toolbox/:module/run", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), RunAttendanceToolbox)
 				attendance.POST("/toolbox/dingtalk-sync", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunDingtalkSync)
-				attendance.POST("/toolbox/rules/export", middleware.RequirePermission("attendance_manage", "attendance_toolbox_rules_edit"), ExportOvertimeRules)
-				attendance.POST("/toolbox/rules/import-preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_rules_edit"), ImportOvertimeRulesPreview)
+				attendance.POST("/toolbox/rules/export", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ExportOvertimeRules)
+				attendance.POST("/toolbox/rules/import-preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ImportOvertimeRulesPreview)
 				attendance.POST("/toolbox/:module/validate", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ValidateAttendanceToolbox)
 				attendance.POST("/toolbox/templates", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ExportAttendanceToolboxTemplates)
 				attendance.POST("/toolbox/audit", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), AuditAttendanceToolbox)
@@ -334,9 +336,25 @@ func SetupRouter() *gin.Engine {
 				shiftConfig.POST("/get-or-create-shift", middleware.RequirePermission("attendance_manage"), GetOrCreateCustomShift)
 			}
 
-			// Shared attachment upload. Business write permissions are enforced by the
-			// endpoint that persists the returned opaque URL.
-			authRequired.POST("/upload", UploadFile)
+			// 通用上传：需具备业务写相关权限之一，禁止任意登录用户无门闩上传
+			authRequired.POST("/upload", middleware.RequirePermissionOrMenu(
+				[]string{
+					"user_manage",
+					"attendance_manage",
+					"attendance_toolbox_operate",
+					"performance:self_eval:submit",
+					"performance:manager_eval:submit",
+					"performance:goal:manage",
+					"performance:activity:manage",
+					"performance:result:view",
+				},
+				[]string{
+					"menu:performance-overview",
+					"menu:attendance-toolbox",
+					"menu:employee-profile",
+					"menu:employee-flow",
+				},
+			), UploadFile)
 
 			performanceReadPermissions := []string{
 				"performance:result:view",
@@ -365,6 +383,12 @@ func SetupRouter() *gin.Engine {
 			)
 			performance := authRequired.Group("/performance")
 			{
+				// 活动编辑器范围选项 / Excel 导入批次（JWT + TenantContext + 绩效权限）
+				performance.GET("/scope-options", performanceRead, GetPerformanceScopeOptions)
+				performance.POST("/imports/analyze", middleware.RequirePermission("performance:activity:manage"), AnalyzePerformanceActivityImport)
+				performance.GET("/imports/:batch_id", middleware.RequirePermission("performance:activity:manage"), GetPerformanceActivityImportBatch)
+				performance.POST("/imports/:batch_id/commit", middleware.RequirePermission("performance:activity:manage"), CommitPerformanceActivityImport)
+
 				performance.GET("/activities", performanceRead, GetPerformanceActivities)
 				performance.POST("/activities", middleware.RequirePermission("performance:activity:manage"), CreatePerformanceActivity)
 				performance.GET("/activities/:activity_id", performanceRead, GetPerformanceActivity)

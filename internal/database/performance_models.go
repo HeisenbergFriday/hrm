@@ -594,3 +594,24 @@ type PerformanceIndicatorItem struct {
 	CreatedBy         string     `gorm:"type:varchar(64)" json:"created_by"`
 	UpdatedBy         string     `gorm:"type:varchar(64)" json:"updated_by"`
 }
+
+// PerformanceImportBatch 记录 Excel 绩效导入的分析预览和提交结果。
+type PerformanceImportBatch struct {
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	OrgID          string     `gorm:"type:varchar(64);not null;default:'default';index;uniqueIndex:uk_performance_import_batch_org_key,priority:1" json:"org_id"`
+	BatchKey       string     `gorm:"type:varchar(64);not null;uniqueIndex:uk_performance_import_batch_org_key,priority:2" json:"batch_id"`
+	FileName       string     `gorm:"type:varchar(256);not null" json:"file_name"`
+	FileSHA256     string     `gorm:"type:varchar(64);not null;index" json:"file_sha256"`
+	SourceType     string     `gorm:"type:varchar(32);not null;index" json:"source_type"`
+	Status         string     `gorm:"type:varchar(32);not null;index;default:analyzed" json:"status"` // analyzed, committing, committed, failed
+	PreviewJSON    string     `gorm:"type:longtext;not null" json:"-"`
+	ResultJSON     string     `gorm:"type:longtext" json:"-"`
+	FailureMessage string     `gorm:"type:text" json:"failure_message,omitempty"`
+	CreatedBy      string     `gorm:"type:varchar(64);not null" json:"created_by"`
+	CommittedBy    string     `gorm:"type:varchar(64)" json:"committed_by,omitempty"`
+	CommittedAt    *time.Time `json:"committed_at,omitempty"`
+	ExpiresAt      *time.Time `gorm:"index" json:"expires_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	DeletedAt      *time.Time `gorm:"index" json:"-"`
+}

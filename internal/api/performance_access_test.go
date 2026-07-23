@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"peopleops/internal/database"
+	"peopleops/internal/requestmeta"
 
 	"github.com/gin-gonic/gin"
 )
@@ -124,7 +125,7 @@ func TestIndicatorLibraryAccessRespectsDepartmentScope(t *testing.T) {
 			})
 
 			c, recorder := newPerformanceAccessContext("manager-1")
-			c.Request = performanceTestRequest(http.MethodGet, "/api/v1/performance/indicator-libraries/1", nil)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/performance/indicator-libraries/1", nil)
 			c.Params = gin.Params{{Key: "id", Value: "1"}}
 
 			GetIndicatorLibrary(c)
@@ -196,12 +197,14 @@ func TestPerformanceHandlersRejectBadInputBeforeDatabaseWork(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
-			c.Set("userID", "admin")
+			// 先绑定 org 再校验入参：缺 org 现在会在 requirePermission 层直接 401。
+			c, recorder := performanceHandlerContextAs(t, performanceHandlerTestOrgID, "admin")
 			c.Params = tt.params
 			c.Request = httptest.NewRequest(tt.method, tt.target, strings.NewReader(tt.body))
 			c.Request.Header.Set("Content-Type", "application/json")
+			if database.DB != nil {
+				c.Set("requestDB", database.DB.WithContext(c.Request.Context()))
+			}
 
 			tt.handler(c)
 
@@ -213,12 +216,19 @@ func TestPerformanceHandlersRejectBadInputBeforeDatabaseWork(t *testing.T) {
 }
 
 func newPerformanceAccessContext(userID string) (*gin.Context, *httptest.ResponseRecorder) {
+	// 统一写入 orgID + userID + requestmeta + requestDB，与 JWT/Tenant 中间件一致。
 	gin.SetMode(gin.TestMode)
-
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	info := &requestmeta.RequestInfo{OrgID: performanceHandlerTestOrgID}
+	ctx := requestmeta.WithRequestInfo(req.Context(), info)
+	ctx = requestmeta.WithTenant(ctx, performanceHandlerTestOrgID)
+	c.Request = req.WithContext(ctx)
+	c.Set("orgID", performanceHandlerTestOrgID)
 	c.Set("userID", userID)
-	c.Set("orgID", database.DefaultOrganizationID)
-	c.Request = performanceTestRequest(http.MethodGet, "/", nil)
+	if database.DB != nil {
+		c.Set("requestDB", database.DB.WithContext(ctx))
+	}
 	return c, recorder
 }

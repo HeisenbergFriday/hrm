@@ -1,6 +1,6 @@
 ---
 purpose: UI 设计规范约束，包括组件库、样式、布局、交互、命名、无障碍规范
-last_updated: 2026-05-25
+last_updated: 2026-07-20
 source_of_truth:
   - Ant Design 官方文档
   - 项目现有代码风格
@@ -75,19 +75,27 @@ update_when:
 
 ### 2.1 颜色规范
 
-#### 主色
-- **Primary**：`#1677ff`（antd 默认蓝）
-- **Success**：`#52c41a`
-- **Warning**：`#faad14`
+#### 主色（与 `frontend/src/index.css` / App theme 同步，2026-07 浅色改版）
+- **Primary**：`#2563eb`
+- **Primary Hover**：`#3b82f6`
+- **Primary Active**：`#1d4ed8`
+- **Primary Light**：`#7dd3fc`
+- **Primary Bg**：`#eaf2ff`
+- **Success**：`#10b981`
+- **Warning**：`#f59e0b`
 - **Error**：`#ff4d4f`
-- **Info**：`#1677ff`
+- **Info**：`#0891b2`
 
-#### 中性色
-- **Text Primary**：`rgba(0, 0, 0, 0.88)`
-- **Text Secondary**：`rgba(0, 0, 0, 0.65)`
-- **Text Tertiary**：`rgba(0, 0, 0, 0.45)`
-- **Border**：`#d9d9d9`
-- **Background**：`#fafafa`
+> 禁止再使用旧主色 `#1677ff`（antd 默认）或 `#4338ca`（历史靛蓝主题）。
+
+#### 中性色 / 背景（Design Token）
+- **Text Title**：`#172033`
+- **Text Primary**：`#1f2937`
+- **Text Secondary**：`#64748b`
+- **Text Tertiary**：`#94a3b8`
+- **Border**：`#e3eaf3`
+- **Background Page**：`#f6f8fb`
+- **Card**：`#ffffff`
 - **White**：`#ffffff`
 
 #### 语义色使用
@@ -137,13 +145,23 @@ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica N
 
 ### 2.4 圆角规范
 
+与 `index.css` token 对齐：
+
+| Token | 值 | 典型用途 |
+|---|---|---|
+| `--radius-xs` | 4px | 小标签 |
+| `--radius-sm` | 6px | 输入框 |
+| `--radius-md` / `--radius-lg` / `--radius-xl` | 8px | 按钮、卡片、模态框 |
+| `--radius-2xl` | 10px | 大卡片 / Hero |
+| `--radius-pill` | 999px | 芯片、user-chip |
+
 | 元素 | 圆角 |
 |---|---|
-| 按钮 | 6px（antd 默认） |
-| 输入框 | 6px（antd 默认） |
-| 卡片 | 8px |
+| 按钮 | 8px（App theme `borderRadius`） |
+| 输入框 | 8px |
+| 卡片 | 8–10px |
 | 模态框 | 8px |
-| 标签 | 4px |
+| 标签 | 6px（`borderRadiusSM`） |
 | 头像 | 50%（圆形） |
 
 ### 2.5 阴影规范
@@ -282,12 +300,18 @@ notification.error({ message: '失败', description: '...' });
 
 #### 空状态
 ```tsx
+// 全局默认已在 App.tsx 通过 ConfigProvider.renderEmpty + locale.Table.emptyText 设为「暂无数据」
+// 页面有场景语义时仍应显式覆盖：
 <Empty description="暂无数据" />
 // 或自定义
 <Empty description={<span>暂无考勤记录</span>}>
   <Button type="primary">去打卡</Button>
 </Empty>
+// 依赖先选筛选条件的列表：
+locale={{ emptyText: queryKey ? '暂无xxx数据' : '请先选择员工后查询' }}
 ```
+
+禁止依赖 antd 默认英文 `No data`；即便已设 `locale={zhCN}`，也建议全局 `renderEmpty` 兜底。
 
 ### 4.4 确认弹窗
 

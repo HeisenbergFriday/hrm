@@ -14,6 +14,7 @@ import {
   Spin,
   Table,
   Tabs,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -24,6 +25,7 @@ import StatusTag from '../components/StatusTag'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { departmentAPI, employeeAPI } from '../services/api'
 import { formatDateTime } from '../utils/format'
+import { hasPermission } from '../utils/permission'
 
 const { Title, Paragraph, Text } = Typography
 const { TextArea } = Input
@@ -164,9 +166,12 @@ const renderStatusTag = (value?: string) => {
 const employmentTypeOptions = ['全职', '兼职', '实习']
 const educationOptions = ['高中', '大专', '本科', '硕士', '博士']
 
+const missingUserManageTip = '你缺少 user_manage 权限，需要联系管理员添加'
+
 const EmployeeFlow: React.FC = () => {
   const [activeTab, setActiveTab] = useState<FlowTabKey>('onboarding')
   const [createModalOpen, setCreateModalOpen] = useState(false)
+  const canManage = hasPermission('user_manage')
   const [detailState, setDetailState] = useState<DetailState | null>(null)
   const [form] = Form.useForm<FlowFormValues>()
 
@@ -682,9 +687,11 @@ const EmployeeFlow: React.FC = () => {
                 <Button icon={<ReloadOutlined />} onClick={refetchCurrentList} loading={onboardingsQuery.isFetching}>
                   刷新
                 </Button>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-                  新建入职
-                </Button>
+                <Tooltip title={canManage ? undefined : missingUserManageTip}>
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => canManage && setCreateModalOpen(true)} disabled={!canManage}>
+                    新建入职
+                  </Button>
+                </Tooltip>
               </div>
             }
           >
@@ -698,9 +705,11 @@ const EmployeeFlow: React.FC = () => {
                 <Button icon={<ReloadOutlined />} onClick={refetchCurrentList} loading={transfersQuery.isFetching}>
                   刷新
                 </Button>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-                  新建调岗
-                </Button>
+                <Tooltip title={canManage ? undefined : missingUserManageTip}>
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => canManage && setCreateModalOpen(true)} disabled={!canManage}>
+                    新建调岗
+                  </Button>
+                </Tooltip>
               </div>
             }
           >
@@ -714,9 +723,11 @@ const EmployeeFlow: React.FC = () => {
                 <Button icon={<ReloadOutlined />} onClick={refetchCurrentList} loading={resignationsQuery.isFetching}>
                   刷新
                 </Button>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-                  新建离职
-                </Button>
+                <Tooltip title={canManage ? undefined : missingUserManageTip}>
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => canManage && setCreateModalOpen(true)} disabled={!canManage}>
+                    新建离职
+                  </Button>
+                </Tooltip>
               </div>
             }
           >

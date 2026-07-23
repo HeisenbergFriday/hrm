@@ -6,10 +6,9 @@ import App from './App.tsx'
 import './index.css'
 
 dayjs.locale('zh-cn')
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
-
-const queryClient = new QueryClient()
+import { queryClient } from './queryClient'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <QueryClientProvider client={queryClient}>

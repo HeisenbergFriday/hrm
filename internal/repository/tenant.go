@@ -24,8 +24,7 @@ func RequireOrgID(orgID string) (string, error) {
 }
 
 // ScopeOrg 返回一个 GORM Scope，向指定列附加 org 过滤；qualifiedColumn 支持
-// "org_id" 或 "users.org_id"，orgID 为空时直接返回原 tx，供仍需兼容的旧构造使用。
-// 新代码请优先使用严格 tenant 仓储：不允许空 org。
+// "org_id" 或 "users.org_id"。orgID 为空时 fail-closed（1=0），禁止未绑定租户的全表扫描。
 func ScopeOrg(orgID, qualifiedColumn string) func(*gorm.DB) *gorm.DB {
 	col := strings.TrimSpace(qualifiedColumn)
 	if col == "" {
@@ -34,7 +33,7 @@ func ScopeOrg(orgID, qualifiedColumn string) func(*gorm.DB) *gorm.DB {
 	trimmed := strings.TrimSpace(orgID)
 	return func(tx *gorm.DB) *gorm.DB {
 		if trimmed == "" {
-			return tx
+			return tx.Where("1 = 0")
 		}
 		return tx.Where(fmt.Sprintf("%s = ?", col), trimmed)
 	}

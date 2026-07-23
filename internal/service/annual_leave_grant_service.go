@@ -291,7 +291,15 @@ func (s *AnnualLeaveGrantService) syncGrantToDingTalk(grant *database.AnnualLeav
 	if grant.Remark != "" {
 		reason = grant.Remark
 	}
-	if err := dingtalk.UpdateAnnualLeaveQuotaForOrg(orgIDFromDB(s.db), grant.UserID, grant.Year, days, reason); err != nil {
+	orgID, orgErr := resolveServiceOrgID(s.orgID, s.db)
+	if orgErr != nil {
+		log.Printf("[leave-sync] missing org context grantID=%d userID=%s err=%v", grant.ID, grant.UserID, orgErr)
+		result.DingTalkFailedCount++
+		result.Errors = append(result.Errors, fmt.Sprintf("%s Q%d: %s", grant.UserID, grant.Quarter, orgErr.Error()))
+		setStatus("failed", orgErr.Error(), nil)
+		return
+	}
+	if err := dingtalk.UpdateAnnualLeaveQuotaForOrg(orgID, grant.UserID, grant.Year, days, reason); err != nil {
 		log.Printf("[leave-sync] 同步失败 grantID=%d userID=%s year=%d days=%.2f err=%v", grant.ID, grant.UserID, grant.Year, days, err)
 		result.DingTalkFailedCount++
 		result.Errors = append(result.Errors, fmt.Sprintf("%s Q%d: %s", grant.UserID, grant.Quarter, err.Error()))
@@ -334,7 +342,11 @@ func grantTypeLabel(grantType string) string {
 
 func (s *AnnualLeaveGrantService) lookupCurrentWorkingYears(userID string, year int) (float64, bool) {
 	var profile database.EmployeeProfile
-	if err := s.db.Select("entry_date").Where("user_id = ?", userID).First(&profile).Error; err != nil {
+	query := s.db.Select("entry_date").Where("user_id = ?", userID)
+	if orgID := strings.TrimSpace(s.orgID); orgID != "" {
+		query = query.Where("org_id = ?", orgID)
+	}
+	if err := query.First(&profile).Error; err != nil {
 		return 0, false
 	}
 	if profile.EntryDate == "" {
@@ -422,9 +434,14 @@ func (s *AnnualLeaveGrantService) SyncAllGrantsToDingTalk() (*GrantOperationResu
 }
 
 // approvalRef 作为唯一键防止同一条审批重复扣减；传空时跳过去重检查（手动录入场景）。
+// 必须绑定租户 orgID，禁止跨组织扣减同 user_id 余额。
 func (s *AnnualLeaveGrantService) ConsumeAnnualLeave(userID string, days float64, approvalRef, remark string) error {
 	if days <= 0 {
 		return fmt.Errorf("消费天数必须大于0")
+	}
+	orgID := strings.TrimSpace(s.orgID)
+	if orgID == "" {
+		return fmt.Errorf("org_id required for annual leave consumption")
 	}
 
 	approvalRef = strings.TrimSpace(approvalRef)
@@ -433,7 +450,7 @@ func (s *AnnualLeaveGrantService) ConsumeAnnualLeave(userID string, days float64
 		if approvalRef != "" {
 			var exists int64
 			if err := tx.Model(&database.AnnualLeaveConsumeLog{}).
-				Where("approval_ref = ?", approvalRef).
+				Where("org_id = ? AND approval_ref = ?", orgID, approvalRef).
 				Count(&exists).Error; err != nil {
 				return err
 			}
@@ -444,7 +461,7 @@ func (s *AnnualLeaveGrantService) ConsumeAnnualLeave(userID string, days float64
 
 		var grants []database.AnnualLeaveGrant
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("user_id = ? AND remaining_days > 0", userID).
+			Where("org_id = ? AND user_id = ? AND remaining_days > 0", orgID, userID).
 			Order("year asc, quarter asc, id asc").
 			Find(&grants).Error; err != nil {
 			return err
@@ -475,7 +492,7 @@ func (s *AnnualLeaveGrantService) ConsumeAnnualLeave(userID string, days float64
 			newUsed := grant.UsedDays + deduct
 			newRemaining := grant.RemainingDays - deduct
 			if err := tx.Model(&database.AnnualLeaveGrant{}).
-				Where("id = ?", grant.ID).
+				Where("id = ? AND org_id = ?", grant.ID, orgID).
 				Updates(map[string]interface{}{
 					"used_days":      newUsed,
 					"remaining_days": newRemaining,
@@ -484,6 +501,7 @@ func (s *AnnualLeaveGrantService) ConsumeAnnualLeave(userID string, days float64
 			}
 
 			logEntry := &database.AnnualLeaveConsumeLog{
+				OrgID:       orgID,
 				UserID:      userID,
 				GrantID:     grant.ID,
 				ApprovalRef: approvalRef,
@@ -507,12 +525,13 @@ func (s *AnnualLeaveGrantService) ConsumeAnnualLeave(userID string, days float64
 
 // GetConsumeLog 查询用户的年假消费记录
 func (s *AnnualLeaveGrantService) GetConsumeLog(userID string) ([]database.AnnualLeaveConsumeLog, error) {
-	var logs []database.AnnualLeaveConsumeLog
-	query := s.db.Where("user_id = ?", userID)
-	if s.orgID != "" {
-		query = query.Where("org_id = ?", s.orgID)
+	orgID := strings.TrimSpace(s.orgID)
+	if orgID == "" {
+		return nil, fmt.Errorf("org_id required for annual leave consume log")
 	}
-	err := query.Order("created_at desc").Find(&logs).Error
+	var logs []database.AnnualLeaveConsumeLog
+	err := s.db.Where("org_id = ? AND user_id = ?", orgID, userID).
+		Order("created_at desc").Find(&logs).Error
 	return logs, err
 }
 

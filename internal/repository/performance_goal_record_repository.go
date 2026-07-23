@@ -18,15 +18,13 @@ func NewPerformanceGoalRecordRepository(db *gorm.DB) *PerformanceGoalRecordRepos
 }
 
 func NewPerformanceGoalRecordRepositoryWithOrgID(db *gorm.DB, orgID string) *PerformanceGoalRecordRepository {
-	return &PerformanceGoalRecordRepository{db: db, orgID: strings.TrimSpace(orgID)}
+	orgID = strings.TrimSpace(orgID)
+	return &PerformanceGoalRecordRepository{db: performanceRepositoryDB(db, orgID), orgID: orgID}
 }
 
 func (r *PerformanceGoalRecordRepository) scoped() *gorm.DB {
-	tx := r.db
-	if strings.TrimSpace(r.orgID) != "" {
-		tx = tx.Where("org_id = ?", strings.TrimSpace(r.orgID))
-	}
-	return tx
+	// Fail-closed: empty org never returns unfiltered db.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *PerformanceGoalRecordRepository) GetByID(id uint) (*database.PerformanceGoalRecord, error) {
@@ -71,10 +69,16 @@ func (r *PerformanceGoalRecordRepository) BatchUpsert(records []database.Perform
 	if len(records) == 0 {
 		return nil
 	}
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
+	}
 	for i := range records {
-		if strings.TrimSpace(r.orgID) != "" {
-			records[i].OrgID = strings.TrimSpace(r.orgID)
+		merged, err := EnsureSameOrg(orgID, records[i].OrgID)
+		if err != nil {
+			return err
 		}
+		records[i].OrgID = merged
 	}
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "id"}},
@@ -83,12 +87,15 @@ func (r *PerformanceGoalRecordRepository) BatchUpsert(records []database.Perform
 }
 
 func (r *PerformanceGoalRecordRepository) UpdateSingle(record *database.PerformanceGoalRecord) error {
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(record.OrgID) == "" {
-		record.OrgID = strings.TrimSpace(r.orgID)
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
 	}
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(record.OrgID) != strings.TrimSpace(r.orgID) {
-		return ErrOrgMismatch
+	merged, err := EnsureSameOrg(orgID, record.OrgID)
+	if err != nil {
+		return err
 	}
+	record.OrgID = merged
 	return r.scoped().Save(record).Error
 }
 

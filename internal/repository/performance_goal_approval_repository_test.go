@@ -192,7 +192,7 @@ func goalApprovalRow(id, participantID, goalRecordID uint, activityID, action, a
 
 func TestGoalApprovalRepo_Create_Success(t *testing.T) {
 	db := newGoalApprovalTestDB(t)
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	log := &database.PerformanceGoalApprovalLog{
 		ParticipantID: 10,
@@ -215,7 +215,7 @@ func TestGoalApprovalRepo_Create_Success(t *testing.T) {
 
 func TestGoalApprovalRepo_Create_ApproveAction(t *testing.T) {
 	db := newGoalApprovalTestDB(t)
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	log := &database.PerformanceGoalApprovalLog{
 		ParticipantID: 20,
@@ -237,7 +237,7 @@ func TestGoalApprovalRepo_Create_ApproveAction(t *testing.T) {
 
 func TestGoalApprovalRepo_Create_RejectAction(t *testing.T) {
 	db := newGoalApprovalTestDB(t)
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	log := &database.PerformanceGoalApprovalLog{
 		ParticipantID: 30,
@@ -269,7 +269,7 @@ func TestGoalApprovalRepo_FindByParticipant_Found(t *testing.T) {
 			goalApprovalRow(2, 10, 100, "act-1", "approve", "manager-1", 2, now.Add(-1*time.Hour)),
 		},
 	})
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.FindByParticipant(10, "act-1")
 	if err != nil {
@@ -289,7 +289,7 @@ func TestGoalApprovalRepo_FindByParticipant_Empty(t *testing.T) {
 		columns: goalApprovalColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.FindByParticipant(999, "nonexistent")
 	if err != nil {
@@ -311,7 +311,7 @@ func TestGoalApprovalRepo_FindByParticipant_Ordering(t *testing.T) {
 			goalApprovalRow(1, 10, 100, "act-1", "submit", "user-10", 1, now.Add(-2*time.Hour)),
 		},
 	})
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.FindByParticipant(10, "act-1")
 	if err != nil {
@@ -334,7 +334,7 @@ func TestGoalApprovalRepo_FindByGoalRecord_Found(t *testing.T) {
 			goalApprovalRow(2, 10, 100, "act-1", "approve", "manager-1", 2, now.Add(-1*time.Hour)),
 		},
 	})
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.FindByGoalRecord(100)
 	if err != nil {
@@ -356,7 +356,7 @@ func TestGoalApprovalRepo_FindByGoalRecord_Empty(t *testing.T) {
 		columns: goalApprovalColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.FindByGoalRecord(999)
 	if err != nil {
@@ -379,7 +379,7 @@ func TestGoalApprovalRepo_FindByGoalRecord_MultipleActions(t *testing.T) {
 			goalApprovalRow(4, 10, 100, "act-1", "approve", "manager-1", 4, now),
 		},
 	})
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.FindByGoalRecord(100)
 	if err != nil {
@@ -401,7 +401,7 @@ func TestGoalApprovalRepo_GetLatestByParticipant_Found(t *testing.T) {
 			goalApprovalRow(1, 10, 100, "act-1", "approve", "manager-1", 2, now),
 		},
 	})
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	log, err := repo.GetLatestByParticipant(10, "act-1")
 	if err != nil {
@@ -417,7 +417,7 @@ func TestGoalApprovalRepo_GetLatestByParticipant_Found(t *testing.T) {
 
 func TestGoalApprovalRepo_GetLatestByParticipant_NotFound(t *testing.T) {
 	db := newGoalApprovalTestDB(t) // no stub → query fails
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	_, err := repo.GetLatestByParticipant(999, "nonexistent")
 	if err == nil {
@@ -434,7 +434,7 @@ func TestGoalApprovalRepo_GetLatestByParticipant_VerifyFields(t *testing.T) {
 			goalApprovalRow(5, 20, 200, "act-2", "submit", "user-20", 1, now),
 		},
 	})
-	repo := NewPerformanceGoalApprovalRepository(db)
+	repo := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "test-org")
 
 	log, err := repo.GetLatestByParticipant(20, "act-2")
 	if err != nil {

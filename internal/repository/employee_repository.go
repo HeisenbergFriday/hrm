@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"strings"
+
 	"peopleops/internal/database"
 
 	"gorm.io/gorm"
@@ -42,56 +44,84 @@ type EmployeeLifecycleLedgerItem struct {
 	OnboardingStatusDisplay string `json:"onboarding_status_display"` // 状态展示文本
 }
 
+// NewEmployeeRepository 仅保留给明确的全局迁移/审计场景。
+// 普通业务读/写在 orgID 为空时 fail-closed（返回 ErrMissingOrgID / 空结果），
+// 禁止再把该构造器用于 HTTP 请求路径。
 func NewEmployeeRepository(db *gorm.DB) *EmployeeRepository {
 	return &EmployeeRepository{db: db}
 }
 
 // NewEmployeeRepositoryWithOrgID 多租户构造：所有查询自动追加 org 过滤。
-// employee_profiles/transfers/resignations/onboardings 表本身无 org_id，
-// 通过 users 或 departments 表间接过滤。orgID 为空时行为等同旧构造（不过滤）。
+// profiles/transfers/resignations/onboardings 均带 org_id，直接按表内 org_id 过滤。
+// orgID 为空时行为等同未绑定组织：读路径 fail-closed。
 func NewEmployeeRepositoryWithOrgID(db *gorm.DB, orgID string) *EmployeeRepository {
-	return &EmployeeRepository{db: db, orgID: orgID}
+	return &EmployeeRepository{db: db, orgID: strings.TrimSpace(orgID)}
 }
 
-// applyProfileOrgFilter 通过 employee_profiles.user_id 关联 users.org_id 做过滤。
+// requireBoundOrg 普通请求必须绑定组织；空 org 禁止返回任何员工数据。
+func (r *EmployeeRepository) requireBoundOrg() (string, error) {
+	if r == nil {
+		return "", ErrMissingOrgID
+	}
+	return RequireOrgID(r.orgID)
+}
+
+// applyProfileOrgFilter 按 employee_profiles.org_id 过滤；未绑定组织时 fail-closed（1=0）。
 func (r *EmployeeRepository) applyProfileOrgFilter(query *gorm.DB) *gorm.DB {
 	if r.orgID == "" {
-		return query
+		return query.Where("1 = 0")
 	}
 	return query.Where("employee_profiles.org_id = ?", r.orgID)
 }
 
-// applyUsersOrgFilter 用于以 users 为主表的查询。
+// applyUsersOrgFilter 用于以 users 为主表的查询；未绑定组织时 fail-closed。
 func (r *EmployeeRepository) applyUsersOrgFilter(query *gorm.DB) *gorm.DB {
 	if r.orgID == "" {
-		return query
+		return query.Where("1 = 0")
 	}
 	return query.Where("users.org_id = ?", r.orgID)
 }
 
-// applyTransferOrgFilter 通过 employee_transfers.user_id 关联 users.org_id 做过滤。
+// applyTransferOrgFilter 直接按 employee_transfers.org_id 过滤。
 func (r *EmployeeRepository) applyTransferOrgFilter(query *gorm.DB) *gorm.DB {
 	if r.orgID == "" {
-		return query
+		return query.Where("1 = 0")
 	}
-	return query.Where("EXISTS (SELECT 1 FROM users u WHERE u.user_id = employee_transfers.user_id AND u.org_id = ? AND u.deleted_at IS NULL)", r.orgID)
+	return query.Where("employee_transfers.org_id = ?", r.orgID)
 }
 
-// applyResignationOrgFilter 通过 employee_resignations.user_id 关联 users.org_id 做过滤。
+// applyResignationOrgFilter 直接按 employee_resignations.org_id 过滤。
 func (r *EmployeeRepository) applyResignationOrgFilter(query *gorm.DB) *gorm.DB {
 	if r.orgID == "" {
-		return query
+		return query.Where("1 = 0")
 	}
-	return query.Where("EXISTS (SELECT 1 FROM users u WHERE u.user_id = employee_resignations.user_id AND u.org_id = ? AND u.deleted_at IS NULL)", r.orgID)
+	return query.Where("employee_resignations.org_id = ?", r.orgID)
 }
 
-// applyOnboardingOrgFilter 通过 employee_onboardings.department_id 关联 departments.org_id 做过滤。
-// candidate onboarding 未必有 users 对应，只能靠 department 判断组织归属。
+// applyOnboardingOrgFilter 直接按 employee_onboardings.org_id 过滤。
 func (r *EmployeeRepository) applyOnboardingOrgFilter(query *gorm.DB) *gorm.DB {
 	if r.orgID == "" {
-		return query
+		return query.Where("1 = 0")
 	}
-	return query.Where("EXISTS (SELECT 1 FROM departments d WHERE d.department_id = employee_onboardings.department_id AND d.org_id = ? AND d.deleted_at IS NULL)", r.orgID)
+	return query.Where("employee_onboardings.org_id = ?", r.orgID)
+}
+
+// usersDepartmentSubquery 生成 users 子查询，必须同时约束 org_id 与 deleted_at。
+// GORM 租户回调不会注入原生 SQL 子查询，因此这里必须显式带 org。
+func (r *EmployeeRepository) usersDepartmentSubquery(singleDepartmentID string, departmentIDs []string) (string, []interface{}, error) {
+	orgID, err := r.requireBoundOrg()
+	if err != nil {
+		return "", nil, err
+	}
+	if singleDepartmentID != "" {
+		return "user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id = ? AND deleted_at IS NULL)",
+			[]interface{}{orgID, singleDepartmentID}, nil
+	}
+	if len(departmentIDs) > 0 {
+		return "user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)",
+			[]interface{}{orgID, departmentIDs}, nil
+	}
+	return "", nil, nil
 }
 
 // EmployeeProfile
@@ -100,13 +130,12 @@ func (r *EmployeeRepository) CreateProfile(profile *database.EmployeeProfile) er
 	if profile == nil {
 		return gorm.ErrInvalidData
 	}
-	if r.orgID != "" {
-		merged, err := EnsureSameOrg(r.orgID, profile.OrgID)
-		if err != nil {
-			return err
-		}
-		profile.OrgID = merged
+	// 写路径必须绑定组织：未绑定或跨组织写入一律拒绝。
+	merged, err := EnsureSameOrg(r.orgID, profile.OrgID)
+	if err != nil {
+		return err
 	}
+	profile.OrgID = merged
 	return r.db.Create(profile).Error
 }
 
@@ -114,17 +143,18 @@ func (r *EmployeeRepository) UpdateProfile(profile *database.EmployeeProfile) er
 	if profile == nil {
 		return gorm.ErrInvalidData
 	}
-	if r.orgID != "" {
-		merged, err := EnsureSameOrg(r.orgID, profile.OrgID)
-		if err != nil {
-			return err
-		}
-		profile.OrgID = merged
+	merged, err := EnsureSameOrg(r.orgID, profile.OrgID)
+	if err != nil {
+		return err
 	}
+	profile.OrgID = merged
 	return r.db.Save(profile).Error
 }
 
 func (r *EmployeeRepository) FindProfileByID(id string) (*database.EmployeeProfile, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, err
+	}
 	var profile database.EmployeeProfile
 	query := r.db.Model(&database.EmployeeProfile{}).Where("id = ?", id)
 	query = r.applyProfileOrgFilter(query)
@@ -136,6 +166,9 @@ func (r *EmployeeRepository) FindProfileByID(id string) (*database.EmployeeProfi
 }
 
 func (r *EmployeeRepository) FindProfileByUserID(userID string) (*database.EmployeeProfile, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, err
+	}
 	var profile database.EmployeeProfile
 	query := r.db.Model(&database.EmployeeProfile{}).Where("user_id = ?", userID)
 	query = r.applyProfileOrgFilter(query)
@@ -147,6 +180,9 @@ func (r *EmployeeRepository) FindProfileByUserID(userID string) (*database.Emplo
 }
 
 func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[string]string) ([]database.EmployeeProfile, int64, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, 0, err
+	}
 	var profiles []database.EmployeeProfile
 	var total int64
 
@@ -154,17 +190,21 @@ func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[str
 	query = r.applyProfileOrgFilter(query)
 
 	if v, ok := filters["department_id"]; ok && v != "" {
-		if r.orgID != "" {
-			query = query.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id = ? AND deleted_at IS NULL)", r.orgID, v)
-		} else {
-			query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id = ? AND deleted_at IS NULL)", v)
+		clause, args, err := r.usersDepartmentSubquery(v, nil)
+		if err != nil {
+			return nil, 0, err
+		}
+		if clause != "" {
+			query = query.Where(clause, args...)
 		}
 	}
 	if departmentIDs := csvFilterValues(filters["department_ids"]); len(departmentIDs) > 0 {
-		if r.orgID != "" {
-			query = query.Where("user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)", r.orgID, departmentIDs)
-		} else {
-			query = query.Where("user_id IN (SELECT user_id FROM users WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+		clause, args, err := r.usersDepartmentSubquery("", departmentIDs)
+		if err != nil {
+			return nil, 0, err
+		}
+		if clause != "" {
+			query = query.Where(clause, args...)
 		}
 	}
 	if v, ok := filters["user_id"]; ok && v != "" {
@@ -187,7 +227,8 @@ func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[str
 }
 
 func (r *EmployeeRepository) buildLifecycleLedgerQuery(filters map[string]string) *gorm.DB {
-	orgID := database.CurrentOrganizationIDFromDB(r.db)
+	// 绑定组织优先使用仓储显式 org；不得回退 CurrentOrganizationIDFromDB 的 default。
+	orgID := strings.TrimSpace(r.orgID)
 	query := r.db.Table("users").
 		Joins("LEFT JOIN employee_profiles ON employee_profiles.org_id = users.org_id AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
 		Joins("LEFT JOIN departments current_departments ON current_departments.org_id = users.org_id AND current_departments.department_id = users.department_id AND current_departments.deleted_at IS NULL").
@@ -218,10 +259,13 @@ func (r *EmployeeRepository) buildLifecycleLedgerQuery(filters map[string]string
 			ORDER BY er.resign_date DESC, er.id DESC
 			LIMIT 1
 		)`).
-		Where("users.org_id = ?", orgID).
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin")
 
+	if orgID != "" {
+		// 主表与 JOIN 关联均以仓储 org 收口，避免仅靠 users.org_id 联接跨组织同 ID 行。
+		query = query.Where("users.org_id = ?", orgID)
+	}
 	query = r.applyUsersOrgFilter(query)
 
 	if v, ok := filters["department_id"]; ok && v != "" {
@@ -267,9 +311,10 @@ func (r *EmployeeRepository) FindLifecycleLedger(page, pageSize int, filters map
 // 3. 判断是否已建档只能通过 employee_profiles.employee_id 匹配工号
 // 4. 后续建议：增加 employee_onboardings.user_id 字段建立明确关联
 func (r *EmployeeRepository) FindCandidateOnboardings(filters map[string]string) ([]EmployeeLifecycleLedgerItem, int64, error) {
-	orgID := database.CurrentOrganizationIDFromDB(r.db)
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, 0, err
+	}
 	query := r.db.Table("employee_onboardings").
-		Where("employee_onboardings.org_id = ?", orgID).
 		Where("employee_onboardings.deleted_at IS NULL").
 		Where("employee_onboardings.status IN (?)", []string{"pending", "processing", "completed"}).
 		Where(`NOT EXISTS (
@@ -279,6 +324,7 @@ func (r *EmployeeRepository) FindCandidateOnboardings(filters map[string]string)
 			  AND ep.deleted_at IS NULL
 		)`)
 
+	// applyOnboardingOrgFilter 强制 org_id；未绑定时 1=0。
 	query = r.applyOnboardingOrgFilter(query)
 
 	// 应用筛选条件
@@ -360,6 +406,9 @@ func (r *EmployeeRepository) FindCandidateOnboardings(filters map[string]string)
 // FindLifecycleLedgerWithCandidates 查询台账（包含候选入职人员）
 // 阶段 3B：合并候选入职人员和已入职员工
 func (r *EmployeeRepository) FindLifecycleLedgerWithCandidates(page, pageSize int, filters map[string]string) ([]EmployeeLifecycleLedgerItem, int64, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, 0, err
+	}
 	if page <= 0 {
 		page = 1
 	}
@@ -485,10 +534,21 @@ func (r *EmployeeRepository) FindLifecycleLedgerWithCandidates(page, pageSize in
 // EmployeeTransfer
 
 func (r *EmployeeRepository) CreateTransfer(transfer *database.EmployeeTransfer) error {
+	if transfer == nil {
+		return gorm.ErrInvalidData
+	}
+	merged, err := EnsureSameOrg(r.orgID, transfer.OrgID)
+	if err != nil {
+		return err
+	}
+	transfer.OrgID = merged
 	return r.db.Create(transfer).Error
 }
 
 func (r *EmployeeRepository) FindAllTransfers(page, pageSize int, filters map[string]string) ([]database.EmployeeTransfer, int64, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, 0, err
+	}
 	var transfers []database.EmployeeTransfer
 	var total int64
 
@@ -522,10 +582,21 @@ func (r *EmployeeRepository) FindAllTransfers(page, pageSize int, filters map[st
 // EmployeeResignation
 
 func (r *EmployeeRepository) CreateResignation(resignation *database.EmployeeResignation) error {
+	if resignation == nil {
+		return gorm.ErrInvalidData
+	}
+	merged, err := EnsureSameOrg(r.orgID, resignation.OrgID)
+	if err != nil {
+		return err
+	}
+	resignation.OrgID = merged
 	return r.db.Create(resignation).Error
 }
 
 func (r *EmployeeRepository) FindAllResignations(page, pageSize int, filters map[string]string) ([]database.EmployeeResignation, int64, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, 0, err
+	}
 	var resignations []database.EmployeeResignation
 	var total int64
 
@@ -559,10 +630,21 @@ func (r *EmployeeRepository) FindAllResignations(page, pageSize int, filters map
 // EmployeeOnboarding
 
 func (r *EmployeeRepository) CreateOnboarding(onboarding *database.EmployeeOnboarding) error {
+	if onboarding == nil {
+		return gorm.ErrInvalidData
+	}
+	merged, err := EnsureSameOrg(r.orgID, onboarding.OrgID)
+	if err != nil {
+		return err
+	}
+	onboarding.OrgID = merged
 	return r.db.Create(onboarding).Error
 }
 
 func (r *EmployeeRepository) FindAllOnboardings(page, pageSize int, filters map[string]string) ([]database.EmployeeOnboarding, int64, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, 0, err
+	}
 	var onboardings []database.EmployeeOnboarding
 	var total int64
 

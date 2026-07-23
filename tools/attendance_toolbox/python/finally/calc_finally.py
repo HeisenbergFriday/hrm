@@ -320,14 +320,35 @@ def _shift_year_month(year: int, month: int, offset: int) -> tuple[int, int]:
     return month_index // 12, month_index % 12 + 1
 
 
-def _in_resign_keep_window(resign_date: date | None, year: int, month: int) -> bool:
-    """Keep active employees and resigned employees in previous/current/next month."""
+def _in_resign_keep_window(
+    resign_date: date | None,
+    year: int,
+    month: int,
+    hire_date: date | None = None,
+) -> bool:
+    """Keep employees who overlapped the target month (plus a one-month edge).
+
+    Historical stats must not depend on whether the person is still active today.
+    Rule:
+      - no resign date → always keep
+      - still employed during the target month (resign_date >= month_start) → keep
+      - resigned in previous/current/next month of the target → keep (edge buffer
+        for late payroll adjustments)
+      - otherwise drop (left long before the target month)
+    """
     if not resign_date:
         return True
+    month_start, month_end = _month_bounds(year, month)
+    # Active for any day of the target month.
+    if resign_date >= month_start:
+        if hire_date and hire_date > month_end:
+            return False
+        return True
+    # One-month lookback buffer after resignation (legacy ±1 month behavior).
     for offset in (-1, 0, 1):
         window_year, window_month = _shift_year_month(year, month, offset)
-        month_start, month_end = _month_bounds(window_year, window_month)
-        if month_start <= resign_date <= month_end:
+        w_start, w_end = _month_bounds(window_year, window_month)
+        if w_start <= resign_date <= w_end:
             return True
     return False
 
@@ -343,9 +364,46 @@ def calc_statutory_holiday_days(
     month_start: date,
     month_end: date,
 ) -> int:
-    """按员工在本月的在职区间统计应计法定节假日天数。"""
-    return calc_active_day_count(
-        statutory_holidays, hire_date, resign_date, month_start, month_end
+    """Count paid statutory holidays inside the employee active window.
+
+    The hire date is inclusive; the resignation date is exclusive.
+    """
+    if not statutory_holidays:
+        return 0
+
+    active_start = max(month_start, hire_date) if hire_date else month_start
+    active_end = month_end
+    if resign_date:
+        active_end = min(month_end, resign_date - timedelta(days=1))
+    if active_start > active_end:
+        return 0
+
+    return sum(1 for day in statutory_holidays if active_start <= day <= active_end)
+
+
+def calc_maternity_statutory_overlap_days(
+    leave_day_detail: dict[date, dict[str, float]] | None,
+    statutory_holidays: set[date],
+    hire_date: date | None,
+    resign_date: date | None,
+    month_start: date,
+    month_end: date,
+) -> int:
+    """统计本月在职区间内同时落在产假的法定节假日，避免重复计薪。"""
+    if not leave_day_detail or not statutory_holidays:
+        return 0
+    active_start = max(month_start, hire_date) if hire_date else month_start
+    active_end = (
+        min(month_end, resign_date - timedelta(days=1))
+        if resign_date else month_end
+    )
+    if active_start > active_end:
+        return 0
+    return sum(
+        1
+        for day in statutory_holidays
+        if active_start <= day <= active_end
+        and float((leave_day_detail.get(day) or {}).get("产假") or 0) > 0
     )
 
 
@@ -702,6 +760,15 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
         col_start = _find_col(header_vals, "开始时间")
         col_end = _find_col(header_vals, "结束时间")
         col_sys_hours = _find_col(header_vals, "系统时长", "时长", "请假时长")
+        col_final_hours = _find_col(
+            header_vals,
+            "最终请假时长",
+            "最终请假时长（小时）",
+            "最终请假时长(小时)",
+            "最终时长（小时）",
+            "最终时长(小时)",
+            "最终小时",
+        )
         col_days = _find_col(
             header_vals,
             "最终请假天数",
@@ -755,6 +822,10 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
                 "raw_start": raw_start,
                 "raw_end": raw_end,
                 "sys_hours": ws.cell(r, col_sys_hours + 1).value if col_sys_hours is not None else None,
+                "final_hours": (
+                    ws.cell(r, col_final_hours + 1).value
+                    if col_final_hours is not None else None
+                ),
                 "raw_days": raw_days,
             }
 
@@ -1194,14 +1265,27 @@ def parse_leave_summary(
     汇总时直接使用请假明细中的“最终请假天数”。
     """
     result: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    hours_fallback_rows = 0
     for row in _collect_deduped_leave_rows(path):
         emp_no = row["emp_no"]
         name = row["name"]
         leave_type = row["leave_type"]
         days = _to_float(row["raw_days"])
+        # Defensive: prefer final hours → days when day column is missing/blank.
+        # Only fall back when days is None (not when explicitly 0), so true zero
+        # outside-month rows stay zero. Prefer 最终请假时长 over 系统时长.
+        if days is None:
+            final_hours = _to_float(row.get("final_hours"))
+            sys_hours = _to_float(row.get("sys_hours"))
+            hours = final_hours if final_hours and final_hours > 0 else sys_hours
+            if hours and hours > 0:
+                days = _overtime_days_from_hours(hours)
+                hours_fallback_rows += 1
 
         key = emp_no or name
         if not key or not leave_type or days is None:
+            continue
+        if days == 0:
             continue
 
         # 标准化请假类型
@@ -1214,6 +1298,8 @@ def parse_leave_summary(
             result[key][matched] += days
 
     print(f"[请假明细] 共解析 {len(result)} 名员工的请假数据")
+    if hours_fallback_rows:
+        print(f"[请假明细] 其中 {hours_fallback_rows} 行按系统时长小时折算天数（天数字段为空/0）")
     return dict(result)
 
 
@@ -1265,12 +1351,20 @@ def parse_leave_day_details(
             schedule_ctx["chengdu_working_days"]
             if is_cd else schedule_ctx["main_working_days"]
         )
+        if matched == "产假":
+            expected_key = (
+                "chengdu_expected_attendance_days"
+                if is_cd else "main_expected_attendance_days"
+            )
+            day_calendar = schedule_ctx.get(expected_key) or working_days
+        else:
+            day_calendar = working_days
 
         cur = max(dt_start.date(), month_start)
         end = min(dt_end.date(), month_end)
         while cur <= end:
             hours = calc_leave.calc_target_month_working_hours(
-                dt_start, dt_end, working_days, cur, cur,
+                dt_start, dt_end, day_calendar, cur, cur,
             )
             day_value = _round2(hours / 8) if hours else None
             if day_value:
@@ -1701,23 +1795,24 @@ def calc_probation_days(
     month_start: date,
     month_end: date,
 ) -> float | None:
-    """
-    当月转正天数：转正日期在当月内时，
-    从转正次日起到月末的工作日数，加上转正后发生的法定节假日天数。
+    """Count post-confirmation days for an employee confirmed this month.
+
+    Working days start on the next day; a statutory holiday on the exact
+    confirmation date is included.
     """
     if not confirm_date:
         return None
     if not (month_start <= confirm_date <= month_end):
         return None
 
-    count = sum(
-        1 for d in working_days if confirm_date < d <= month_end
-    )
-    count += sum(
-        1
-        for d in statutory_holidays
-        if confirm_date < d <= month_end and d.weekday() < 5
-    )
+    countable_days = {
+        day for day in working_days
+        if confirm_date < day <= month_end
+    } | {
+        day for day in statutory_holidays
+        if confirm_date <= day <= month_end
+    }
+    count = len(countable_days)
     return count if count > 0 else None
 
 
@@ -1852,7 +1947,9 @@ def generate(
 
     window_employees = [
         emp for emp in employees
-        if _in_resign_keep_window(emp.get("resign_date"), year, month)
+        if _in_resign_keep_window(
+            emp.get("resign_date"), year, month, emp.get("hire_date"),
+        )
     ]
     skipped_resigned_outside_window = len(employees) - len(window_employees)
     excluded_final_table_employees = [
@@ -1909,6 +2006,14 @@ def generate(
 
         leave_data = _lookup_leave(emp)
         leave_day_detail = _lookup_leave_detail(emp)
+        holidays = max(
+            0,
+            holidays - calc_maternity_statutory_overlap_days(
+                leave_day_detail, statutory_holidays,
+                emp["hire_date"], emp["resign_date"],
+                month_start, month_end,
+            ),
+        )
         ot_data    = _lookup_overtime(emp)
         absent     = _lookup_absent(emp)
         absent_day_detail = _lookup_absent_days(emp)

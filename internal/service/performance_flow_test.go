@@ -65,7 +65,18 @@ func TestCreateActivitySyncsDraftParticipants(t *testing.T) {
 		performanceActivityResponse("draft", ""),
 		stubQueryResponse{
 			match: func(query string, args []driver.NamedValue) bool {
-				if strings.Contains(strings.ToLower(query), "users") && len(args) == 1 && args[0].Value == "active" {
+				lower := strings.ToLower(query)
+				if !strings.Contains(lower, "users") || strings.Contains(lower, "user_roles") {
+					return false
+				}
+				hasActive := false
+				for _, arg := range args {
+					if arg.Value == "active" {
+						hasActive = true
+						break
+					}
+				}
+				if hasActive {
 					activeUsersQueried = true
 					return true
 				}
@@ -399,7 +410,7 @@ func TestConfirmHRResultAdvancesMutengParticipantWithoutWaitingForPeers(t *testi
 
 			originalSender := sendPerformanceActionCardToUser
 			notified := make(chan struct{}, 1)
-			sendPerformanceActionCardToUser = func(_, _, _, _, _ string) error {
+			sendPerformanceActionCardToUser = func(_, _, _, _, _, _ string) error {
 				notified <- struct{}{}
 				return nil
 			}
@@ -631,7 +642,7 @@ func TestConfirmHRResultPreservesManualHideAndIsIdempotentForMuteng(t *testing.T
 	}
 
 	originalSender := sendPerformanceActionCardToUser
-	sendPerformanceActionCardToUser = func(_, _, _, _, _ string) error { return nil }
+	sendPerformanceActionCardToUser = func(_, _, _, _, _, _ string) error { return nil }
 	defer func() { sendPerformanceActionCardToUser = originalSender }()
 
 	if err := svc.ConfirmHRResult(1, "hr-1"); err != nil {
@@ -1011,9 +1022,9 @@ func TestSubmitGoalApprovalSubmitFlow(t *testing.T) {
 func performanceActivityResponse(status, deadline string) stubQueryResponse {
 	return stubQueryResponse{
 		match:   stubTableMatcher("performance_activities"),
-		columns: []string{"id", "name", "cycle_type", "status", "hr_confirm_deadline", "created_by"},
+		columns: []string{"id", "name", "cycle_type", "status", "hr_confirm_deadline", "created_by", "org_id"},
 		rows: [][]driver.Value{
-			{int64(1), "Q2", "quarterly", status, deadline, "creator-1"},
+			{int64(1), "Q2", "quarterly", status, deadline, "creator-1", "test-org"},
 		},
 	}
 }
@@ -1031,9 +1042,9 @@ func newFlowPerformanceActivityResponse(status, deadline string) stubQueryRespon
 func mutengReviewScoringActivityResponse(status, deadline string) stubQueryResponse {
 	return stubQueryResponse{
 		match:   stubTableMatcher("performance_activities"),
-		columns: []string{"id", "name", "cycle_type", "status", "flow_type", "activity_kind", "hr_confirm_deadline", "created_by"},
+		columns: []string{"id", "org_id", "name", "cycle_type", "status", "flow_type", "activity_kind", "hr_confirm_deadline", "created_by"},
 		rows: [][]driver.Value{
-			{int64(1), "Q2", "quarterly", status, PerformanceFlowNew, PerformanceActivityKindReviewScoring, deadline, "creator-1"},
+			{int64(1), "test-org", "Q2", "quarterly", status, PerformanceFlowNew, PerformanceActivityKindReviewScoring, deadline, "creator-1"},
 		},
 	}
 }

@@ -26,7 +26,7 @@ func TestPerformanceReminderUniqueIndexIsOrganizationScoped(t *testing.T) {
 }
 
 func TestIdempotencyRecordUniqueIndexIsOrganizationScoped(t *testing.T) {
-	assertUniqueIndexFields(t, &IdempotencyRecord{}, "idx_idempotency_records_org_digest", []string{"org_id", "digest"})
+	assertUniqueIndexFields(t, &IdempotencyRecord{}, "idx_idempotency_org_digest", []string{"org_id", "digest"})
 	assertModelHasNoIndex(t, &IdempotencyRecord{}, "idx_idempotency_records_digest")
 }
 

@@ -98,6 +98,11 @@ describe('getUserOption', () => {
     const user = { name: '张三' }
     expect(getUserOption(user)).toBeNull()
   })
+
+  it('should not fallback to employee_id or database id', () => {
+    expect(getUserOption({ employee_id: 'E001', name: '张三' })).toBeNull()
+    expect(getUserOption({ id: 99, name: '张三' })).toBeNull()
+  })
 })
 
 describe('getImportedUserOption', () => {
@@ -112,6 +117,11 @@ describe('getImportedUserOption', () => {
   it('should handle missing id', () => {
     const user = { name: '张三' }
     expect(getImportedUserOption(user)).toBeNull()
+  })
+
+  it('should not fallback to employee_id or database id without user_id', () => {
+    expect(getImportedUserOption({ employee_id: 'E001', name: '张三' })).toBeNull()
+    expect(getImportedUserOption({ id: 123, name: '张三' })).toBeNull()
   })
 })
 

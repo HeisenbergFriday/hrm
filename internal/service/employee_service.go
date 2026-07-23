@@ -9,18 +9,23 @@ import (
 
 type EmployeeService struct {
 	employeeRepo *repository.EmployeeRepository
+	orgID        string
 }
 
+// NewEmployeeService 仅保留给明确的全局迁移/审计场景。
+// 普通 HTTP 请求必须使用 NewEmployeeServiceWithOrgID；无 org 时仓储读/写 fail-closed。
 func NewEmployeeService(db *gorm.DB) *EmployeeService {
 	return &EmployeeService{
 		employeeRepo: repository.NewEmployeeRepository(db),
 	}
 }
 
-// NewEmployeeServiceWithOrgID 构造带 org 隔离的员工服务；orgID 为空时行为等同旧构造。
+// NewEmployeeServiceWithOrgID 构造带 org 隔离的员工服务。
+// orgID 为空时仓储层 fail-closed，不会返回任何员工数据。
 func NewEmployeeServiceWithOrgID(db *gorm.DB, orgID string) *EmployeeService {
 	return &EmployeeService{
 		employeeRepo: repository.NewEmployeeRepositoryWithOrgID(db, orgID),
+		orgID:        orgID,
 	}
 }
 

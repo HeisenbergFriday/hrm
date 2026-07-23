@@ -280,6 +280,11 @@ def _system_total_mismatch_remark(
 
 
 def parse_float(value) -> float | None:
+    """Parse overtime duration.
+
+    Supports plain numbers and DingTalk export texts such as ``3.5小时`` /
+    ``0.5天``. Day-unit values are converted with STANDARD_HOURS_PER_DAY.
+    """
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -287,6 +292,14 @@ def parse_float(value) -> float | None:
     text = str(value).strip()
     if not text:
         return None
+    # "3.5小时" / "1 小时" — keep as hours.
+    match = re.fullmatch(r"([+-]?\d+(?:\.\d+)?)\s*(?:小时|钟头|h|H)", text)
+    if match:
+        return float(match.group(1))
+    # "0.5天" / "1 天" — convert to hours using the standard day length.
+    match = re.fullmatch(r"([+-]?\d+(?:\.\d+)?)\s*(?:天|日|d|D)", text)
+    if match:
+        return float(match.group(1)) * STANDARD_HOURS_PER_DAY
     try:
         return float(text)
     except ValueError:
@@ -1855,6 +1868,14 @@ def _calc_premium_hour_value(
     clock_hours: float | None,
     standard_hours_per_day: float,
 ) -> float:
+    """Derive 2x/3x premium hours for one overtime day.
+
+    Priority:
+      1. Effective bilateral attendance clock span (capped at standard day).
+      2. Parsed approval duration (capped at standard day).
+      3. Unknown duration → 0 (do NOT default to a full day). Full-day fallback
+         only applies on the explicit ``no_attendance`` branch in fill_row.
+    """
     standard_hours = _normalize_standard_hours(standard_hours_per_day)
     if _has_effective_clock_hours(clock_hours):
         return round(
@@ -1862,7 +1883,9 @@ def _calc_premium_hour_value(
             PREMIUM_HOUR_VALUE_PRECISION,
         ) or 0.0
     if raw_hours is None:
-        return standard_hours
+        # Missing/unparsed duration must not silently become 1 full day
+        # (e.g. "3.5小时" previously failed parse_float → None → 8h → 1 day).
+        return 0.0
     return round(
         min(raw_hours, standard_hours),
         PREMIUM_HOUR_VALUE_PRECISION,
@@ -2590,11 +2613,7 @@ def process_overtime(
     }
     from rules_engine import validate_holiday_years_available
 
-    rows_for_holiday_validation, _ = filter_rows_by_target_month(
-        src_rows,
-        current_month_anchor,
-    )
-    holiday_years = _collect_holiday_years(rows_for_holiday_validation, schedule_map)
+    holiday_years = _collect_holiday_years(src_rows, schedule_map)
     if not holiday_years:
         holiday_years = {current_month_anchor.year}
     validate_holiday_years_available(

@@ -85,9 +85,22 @@ func NewPerformanceFollowupService(db *gorm.DB) *PerformanceFollowupService {
 	return &PerformanceFollowupService{db: db}
 }
 
+// requireOrgID fails closed when the request DB session has no tenant context.
+// Follow-up tables are org-scoped; never list/mutate without an explicit org.
+func (s *PerformanceFollowupService) requireOrgID() (string, error) {
+	if s == nil || s.db == nil {
+		return "", fmt.Errorf("missing organization context")
+	}
+	return requireOrgIDFromDB(s.db)
+}
+
 func (s *PerformanceFollowupService) ListInterviews(filter PerformanceFollowupListFilter) ([]database.PerformanceInterviewRecord, int64, PerformanceFollowupSummary, error) {
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, 0, PerformanceFollowupSummary{}, err
+	}
 	filter = normalizePerformanceFollowupListFilter(filter)
-	query := s.db.Model(&database.PerformanceInterviewRecord{}).Where("deleted_at IS NULL")
+	query := s.db.Model(&database.PerformanceInterviewRecord{}).Where("org_id = ? AND deleted_at IS NULL", orgID)
 	query = applyPerformanceFollowupFilters(query, filter)
 
 	var total int64
@@ -115,6 +128,10 @@ func (s *PerformanceFollowupService) ArrangeInterview(payload PerformanceIntervi
 	if payload.ParticipantID == 0 {
 		return nil, errors.New("请选择绩效参与人")
 	}
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
 	participant, activity, err := s.loadParticipantAndActivity(payload.ParticipantID)
 	if err != nil {
 		return nil, err
@@ -124,7 +141,7 @@ func (s *PerformanceFollowupService) ArrangeInterview(payload PerformanceIntervi
 	}
 
 	record := database.PerformanceInterviewRecord{}
-	err = s.db.Where("participant_id = ? AND deleted_at IS NULL", payload.ParticipantID).First(&record).Error
+	err = s.db.Where("org_id = ? AND participant_id = ? AND deleted_at IS NULL", orgID, payload.ParticipantID).First(&record).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -159,8 +176,12 @@ func (s *PerformanceFollowupService) UpdateInterview(id uint, payload Performanc
 	if id == 0 {
 		return nil, errors.New("无效的面谈记录 ID")
 	}
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
 	var record database.PerformanceInterviewRecord
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", id).First(&record).Error; err != nil {
+	if err := s.db.Where("org_id = ? AND id = ? AND deleted_at IS NULL", orgID, id).First(&record).Error; err != nil {
 		return nil, err
 	}
 	applyInterviewPayload(&record, payload, false)
@@ -175,16 +196,24 @@ func (s *PerformanceFollowupService) UpdateInterview(id uint, payload Performanc
 }
 
 func (s *PerformanceFollowupService) GetInterview(id uint) (*database.PerformanceInterviewRecord, error) {
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
 	var record database.PerformanceInterviewRecord
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", id).First(&record).Error; err != nil {
+	if err := s.db.Where("org_id = ? AND id = ? AND deleted_at IS NULL", orgID, id).First(&record).Error; err != nil {
 		return nil, err
 	}
 	return &record, nil
 }
 
 func (s *PerformanceFollowupService) ListAppeals(filter PerformanceFollowupListFilter) ([]database.PerformanceAppealRecord, int64, PerformanceFollowupSummary, error) {
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, 0, PerformanceFollowupSummary{}, err
+	}
 	filter = normalizePerformanceFollowupListFilter(filter)
-	query := s.db.Model(&database.PerformanceAppealRecord{}).Where("deleted_at IS NULL")
+	query := s.db.Model(&database.PerformanceAppealRecord{}).Where("org_id = ? AND deleted_at IS NULL", orgID)
 	query = applyPerformanceFollowupFilters(query, filter)
 
 	var total int64
@@ -215,6 +244,10 @@ func (s *PerformanceFollowupService) SubmitAppeal(payload PerformanceAppealPaylo
 	if strings.TrimSpace(payload.AppealReason) == "" {
 		return nil, errors.New("请填写申诉原因")
 	}
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
 	participant, activity, err := s.loadParticipantAndActivity(payload.ParticipantID)
 	if err != nil {
 		return nil, err
@@ -225,7 +258,7 @@ func (s *PerformanceFollowupService) SubmitAppeal(payload PerformanceAppealPaylo
 
 	var activeCount int64
 	if err := s.db.Model(&database.PerformanceAppealRecord{}).
-		Where("participant_id = ? AND status IN ? AND deleted_at IS NULL", payload.ParticipantID, []string{PerformanceAppealStatusSubmitted, PerformanceAppealStatusProcessing}).
+		Where("org_id = ? AND participant_id = ? AND status IN ? AND deleted_at IS NULL", orgID, payload.ParticipantID, []string{PerformanceAppealStatusSubmitted, PerformanceAppealStatusProcessing}).
 		Count(&activeCount).Error; err != nil {
 		return nil, err
 	}
@@ -251,8 +284,12 @@ func (s *PerformanceFollowupService) UpdateAppeal(id uint, payload PerformanceAp
 	if id == 0 {
 		return nil, errors.New("无效的申诉记录 ID")
 	}
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
 	var record database.PerformanceAppealRecord
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", id).First(&record).Error; err != nil {
+	if err := s.db.Where("org_id = ? AND id = ? AND deleted_at IS NULL", orgID, id).First(&record).Error; err != nil {
 		return nil, err
 	}
 	status := normalizePerformanceAppealStatus(payload.Status)
@@ -286,8 +323,12 @@ func (s *PerformanceFollowupService) WithdrawAppeal(id uint, reason, operatorID 
 	if id == 0 {
 		return nil, errors.New("无效的申诉记录 ID")
 	}
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
 	var record database.PerformanceAppealRecord
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", id).First(&record).Error; err != nil {
+	if err := s.db.Where("org_id = ? AND id = ? AND deleted_at IS NULL", orgID, id).First(&record).Error; err != nil {
 		return nil, err
 	}
 	if record.Status != PerformanceAppealStatusSubmitted && record.Status != PerformanceAppealStatusProcessing {
@@ -304,37 +345,46 @@ func (s *PerformanceFollowupService) WithdrawAppeal(id uint, reason, operatorID 
 }
 
 func (s *PerformanceFollowupService) GetAppeal(id uint) (*database.PerformanceAppealRecord, error) {
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
 	var record database.PerformanceAppealRecord
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", id).First(&record).Error; err != nil {
+	if err := s.db.Where("org_id = ? AND id = ? AND deleted_at IS NULL", orgID, id).First(&record).Error; err != nil {
 		return nil, err
 	}
 	return &record, nil
 }
 
-func PerformanceInterviewsURL(activityID string) string {
-	return performanceFollowupModuleURL("/performance-interviews", activityID)
+func PerformanceInterviewsURL(orgID, activityID string) string {
+	return performanceFollowupModuleURL(orgID, "/performance-interviews", activityID)
 }
 
-func PerformanceAppealsURL(activityID string) string {
-	return performanceFollowupModuleURL("/performance-appeals", activityID)
+func PerformanceAppealsURL(orgID, activityID string) string {
+	return performanceFollowupModuleURL(orgID, "/performance-appeals", activityID)
 }
 
-func performanceFollowupModuleURL(path, activityID string) string {
+func performanceFollowupModuleURL(orgID, path, activityID string) string {
 	activityID = strings.TrimSpace(activityID)
 	if activityID == "" {
-		return dingtalk.BuildAppURL(path)
+		return buildPerformanceAppURL(orgID, path)
 	}
-	return dingtalk.BuildAppURL(fmt.Sprintf("%s?activity_id=%s", path, url.QueryEscape(activityID)))
+	return buildPerformanceAppURL(orgID, fmt.Sprintf("%s?activity_id=%s", path, url.QueryEscape(activityID)))
 }
 
 func (s *PerformanceFollowupService) notifyInterviewChanged(record *database.PerformanceInterviewRecord) {
 	if record == nil {
 		return
 	}
+	orgID, err := performanceNoticeOrgID(record.OrgID)
+	if err != nil {
+		logrus.Warnf("skip interview notice: %v", err)
+		return
+	}
 	employeeID := strings.TrimSpace(record.EmployeeID)
 	if employeeID != "" {
 		title, content := performanceInterviewEmployeeNotice(*record)
-		sendPerformanceFollowupActionCard(employeeID, title, content, "查看绩效结果", PerformanceResultURL(record.ActivityID, record.ParticipantID), "interview employee notice")
+		sendPerformanceFollowupActionCard(orgID, employeeID, title, content, "查看绩效结果", PerformanceResultURL(orgID, record.ActivityID, record.ParticipantID), "interview employee notice")
 	}
 
 	interviewerID := strings.TrimSpace(record.InterviewerID)
@@ -345,7 +395,7 @@ func (s *PerformanceFollowupService) notifyInterviewChanged(record *database.Per
 		return
 	}
 	title, content := performanceInterviewInterviewerNotice(*record)
-	sendPerformanceFollowupActionCard(interviewerID, title, content, "查看面谈记录", PerformanceInterviewsURL(record.ActivityID), "interview owner notice")
+	sendPerformanceFollowupActionCard(orgID, interviewerID, title, content, "查看面谈记录", PerformanceInterviewsURL(orgID, record.ActivityID), "interview owner notice")
 }
 
 func (s *PerformanceFollowupService) notifyAppealSubmitted(record *database.PerformanceAppealRecord) {
@@ -371,8 +421,13 @@ func (s *PerformanceFollowupService) notifyAppealSubmitted(record *database.Perf
 		fmt.Sprintf("申诉原因：%s", record.AppealReason),
 		"请及时受理并处理该绩效申诉。",
 	}, "\n")
+	orgID, err := performanceNoticeOrgID(record.OrgID)
+	if err != nil {
+		logrus.Warnf("skip performance appeal notice: %v", err)
+		return
+	}
 	for _, recipient := range recipients {
-		sendPerformanceFollowupActionCard(recipient.UserID, title, content, "去处理申诉", PerformanceAppealsURL(record.ActivityID), "appeal manager notice")
+		sendPerformanceFollowupActionCard(orgID, recipient.UserID, title, content, "去处理申诉", PerformanceAppealsURL(orgID, record.ActivityID), "appeal manager notice")
 	}
 }
 
@@ -382,6 +437,11 @@ func (s *PerformanceFollowupService) notifyAppealStatusChanged(record *database.
 	}
 	employeeID := strings.TrimSpace(record.EmployeeID)
 	if employeeID == "" {
+		return
+	}
+	orgID, err := performanceNoticeOrgID(record.OrgID)
+	if err != nil {
+		logrus.Warnf("skip appeal status notice for %s: %v", employeeID, err)
 		return
 	}
 	title := "绩效申诉处理通知"
@@ -398,15 +458,20 @@ func (s *PerformanceFollowupService) notifyAppealStatusChanged(record *database.
 	if reason := strings.TrimSpace(record.WithdrawReason); reason != "" {
 		lines = append(lines, fmt.Sprintf("撤回原因：%s", reason))
 	}
-	sendPerformanceFollowupActionCard(employeeID, title, strings.Join(lines, "\n"), "查看绩效结果", PerformanceResultURL(record.ActivityID, record.ParticipantID), "appeal employee notice")
+	sendPerformanceFollowupActionCard(orgID, employeeID, title, strings.Join(lines, "\n"), "查看绩效结果", PerformanceResultURL(orgID, record.ActivityID, record.ParticipantID), "appeal employee notice")
 }
 
 func (s *PerformanceFollowupService) findPerformanceAppealManageRecipients(record database.PerformanceAppealRecord) ([]ReminderRecipient, error) {
 	var recipients []ReminderRecipient
-	orgID := orgIDFromDB(s.db)
+	orgID := strings.TrimSpace(record.OrgID)
+	if orgID == "" {
+		return nil, ErrPerformanceNoticeMissingOrg
+	}
+	// permissions / role_permissions remain global; isolate via users/user_roles/roles.org_id.
 	if err := s.db.Table("users").
 		Select("DISTINCT users.user_id AS user_id, users.name AS name").
-		Joins("JOIN user_roles ON user_roles.user_id = users.user_id AND user_roles.deleted_at IS NULL").
+		Joins("JOIN user_roles ON user_roles.user_id = users.user_id AND user_roles.org_id = users.org_id AND user_roles.deleted_at IS NULL").
+		Joins("JOIN roles ON roles.id = user_roles.role_id AND roles.org_id = users.org_id AND roles.deleted_at IS NULL").
 		Joins("JOIN role_permissions ON role_permissions.role_id = user_roles.role_id AND role_permissions.deleted_at IS NULL").
 		Joins("JOIN permissions ON permissions.id = role_permissions.permission_id AND permissions.deleted_at IS NULL").
 		Where("permissions.code IN ?", []string{"performance:appeal:manage", "performance:activity:manage"}).
@@ -421,13 +486,14 @@ func (s *PerformanceFollowupService) findPerformanceAppealManageRecipients(recor
 		return recipients, nil
 	}
 
-	permissionService := NewPermissionService(s.db)
+	// Scope checks must stay in the appeal record's org; never borrow another tenant's roles.
+	permissionService := NewPermissionServiceWithOrgID(s.db, orgID)
 	filtered := make([]ReminderRecipient, 0, len(recipients))
 	for _, recipient := range recipients {
 		if strings.TrimSpace(recipient.UserID) == strings.TrimSpace(record.EmployeeID) {
 			continue
 		}
-		scope, err := permissionService.ResolveUserScope(recipient.UserID)
+		scope, err := permissionService.ResolveUserScopeInOrg(orgID, recipient.UserID)
 		if err != nil {
 			logrus.Warnf("resolve appeal recipient scope failed for user %s: %v", recipient.UserID, err)
 			continue
@@ -454,12 +520,12 @@ func performanceFollowupScopeAllowsRecord(scope *OrgDataScope, employeeID, depar
 	return scope.AllowsDepartment(strings.TrimSpace(departmentID))
 }
 
-func sendPerformanceFollowupActionCard(userID, title, content, actionTitle, actionURL, logContext string) {
+func sendPerformanceFollowupActionCard(orgID, userID, title, content, actionTitle, actionURL, logContext string) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return
 	}
-	if err := sendPerformanceActionCardToUser(userID, title, content, actionTitle, actionURL); err != nil {
+	if err := sendPerformanceActionCard(orgID, userID, title, content, actionTitle, actionURL); err != nil {
 		if dingtalk.IsUserNotNotifiableError(err) {
 			logrus.Infof("skip %s to non-notifiable user %s: %v", logContext, userID, err)
 			return
@@ -556,15 +622,19 @@ func nonEmptyPerformanceFollowupText(values ...string) string {
 }
 
 func (s *PerformanceFollowupService) loadParticipantAndActivity(participantID uint) (*database.PerformanceParticipant, *database.PerformanceActivity, error) {
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, nil, err
+	}
 	var participant database.PerformanceParticipant
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
+	if err := s.db.Where("org_id = ? AND id = ? AND deleted_at IS NULL", orgID, participantID).First(&participant).Error; err != nil {
 		return nil, nil, errors.New("绩效参与人不存在")
 	}
 	if participant.Status == "inactive" || participant.Status == "removed_from_scope" {
 		return nil, nil, errors.New("该参与人不在当前绩效范围内")
 	}
 	var activity database.PerformanceActivity
-	if err := s.db.Where("id = ? AND deleted_at IS NULL", participant.ActivityID).First(&activity).Error; err != nil {
+	if err := s.db.Where("org_id = ? AND id = ? AND deleted_at IS NULL", orgID, participant.ActivityID).First(&activity).Error; err != nil {
 		return nil, nil, errors.New("绩效活动不存在")
 	}
 	return &participant, &activity, nil
@@ -663,6 +733,11 @@ func buildPerformanceFollowupSummary(query *gorm.DB, table string) (PerformanceF
 }
 
 func fillInterviewSnapshot(record *database.PerformanceInterviewRecord, participant *database.PerformanceParticipant, activity *database.PerformanceActivity) {
+	orgID := strings.TrimSpace(participant.OrgID)
+	if orgID == "" {
+		orgID = strings.TrimSpace(activity.OrgID)
+	}
+	record.OrgID = orgID
 	record.ActivityID = strings.TrimSpace(participant.ActivityID)
 	record.ActivityName = strings.TrimSpace(activity.Name)
 	record.ParticipantID = participant.ID
@@ -675,6 +750,11 @@ func fillInterviewSnapshot(record *database.PerformanceInterviewRecord, particip
 }
 
 func fillAppealSnapshot(record *database.PerformanceAppealRecord, participant *database.PerformanceParticipant, activity *database.PerformanceActivity) {
+	orgID := strings.TrimSpace(participant.OrgID)
+	if orgID == "" {
+		orgID = strings.TrimSpace(activity.OrgID)
+	}
+	record.OrgID = orgID
 	record.ActivityID = strings.TrimSpace(participant.ActivityID)
 	record.ActivityName = strings.TrimSpace(activity.Name)
 	record.ParticipantID = participant.ID

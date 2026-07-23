@@ -232,7 +232,7 @@ func itemRow(id, libraryID uint, sectionType, name string, weight float64, sortO
 
 func TestLibraryRepo_Create(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	lib := &database.PerformanceIndicatorLibrary{
 		Name:         "Test Library",
@@ -249,7 +249,7 @@ func TestLibraryRepo_GetByID_Found(t *testing.T) {
 		columns: libraryColumns(),
 		rows:    [][]driver.Value{libraryRow(1, "dept-1", "Dept", "Lib", "desc", "active", "monthly")},
 	})
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	lib, err := repo.GetByID(1)
 	if err != nil {
@@ -265,7 +265,7 @@ func TestLibraryRepo_GetByID_Found(t *testing.T) {
 
 func TestLibraryRepo_GetByID_NotFound(t *testing.T) {
 	db := newTestDB(t) // no stub → query fails
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	_, err := repo.GetByID(999)
 	if err == nil {
@@ -275,7 +275,7 @@ func TestLibraryRepo_GetByID_NotFound(t *testing.T) {
 
 func TestLibraryRepo_Update(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	lib := &database.PerformanceIndicatorLibrary{
 		ID:             1,
@@ -292,7 +292,7 @@ func TestLibraryRepo_Update(t *testing.T) {
 
 func TestLibraryRepo_Delete(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	if err := repo.Delete(1, "admin"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
@@ -315,7 +315,7 @@ func TestLibraryRepo_FindAll_NoFilters(t *testing.T) {
 			},
 		},
 	)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	libs, total, err := repo.FindAll(1, 10, "", "", "", nil)
 	if err != nil {
@@ -342,7 +342,7 @@ func TestLibraryRepo_FindAll_WithDepartmentFilter(t *testing.T) {
 			rows:    [][]driver.Value{libraryRow(1, "dept-1", "Dept", "Lib1", "", "active", "")},
 		},
 	)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	libs, total, err := repo.FindAll(1, 10, "dept-1", "", "", nil)
 	if err != nil {
@@ -369,7 +369,7 @@ func TestLibraryRepo_FindAll_WithKeywordFilter(t *testing.T) {
 			rows:    [][]driver.Value{libraryRow(1, "dept-1", "Dept", "Sales KPI", "", "active", "")},
 		},
 	)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	libs, total, err := repo.FindAll(1, 10, "", "Sales", "", nil)
 	if err != nil {
@@ -396,7 +396,7 @@ func TestLibraryRepo_FindAll_WithStatusFilter(t *testing.T) {
 			rows:    [][]driver.Value{libraryRow(1, "dept-1", "Dept", "Archived Lib", "", "archived", "")},
 		},
 	)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	libs, total, err := repo.FindAll(1, 10, "", "", "archived", nil)
 	if err != nil {
@@ -423,7 +423,7 @@ func TestLibraryRepo_FindAll_WithVisibleDepartments(t *testing.T) {
 			rows:    [][]driver.Value{libraryRow(1, "dept-1", "Dept", "Lib1", "", "active", "")},
 		},
 	)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	libs, total, err := repo.FindAll(1, 10, "", "", "", []string{"dept-1", "dept-2"})
 	if err != nil {
@@ -450,7 +450,7 @@ func TestLibraryRepo_FindAll_Pagination(t *testing.T) {
 			rows:    [][]driver.Value{libraryRow(3, "dept-1", "Dept", "Lib3", "", "active", "")},
 		},
 	)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	libs, total, err := repo.FindAll(2, 2, "", "", "", nil)
 	if err != nil {
@@ -477,7 +477,7 @@ func TestLibraryRepo_FindAll_DefaultPagination(t *testing.T) {
 			rows:    [][]driver.Value{},
 		},
 	)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	// page=0, pageSize=0 should use defaults (1, 10)
 	libs, total, err := repo.FindAll(0, 0, "", "", "", nil)
@@ -501,7 +501,7 @@ func TestLibraryRepo_FindByDepartment_Found(t *testing.T) {
 			libraryRow(2, "dept-1", "Dept", "Lib2", "", "active", ""),
 		},
 	})
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	libs, err := repo.FindByDepartment("dept-1")
 	if err != nil {
@@ -526,7 +526,7 @@ func TestLibraryRepo_FindByDepartment_Empty(t *testing.T) {
 		columns: libraryColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	libs, err := repo.FindByDepartment("dept-999")
 	if err != nil {
@@ -539,7 +539,7 @@ func TestLibraryRepo_FindByDepartment_Empty(t *testing.T) {
 
 func TestLibraryRepo_Archive(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	if err := repo.Archive(1, "admin"); err != nil {
 		t.Fatalf("Archive() error = %v", err)
@@ -550,7 +550,7 @@ func TestLibraryRepo_Archive(t *testing.T) {
 
 func TestItemRepo_Create(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	item := &database.PerformanceIndicatorItem{
 		LibraryID:   1,
@@ -570,7 +570,7 @@ func TestItemRepo_GetByID_Found(t *testing.T) {
 		columns: itemColumns(),
 		rows:    [][]driver.Value{itemRow(5, 1, "quantitative", "KPI", 0.6, 1)},
 	})
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	item, err := repo.GetByID(5)
 	if err != nil {
@@ -586,7 +586,7 @@ func TestItemRepo_GetByID_Found(t *testing.T) {
 
 func TestItemRepo_GetByID_NotFound(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	_, err := repo.GetByID(999)
 	if err == nil {
@@ -596,7 +596,7 @@ func TestItemRepo_GetByID_NotFound(t *testing.T) {
 
 func TestItemRepo_Update(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	item := &database.PerformanceIndicatorItem{
 		ID:          1,
@@ -613,7 +613,7 @@ func TestItemRepo_Update(t *testing.T) {
 
 func TestItemRepo_Delete(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	if err := repo.Delete(1, "admin"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
@@ -630,7 +630,7 @@ func TestItemRepo_FindByLibrary_NoSectionType(t *testing.T) {
 			itemRow(3, 1, "bonus_penalty", "Bonus1", 0.2, 3),
 		},
 	})
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	items, err := repo.FindByLibrary(1, "")
 	if err != nil {
@@ -649,7 +649,7 @@ func TestItemRepo_FindByLibrary_WithSectionType(t *testing.T) {
 			itemRow(1, 1, "quantitative", "KPI1", 0.5, 1),
 		},
 	})
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	items, err := repo.FindByLibrary(1, "quantitative")
 	if err != nil {
@@ -666,7 +666,7 @@ func TestItemRepo_FindByLibrary_Empty(t *testing.T) {
 		columns: itemColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	items, err := repo.FindByLibrary(999, "")
 	if err != nil {
@@ -685,7 +685,7 @@ func TestItemRepo_Search_WithLibraryIDs(t *testing.T) {
 			itemRow(1, 1, "quantitative", "客户满意度", 0.6, 1),
 		},
 	})
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	items, err := repo.Search([]uint{1}, "客户", "", nil)
 	if err != nil {
@@ -705,7 +705,7 @@ func TestItemRepo_Search_EmptyLibraryIDs(t *testing.T) {
 			itemRow(2, 2, "key_action", "Action1", 0.3, 1),
 		},
 	})
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	items, err := repo.Search(nil, "", "", nil)
 	if err != nil {
@@ -724,7 +724,7 @@ func TestItemRepo_Search_WithSectionType(t *testing.T) {
 			itemRow(1, 1, "quantitative", "KPI1", 0.5, 1),
 		},
 	})
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	items, err := repo.Search([]uint{1}, "", "quantitative", nil)
 	if err != nil {
@@ -743,7 +743,7 @@ func TestItemRepo_Search_WithKeyword(t *testing.T) {
 			itemRow(1, 1, "quantitative", "Revenue Target", 0.6, 1),
 		},
 	})
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	items, err := repo.Search([]uint{1}, "Revenue", "", nil)
 	if err != nil {
@@ -767,7 +767,7 @@ func TestItemRepo_Search_WithVisibleDepartments(t *testing.T) {
 			itemRow(1, 1, "quantitative", "Revenue Target", 0.6, 1),
 		},
 	})
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	items, err := repo.Search(nil, "", "", []string{"dept-1"})
 	if err != nil {
@@ -780,7 +780,7 @@ func TestItemRepo_Search_WithVisibleDepartments(t *testing.T) {
 
 func TestItemRepo_BatchCreate(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	items := []database.PerformanceIndicatorItem{
 		{LibraryID: 1, Name: "Item1", SectionType: "quantitative", SortOrder: 1},
@@ -794,7 +794,7 @@ func TestItemRepo_BatchCreate(t *testing.T) {
 
 func TestItemRepo_BatchCreate_Empty(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	// Empty slice should be a no-op
 	if err := repo.BatchCreate([]database.PerformanceIndicatorItem{}); err != nil {
@@ -804,7 +804,7 @@ func TestItemRepo_BatchCreate_Empty(t *testing.T) {
 
 func TestItemRepo_DeleteByLibrary(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	if err := repo.DeleteByLibrary(1, "admin"); err != nil {
 		t.Fatalf("DeleteByLibrary() error = %v", err)
@@ -813,7 +813,7 @@ func TestItemRepo_DeleteByLibrary(t *testing.T) {
 
 func TestItemRepo_DeleteByLibrary_VerifiesSoftDelete(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	// Delete should set deleted_at and updated_by
 	err := repo.DeleteByLibrary(1, "admin")
@@ -838,7 +838,7 @@ func TestLibraryRepo_FindAll_AllFiltersCombined(t *testing.T) {
 			rows:    [][]driver.Value{libraryRow(1, "dept-1", "Dept", "Sales KPI", "desc", "active", "monthly")},
 		},
 	)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	libs, total, err := repo.FindAll(1, 10, "dept-1", "Sales", "active", []string{"dept-1"})
 	if err != nil {
@@ -860,7 +860,7 @@ func TestItemRepo_Search_AllFiltersCombined(t *testing.T) {
 			itemRow(1, 1, "quantitative", "客户满意度", 0.6, 1),
 		},
 	})
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	items, err := repo.Search([]uint{1}, "客户", "quantitative", nil)
 	if err != nil {
@@ -873,7 +873,7 @@ func TestItemRepo_Search_AllFiltersCombined(t *testing.T) {
 
 func TestLibraryRepo_Delete_WithDeletedBy(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorLibraryRepository(db)
+	repo := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
 
 	// Should not error even if deleted_by is empty
 	if err := repo.Delete(1, ""); err != nil {
@@ -883,7 +883,7 @@ func TestLibraryRepo_Delete_WithDeletedBy(t *testing.T) {
 
 func TestItemRepo_Create_VerifyFields(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewPerformanceIndicatorItemRepository(db)
+	repo := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 
 	item := &database.PerformanceIndicatorItem{
 		LibraryID:         1,

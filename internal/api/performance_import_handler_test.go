@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"peopleops/internal/database"
+	"peopleops/internal/requestmeta"
 	"strings"
 	"sync"
 	"testing"
@@ -43,9 +44,16 @@ func TestImportPerformanceActivityParticipantsHandlerParsesAndResolvesUpload(t *
 		database.DB = originalDB
 	})
 
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, recorder := performanceHandlerContextAs(t, "test-org", "admin")
 	c.Request = newMultipartPerformanceImportRequest(t, "participants.xlsx", buildAPIPerformanceImportXLSX(t))
+	// Preserve tenant org context on the multipart request.
+	info := &requestmeta.RequestInfo{OrgID: "test-org"}
+	ctx := requestmeta.WithRequestInfo(c.Request.Context(), info)
+	ctx = requestmeta.WithTenant(ctx, "test-org")
+	c.Request = c.Request.WithContext(ctx)
+	if database.DB != nil {
+		c.Set("requestDB", database.DB.WithContext(ctx))
+	}
 
 	ImportPerformanceActivityParticipants(c)
 

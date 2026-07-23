@@ -36,6 +36,55 @@ func TestBuildCorpMessagePayloadUsesAsyncSendSchema(t *testing.T) {
 	}
 }
 
+func TestBuildCorpImagePayloadUsesImageMsgTypeAndMediaID(t *testing.T) {
+	t.Setenv("DINGTALK_AGENT_ID", "88")
+
+	payload := buildCorpImagePayload("ding-user-2", "  @lADPxxxxx  ")
+
+	if got, ok := payload["agent_id"].(int64); !ok || got != 88 {
+		t.Fatalf("expected agent_id 88, got %#v", payload["agent_id"])
+	}
+	if got, ok := payload["userid_list"].(string); !ok || got != "ding-user-2" {
+		t.Fatalf("expected userid_list ding-user-2, got %#v", payload["userid_list"])
+	}
+
+	msg, ok := payload["msg"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected msg payload, got %#v", payload["msg"])
+	}
+	if got, ok := msg["msgtype"].(string); !ok || got != "image" {
+		t.Fatalf("expected msg.msgtype image, got %#v", msg["msgtype"])
+	}
+	image, ok := msg["image"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected msg.image payload, got %#v", msg["image"])
+	}
+	if got, ok := image["media_id"].(string); !ok || got != "@lADPxxxxx" {
+		t.Fatalf("expected trimmed media_id @lADPxxxxx, got %#v", image["media_id"])
+	}
+}
+
+func TestUploadImageMediaForOrgFailClosedOnEmptyOrg(t *testing.T) {
+	_, err := UploadImageMediaForOrg("", "schedule.png", []byte{0x89, 0x50, 0x4e, 0x47})
+	if err == nil || !strings.Contains(err.Error(), "orgID is empty") {
+		t.Fatalf("err = %v, want orgID is empty", err)
+	}
+}
+
+func TestUploadImageMediaForOrgRejectsEmptyContent(t *testing.T) {
+	_, err := UploadImageMediaForOrg("org-a", "schedule.png", nil)
+	if err == nil || !strings.Contains(err.Error(), "image content is empty") {
+		t.Fatalf("err = %v, want image content is empty", err)
+	}
+}
+
+func TestSendCorpImageToUserForOrgRejectsEmptyMediaID(t *testing.T) {
+	err := SendCorpImageToUserForOrg("org-a", "ding-user-1", "  ")
+	if err == nil || !strings.Contains(err.Error(), "media_id is empty") {
+		t.Fatalf("err = %v, want media_id is empty", err)
+	}
+}
+
 func TestShouldValidateAttendanceGroupMembersUsesExplicitUserIDs(t *testing.T) {
 	group := map[string]interface{}{
 		"userids": map[string]interface{}{

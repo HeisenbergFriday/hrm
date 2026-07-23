@@ -8,6 +8,7 @@ import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
 import { formatDateTime } from '../utils/format'
+import { downloadAuthorizedFile } from '../utils/authFileUrl'
 
 const { Title } = Typography
 const { RangePicker } = DatePicker
@@ -84,9 +85,13 @@ const AttendanceExport: React.FC = () => {
     })
   }
 
-  const handleDownload = (record: ExportRecord) => {
+  const handleDownload = async (record: ExportRecord) => {
     if (record.status === 'completed' && record.file_path) {
-      window.open(record.file_path, '_blank')
+      try {
+        await downloadAuthorizedFile(record.file_path, record.file_name)
+      } catch {
+        message.error('下载失败，请稍后重试')
+      }
     } else {
       message.warning('文件暂不可用，请稍后再试')
     }

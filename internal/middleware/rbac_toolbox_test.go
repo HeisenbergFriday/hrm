@@ -70,6 +70,26 @@ func TestToolboxRBAC_SyncOnlyCannotOperate(t *testing.T) {
 	}
 }
 
+func TestToolboxRBAC_QuickRequiresBoth(t *testing.T) {
+	// missing sync
+	c, w := newToolboxTestContext(t, []string{"attendance_toolbox_operate"}, nil)
+	ok := runMiddleware(t, RequireAllPermissions("attendance_toolbox_operate", "attendance_toolbox_dingtalk_sync"), c)
+	if ok || w.Code != http.StatusForbidden {
+		t.Fatalf("quick missing sync must 403, ok=%v code=%d", ok, w.Code)
+	}
+	// missing operate
+	c2, w2 := newToolboxTestContext(t, []string{"attendance_toolbox_dingtalk_sync"}, nil)
+	ok2 := runMiddleware(t, RequireAllPermissions("attendance_toolbox_operate", "attendance_toolbox_dingtalk_sync"), c2)
+	if ok2 || w2.Code != http.StatusForbidden {
+		t.Fatalf("quick missing operate must 403, ok=%v code=%d", ok2, w2.Code)
+	}
+	// both present
+	c3, _ := newToolboxTestContext(t, []string{"attendance_toolbox_operate", "attendance_toolbox_dingtalk_sync"}, nil)
+	if !runMiddleware(t, RequireAllPermissions("attendance_toolbox_operate", "attendance_toolbox_dingtalk_sync"), c3) {
+		t.Fatal("quick with both perms should pass")
+	}
+}
+
 func TestToolboxRBAC_AttendanceManageCompat(t *testing.T) {
 	// single-permission routes
 	c, _ := newToolboxTestContext(t, []string{"attendance_manage"}, nil)
@@ -79,6 +99,11 @@ func TestToolboxRBAC_AttendanceManageCompat(t *testing.T) {
 	c2, _ := newToolboxTestContext(t, []string{"attendance_manage"}, nil)
 	if !runMiddleware(t, RequirePermission("attendance_toolbox_dingtalk_sync", "attendance_manage"), c2) {
 		t.Fatal("attendance_manage should authorize sync route")
+	}
+	// quick (AND) — attendance_manage compat inside RequireAllPermissions
+	c3, _ := newToolboxTestContext(t, []string{"attendance_manage"}, nil)
+	if !runMiddleware(t, RequireAllPermissions("attendance_toolbox_operate", "attendance_toolbox_dingtalk_sync"), c3) {
+		t.Fatal("attendance_manage should authorize quick workflow")
 	}
 }
 

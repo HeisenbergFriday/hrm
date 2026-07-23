@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"peopleops/internal/database"
+
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -40,7 +42,9 @@ func newStubPermissionService(t *testing.T, queries ...stubQueryResponse) *Permi
 	if err != nil {
 		t.Fatalf("open stub gorm db: %v", err)
 	}
-	return NewPermissionServiceWithOrgID(db, "default")
+	// Stub scope tests exercise role/data/department merge without a request tenant.
+	// Bind default so menu/data permission repos stay org-scoped rather than fail-closed.
+	return NewPermissionServiceWithOrgID(db, database.DefaultOrganizationID)
 }
 
 func TestResolveUserScopeExpandsRoleAndManagedDepartments(t *testing.T) {

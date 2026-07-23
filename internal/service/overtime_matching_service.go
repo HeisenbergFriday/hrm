@@ -27,10 +27,12 @@ type OvertimeMatchingService struct {
 }
 
 func (s *OvertimeMatchingService) scopedDB() *gorm.DB {
-	if s.orgID != "" {
-		return s.db.Where("org_id = ?", s.orgID)
+	orgID := strings.TrimSpace(s.orgID)
+	if orgID == "" {
+		// Fail-closed: never scan overtime rows across all tenants.
+		return s.db.Where("1 = 0")
 	}
-	return s.db
+	return s.db.Where("org_id = ?", orgID)
 }
 
 func NewOvertimeMatchingService(db *gorm.DB) *OvertimeMatchingService {
@@ -101,6 +103,9 @@ func (s *OvertimeMatchingService) MatchApprovedOvertime(startDate, endDate strin
 }
 
 func (s *OvertimeMatchingService) MatchApprovedOvertimeForUser(userID, startDate, endDate string) error {
+	if strings.TrimSpace(s.orgID) == "" {
+		return fmt.Errorf("org_id required for overtime matching")
+	}
 	rangeStart, err := time.ParseInLocation("2006-01-02", startDate, time.Local)
 	if err != nil {
 		return fmt.Errorf("开始日期格式错误: %w", err)
@@ -317,9 +322,9 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 			actualClockSpanMinutes, breakDeductMinutes)
 	}
 
-		if err := s.saveMatchResult(approval, approvalStart, approvalEnd, &checkin, &checkout, actualClockSpanMinutes, breakDeductMinutes, effectiveOvertimeMinutes, status, reason); err != nil {
-			return err
-		}
+	if err := s.saveMatchResult(approval, approvalStart, approvalEnd, &checkin, &checkout, actualClockSpanMinutes, breakDeductMinutes, effectiveOvertimeMinutes, status, reason); err != nil {
+		return err
+	}
 	match, err := s.matchRepo.FindByUserAndWorkDate(approval.ApplicantID, approvalDate)
 	if err != nil {
 		return err
@@ -413,7 +418,13 @@ func (s *OvertimeMatchingService) syncOvertimeToDingTalk(match *database.Overtim
 
 	requestID := fmt.Sprintf("overtime:%s:%s:%d", match.UserID, match.WorkDate, match.ID)
 	reason := fmt.Sprintf("休息日加班调休 %s %d分钟", match.WorkDate, match.EffectiveOvertimeMinutes)
-	if err := dingtalk.UpdateCompensatoryLeaveQuotaForOrg(orgIDFromDB(s.db), match.UserID, match.EffectiveOvertimeMinutes, match.WorkDate, reason); err != nil {
+	orgID, orgErr := resolveServiceOrgID(s.orgID, s.db)
+	if orgErr != nil {
+		_ = s.matchRepo.UpdateSyncStatus(match.ID, "failed", requestID, orgErr.Error())
+		_ = s.matchRepo.UpdateStatus(match.ID, "dingtalk_sync_failed", "钉钉调休余额同步失败："+orgErr.Error())
+		return orgErr
+	}
+	if err := dingtalk.UpdateCompensatoryLeaveQuotaForOrg(orgID, match.UserID, match.EffectiveOvertimeMinutes, match.WorkDate, reason); err != nil {
 		_ = s.matchRepo.UpdateSyncStatus(match.ID, "failed", requestID, err.Error())
 		_ = s.matchRepo.UpdateStatus(match.ID, "dingtalk_sync_failed", "钉钉调休余额同步失败："+err.Error())
 		return nil
@@ -879,10 +890,7 @@ func (s *OvertimeMatchingService) saveMatchResult(a *database.Approval, approval
 	// 优先使用 ApplicantName；若为空或与 ID 相同，从 User 表回填
 	userName := a.ApplicantName
 	if userName == "" || userName == a.ApplicantID {
-		userRepo := repository.NewUserRepository(s.db)
-		if s.orgID != "" {
-			userRepo = repository.NewUserRepositoryWithOrgID(s.db, s.orgID)
-		}
+		userRepo := repository.NewUserRepositoryWithOrgID(s.db, strings.TrimSpace(s.orgID))
 		if user, err := userRepo.FindByUserID(a.ApplicantID); err == nil && user.Name != "" {
 			userName = user.Name
 		}
@@ -1174,7 +1182,7 @@ func (s *OvertimeMatchingService) upsertOvertimeSyncHistory(match *database.Over
 			"synced_at",
 			"updated_at",
 		}),
-		}).Create(&history).Error
+	}).Create(&history).Error
 }
 
 func shouldRollbackOvertimeMatch(match database.OvertimeMatchResult) bool {
@@ -1205,7 +1213,12 @@ func (s *OvertimeMatchingService) syncAbsoluteOvertimeBalances(scopes []overtime
 		}
 
 		reason := fmt.Sprintf("加班匹配重算回写 %d", scope.Year)
-		if err := dingtalk.SetCompensatoryLeaveQuotaForOrg(orgIDFromDB(s.db), scope.UserID, scope.Year, totalMinutes, reason); err != nil {
+		orgID, orgErr := resolveServiceOrgID(s.orgID, s.db)
+		if orgErr != nil {
+			_ = s.markOvertimeYearSyncFailed(scope, orgErr)
+			return fmt.Errorf("user %s year %d: %w", scope.UserID, scope.Year, orgErr)
+		}
+		if err := dingtalk.SetCompensatoryLeaveQuotaForOrg(orgID, scope.UserID, scope.Year, totalMinutes, reason); err != nil {
 			_ = s.markOvertimeYearSyncFailed(scope, err)
 			return fmt.Errorf("user %s year %d: %w", scope.UserID, scope.Year, err)
 		}
@@ -1226,11 +1239,11 @@ func (s *OvertimeMatchingService) markOvertimeYearSynced(scope overtimeSyncScope
 		query = query.Where("org_id = ?", s.orgID)
 	}
 	return query.Updates(map[string]interface{}{
-			"dingtalk_sync_status":     "success",
-			"dingtalk_sync_request_id": requestID,
-			"dingtalk_sync_error":      "",
-			"match_status":             "synced",
-		}).Error
+		"dingtalk_sync_status":     "success",
+		"dingtalk_sync_request_id": requestID,
+		"dingtalk_sync_error":      "",
+		"match_status":             "synced",
+	}).Error
 }
 
 func (s *OvertimeMatchingService) markOvertimeYearSyncFailed(scope overtimeSyncScope, syncErr error) error {
@@ -1242,10 +1255,10 @@ func (s *OvertimeMatchingService) markOvertimeYearSyncFailed(scope overtimeSyncS
 		query = query.Where("org_id = ?", s.orgID)
 	}
 	return query.Updates(map[string]interface{}{
-			"dingtalk_sync_status": "failed",
-			"dingtalk_sync_error":  syncErr.Error(),
-			"match_status":         "dingtalk_sync_failed",
-		}).Error
+		"dingtalk_sync_status": "failed",
+		"dingtalk_sync_error":  syncErr.Error(),
+		"match_status":         "dingtalk_sync_failed",
+	}).Error
 }
 
 // createSupplementaryRequestIfNotExists 为无打卡记录的加班匹配创建补卡申请记录

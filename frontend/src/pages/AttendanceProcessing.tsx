@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Tabs, Upload, Button, message, Spin, Typography, Space, Alert } from 'antd'
+import { Tabs, Upload, Button, message, Spin, Typography, Space, Alert, Tooltip } from 'antd'
 import {
   UploadOutlined,
   FileExcelOutlined,
@@ -10,6 +10,7 @@ import type { UploadFile } from 'antd/es/upload/interface'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import { attendanceAPI } from '../services/api'
+import { hasPermission } from '../utils/permission'
 
 const { Text } = Typography
 
@@ -106,6 +107,7 @@ const AttendanceProcessing: React.FC = () => {
   const [activeTab, setActiveTab] = useState('leave')
   const [fileLists, setFileLists] = useState<FileState>({})
   const [loading, setLoading] = useState(false)
+  const canManage = hasPermission('attendance_manage')
 
   const currentTab = processingTabs.find((t) => t.key === activeTab)!
 
@@ -116,6 +118,10 @@ const AttendanceProcessing: React.FC = () => {
   }
 
   const handleProcess = async () => {
+    if (!canManage) {
+      message.warning('你缺少 attendance_manage 权限，需要联系管理员添加')
+      return
+    }
     // 验证必选文件
     const missing = currentTab.files
       .filter((f) => f.required && getFileList(f.key).length === 0)
@@ -221,15 +227,18 @@ const AttendanceProcessing: React.FC = () => {
       ))}
 
       <Space style={{ marginTop: 24 }}>
-        <Button
-          type="primary"
-          icon={<ToolOutlined />}
-          onClick={handleProcess}
-          loading={loading}
-          size="large"
-        >
-          开始处理
-        </Button>
+        <Tooltip title={canManage ? undefined : '你缺少 attendance_manage 权限，需要联系管理员添加'}>
+          <Button
+            type="primary"
+            icon={<ToolOutlined />}
+            onClick={handleProcess}
+            loading={loading}
+            disabled={!canManage}
+            size="large"
+          >
+            开始处理
+          </Button>
+        </Tooltip>
         <Button icon={<DeleteOutlined />} onClick={handleClearFiles} disabled={loading}>
           清空文件
         </Button>

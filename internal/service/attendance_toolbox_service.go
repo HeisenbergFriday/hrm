@@ -33,6 +33,9 @@ type AttendanceToolboxResult struct {
 	FileName    string
 	ContentType string
 	Data        []byte
+	Kind        string
+	FlowKey     string
+	RowCount    int
 }
 
 type attendanceToolboxRunnerResult struct {
@@ -689,8 +692,12 @@ func (s *AttendanceToolboxService) runAction(ctx context.Context, action string,
 
 // ── Action: ExportRules ──────────────────────────────────────────────────────
 
-func (s *AttendanceToolboxService) ExportRules(ctx context.Context) (*AttendanceToolboxResult, error) {
-	result, err := s.runAction(ctx, "export-rules", map[string]interface{}{})
+func (s *AttendanceToolboxService) ExportRules(ctx context.Context, rulesJSON string) (*AttendanceToolboxResult, error) {
+	config := map[string]interface{}{}
+	if strings.TrimSpace(rulesJSON) != "" {
+		config["rules_json"] = rulesJSON
+	}
+	result, err := s.runAction(ctx, "export-rules", config)
 	if err != nil {
 		return nil, err
 	}

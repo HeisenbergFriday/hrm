@@ -37,11 +37,7 @@ func performanceCoverageTestDB(t *testing.T) {
 
 func performanceCoverageAdminContext(t *testing.T) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Set("userID", "admin")
-	return c, recorder
+	return performanceHandlerContextAs(t, performanceHandlerTestOrgID, "admin")
 }
 
 // ===================== RefreshPerformanceParticipants Tests =====================
@@ -512,7 +508,7 @@ func TestSubmitReviewSelfEvaluationBranches(t *testing.T) {
 			apiPerformanceRouterPermissionsResponse([]string{"performance:other"}),
 		)
 		c, recorder := performanceCoverageUserContext(t, "user-1")
-		c.Request = performanceTestRequest(http.MethodPost, "/api/v1/performance/participants/1/review-self-evaluation", strings.NewReader(`{"self_content_json":{"content":"done"}}`))
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/performance/participants/1/review-self-evaluation", strings.NewReader(`{"self_content_json":{"content":"done"}}`))
 		c.Request.Header.Set("Content-Type", "application/json")
 		c.Params = gin.Params{{Key: "participant_id", Value: "1"}}
 
@@ -1476,19 +1472,14 @@ func TestGoalRecordHandlersAdditionalBranches(t *testing.T) {
 
 func performanceCoverageUserContext(t *testing.T, userID string) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Set("userID", userID)
-	c.Set("orgID", database.DefaultOrganizationID)
-	c.Request = performanceTestRequest(http.MethodGet, "/", nil)
-	return c, recorder
+	// 统一 orgID + requestmeta + requestDB，避免 hasPerformancePermission 因缺 org 返回 401/error。
+	return performanceHandlerContextAs(t, performanceHandlerTestOrgID, userID)
 }
 
 func performPerformanceHandlerRequestAs(t *testing.T, userID, method, path, body string, params gin.Params, handler func(*gin.Context)) *httptest.ResponseRecorder {
 	t.Helper()
 	c, recorder := performanceCoverageUserContext(t, userID)
-	c.Request = performanceTestRequest(method, path, strings.NewReader(body))
+	c.Request = httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
 		c.Request.Header.Set("Content-Type", "application/json")
 	}
@@ -1524,7 +1515,7 @@ func apiPerformanceParticipantRowsResponse(rows [][]driver.Value) apiImportQuery
 	return apiImportQueryResponse{
 		match: apiPerformanceParticipantSelectMatch,
 		columns: []string{
-			"id", "activity_id", "employee_id", "employee_name", "department_id", "department_name",
+			"id", "org_id", "activity_id", "employee_id", "employee_name", "department_id", "department_name",
 			"manager_id", "manager_name", "status", "employee_status",
 			"self_score", "manager_score", "final_level", "is_locked",
 		},
@@ -1570,7 +1561,7 @@ func apiPerformanceParticipantRowWithDetails(id int64, activityID, employeeID st
 		managerName = "Manager Bob"
 	}
 	return []driver.Value{
-		id, activityID, employeeID, "Alice", "dept-1", "Product",
+		id, "test-org", activityID, employeeID, "Alice", "dept-1", "Product",
 		managerValue, managerName, status, employeeStatus,
 		float64(0), managerScore, finalLevel, locked,
 	}
@@ -1583,7 +1574,7 @@ func apiPerformanceActivityRowsResponse(rows [][]driver.Value) apiImportQueryRes
 			return strings.Contains(lower, "performance_activities") && !strings.Contains(lower, "count(")
 		},
 		columns: []string{
-			"id", "name", "cycle_type", "start_date", "end_date",
+			"id", "org_id", "name", "cycle_type", "start_date", "end_date",
 			"self_eval_start_at", "self_eval_end_at",
 			"manager_eval_start_at", "manager_eval_end_at",
 			"result_confirm_start_at", "result_confirm_end_at",
@@ -1595,7 +1586,7 @@ func apiPerformanceActivityRowsResponse(rows [][]driver.Value) apiImportQueryRes
 
 func apiPerformanceActivityRow(id int64, name, status string) []driver.Value {
 	return []driver.Value{
-		id, name, "quarterly", "2026-04-01", "2026-06-30",
+		id, "test-org", name, "quarterly", "2026-04-01", "2026-06-30",
 		"2026-05-01", "2026-05-07",
 		"2026-05-08", "2026-05-15",
 		"2026-05-16", "2026-05-20",
@@ -1610,7 +1601,7 @@ func apiPerformanceActivityRowsWithBonusResponse(rows [][]driver.Value) apiImpor
 			return strings.Contains(lower, "performance_activities") && !strings.Contains(lower, "count(")
 		},
 		columns: []string{
-			"id", "name", "cycle_type", "start_date", "end_date",
+			"id", "org_id", "name", "cycle_type", "start_date", "end_date",
 			"self_eval_start_at", "self_eval_end_at",
 			"manager_eval_start_at", "manager_eval_end_at",
 			"result_confirm_start_at", "result_confirm_end_at",
@@ -1622,7 +1613,7 @@ func apiPerformanceActivityRowsWithBonusResponse(rows [][]driver.Value) apiImpor
 
 func apiPerformanceActivityRowWithBonus(id int64, name, status string, enableBonus bool) []driver.Value {
 	return []driver.Value{
-		id, name, "quarterly", "2026-04-01", "2026-06-30",
+		id, "test-org", name, "quarterly", "2026-04-01", "2026-06-30",
 		"2026-05-01", "2026-05-07",
 		"2026-05-08", "2026-05-15",
 		"2026-05-16", "2026-05-20",

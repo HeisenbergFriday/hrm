@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"peopleops/internal/database"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -21,11 +22,8 @@ func NewLeaveRuleConfigRepositoryWithOrgID(db *gorm.DB, orgID string) *LeaveRule
 }
 
 func (r *LeaveRuleConfigRepository) scoped() *gorm.DB {
-	tx := r.db
-	if r.orgID != "" {
-		tx = tx.Where("org_id = ?", r.orgID)
-	}
-	return tx
+	// Fail-closed: empty org must never return an unfiltered db session.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *LeaveRuleConfigRepository) FindActiveByType(ruleType string) ([]database.LeaveRuleConfig, error) {
@@ -44,15 +42,17 @@ func (r *LeaveRuleConfigRepository) FindByKey(ruleKey string) (*database.LeaveRu
 }
 
 func (r *LeaveRuleConfigRepository) Upsert(config *database.LeaveRuleConfig) error {
-	if r.orgID != "" {
-		merged, err := EnsureSameOrg(r.orgID, config.OrgID)
-		if err != nil {
-			return err
-		}
-		config.OrgID = merged
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
 	}
+	merged, err := EnsureSameOrg(orgID, config.OrgID)
+	if err != nil {
+		return err
+	}
+	config.OrgID = merged
 	var existing database.LeaveRuleConfig
-	err := r.scoped().Where("rule_key = ?", config.RuleKey).First(&existing).Error
+	err = r.scoped().Where("rule_key = ?", config.RuleKey).First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return r.db.Create(config).Error
 	}

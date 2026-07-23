@@ -11,6 +11,15 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+func performanceRepositoryDB(db *gorm.DB, orgID string) *gorm.DB {
+	if db == nil || strings.TrimSpace(orgID) != "" || db.Error != nil {
+		return db
+	}
+	tx := db.Session(&gorm.Session{NewDB: true})
+	_ = tx.AddError(ErrMissingOrgID)
+	return tx
+}
+
 type PerformanceActivityRepository struct {
 	db    *gorm.DB
 	orgID string
@@ -21,24 +30,25 @@ func NewPerformanceActivityRepository(db *gorm.DB) *PerformanceActivityRepositor
 }
 
 func NewPerformanceActivityRepositoryWithOrgID(db *gorm.DB, orgID string) *PerformanceActivityRepository {
-	return &PerformanceActivityRepository{db: db, orgID: strings.TrimSpace(orgID)}
+	orgID = strings.TrimSpace(orgID)
+	return &PerformanceActivityRepository{db: performanceRepositoryDB(db, orgID), orgID: orgID}
 }
 
 func (r *PerformanceActivityRepository) scoped() *gorm.DB {
-	tx := r.db
-	if strings.TrimSpace(r.orgID) != "" {
-		tx = tx.Where("org_id = ?", strings.TrimSpace(r.orgID))
-	}
-	return tx
+	// Fail-closed: empty org never returns unfiltered db.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *PerformanceActivityRepository) Create(a *database.PerformanceActivity) error {
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(a.OrgID) == "" {
-		a.OrgID = strings.TrimSpace(r.orgID)
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
 	}
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(a.OrgID) != strings.TrimSpace(r.orgID) {
-		return ErrOrgMismatch
+	merged, err := EnsureSameOrg(orgID, a.OrgID)
+	if err != nil {
+		return err
 	}
+	a.OrgID = merged
 	return r.scoped().Create(a).Error
 }
 
@@ -51,12 +61,15 @@ func (r *PerformanceActivityRepository) GetByID(activityID string) (*database.Pe
 }
 
 func (r *PerformanceActivityRepository) Update(a *database.PerformanceActivity) error {
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(a.OrgID) == "" {
-		a.OrgID = strings.TrimSpace(r.orgID)
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
 	}
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(a.OrgID) != strings.TrimSpace(r.orgID) {
-		return ErrOrgMismatch
+	merged, err := EnsureSameOrg(orgID, a.OrgID)
+	if err != nil {
+		return err
 	}
+	a.OrgID = merged
 	return r.scoped().Save(a).Error
 }
 
@@ -83,12 +96,13 @@ func (r *PerformanceActivityRepository) FindAll(page, pageSize int, status, keyw
 	if endDate != "" {
 		query = query.Where("end_date <= ?", endDate)
 	}
-	// 部门隔离：只显示包含可见部门参与人的活动
+	// 部门隔离：只显示包含可见部门参与人的活动（子查询必须带 org_id）
 	if len(departmentIDs) > 0 {
-		if strings.TrimSpace(r.orgID) != "" {
-			query = query.Where("id IN (SELECT DISTINCT activity_id FROM performance_participants WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)", strings.TrimSpace(r.orgID), departmentIDs)
+		orgID := strings.TrimSpace(r.orgID)
+		if orgID == "" {
+			query = query.Where("1 = 0")
 		} else {
-			query = query.Where("id IN (SELECT DISTINCT activity_id FROM performance_participants WHERE department_id IN ? AND deleted_at IS NULL)", departmentIDs)
+			query = query.Where("id IN (SELECT DISTINCT activity_id FROM performance_participants WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)", orgID, departmentIDs)
 		}
 	}
 
@@ -128,12 +142,13 @@ func (r *PerformanceActivityRepository) FindAllByUserID(page, pageSize int, stat
 	if endDate != "" {
 		query = query.Where("end_date <= ?", endDate)
 	}
-	// 只显示用户参与的活动
+	// 只显示用户参与的活动（子查询必须带 org_id）
 	if len(userIDs) > 0 {
-		if strings.TrimSpace(r.orgID) != "" {
-			query = query.Where("id IN (SELECT DISTINCT activity_id FROM performance_participants WHERE org_id = ? AND employee_id IN ? AND deleted_at IS NULL)", strings.TrimSpace(r.orgID), userIDs)
+		orgID := strings.TrimSpace(r.orgID)
+		if orgID == "" {
+			query = query.Where("1 = 0")
 		} else {
-			query = query.Where("id IN (SELECT DISTINCT activity_id FROM performance_participants WHERE employee_id IN ? AND deleted_at IS NULL)", userIDs)
+			query = query.Where("id IN (SELECT DISTINCT activity_id FROM performance_participants WHERE org_id = ? AND employee_id IN ? AND deleted_at IS NULL)", orgID, userIDs)
 		}
 	}
 
@@ -163,15 +178,13 @@ func NewPerformanceDistributionRuleRepository(db *gorm.DB) *PerformanceDistribut
 }
 
 func NewPerformanceDistributionRuleRepositoryWithOrgID(db *gorm.DB, orgID string) *PerformanceDistributionRuleRepository {
-	return &PerformanceDistributionRuleRepository{db: db, orgID: strings.TrimSpace(orgID)}
+	orgID = strings.TrimSpace(orgID)
+	return &PerformanceDistributionRuleRepository{db: performanceRepositoryDB(db, orgID), orgID: orgID}
 }
 
 func (r *PerformanceDistributionRuleRepository) scoped() *gorm.DB {
-	tx := r.db
-	if strings.TrimSpace(r.orgID) != "" {
-		tx = tx.Where("org_id = ?", strings.TrimSpace(r.orgID))
-	}
-	return tx
+	// Fail-closed: empty org never returns unfiltered db.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *PerformanceDistributionRuleRepository) ReplaceForActivity(activityID string, rules []database.PerformanceDistributionRule) error {
@@ -218,22 +231,26 @@ func NewPerformanceTemplateRepository(db *gorm.DB) *PerformanceTemplateRepositor
 }
 
 func NewPerformanceTemplateRepositoryWithOrgID(db *gorm.DB, orgID string) *PerformanceTemplateRepository {
-	return &PerformanceTemplateRepository{db: db, orgID: strings.TrimSpace(orgID)}
+	orgID = strings.TrimSpace(orgID)
+	return &PerformanceTemplateRepository{db: performanceRepositoryDB(db, orgID), orgID: orgID}
 }
 
 func (r *PerformanceTemplateRepository) scoped() *gorm.DB {
-	tx := r.db
-	if strings.TrimSpace(r.orgID) != "" {
-		tx = tx.Where("org_id = ?", strings.TrimSpace(r.orgID))
-	}
-	return tx
+	// Fail-closed: empty org never returns unfiltered db.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *PerformanceTemplateRepository) Create(template *database.PerformanceTemplate, sections []database.PerformanceTemplateSection, items []database.PerformanceTemplateItem, sectionItemCounts []int) error {
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
+	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if strings.TrimSpace(r.orgID) != "" {
-			template.OrgID = strings.TrimSpace(r.orgID)
+		merged, err := EnsureSameOrg(orgID, template.OrgID)
+		if err != nil {
+			return err
 		}
+		template.OrgID = merged
 		if err := tx.Create(template).Error; err != nil {
 			return err
 		}
@@ -241,9 +258,11 @@ func (r *PerformanceTemplateRepository) Create(template *database.PerformanceTem
 		itemOffset := 0
 		for i := range sections {
 			sections[i].TemplateID = template.ID
-			if strings.TrimSpace(r.orgID) != "" {
-				sections[i].OrgID = strings.TrimSpace(r.orgID)
+			merged, err := EnsureSameOrg(orgID, sections[i].OrgID)
+			if err != nil {
+				return err
 			}
+			sections[i].OrgID = merged
 			if err := tx.Create(&sections[i]).Error; err != nil {
 				return err
 			}
@@ -254,9 +273,11 @@ func (r *PerformanceTemplateRepository) Create(template *database.PerformanceTem
 			}
 			for j := itemOffset; j < itemOffset+count && j < len(items); j++ {
 				items[j].SectionID = sections[i].ID
-				if strings.TrimSpace(r.orgID) != "" {
-					items[j].OrgID = strings.TrimSpace(r.orgID)
+				merged, err := EnsureSameOrg(orgID, items[j].OrgID)
+				if err != nil {
+					return err
 				}
+				items[j].OrgID = merged
 				if err := tx.Create(&items[j]).Error; err != nil {
 					return err
 				}
@@ -374,14 +395,18 @@ func (r *PerformanceTemplateRepository) Update(template *database.PerformanceTem
 }
 
 func (r *PerformanceTemplateRepository) IsReferencedByActivity(templateID uint) (bool, error) {
+	if r.db != nil && r.db.Error != nil {
+		return false, r.db.Error
+	}
 	if !r.db.Migrator().HasColumn(&database.PerformanceActivity{}, "template_id") {
 		return false, nil
 	}
 	var count int64
-	query := r.db.Table("performance_activities").Where("template_id = ? AND deleted_at IS NULL", templateID)
-	if strings.TrimSpace(r.orgID) != "" {
-		query = query.Where("org_id = ?", strings.TrimSpace(r.orgID))
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return false, ErrMissingOrgID
 	}
+	query := r.db.Table("performance_activities").Where("template_id = ? AND org_id = ? AND deleted_at IS NULL", templateID, orgID)
 	if err := query.Count(&count).Error; err != nil {
 		return false, err
 	}
@@ -398,15 +423,13 @@ func NewPerformanceParticipantRepository(db *gorm.DB) *PerformanceParticipantRep
 }
 
 func NewPerformanceParticipantRepositoryWithOrgID(db *gorm.DB, orgID string) *PerformanceParticipantRepository {
-	return &PerformanceParticipantRepository{db: db, orgID: strings.TrimSpace(orgID)}
+	orgID = strings.TrimSpace(orgID)
+	return &PerformanceParticipantRepository{db: performanceRepositoryDB(db, orgID), orgID: orgID}
 }
 
 func (r *PerformanceParticipantRepository) scoped() *gorm.DB {
-	tx := r.db
-	if strings.TrimSpace(r.orgID) != "" {
-		tx = tx.Where("org_id = ?", strings.TrimSpace(r.orgID))
-	}
-	return tx
+	// Fail-closed: empty org never returns unfiltered db.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *PerformanceParticipantRepository) GetByID(participantID string) (*database.PerformanceParticipant, error) {
@@ -483,15 +506,13 @@ func NewPerformanceReviewVersionRepository(db *gorm.DB) *PerformanceReviewVersio
 }
 
 func NewPerformanceReviewVersionRepositoryWithOrgID(db *gorm.DB, orgID string) *PerformanceReviewVersionRepository {
-	return &PerformanceReviewVersionRepository{db: db, orgID: strings.TrimSpace(orgID)}
+	orgID = strings.TrimSpace(orgID)
+	return &PerformanceReviewVersionRepository{db: performanceRepositoryDB(db, orgID), orgID: orgID}
 }
 
 func (r *PerformanceReviewVersionRepository) scoped() *gorm.DB {
-	tx := r.db
-	if strings.TrimSpace(r.orgID) != "" {
-		tx = tx.Where("org_id = ?", strings.TrimSpace(r.orgID))
-	}
-	return tx
+	// Fail-closed: empty org never returns unfiltered db.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *PerformanceReviewVersionRepository) CreateSelfEvaluationVersion(participantID string, score float64, level, summary string, attachments []string, userID string) (*database.PerformanceReviewVersion, error) {
@@ -789,10 +810,11 @@ func (r *PerformanceReviewVersionRepository) ListByParticipant(participantID str
 
 func (r *PerformanceReviewVersionRepository) getParticipantLocked(participantID string) (*database.PerformanceParticipant, error) {
 	var p database.PerformanceParticipant
-	query := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", participantID)
-	if strings.TrimSpace(r.orgID) != "" {
-		query = query.Where("org_id = ?", strings.TrimSpace(r.orgID))
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return nil, ErrMissingOrgID
 	}
+	query := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND org_id = ? AND deleted_at IS NULL", participantID, orgID)
 	if err := query.First(&p).Error; err != nil {
 		return nil, err
 	}
@@ -809,15 +831,13 @@ func NewPerformanceRelationshipChangeLogRepository(db *gorm.DB) *PerformanceRela
 }
 
 func NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db *gorm.DB, orgID string) *PerformanceRelationshipChangeLogRepository {
-	return &PerformanceRelationshipChangeLogRepository{db: db, orgID: strings.TrimSpace(orgID)}
+	orgID = strings.TrimSpace(orgID)
+	return &PerformanceRelationshipChangeLogRepository{db: performanceRepositoryDB(db, orgID), orgID: orgID}
 }
 
 func (r *PerformanceRelationshipChangeLogRepository) scoped() *gorm.DB {
-	tx := r.db
-	if strings.TrimSpace(r.orgID) != "" {
-		tx = tx.Where("org_id = ?", strings.TrimSpace(r.orgID))
-	}
-	return tx
+	// Fail-closed: empty org never returns unfiltered db.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *PerformanceRelationshipChangeLogRepository) ListByParticipant(participantID string) ([]database.PerformanceRelationshipChangeLog, error) {

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,9 +106,8 @@ func TestAttendanceRepository_UpsertEnforcesTenantOrg(t *testing.T) {
 	}
 }
 
-// TestAttendanceRepository_LegacyEmptyOrgFallsBackToDefault 保留旧构造的迁移期语义
-// —— 当且仅当没有租户上下文时，空 OrgID 才落 "default"。新代码请使用 WithOrgID 构造。
-func TestAttendanceRepository_LegacyEmptyOrgFallsBackToDefault(t *testing.T) {
+// TestAttendanceRepository_EmptyOrgConstructorFailClosed 无租户上下文时不得静默 default。
+func TestAttendanceRepository_EmptyOrgConstructorFailClosed(t *testing.T) {
 	db := newDryRunGORM(t)
 	repo := NewAttendanceRepository(db)
 	record := &database.Attendance{
@@ -115,9 +115,136 @@ func TestAttendanceRepository_LegacyEmptyOrgFallsBackToDefault(t *testing.T) {
 		CheckTime: time.Now(),
 		CheckType: "OnDuty",
 	}
-	_ = repo.Upsert(record)
-	if record.OrgID != "default" {
-		t.Fatalf("OrgID = %q, want default", record.OrgID)
+	err := repo.Upsert(record)
+	if err == nil || (!errors.Is(err, ErrMissingOrgID) && !strings.Contains(err.Error(), "missing organization") && !strings.Contains(err.Error(), "orgID required")) {
+		t.Fatalf("Upsert err=%v, want missing org", err)
+	}
+}
+
+// TestEmployeeRepository_LifecycleWritesEnforceTenantOrg 阶段三：转岗/离职/入职写路径组织隔离。
+func TestEmployeeRepository_LifecycleWritesEnforceTenantOrg(t *testing.T) {
+	orgs := []string{"default", "xiaotie", "muteng"}
+	for _, org := range orgs {
+		t.Run(org+"/transfer rejects mismatch", func(t *testing.T) {
+			db := newDryRunGORM(t)
+			repo := NewEmployeeRepositoryWithOrgID(db, org)
+			err := repo.CreateTransfer(&database.EmployeeTransfer{
+				TransferID: "tf-1",
+				OrgID:      otherOrg(org),
+			})
+			if !errors.Is(err, ErrOrgMismatch) {
+				t.Fatalf("err = %v, want ErrOrgMismatch", err)
+			}
+		})
+		t.Run(org+"/transfer inherits tenant org", func(t *testing.T) {
+			db := newDryRunGORM(t)
+			repo := NewEmployeeRepositoryWithOrgID(db, org)
+			tr := &database.EmployeeTransfer{TransferID: "tf-1"}
+			_ = repo.CreateTransfer(tr)
+			if tr.OrgID != org {
+				t.Fatalf("OrgID = %q, want %q", tr.OrgID, org)
+			}
+		})
+		t.Run(org+"/resignation rejects mismatch", func(t *testing.T) {
+			db := newDryRunGORM(t)
+			repo := NewEmployeeRepositoryWithOrgID(db, org)
+			err := repo.CreateResignation(&database.EmployeeResignation{
+				ResignationID: "rs-1",
+				OrgID:         otherOrg(org),
+			})
+			if !errors.Is(err, ErrOrgMismatch) {
+				t.Fatalf("err = %v, want ErrOrgMismatch", err)
+			}
+		})
+		t.Run(org+"/onboarding rejects mismatch", func(t *testing.T) {
+			db := newDryRunGORM(t)
+			repo := NewEmployeeRepositoryWithOrgID(db, org)
+			err := repo.CreateOnboarding(&database.EmployeeOnboarding{
+				OnboardingID: "ob-1",
+				EmployeeID:   "E001",
+				OrgID:        otherOrg(org),
+			})
+			if !errors.Is(err, ErrOrgMismatch) {
+				t.Fatalf("err = %v, want ErrOrgMismatch", err)
+			}
+		})
+		t.Run(org+"/onboarding inherits tenant org", func(t *testing.T) {
+			db := newDryRunGORM(t)
+			repo := NewEmployeeRepositoryWithOrgID(db, org)
+			ob := &database.EmployeeOnboarding{OnboardingID: "ob-1", EmployeeID: "E001"}
+			_ = repo.CreateOnboarding(ob)
+			if ob.OrgID != org {
+				t.Fatalf("OrgID = %q, want %q", ob.OrgID, org)
+			}
+		})
+	}
+}
+
+// TestApprovalRepository_EmptyOrgAndMismatchFailClosed 审批仓储必须严格绑定组织。
+func TestApprovalRepository_EmptyOrgAndMismatchFailClosed(t *testing.T) {
+	db := newDryRunGORM(t)
+	empty := NewApprovalRepository(db)
+	if err := empty.Create(&database.Approval{ProcessID: "p1", Title: "t"}); !isMissingOrgErr(err) {
+		t.Fatalf("empty create err = %v, want missing-org error", err)
+	}
+	if _, _, err := empty.FindAll(1, 10, nil); !isMissingOrgErr(err) {
+		t.Fatalf("empty find err = %v, want missing-org error", err)
+	}
+
+	repo := NewApprovalRepositoryWithOrgID(db, "org-a")
+	if err := repo.Create(&database.Approval{ProcessID: "p1", Title: "t", OrgID: "org-b"}); !errors.Is(err, ErrOrgMismatch) {
+		t.Fatalf("mismatch create err = %v, want ErrOrgMismatch", err)
+	}
+	a := &database.Approval{ProcessID: "p1", Title: "t"}
+	_ = repo.Create(a)
+	if a.OrgID != "org-a" {
+		t.Fatalf("OrgID = %q, want org-a", a.OrgID)
+	}
+
+	tplEmpty := NewApprovalTemplateRepository(db)
+	if err := tplEmpty.Create(&database.ApprovalTemplate{Name: "n"}); !isMissingOrgErr(err) {
+		t.Fatalf("empty template create err = %v, want missing-org error", err)
+	}
+}
+
+// TestDepartmentRepository_EmptyOrgFailClosed 空 org 部门仓储不得全表读写。
+func TestDepartmentRepository_EmptyOrgFailClosed(t *testing.T) {
+	db := newDryRunGORM(t)
+	repo := NewDepartmentRepository(db)
+	if err := repo.Create(&database.Department{DepartmentID: "d1", Name: "D"}); !isMissingOrgErr(err) {
+		t.Fatalf("empty create err = %v, want missing-org error", err)
+	}
+	// FindAll with empty org uses WHERE 1=0 (fail-closed). DryRun may surface
+	// the query as an error; either empty rows or any error is acceptable.
+	if rows, err := repo.FindAll(); err == nil && len(rows) != 0 {
+		t.Fatalf("empty FindAll returned %d rows, want 0", len(rows))
+	}
+	if _, err := repo.FindAllChildDepartmentIDs("d1"); !isMissingOrgErr(err) {
+		t.Fatalf("empty child ids err = %v, want missing-org error", err)
+	}
+}
+
+// TestTalentRepository_WritesEnforceTenantOrg 阶段三：人才分析写路径组织隔离。
+func TestTalentRepository_WritesEnforceTenantOrg(t *testing.T) {
+	orgs := []string{"default", "xiaotie", "muteng"}
+	for _, org := range orgs {
+		t.Run(org+"/create rejects mismatch", func(t *testing.T) {
+			db := newDryRunGORM(t)
+			repo := NewTalentRepositoryWithOrgID(db, org)
+			err := repo.Create(&database.TalentAnalysis{UserID: "alice", OrgID: otherOrg(org)})
+			if !errors.Is(err, ErrOrgMismatch) {
+				t.Fatalf("err = %v, want ErrOrgMismatch", err)
+			}
+		})
+		t.Run(org+"/create inherits tenant org", func(t *testing.T) {
+			db := newDryRunGORM(t)
+			repo := NewTalentRepositoryWithOrgID(db, org)
+			a := &database.TalentAnalysis{UserID: "alice"}
+			_ = repo.Create(a)
+			if a.OrgID != org {
+				t.Fatalf("OrgID = %q, want %q", a.OrgID, org)
+			}
+		})
 	}
 }
 

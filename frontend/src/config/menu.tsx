@@ -18,6 +18,7 @@ import {
   ScheduleOutlined,
   DatabaseOutlined,
   ToolOutlined,
+  CloudSyncOutlined,
 } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 
@@ -47,7 +48,8 @@ export const menuConfig: MenuItem[] = [
     label: '组织管理',
     icon: <TeamOutlined />,
     children: [
-      { key: menuPermissionKey('organization-dashboard'), title: '人才管理驾驶舱', label: <Link to="/organization">人才管理驾驶舱</Link>, icon: <TeamOutlined /> },
+      // title 保持完整（顶栏/权限树/tooltip）；label 侧栏可缩短防截断。menu key 禁止改动
+      { key: menuPermissionKey('organization-dashboard'), title: '人才管理驾驶舱', label: <Link to="/organization">人才驾驶舱</Link>, icon: <TeamOutlined /> },
       { key: menuPermissionKey('department-tree'), title: '组织架构', label: <Link to="/department-tree">组织架构</Link>, icon: <TeamOutlined /> },
       { key: menuPermissionKey('employees'), title: '组织花名册', label: <Link to="/employees">组织花名册</Link>, icon: <UserOutlined /> },
       { key: menuPermissionKey('employee-profile'), title: '员工档案', label: <Link to="/employee-profile">员工档案</Link>, icon: <UserOutlined /> },
@@ -66,10 +68,11 @@ export const menuConfig: MenuItem[] = [
       { key: menuPermissionKey('attendance-stats'), title: '异常统计', label: <Link to="/attendance-stats">异常统计</Link>, icon: <WarningOutlined /> },
       { key: menuPermissionKey('attendance-export'), title: '导出记录', label: <Link to="/attendance-export">导出记录</Link>, icon: <FileExcelOutlined /> },
       { key: menuPermissionKey('attendance-processing'), title: '数据处理', label: <Link to="/attendance-processing">数据处理</Link>, icon: <ToolOutlined /> },
+      { key: menuPermissionKey('attendance-external-sync'), title: '外部考勤同步', label: <Link to="/attendance/external-sync">外部同步</Link>, icon: <CloudSyncOutlined /> },
       { key: menuPermissionKey('leave-overtime'), title: '年假与调休', label: <Link to="/leave-overtime">年假与调休</Link>, icon: <ScheduleOutlined /> },
       { key: menuPermissionKey('attendance-toolbox'), title: '考勤工具箱', label: <Link to="/attendance-toolbox">考勤工具箱</Link>, icon: <ToolOutlined /> },
-      { key: menuPermissionKey('week-schedule'), title: '大小周与节假日', label: <Link to="/week-schedule">大小周与节假日</Link>, icon: <CalendarOutlined /> },
-      { key: menuPermissionKey('employee-shift-config'), title: '员工下班时间', label: <Link to="/employee-shift-config">员工下班时间</Link>, icon: <ClockCircleOutlined /> },
+      { key: menuPermissionKey('week-schedule'), title: '大小周与节假日', label: <Link to="/week-schedule">大小周/节假日</Link>, icon: <CalendarOutlined /> },
+      { key: menuPermissionKey('employee-shift-config'), title: '员工下班时间', label: <Link to="/employee-shift-config">下班时间</Link>, icon: <ClockCircleOutlined /> },
     ],
   },
   {

@@ -17,6 +17,7 @@ vendor/
 .env.local
 .env.*.local
 deploy/peopleops.env
+deploy/peopleops.test.env
 
 # Logs
 logs
@@ -63,3 +64,13 @@ Thumbs.db
 peopleops-hr-test.tar
 uploads/*.xlsx
 uploads/*.jpg
+# Local AI/test review artifacts
+/.codex-tmp/
+/.tmp_attendance_audit/
+/.wolf/designqc-captures/
+/.wolf/tmp_*
+/audit_leave_test.xlsx
+/tools/attendance_toolbox/python/_diff_report.txt
+/tools/attendance_toolbox/python/_tmp_compare.py
+/tools/attendance_toolbox/python/tmp*/
+/tools/attendance_toolbox/python/scripts/compare_app_source.last_run.txt

@@ -3,6 +3,7 @@ package repository
 import (
 	"fmt"
 	"peopleops/internal/database"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -21,11 +22,8 @@ func NewCompensatoryLeaveLedgerRepositoryWithOrgID(db *gorm.DB, orgID string) *C
 }
 
 func (r *CompensatoryLeaveLedgerRepository) scoped() *gorm.DB {
-	tx := r.db
-	if r.orgID != "" {
-		tx = tx.Where("org_id = ?", r.orgID)
-	}
-	return tx
+	// Fail-closed: empty org must never return an unfiltered db session.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *CompensatoryLeaveLedgerRepository) FindByUser(userID string) ([]database.CompensatoryLeaveLedger, error) {
@@ -80,13 +78,15 @@ func (r *CompensatoryLeaveLedgerRepository) GetBalanceByUserYearAndSource(userID
 }
 
 func (r *CompensatoryLeaveLedgerRepository) Create(ledger *database.CompensatoryLeaveLedger) error {
-	if r.orgID != "" {
-		merged, err := EnsureSameOrg(r.orgID, ledger.OrgID)
-		if err != nil {
-			return err
-		}
-		ledger.OrgID = merged
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
 	}
+	merged, err := EnsureSameOrg(orgID, ledger.OrgID)
+	if err != nil {
+		return err
+	}
+	ledger.OrgID = merged
 	return r.db.Create(ledger).Error
 }
 

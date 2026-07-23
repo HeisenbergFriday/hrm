@@ -346,6 +346,16 @@ func resolveIdempotencyOrgID(c *gin.Context) (string, error) {
 	return unauthenticatedIdempotencyOrg, nil
 }
 
+// idempotencyOrgID is retained for unit tests that only need the resolved string.
+// Prefer resolveIdempotencyOrgID in production paths.
+func idempotencyOrgID(c *gin.Context) string {
+	orgID, err := resolveIdempotencyOrgID(c)
+	if err != nil {
+		return ""
+	}
+	return orgID
+}
+
 func idempotencyRoute(c *gin.Context) string {
 	if route := c.FullPath(); route != "" {
 		return route

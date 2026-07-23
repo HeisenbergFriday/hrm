@@ -64,7 +64,7 @@ export default defineConfig({
   webServer: {
     command: `npm run dev -- --port ${E2E_PORT} --strictPort`,
     url: E2E_BASE_URL,
-    reuseExistingServer: false,
+    reuseExistingServer: process.env.PLAYWRIGHT_REUSE_SERVER === '1',
     timeout: 120_000,
     stdout: 'pipe',
     stderr: 'pipe',

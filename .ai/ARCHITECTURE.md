@@ -1,6 +1,6 @@
 ---
 purpose: 项目整体架构、数据流、核心设计约束
-last_updated: 2026-05-26
+last_updated: 2026-07-20
 source_of_truth:
   - go.mod（后端技术栈）
   - frontend/package.json（前端技术栈）
@@ -57,14 +57,24 @@ update_when:
 ### 核心流程
 
 1. **组织架构同步**：钉钉部门/用户 → 本地 `departments` / `users` 表
-2. **考勤同步**：钉钉打卡记录 → 本地 `attendances` 表
-3. **审批同步**：钉钉审批实例 → 本地 `approvals` 表
-4. **年假发放**：本地计算 → 写入 `annual_leave_grants` → 同步到钉钉假期配置
-5. **加班匹配**：钉钉审批 + 本地打卡 → 计算有效加班时长 → 写入 `overtime_match_results` → 生成调休余额 → 同步到钉钉
-6. **大小周排班**：本地配置 `week_schedule_rules` → 计算每周班次 → 同步到钉钉考勤组
-7. **绩效管理**：活动创建 → 参与人刷新 →（沐腾）双门槛开启 + 参与人独立流水线 /（旧流程）统一阶段推进 → 结果确认/公布 → 归档
-8. **员工全生命周期**：入职 → 档案管理 → 转岗 → 离职
-9. **补卡申请**：员工提交补卡 → 审批流程 → 钉钉同步
+2. **考勤同步（钉钉 API）**：钉钉打卡记录 → 本地 `attendances` 表
+3. **考勤同步（外部 Doris，一期）**：Doris 只读表 → `external_*` staging → `attendances` / `user_department_relations`（按 JWT org 隔离，未知 corp 拒绝）
+4. **审批同步**：钉钉审批实例 → 本地 `approvals` 表
+5. **年假发放**：本地计算 → 写入 `annual_leave_grants` → 同步到钉钉假期配置
+6. **加班匹配**：钉钉审批 + 本地打卡 → 计算有效加班时长 → 写入 `overtime_match_results` → 生成调休余额 → 同步到钉钉
+7. **大小周排班**：本地配置 `week_schedule_rules` → 计算每周班次 → 同步到钉钉考勤组
+8. **绩效管理**：活动创建 → 参与人刷新 →（沐腾）双门槛开启 + 参与人独立流水线 /（旧流程）统一阶段推进 → 结果确认/公布 → 归档
+9. **员工全生命周期**：入职 → 档案管理 → 转岗 → 离职
+10. **补卡申请**：员工提交补卡 → 审批流程 → 钉钉同步
+11. **考勤工具箱文件计算**：React multipart 参数/Excel → Go `AttendanceToolboxService` → Python runner；Python 生成业务 Excel 与 `kind=meta` JSON，Go 合并到结构化运行响应 `meta/stats`，前端据此展示异常提示且不把 meta 文件作为用户下载结果
+
+### 外部 Doris 考勤同步（一期）
+
+1. **首次回填**：无 cursor 时从 `EXTERNAL_ATTENDANCE_INITIAL_START_TIME`（默认 Unix epoch，全量历史）读取 Doris 只读表
+2. **写入 staging**：`external_attendance_raw` / `external_user_department_raw` / `external_attendance_approve_links`，按 org 隔离
+3. **落业务表**：映射本地用户后 upsert `attendances` / `user_department_relations`
+4. **推进 cursor**：成功完成后写入 `(cursor_time, cursor_tie_key)`；之后 cron 用 cursor + lookback 增量
+5. **串行锁**：同一 org 下 attendance/department/all 共用 `scope_key=external-attendance`
 
 ---
 
@@ -103,6 +113,16 @@ type Response struct {
 - Handler 内通过 `c.Get("userID")` 取当前用户，通过 `c.Get("orgID")` 取当前企业上下文
 - 钉钉多企业登录必须使用选中企业的 `org_id` 解析钉钉应用配置、换取用户信息并签发同企业 JWT，禁止选中企业后静默回退默认钉钉应用
 - 中间件：`internal/middleware/jwt.go`
+
+#### 通用文件上传/下载（组织隔离）
+- 元数据表 `uploaded_files`（`UploadedFile`）：`org_id` 所有权 + `stored_name` / `original_name` / `content_type` / `size` / 软删除
+- 磁盘路径：`uploads/<safe_org_id>/<stored_name>`；`safe_org_id` 仅允许 `[A-Za-z0-9._-]`，含 `..` 或路径分隔符则拒绝
+- 对外 URL：`/api/v1/files/:file_id`（数字主键），不暴露物理路径与组织目录
+- 路由：`POST /upload` 与 `GET /files/:file_id` 均在 `JWTAuth + TenantContext` 下；归属只取 JWT `org_id`，禁止 body/query/header 切 org
+- 下载查询：`middleware.RequestDB(c)` + org-scoped repository；当前组织无记录时统一 **404**（跨 org 不暴露是否存在）
+- 旧 URL `/api/v1/files/<random_filename>`：**fail-closed**（无元数据所有权证明即 404），不开放全企业访问
+- 安全保留：扩展名白名单、内容嗅探、ClamAV（可选）、`X-Content-Type-Options: nosniff`、路径穿越防护
+- 绩效附件：业务字段仍存 URL 字符串；`AttachmentUpload` + `authFileUrl` 用 `credentials: include` 预览，新上传自然得到 file_id URL
 
 #### 钉钉 ID 存储
 - `User.UserID` 和 `Department.DepartmentID` 存钉钉原始 ID（字符串），不是本地自增主键
@@ -175,7 +195,8 @@ type Response struct {
 ### 大小周排班流程
 1. 配置 `WeekScheduleRule`（基准周 + pattern）
 2. 可手动覆盖特定周（`WeekScheduleOverride`）
-3. 同步到钉钉班次（`SyncWeekToDingTalk`）：按用户分配钉钉 Shift
+3. 同步到钉钉班次（`WeekScheduleService.SyncToDingTalk`）：按用户分配钉钉 Shift；读写钉钉必须走当前 JWT `org_id` 的 access_token / `op_user_id`
+4. 从钉钉回读（`SyncFromDingTalk` / `SyncFromDingTalkConservative`）仅调用 `GetScheduleListBatchByDayForOrg(orgID, ...)`，禁止非 default 企业走默认 `GetScheduleListBatchByDay` / `GetAccessToken`
 
 ### 绩效管理流程
 1. **活动配置**：HR 创建绩效活动，设置时间范围、参与人范围、关联指标库；按 `flow_type` 区分小铁文娱旧流程与沐腾科技新流程
@@ -198,6 +219,20 @@ type Response struct {
 - 支持菜单权限和数据权限
 - 前端页面：角色管理、权限管理、菜单权限、数据权限
 
+### 多租户隔离（org_id）运行时边界
+- **入口**：`JWTAuth` 强制 claims 含 `org_id`；`TenantContext` 把 org 写入 `requestmeta.WithTenant` **并回写** `RequestInfo.OrgID`，供 `CurrentOrganizationIDFromDB` 与旧仓储路径使用。
+- **Handler**：普通业务只读 JWT `orgID`（`currentOrgID` / `currentOrgIDOrAbort`）；`org_id`/`target_org_id` 请求参数一律 `rejectCrossOrgParam`。
+- **Service/Repository**：优先 `NewXxxWithOrgID` + `scoped()`；后台任务（年假/加班/外勤/绩效提醒）必须 `ListActiveOrganizations` 后**逐 org** 构造服务，禁止空 org 全表业务扫描。
+- **tenant-scoped 缺 org fail-closed**：仓储/服务在缺少 `orgID` 时必须硬失败（如 `repository: orgID required for tenant-scoped operation` / `ErrMissingOrgID`），禁止发明 `default`、禁止无过滤全表扫描。
+- **已解析组织优先 `NewXxxWithOrgID`**：Handler/登录路径一旦解析出 `orgID`（JWT、钉钉回调 `resolvedOrgID`、state 等），构造用户/部门/审批等服务时必须 `NewXxxServiceWithOrgID(db, orgID)`，**禁止**先 `NewXxxService(db)` 再指望实体字段补作用域。
+- **实体字段 `OrgID` ≠ 仓储绑定**：`User.OrgID` / 模型上的 `org_id` 列只描述数据归属；**不能**替代 repository/service 构造时注入的组织绑定。跨 org 实体写入必须拒绝。
+- **钉钉工具调用**：考勤工具箱等直接调用钉钉的功能必须使用 JWT `org_id` 解析 `organizations` 中的 AppKey/AppSecret；审批流程码存于 `organizations.extension.dingtalk_process_codes`，非默认组织禁止回退全局钉钉凭证或流程码，且请求 body/multipart 不得覆盖服务端解析的组织配置。
+- **钉钉 op_user_id（企业管理员）**：`organizations.ding_talk_admin_user_id`（模型字段 `DingTalkAdminUserID`）为权威来源；`dingtalk.ResolveAdminUserID(orgID)` / `ResolveAdminUserIDFromConfig` 统一解析。非 default 企业**禁止**回退全局 `DINGTALK_ADMIN_USER_ID`；default 企业可在 `DefaultConfig` / `ConfigFromOrganization` 配置解析层兼容环境变量。排班读写、班次创建、年假/调休额度写钉钉均须走该解析，业务层禁止直接 `os.Getenv("DINGTALK_ADMIN_USER_ID")`。
+- **班次 ID 进程缓存**：`ShiftConfigService` 的 `shiftIDCache` key 必须为 `orgID|shiftKey`；提供 `ClearShiftIDCacheForTest` 避免测试互相污染。相同班次名+时间在不同企业不得共享钉钉 `shift_id`。
+- **缺配置 fail-closed**：非 default 企业缺少 App 凭证或 `DingTalkAdminUserID` 时，排班同步/班次创建/假期写钉钉须直接报错，禁止写库后 partial 成功、禁止静默用 default 企业 token。
+- **双上下文**：`requestmeta.TenantID`（严格）与 `RequestInfo.OrgID`（兼容）均可能携带 org；绩效等服务构造时优先 Tenant，再回退 RequestInfo；异步 goroutine 必须两者都注入。
+- **全局表**（有意不绑业务 org）：`organizations`、`permissions`、`role_permissions`；`Permission.Code` 等全局唯一。业务唯一键见 `docs/org_composite_unique_index_migration.md`。
+- **相关复盘**：`docs/DEVELOPMENT_ISSUES.md`（2026-07-20 钉钉多组织登录更新用户缺少组织作用域）。
 ### 审计日志
 - 记录所有操作日志，写入 `OperationLog`
 - 支持按用户、操作类型、时间范围查询
@@ -219,11 +254,12 @@ type Response struct {
 - `JWT_SECRET`：JWT 签名密钥
 
 ### 钉钉集成
-- `DINGTALK_APP_KEY`：钉钉应用 Key
-- `DINGTALK_APP_SECRET`：钉钉应用 Secret
-- `DINGTALK_CORP_ID`：钉钉企业 ID
-- `DINGTALK_AGENT_ID`：钉钉应用 Agent ID
-- `DINGTALK_ADMIN_USER_ID`：钉钉管理员用户 ID
+- `DINGTALK_APP_KEY`：钉钉应用 Key（default 企业兼容；多企业优先 `organizations.ding_talk_app_key`）
+- `DINGTALK_APP_SECRET`：钉钉应用 Secret（default 企业兼容）
+- `DINGTALK_CORP_ID`：钉钉企业 ID（default 企业兼容）
+- `DINGTALK_AGENT_ID`：钉钉应用 Agent ID（default 企业兼容）
+- `DINGTALK_ADMIN_USER_ID`：default 企业钉钉管理员 userid（`op_user_id`）兼容项；多企业写入 `organizations.ding_talk_admin_user_id`，由配置解析层封装，非 default 禁止业务侧读此环境变量
+- `DINGTALK_ORGANIZATIONS`：JSON 数组种子/更新多企业钉钉配置，字段含 `org_id` / `corp_id` / `app_key` / `app_secret` / `agent_id` / `admin_user_id`|`dingtalk_admin_user_id` / `process_codes` 等
 - `DINGTALK_REDIRECT_URI`：OAuth 回调地址
 - `DINGTALK_APP_HOME_URL`：应用首页地址
 - `APP_BASE_URL`：后端服务地址

@@ -268,6 +268,137 @@ func isSafeUploadFilename(filename string) bool {
 	return isAllowedUploadExtension(filepath.Ext(filename))
 }
 
+func sanitizeOrgIDForPath(orgID string) string {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return ""
+	}
+	// Fail closed on path-like org identifiers before any mapping.
+	if strings.Contains(orgID, "..") || strings.ContainsAny(orgID, `/\`) {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(orgID))
+	for _, ch := range orgID {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-' {
+			b.WriteRune(ch)
+			continue
+		}
+		// Map other runes to underscore so org dirs stay path-safe without leaking raw values into traversals.
+		b.WriteByte('_')
+	}
+	out := b.String()
+	out = strings.Trim(out, ".")
+	if out == "" || out == "." || out == ".." {
+		return ""
+	}
+	return out
+}
+
+func uploadRootDir() string {
+	return "uploads"
+}
+
+func uploadedFileDiskPath(orgID, storedName string) (string, error) {
+	safeOrg := sanitizeOrgIDForPath(orgID)
+	if safeOrg == "" {
+		return "", errors.New("invalid organization id for storage path")
+	}
+	if !isSafeUploadFilename(storedName) {
+		return "", errors.New("invalid stored file name")
+	}
+	root, err := filepath.Abs(uploadRootDir())
+	if err != nil {
+		return "", err
+	}
+	full := filepath.Join(root, safeOrg, storedName)
+	// Ensure resolved path stays under uploads/<org>/ (path traversal defense).
+	rel, err := filepath.Rel(root, full)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("path escapes upload root")
+	}
+	if !strings.HasPrefix(rel, safeOrg+string(filepath.Separator)) && rel != safeOrg {
+		return "", errors.New("path escapes organization directory")
+	}
+	return full, nil
+}
+
+func detectUploadContentType(file *multipart.FileHeader, ext string) string {
+	src, err := file.Open()
+	if err != nil {
+		return "application/octet-stream"
+	}
+	defer func() { _ = src.Close() }()
+	header := make([]byte, 512)
+	n, err := src.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "application/octet-stream"
+	}
+	if n == 0 {
+		return "application/octet-stream"
+	}
+	detected := http.DetectContentType(header[:n])
+	if detected != "" && detected != "application/octet-stream" {
+		return detected
+	}
+	switch strings.ToLower(ext) {
+	case ".pdf":
+		return "application/pdf"
+	case ".txt":
+		return "text/plain; charset=utf-8"
+	case ".csv":
+		return "text/csv; charset=utf-8"
+	case ".md":
+		return "text/markdown; charset=utf-8"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func contentDispositionFilename(originalName, fallback string) string {
+	name := strings.TrimSpace(originalName)
+	if name == "" {
+		name = fallback
+	}
+	name = filepath.Base(name)
+	name = strings.ReplaceAll(name, "\"", "")
+	name = strings.ReplaceAll(name, "\r", "")
+	name = strings.ReplaceAll(name, "\n", "")
+	if name == "" || name == "." || name == ".." {
+		name = fallback
+	}
+	// RFC 5987 filename* for non-ASCII; also provide ASCII fallback.
+	ascii := make([]rune, 0, len(name))
+	for _, ch := range name {
+		if ch < 0x20 || ch > 0x7e || ch == '"' || ch == '\\' {
+			ascii = append(ascii, '_')
+			continue
+		}
+		ascii = append(ascii, ch)
+	}
+	asciiName := string(ascii)
+	if asciiName == "" {
+		asciiName = fallback
+	}
+	return fmt.Sprintf("filename=\"%s\"; filename*=UTF-8''%s", asciiName, url.PathEscape(name))
+}
+
+func respondUploadedFileNotFound(c *gin.Context) {
+	c.JSON(http.StatusNotFound, Response{
+		Code:    http.StatusNotFound,
+		Message: "文件不存在",
+	})
+}
+
 func validateUploadContent(file *multipart.FileHeader, ext string) error {
 	src, err := file.Open()
 	if err != nil {
@@ -560,6 +691,24 @@ func respondOrgAccessDenied(c *gin.Context) {
 	})
 }
 
+// employeeServiceForRequest 绑定 JWT org 的员工服务；缺 org 时 abort 并返回 nil。
+// 禁止客户端传 org_id；所有员工档案/入转调离查询必须经此入口。
+func employeeServiceForRequest(c *gin.Context) (*service.EmployeeService, string, bool) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return nil, "", false
+	}
+	if !rejectCrossOrgParam(c, orgID, c.Query("org_id"), c.Query("target_org_id")) {
+		return nil, "", false
+	}
+	return service.NewEmployeeServiceWithOrgID(middleware.RequestDB(c), orgID), orgID, true
+}
+
+// employeeServiceForOrg 在已知 org（同步/登录建档）场景下构造组织绑定服务。
+func employeeServiceForOrg(c *gin.Context, orgID string) *service.EmployeeService {
+	return service.NewEmployeeServiceWithOrgID(middleware.RequestDB(c), database.NormalizeOrganizationID(orgID))
+}
+
 func currentUserHasAnyPermission(c *gin.Context, permissionCodes ...string) bool {
 	userID := strings.TrimSpace(c.GetString("userID"))
 	if userID == "" || len(permissionCodes) == 0 {
@@ -632,35 +781,34 @@ func canAccessUserByScope(scope *service.OrgDataScope, user *database.User) bool
 	return scope.AllowsDepartment(user.DepartmentID)
 }
 
-func loadUserByUserID(userID string) (*database.User, error) {
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return nil, gorm.ErrRecordNotFound
-	}
-
-	var user database.User
-	if err := database.DB.Where("user_id = ? AND deleted_at IS NULL", userID).First(&user).Error; err != nil {
-		return nil, err
-	}
-	return &user, nil
+// loadUserByUserID loads a user by business user_id within the given organization.
+// orgID is required (fail-closed); empty org never falls back to a global or default query.
+func loadUserByUserID(orgID, userID string) (*database.User, error) {
+	return loadUserByAuthIDInOrg(orgID, userID)
 }
 
+// loadUserByAuthID is intentionally unavailable without an organization context.
+// Callers must use loadUserByAuthIDInOrg with the JWT-bound org_id.
 func loadUserByAuthID(authUserID string) (*database.User, error) {
-	return loadUserByAuthIDInOrg("", authUserID)
+	_ = authUserID
+	return nil, ErrMissingOrgContext
 }
 
+// loadUserByAuthIDInOrg loads a user by user_id (or numeric primary key) scoped to orgID.
+// Missing orgID is fail-closed: no global lookup and no default-organization fallback.
 func loadUserByAuthIDInOrg(orgID, authUserID string) (*database.User, error) {
 	authUserID = strings.TrimSpace(authUserID)
 	if authUserID == "" {
 		return nil, gorm.ErrRecordNotFound
 	}
 	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, ErrMissingOrgContext
+	}
+	// Do not use NormalizeOrganizationID here: empty must fail, not become "default".
 
 	var user database.User
-	query := database.DB.Where("user_id = ? AND deleted_at IS NULL", authUserID)
-	if orgID != "" {
-		query = query.Where("org_id = ?", orgID)
-	}
+	query := database.DB.Where("org_id = ? AND user_id = ? AND deleted_at IS NULL", orgID, authUserID)
 	tx := query.Limit(1).Find(&user)
 	if tx.Error != nil {
 		return nil, tx.Error
@@ -673,10 +821,7 @@ func loadUserByAuthIDInOrg(orgID, authUserID string) (*database.User, error) {
 		return nil, gorm.ErrRecordNotFound
 	}
 	user = database.User{}
-	query = database.DB.Where("id = ? AND deleted_at IS NULL", authUserID)
-	if orgID != "" {
-		query = query.Where("org_id = ?", orgID)
-	}
+	query = database.DB.Where("org_id = ? AND id = ? AND deleted_at IS NULL", orgID, authUserID)
 	tx = query.Limit(1).Find(&user)
 	if tx.Error != nil {
 		return nil, tx.Error
@@ -700,9 +845,20 @@ func isNumericString(value string) bool {
 }
 
 func ensureCanAccessAttendanceUser(c *gin.Context, userID string) (*database.User, bool) {
-	user, err := loadUserByUserID(userID)
+	// Attendance data access must resolve the target employee inside the JWT organization only.
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return nil, false
+	}
+
+	user, err := loadUserByUserID(orgID, userID)
 	if err != nil {
+		if errors.Is(err, ErrMissingOrgContext) {
+			respondMissingOrgContext(c)
+			return nil, false
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Not found in current org is treated as access denied to avoid cross-org probing.
 			respondOrgAccessDenied(c)
 			return nil, false
 		}
@@ -1193,8 +1349,13 @@ func newLocalUserFromDingTalk(orgID string, u dingtalk.UserInfo, deptID, status 
 }
 
 func ensureLocalUserForDingTalkLogin(c *gin.Context, orgID string, u dingtalk.UserInfo, deptID, source string) (*database.User, error) {
+	// Fail-closed: never NormalizeOrganizationID("") → "default" for first-login provision.
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, repository.ErrMissingOrgID
+	}
 	orgID = database.NormalizeOrganizationID(orgID)
-	userService := service.NewUserService(middleware.RequestDB(c))
+	userService := service.NewUserServiceWithOrgID(middleware.RequestDB(c), orgID)
 	user, err := findLocalUserByDingTalkIdentityInOrg(orgID, userService, u.UserID)
 	if err == nil {
 		return user, nil
@@ -1212,12 +1373,12 @@ func ensureLocalUserForDingTalkLogin(c *gin.Context, orgID string, u dingtalk.Us
 		return nil, err
 	}
 
-	permissionService := service.NewPermissionService(middleware.RequestDB(c))
+	permissionService := service.NewPermissionServiceWithOrgID(middleware.RequestDB(c), orgID)
 	if _, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, newUser.UserID, source); err != nil {
 		return nil, err
 	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
+	employeeService := employeeServiceForOrg(c, orgID)
 	profile := &database.EmployeeProfile{
 		OrgID:      orgID,
 		UserID:     newUser.UserID,
@@ -1311,8 +1472,10 @@ func createOperationAuditLog(c *gin.Context, operation, resource string, details
 		userName = "system"
 	}
 
+	orgID := strings.TrimSpace(c.GetString("orgID"))
 	auditService := service.NewAuditService(middleware.RequestDB(c))
 	_ = auditService.CreateLog(&database.OperationLog{
+		OrgID:     orgID,
 		UserID:    userID,
 		UserName:  userName,
 		Operation: operation,
@@ -1550,17 +1713,21 @@ func rejectInactiveLogin(c *gin.Context, user *database.User, loginType string) 
 	})
 }
 
-func revokeActiveSessionsForUser(userID, reason string) {
+// revokeActiveSessionsForUser revokes active sessions for one user inside one organization.
+// Missing orgID is fail-closed: never revoke sessions across organizations by user_id alone.
+func revokeActiveSessionsForUser(orgID, userID, reason string) {
+	orgID = strings.TrimSpace(orgID)
 	userID = strings.TrimSpace(userID)
-	if userID == "" {
+	if orgID == "" || userID == "" {
+		log.Printf("[security] skip revoke sessions: missing org_id or user_id org_id=%q user_id=%q reason=%s", orgID, userID, reason)
 		return
 	}
 	now := time.Now()
 	tx := database.DB.Model(&database.UserSession{}).
-		Where("user_id = ? AND revoked_at IS NULL", userID).
+		Where("org_id = ? AND user_id = ? AND revoked_at IS NULL", orgID, userID).
 		Update("revoked_at", &now)
 	if tx.Error != nil {
-		log.Printf("[security] revoke sessions for user_id=%s reason=%s failed: %v", userID, reason, tx.Error)
+		log.Printf("[security] revoke sessions for org_id=%s user_id=%s reason=%s failed: %v", orgID, userID, reason, tx.Error)
 	}
 }
 
@@ -1694,6 +1861,20 @@ func Login(c *gin.Context) {
 func GetUsers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	// 选人组件可能请求较大分页；与仓储上限对齐，防止误用超大值。
+	if pageSize > 1000 {
+		pageSize = 1000
+	}
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 
 	if !currentUserHasAnyPermission(c, "user_manage", "permission_manage") {
 		scope, err := resolveOrgScope(c)
@@ -1731,8 +1912,8 @@ func GetUsers(c *gin.Context) {
 		return
 	}
 
-	userService := service.NewUserService(middleware.RequestDB(c))
-	users, total, err := userService.GetUsers(page, pageSize)
+	userService := service.NewUserServiceWithOrgID(middleware.RequestDB(c), orgID)
+	users, total, err := userService.SearchUsers(page, pageSize, c.Query("search"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -1866,7 +2047,11 @@ func UpdateUser(c *gin.Context) {
 
 // GetDepartments 获取部门列表
 func GetDepartments(c *gin.Context) {
-	departmentService := service.NewDepartmentService(middleware.RequestDB(c))
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	departmentService := service.NewDepartmentServiceWithOrgID(middleware.RequestDB(c), orgID)
 	departments, err := departmentService.GetAllDepartments()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -1886,9 +2071,13 @@ func GetDepartments(c *gin.Context) {
 
 // GetDepartment 获取部门详情
 func GetDepartment(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	id := c.Param("id")
 
-	departmentService := service.NewDepartmentService(middleware.RequestDB(c))
+	departmentService := service.NewDepartmentServiceWithOrgID(middleware.RequestDB(c), orgID)
 	department, err := departmentService.GetDepartmentByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -1908,8 +2097,14 @@ func GetDepartment(c *gin.Context) {
 
 // SyncUsers 同步用户
 func SyncUsers(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	if !rejectCrossOrgParam(c, orgID, c.Query("org_id"), c.Query("target_org_id")) {
+		return
+	}
 	syncService := service.NewSyncService(middleware.RequestDB(c))
-	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
 
 	// 从钉钉拉取用户
 	users, err := dingtalk.SyncUsersForOrg(orgID)
@@ -1923,9 +2118,9 @@ func SyncUsers(c *gin.Context) {
 	}
 
 	// 写入数据库
-	userService := service.NewUserService(middleware.RequestDB(c))
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
-	permissionService := service.NewPermissionService(middleware.RequestDB(c))
+	userService := service.NewUserServiceWithOrgID(middleware.RequestDB(c), orgID)
+	employeeService := employeeServiceForOrg(c, orgID)
+	permissionService := service.NewPermissionServiceWithOrgID(middleware.RequestDB(c), orgID)
 	count := 0
 	positionMissingCount := 0
 	defaultRoleAssignedCount := 0
@@ -1960,7 +2155,7 @@ func SyncUsers(c *gin.Context) {
 				continue
 			}
 			if !isActiveUser(existing) {
-				revokeActiveSessionsForUser(existing.UserID, "sync_users_inactive")
+				revokeActiveSessionsForUser(orgID, existing.UserID, "sync_users_inactive")
 			}
 		}
 		if strings.TrimSpace(u.Position) == "" {
@@ -2215,7 +2410,7 @@ func DingTalkInAppLogin(c *gin.Context) {
 		}
 	}
 
-	userService := service.NewUserService(middleware.RequestDB(c))
+	userService := service.NewUserServiceWithOrgID(middleware.RequestDB(c), orgID)
 	user, err := findLocalUserByDingTalkIdentityInOrg(orgID, userService, userid)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -2461,7 +2656,7 @@ func DingTalkCallback(c *gin.Context) {
 		avatar, _ = userInfo["avatarUrl"].(string)
 	}
 
-	userService := service.NewUserService(middleware.RequestDB(c))
+	userService := service.NewUserServiceWithOrgID(middleware.RequestDB(c), resolvedOrgID)
 	user, err := findLocalUserByDingTalkIdentityInOrg(resolvedOrgID, userService, dtUserID, associatedUserID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -2750,29 +2945,41 @@ func Logout(c *gin.Context) {
 	if sessionID := strings.TrimSpace(c.GetString("sessionID")); sessionID != "" {
 		now := time.Now()
 		userID := strings.TrimSpace(c.GetString("userID"))
-		database.DB.Model(&database.UserSession{}).
-			Where("session_id = ? AND user_id = ? AND revoked_at IS NULL", sessionID, userID).
-			Update("revoked_at", &now)
+		orgID := strings.TrimSpace(c.GetString("orgID"))
+		// Session revoke must stay inside the authenticated organization boundary.
+		if orgID != "" && userID != "" {
+			database.DB.Model(&database.UserSession{}).
+				Where("org_id = ? AND session_id = ? AND user_id = ? AND revoked_at IS NULL", orgID, sessionID, userID).
+				Update("revoked_at", &now)
+		} else {
+			log.Printf("[security] logout skip session revoke: missing org_id or user_id org_id=%q user_id=%q session_id=%q", orgID, userID, sessionID)
+		}
 	}
 
-	// 记录登出日志
+	// 记录登出日志（必须绑定 JWT org_id，禁止无 org 审计）
 	userID, _ := c.Get("userID")
 	userName, _ := c.Get("userName")
 	if uid, ok := userID.(string); ok {
 		uname, _ := userName.(string)
-		if user, err := loadUserByAuthIDInOrg(c.GetString("orgID"), uid); err == nil {
+		orgID := strings.TrimSpace(c.GetString("orgID"))
+		if user, err := loadUserByAuthIDInOrg(orgID, uid); err == nil {
 			uid = user.UserID
 			if strings.TrimSpace(uname) == "" {
 				uname = user.Name
 			}
 		}
-		middleware.RequestDB(c).Create(&database.OperationLog{
-			UserID:    uid,
-			UserName:  uname,
-			Operation: "登出",
-			Resource:  "系统",
-			IP:        c.ClientIP(),
-		})
+		if orgID != "" {
+			middleware.RequestDB(c).Create(&database.OperationLog{
+				OrgID:     orgID,
+				UserID:    uid,
+				UserName:  uname,
+				Operation: "登出",
+				Resource:  "系统",
+				IP:        c.ClientIP(),
+			})
+		} else {
+			log.Printf("[security] logout skip operation log: missing org_id user_id=%q", uid)
+		}
 	}
 
 	c.JSON(200, Response{
@@ -2792,8 +2999,17 @@ func GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	user, err := loadUserByAuthIDInOrg(c.GetString("orgID"), userID)
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+
+	user, err := loadUserByAuthIDInOrg(orgID, userID)
 	if err != nil {
+		if errors.Is(err, ErrMissingOrgContext) {
+			respondMissingOrgContext(c)
+			return
+		}
 		c.JSON(http.StatusNotFound, Response{
 			Code:    http.StatusNotFound,
 			Message: "用户不存在",
@@ -2890,6 +3106,10 @@ func GetOrgOverview(c *gin.Context) {
 }
 
 func GetScopedDepartments(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	scope, err := resolveOrgScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -2900,7 +3120,8 @@ func GetScopedDepartments(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	// Bind org explicitly so department queries never fall back across tenants.
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	departments, err := orgService.GetVisibleDepartments(scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3141,7 +3362,11 @@ func GetOrgEmployeePositionSyncDiagnostic(c *gin.Context) {
 
 // GetDepartmentTree 获取部门树
 func GetDepartmentTree(c *gin.Context) {
-	departmentService := service.NewDepartmentService(middleware.RequestDB(c))
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	departmentService := service.NewDepartmentServiceWithOrgID(middleware.RequestDB(c), orgID)
 	departments, err := departmentService.GetAllDepartments()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3226,6 +3451,10 @@ func GetEmployees(c *gin.Context) {
 // GetEmployee 获取员工详情
 func GetEmployee(c *gin.Context) {
 	id := c.Param("id")
+	employeeService, _, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
 
 	userService := service.NewUserService(middleware.RequestDB(c))
 	user, err := userService.GetUserByID(id)
@@ -3238,7 +3467,6 @@ func GetEmployee(c *gin.Context) {
 	}
 
 	// 一并返回员工档案（按 user_id 查），避免前端再发请求
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	profile, _ := employeeService.GetProfileByUserID(user.UserID)
 
 	c.JSON(http.StatusOK, Response{
@@ -3294,9 +3522,9 @@ func SyncOrgData(c *gin.Context) {
 		userErrMsg = userErr.Error()
 		log.Printf("[SyncOrgData] 用户同步失败: %v", userErr)
 	} else {
-		userService := service.NewUserService(middleware.RequestDB(c))
-		employeeService := service.NewEmployeeService(middleware.RequestDB(c))
-		permissionService := service.NewPermissionService(middleware.RequestDB(c))
+		userService := service.NewUserServiceWithOrgID(middleware.RequestDB(c), orgID)
+		employeeService := employeeServiceForOrg(c, orgID)
+		permissionService := service.NewPermissionServiceWithOrgID(middleware.RequestDB(c), orgID)
 		for _, u := range users {
 			deptID := ""
 			if len(u.DeptIDList) > 0 {
@@ -3342,7 +3570,7 @@ func SyncOrgData(c *gin.Context) {
 					continue
 				}
 				if !isActiveUser(existing) {
-					revokeActiveSessionsForUser(existing.UserID, "sync_org_inactive")
+					revokeActiveSessionsForUser(orgID, existing.UserID, "sync_org_inactive")
 				}
 				// 检查是否存在员工档案
 				profile, profileErr := employeeService.GetProfileByUserID(localUserID)
@@ -3702,7 +3930,8 @@ func GetLastSyncTime(c *gin.Context) {
 
 	var count int64
 	requestDB := middleware.RequestDB(c)
-	countQuery := requestDB.Model(&database.Attendance{})
+	// Attendance counts are tenant-scoped: never aggregate across organizations.
+	countQuery := requestDB.Model(&database.Attendance{}).Where("org_id = ?", orgID)
 	if !currentUserHasAnyPermission(c, "attendance_manage") {
 		filters := map[string]string{}
 		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
@@ -3733,7 +3962,11 @@ func GetLastSyncTime(c *gin.Context) {
 
 // GetApprovalTemplates 获取审批模板列表
 func GetApprovalTemplates(c *gin.Context) {
-	approvalService := service.NewApprovalService(middleware.RequestDB(c))
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	approvalService := service.NewApprovalServiceWithOrgID(middleware.RequestDB(c), orgID)
 	templates, total, err := approvalService.GetTemplates()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3755,6 +3988,10 @@ func GetApprovalTemplates(c *gin.Context) {
 
 // GetApprovalInstances 获取审批实例列表
 func GetApprovalInstances(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 
@@ -3766,7 +4003,7 @@ func GetApprovalInstances(c *gin.Context) {
 		"end_date":     c.Query("end_date"),
 	}
 
-	approvalService := service.NewApprovalService(middleware.RequestDB(c))
+	approvalService := service.NewApprovalServiceWithOrgID(middleware.RequestDB(c), orgID)
 	instances, total, err := approvalService.GetInstances(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3788,9 +4025,13 @@ func GetApprovalInstances(c *gin.Context) {
 
 // GetApproval 获取审批详情
 func GetApproval(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	id := c.Param("id")
 
-	approvalService := service.NewApprovalService(middleware.RequestDB(c))
+	approvalService := service.NewApprovalServiceWithOrgID(middleware.RequestDB(c), orgID)
 	approval, err := approvalService.GetByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -3824,7 +4065,11 @@ func SyncApproval(c *gin.Context) {
 	}
 
 	syncService := service.NewSyncService(middleware.RequestDB(c))
-	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	orgID = database.NormalizeOrganizationID(orgID)
 
 	req.ProcessCode = strings.TrimSpace(req.ProcessCode)
 	if req.ProcessCode == "" {
@@ -3846,14 +4091,14 @@ func SyncApproval(c *gin.Context) {
 		return
 	}
 
-	// 写入数据库
-	count := 0
+	// 写入数据库（按 org_id+process_id upsert；统计成功/失败）
+	successCount := 0
+	failCount := 0
 	approvalRepo := repository.NewApprovalRepositoryWithOrgID(middleware.RequestDB(c), orgID)
 	for _, inst := range instances {
 		createTime, _ := time.Parse("2006-01-02 15:04:05", inst.CreateTime)
 		finishTime, _ := time.Parse("2006-01-02 15:04:05", inst.FinishTime)
 
-		// 将 form_component_values 转为 content map
 		content := make(map[string]interface{})
 		for _, fv := range inst.FormValues {
 			name, _ := fv["name"].(string)
@@ -3864,9 +4109,10 @@ func SyncApproval(c *gin.Context) {
 		}
 
 		approval := &database.Approval{
-			OrgID:         orgID,
-			ProcessID:     inst.ProcessInstanceID,
-			Title:         inst.Title,
+			OrgID:     orgID,
+			ProcessID: inst.ProcessInstanceID,
+			Title:     inst.Title,
+			// 与 Stream 路径一致：ApplicantID 存钉钉原始 user_id，隔离靠 org_id
 			ApplicantID:   inst.OriginatorUserID,
 			ApplicantName: inst.OriginatorUserID,
 			Status:        inst.Status,
@@ -3876,32 +4122,41 @@ func SyncApproval(c *gin.Context) {
 			Extension: map[string]interface{}{
 				"result":       inst.Result,
 				"process_code": req.ProcessCode,
+				"source":       "dingtalk_sync",
 			},
 		}
 
 		if err := approvalRepo.UpsertByOrgProcessID(approval); err != nil {
-			updateSyncStatus(syncService, orgID, "approvals", "failed", err.Error())
-			c.JSON(http.StatusInternalServerError, Response{
-				Code:    http.StatusInternalServerError,
-				Message: "保存审批失败: " + err.Error(),
-			})
-			return
+			failCount++
+			log.Printf("[SyncApproval] org=%s process_id=%s upsert failed: %v", orgID, inst.ProcessInstanceID, err)
+			continue
 		}
-		count++
+		successCount++
 	}
 
-	updateSyncStatus(syncService, orgID, "approvals", "success", fmt.Sprintf("同步 %d 个审批实例", count))
+	status := "success"
+	msg := fmt.Sprintf("同步成功 %d 个审批实例", successCount)
+	if failCount > 0 && successCount > 0 {
+		status = "partial"
+		msg = fmt.Sprintf("同步部分成功：success=%d failed=%d", successCount, failCount)
+	} else if failCount > 0 && successCount == 0 {
+		status = "failed"
+		msg = fmt.Sprintf("同步失败：failed=%d", failCount)
+	}
+	updateSyncStatus(syncService, orgID, "approvals", status, msg)
 
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
-		Message: "success",
+		Message: status,
 		Data: gin.H{
 			"sync_status": gin.H{
-				"count":      count,
-				"status":     "success",
-				"sync_time":  time.Now(),
-				"start_date": req.StartDate,
-				"end_date":   req.EndDate,
+				"count":        successCount,
+				"failed_count": failCount,
+				"status":       status,
+				"message":      msg,
+				"sync_time":    time.Now(),
+				"start_date":   req.StartDate,
+				"end_date":     req.EndDate,
 			},
 		},
 	})
@@ -4081,6 +4336,9 @@ func AssignUserRole(c *gin.Context) {
 	}
 	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	if err := permService.AssignUserRoleInOrg(orgID, req.UserID, req.RoleID); err != nil {
+		if respondPermissionOrgNotFound(c, err) {
+			return
+		}
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "分配角色失败"})
 		return
 	}
@@ -4111,10 +4369,31 @@ func RemoveUserRole(c *gin.Context) {
 	}
 	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	if err := permService.RemoveUserRoleInOrg(orgID, req.UserID, req.RoleID); err != nil {
+		if respondPermissionOrgNotFound(c, err) {
+			return
+		}
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "移除角色失败"})
 		return
 	}
 	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "角色移除成功"})
+}
+
+// respondPermissionOrgNotFound maps cross-org / missing user-or-role errors to 404.
+// Intentionally does not distinguish missing vs foreign to avoid org membership probing.
+func respondPermissionOrgNotFound(c *gin.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, service.ErrUserNotInOrg) ||
+		errors.Is(err, service.ErrRoleNotInOrg) ||
+		errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, Response{
+			Code:    http.StatusNotFound,
+			Message: "用户或角色不存在",
+		})
+		return true
+	}
+	return false
 }
 
 // GetRoleUsers 获取指定角色下的用户列表
@@ -4139,6 +4418,9 @@ func GetRoleUsers(c *gin.Context) {
 	permService := service.NewPermissionServiceWithOrgID(database.DB, orgID)
 	users, err := permService.GetRoleUsersInOrg(orgID, roleID)
 	if err != nil {
+		if respondPermissionOrgNotFound(c, err) {
+			return
+		}
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取角色用户失败"})
 		return
 	}
@@ -4422,6 +4704,11 @@ func GetEmployeeProfiles(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 
+	employeeService, _, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
+
 	filters := map[string]string{
 		"department_id": c.Query("department_id"),
 		"status":        c.Query("status"),
@@ -4432,7 +4719,6 @@ func GetEmployeeProfiles(c *gin.Context) {
 		}
 	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	profiles, total, err := employeeService.GetProfiles(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -4455,8 +4741,11 @@ func GetEmployeeProfiles(c *gin.Context) {
 // GetEmployeeProfile 获取员工档案详情
 func GetEmployeeProfile(c *gin.Context) {
 	id := c.Param("id")
+	employeeService, orgID, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	profile, err := employeeService.GetProfileByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -4465,18 +4754,23 @@ func GetEmployeeProfile(c *gin.Context) {
 		})
 		return
 	}
+	// Profile rows from other organizations must never be readable via primary key alone.
+	if strings.TrimSpace(profile.OrgID) != "" && strings.TrimSpace(profile.OrgID) != orgID {
+		respondOrgAccessDenied(c)
+		return
+	}
 	if !currentUserHasAnyPermission(c, "user_manage") {
 		scope, err := resolveOrgScope(c)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, Response{
 				Code:    http.StatusInternalServerError,
-				Message: "鑾峰彇缁勭粐鑼冨洿澶辫触",
+				Message: "获取组织范围失败",
 				Data:    gin.H{"error": err.Error()},
 			})
 			return
 		}
-		var user database.User
-		if err := middleware.RequestDB(c).Where("user_id = ? AND deleted_at IS NULL", profile.UserID).First(&user).Error; err != nil || !canAccessUserByScope(scope, &user) {
+		user, err := loadUserByUserID(orgID, profile.UserID)
+		if err != nil || !canAccessUserByScope(scope, user) {
 			respondOrgAccessDenied(c)
 			return
 		}
@@ -4491,8 +4785,12 @@ func GetEmployeeProfile(c *gin.Context) {
 
 // CreateEmployeeProfile 创建员工档案
 func CreateEmployeeProfile(c *gin.Context) {
-	var profile database.EmployeeProfile
+	employeeService, orgID, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
 
+	var profile database.EmployeeProfile
 	if err := c.ShouldBindJSON(&profile); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
@@ -4500,12 +4798,16 @@ func CreateEmployeeProfile(c *gin.Context) {
 		})
 		return
 	}
+	if !rejectCrossOrgParam(c, orgID, profile.OrgID) {
+		return
+	}
+	// 强制绑定 JWT 组织，禁止客户端指定 org_id。
+	profile.OrgID = orgID
 
 	if profile.ProfileStatus == "" {
 		profile.ProfileStatus = "active"
 	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	if err := employeeService.CreateProfile(&profile); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -4524,8 +4826,11 @@ func CreateEmployeeProfile(c *gin.Context) {
 // UpdateEmployeeProfile 更新员工档案
 func UpdateEmployeeProfile(c *gin.Context) {
 	id := c.Param("id")
+	employeeService, orgID, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	profile, err := employeeService.GetProfileByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -4542,6 +4847,11 @@ func UpdateEmployeeProfile(c *gin.Context) {
 		})
 		return
 	}
+	if !rejectCrossOrgParam(c, orgID, profile.OrgID) {
+		return
+	}
+	// 强制保留 JWT 组织，禁止客户端改写 org_id。
+	profile.OrgID = orgID
 
 	if err := employeeService.UpdateProfile(profile); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -4558,10 +4868,15 @@ func UpdateEmployeeProfile(c *gin.Context) {
 	})
 }
 
-// GetTransfers 获取调动记录列表
+// GetEmployeeLifecycleLedger 获取入转调离台账
 func GetEmployeeLifecycleLedger(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	employeeService, _, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
 
 	filters := map[string]string{
 		"department_id": c.Query("department_id"),
@@ -4574,7 +4889,6 @@ func GetEmployeeLifecycleLedger(c *gin.Context) {
 		}
 	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	items, total, err := employeeService.GetLifecycleLedger(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -4595,6 +4909,10 @@ func GetEmployeeLifecycleLedger(c *gin.Context) {
 func GetTransfers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	employeeService, _, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
 	filters := map[string]string{"status": c.Query("status")}
 	if !currentUserHasAnyPermission(c, "user_manage") {
 		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
@@ -4602,7 +4920,6 @@ func GetTransfers(c *gin.Context) {
 		}
 	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	transfers, total, err := employeeService.GetTransfers(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -4621,6 +4938,11 @@ func GetTransfers(c *gin.Context) {
 
 // CreateTransfer 创建调动记录
 func CreateTransfer(c *gin.Context) {
+	employeeService, orgID, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
+
 	var transfer database.EmployeeTransfer
 	if err := c.ShouldBindJSON(&transfer); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
@@ -4629,12 +4951,15 @@ func CreateTransfer(c *gin.Context) {
 		})
 		return
 	}
+	if !rejectCrossOrgParam(c, orgID, transfer.OrgID) {
+		return
+	}
+	transfer.OrgID = orgID
 
 	if transfer.Status == "" {
 		transfer.Status = "pending"
 	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	if err := employeeService.CreateTransfer(&transfer); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -4654,6 +4979,10 @@ func CreateTransfer(c *gin.Context) {
 func GetResignations(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	employeeService, _, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
 	filters := map[string]string{"status": c.Query("status")}
 	if !currentUserHasAnyPermission(c, "user_manage") {
 		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
@@ -4661,7 +4990,6 @@ func GetResignations(c *gin.Context) {
 		}
 	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	resignations, total, err := employeeService.GetResignations(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -4680,6 +5008,11 @@ func GetResignations(c *gin.Context) {
 
 // CreateResignation 创建离职记录
 func CreateResignation(c *gin.Context) {
+	employeeService, orgID, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
+
 	var resignation database.EmployeeResignation
 	if err := c.ShouldBindJSON(&resignation); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
@@ -4688,12 +5021,15 @@ func CreateResignation(c *gin.Context) {
 		})
 		return
 	}
+	if !rejectCrossOrgParam(c, orgID, resignation.OrgID) {
+		return
+	}
+	resignation.OrgID = orgID
 
 	if resignation.Status == "" {
 		resignation.Status = "pending"
 	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	if err := employeeService.CreateResignation(&resignation); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -4713,6 +5049,10 @@ func CreateResignation(c *gin.Context) {
 func GetOnboardings(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	employeeService, _, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
 	filters := map[string]string{"status": c.Query("status")}
 	if !currentUserHasAnyPermission(c, "user_manage") {
 		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
@@ -4720,7 +5060,6 @@ func GetOnboardings(c *gin.Context) {
 		}
 	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	onboardings, total, err := employeeService.GetOnboardings(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -4739,6 +5078,11 @@ func GetOnboardings(c *gin.Context) {
 
 // CreateOnboarding 创建入职记录
 func CreateOnboarding(c *gin.Context) {
+	employeeService, orgID, ok := employeeServiceForRequest(c)
+	if !ok {
+		return
+	}
+
 	var onboarding database.EmployeeOnboarding
 	if err := c.ShouldBindJSON(&onboarding); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
@@ -4747,12 +5091,15 @@ func CreateOnboarding(c *gin.Context) {
 		})
 		return
 	}
+	if !rejectCrossOrgParam(c, orgID, onboarding.OrgID) {
+		return
+	}
+	onboarding.OrgID = orgID
 
 	if onboarding.Status == "" {
 		onboarding.Status = "pending"
 	}
 
-	employeeService := service.NewEmployeeService(middleware.RequestDB(c))
 	if err := employeeService.CreateOnboarding(&onboarding); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -4768,13 +5115,66 @@ func CreateOnboarding(c *gin.Context) {
 	})
 }
 
+type createTalentAnalysisRequest struct {
+	OrgID             *string                `json:"org_id"`
+	UserID            string                 `json:"user_id" binding:"required"`
+	UserName          string                 `json:"user_name" binding:"required"`
+	DepartmentID      string                 `json:"department_id" binding:"required"`
+	DepartmentName    string                 `json:"department_name" binding:"required"`
+	Position          string                 `json:"position" binding:"required"`
+	PerformanceScore  float64                `json:"performance_score"`
+	PerformanceLevel  string                 `json:"performance_level"`
+	PerformanceReview string                 `json:"performance_review"`
+	SkillsAssessment  map[string]interface{} `json:"skills_assessment"`
+	PotentialScore    float64                `json:"potential_score"`
+	PotentialLevel    string                 `json:"potential_level"`
+	TrainingRecords   map[string]interface{} `json:"training_records"`
+	PromotionRecords  map[string]interface{} `json:"promotion_records"`
+	TurnoverRiskScore float64                `json:"turnover_risk_score"`
+	TurnoverRiskLevel string                 `json:"turnover_risk_level"`
+	AnalysisDate      string                 `json:"analysis_date" binding:"required"`
+	Extension         map[string]interface{} `json:"extension"`
+}
+
+type weekScheduleRuleRequest struct {
+	OrgID     *string `json:"org_id"`
+	ScopeType string  `json:"scope_type"`
+	ScopeID   string  `json:"scope_id"`
+	ScopeName string  `json:"scope_name"`
+	BaseDate  string  `json:"base_date"`
+	Pattern   string  `json:"pattern"`
+	ShiftID   int64   `json:"shift_id"`
+	Status    string  `json:"status"`
+}
+
+type weekScheduleOverrideRequest struct {
+	OrgID         *string `json:"org_id"`
+	ScopeType     string  `json:"scope_type" binding:"required"`
+	ScopeID       string  `json:"scope_id"`
+	WeekStartDate string  `json:"week_start_date" binding:"required"`
+	WeekType      string  `json:"week_type" binding:"required"`
+	Reason        string  `json:"reason"`
+}
+
+type statutoryHolidayRequest struct {
+	OrgID *string `json:"org_id"`
+	Date  string  `json:"date" binding:"required"`
+	Name  string  `json:"name" binding:"required"`
+	Type  string  `json:"type" binding:"required"`
+	Year  int     `json:"year"`
+}
+
 // GetTalentAnalysisList 获取人才分析列表
 func GetTalentAnalysisList(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 	departmentID := c.Query("department_id")
 
-	talentService := service.NewTalentService(middleware.RequestDB(c))
+	talentService := service.NewTalentServiceWithOrgID(middleware.RequestDB(c), orgID)
 	analyses, total, err := talentService.GetList(page, pageSize, departmentID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -4796,9 +5196,13 @@ func GetTalentAnalysisList(c *gin.Context) {
 
 // GetTalentAnalysisDetail 获取人才分析详情
 func GetTalentAnalysisDetail(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	id := c.Param("id")
 
-	talentService := service.NewTalentService(middleware.RequestDB(c))
+	talentService := service.NewTalentServiceWithOrgID(middleware.RequestDB(c), orgID)
 	analysis, err := talentService.GetByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -4817,36 +5221,45 @@ func GetTalentAnalysisDetail(c *gin.Context) {
 
 // CreateTalentAnalysis 创建人才分析
 func CreateTalentAnalysis(c *gin.Context) {
-	var analysis database.TalentAnalysis
-	if err := c.ShouldBindJSON(&analysis); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    http.StatusBadRequest,
-			Message: "参数错误",
-		})
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
 		return
 	}
-
-	talentService := service.NewTalentService(middleware.RequestDB(c))
+	var req createTalentAnalysisRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
+		return
+	}
+	if !rejectClientOrganizationID(c, req.OrgID) {
+		return
+	}
+	analysis := database.TalentAnalysis{
+		OrgID: orgID, UserID: req.UserID, UserName: req.UserName,
+		DepartmentID: req.DepartmentID, DepartmentName: req.DepartmentName, Position: req.Position,
+		PerformanceScore: req.PerformanceScore, PerformanceLevel: req.PerformanceLevel,
+		PerformanceReview: req.PerformanceReview, SkillsAssessment: req.SkillsAssessment,
+		PotentialScore: req.PotentialScore, PotentialLevel: req.PotentialLevel,
+		TrainingRecords: req.TrainingRecords, PromotionRecords: req.PromotionRecords,
+		TurnoverRiskScore: req.TurnoverRiskScore, TurnoverRiskLevel: req.TurnoverRiskLevel,
+		AnalysisDate: req.AnalysisDate, Extension: req.Extension,
+	}
+	talentService := service.NewTalentServiceWithOrgID(middleware.RequestDB(c), orgID)
 	if err := talentService.Create(&analysis); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "创建分析记录失败",
-		})
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "创建人才分析失败"})
 		return
 	}
-
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data:    gin.H{"analysis": analysis},
-	})
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"analysis": analysis}})
 }
 
 // ===================== 大小周管理 =====================
 
 // GetWeekScheduleRules 获取所有大小周规则
 func GetWeekScheduleRules(c *gin.Context) {
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	rules, err := svc.GetAllRules()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -4865,35 +5278,38 @@ func GetWeekScheduleRules(c *gin.Context) {
 
 // CreateWeekScheduleRule 创建大小周规则
 func CreateWeekScheduleRule(c *gin.Context) {
-	var rule database.WeekScheduleRule
-	if err := c.ShouldBindJSON(&rule); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    http.StatusBadRequest,
-			Message: "参数错误",
-		})
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
 		return
 	}
-
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	var req weekScheduleRuleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
+		return
+	}
+	if !rejectClientOrganizationID(c, req.OrgID) {
+		return
+	}
+	rule := database.WeekScheduleRule{
+		OrgID: orgID, ScopeType: req.ScopeType, ScopeID: req.ScopeID, ScopeName: req.ScopeName,
+		BaseDate: req.BaseDate, Pattern: req.Pattern, ShiftID: req.ShiftID, Status: req.Status,
+	}
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	if err := svc.CreateRule(&rule); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "创建规则失败: " + err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "创建规则失败: " + err.Error()})
 		return
 	}
-
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data:    gin.H{"rule": rule},
-	})
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"rule": rule}})
 }
 
 // UpdateWeekScheduleRule 更新大小周规则
 func UpdateWeekScheduleRule(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	idStr := c.Param("id")
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 
 	var id uint
 	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
@@ -4913,12 +5329,15 @@ func UpdateWeekScheduleRule(c *gin.Context) {
 		return
 	}
 
-	var input database.WeekScheduleRule
+	var input weekScheduleRuleRequest
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
 			Message: "参数错误",
 		})
+		return
+	}
+	if !rejectClientOrganizationID(c, input.OrgID) {
 		return
 	}
 
@@ -4958,6 +5377,10 @@ func UpdateWeekScheduleRule(c *gin.Context) {
 
 // DeleteWeekScheduleRule 删除大小周规则
 func DeleteWeekScheduleRule(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	idStr := c.Param("id")
 	var id uint
 	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
@@ -4968,7 +5391,7 @@ func DeleteWeekScheduleRule(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	if err := svc.DeleteRule(id); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -4985,6 +5408,10 @@ func DeleteWeekScheduleRule(c *gin.Context) {
 
 // BatchSetWeekScheduleRules 批量为员工设置大小周规则
 func BatchSetWeekScheduleRules(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	var input service.BatchSetUserRulesInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
@@ -5015,7 +5442,7 @@ func BatchSetWeekScheduleRules(c *gin.Context) {
 	}
 
 	var users []database.User
-	if err := middleware.RequestDB(c).Where("user_id IN ?", input.UserIDs).Find(&users).Error; err != nil {
+	if err := middleware.RequestDB(c).Where("org_id = ? AND user_id IN ? AND deleted_at IS NULL", orgID, input.UserIDs).Find(&users).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
 			Message: "查询用户信息失败",
@@ -5028,7 +5455,7 @@ func BatchSetWeekScheduleRules(c *gin.Context) {
 		userMap[u.UserID] = u
 	}
 
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	result, err := svc.BatchSetUserRules(&input, userMap)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -5183,11 +5610,6 @@ func DebugAttendanceGroups(c *gin.Context) {
 
 // CreateDingTalkShift 在钉钉创建新班次
 func CreateDingTalkShift(c *gin.Context) {
-	orgID, ok := currentOrgIDOrAbort(c)
-	if !ok {
-		return
-	}
-
 	var input struct {
 		Name         string `json:"name" binding:"required"`
 		CheckInTime  string `json:"check_in_time" binding:"required"`
@@ -5201,6 +5623,10 @@ func CreateDingTalkShift(c *gin.Context) {
 		return
 	}
 
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	opUserID, err := dingtalk.ResolveAdminUserID(orgID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -5226,6 +5652,10 @@ func CreateDingTalkShift(c *gin.Context) {
 	})
 }
 func GetWeekCalendar(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	userID := strings.TrimSpace(c.Query("user_id"))
 	departmentID := strings.TrimSpace(c.Query("department_id"))
 	weeksStr := c.DefaultQuery("weeks", "8")
@@ -5261,7 +5691,7 @@ func GetWeekCalendar(c *gin.Context) {
 			}
 		} else if scope.IsSelf() && len(scope.UserIDs) > 0 {
 			userID = scope.UserIDs[0]
-			if user, err := loadUserByUserID(userID); err == nil {
+			if user, err := loadUserByUserID(orgID, userID); err == nil {
 				departmentID = user.DepartmentID
 			}
 		} else if !scope.IsAll() {
@@ -5273,7 +5703,7 @@ func GetWeekCalendar(c *gin.Context) {
 		}
 	}
 
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	calendar, err := svc.GetWeekCalendar(userID, departmentID, weeks, startDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -5292,33 +5722,36 @@ func GetWeekCalendar(c *gin.Context) {
 
 // SetWeekOverride 手动设置某周为大周/小周
 func SetWeekOverride(c *gin.Context) {
-	var override database.WeekScheduleOverride
-	if err := c.ShouldBindJSON(&override); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    http.StatusBadRequest,
-			Message: "参数错误",
-		})
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
 		return
 	}
-
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	var req weekScheduleOverrideRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
+		return
+	}
+	if !rejectClientOrganizationID(c, req.OrgID) {
+		return
+	}
+	override := database.WeekScheduleOverride{
+		OrgID: orgID, ScopeType: req.ScopeType, ScopeID: req.ScopeID,
+		WeekStartDate: req.WeekStartDate, WeekType: req.WeekType, Reason: req.Reason,
+	}
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	if err := svc.SetOverride(&override); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "设置覆盖失败: " + err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "设置覆盖失败: " + err.Error()})
 		return
 	}
-
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data:    gin.H{"override": override},
-	})
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"override": override}})
 }
 
 // DeleteWeekOverride 取消手动覆盖
 func DeleteWeekOverride(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	idStr := c.Param("id")
 	var id uint
 	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
@@ -5329,7 +5762,7 @@ func DeleteWeekOverride(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	if err := svc.DeleteOverride(id); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -5344,8 +5777,12 @@ func DeleteWeekOverride(c *gin.Context) {
 	})
 }
 
-// SyncWeekToDingTalk 将大小周配置推送到钉钉
+// SyncWeekToDingTalk 将大小周配置推送到钉钉（旧接口：写入考勤排班，页面按钮已不再调用）
 func SyncWeekToDingTalk(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	var input struct {
 		Weeks int `json:"weeks"`
 	}
@@ -5354,7 +5791,7 @@ func SyncWeekToDingTalk(c *gin.Context) {
 		input.Weeks = 4
 	}
 
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	result, err := svc.SyncToDingTalk(input.Weeks)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -5371,9 +5808,208 @@ func SyncWeekToDingTalk(c *gin.Context) {
 	})
 }
 
+const (
+	weekSchedulePersonalPushMaxBytes = 8 << 20 // 8MB
+	weekSchedulePersonalPushMaxUsers = 100
+)
+
+// PushPersonalWeekSchedule 推送月作息表图片+文字到指定个人（不写考勤排班）
+// multipart fields: image (PNG), user_ids (JSON array or repeated), title, content
+func PushPersonalWeekSchedule(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+
+	file, err := c.FormFile("image")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "请上传作息表图片（image）",
+		})
+		return
+	}
+	if file.Size <= 0 {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "图片文件不能为空",
+		})
+		return
+	}
+	if file.Size > weekSchedulePersonalPushMaxBytes {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "图片不能超过 8MB",
+		})
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
+		// Also accept missing extension when content is PNG (frontend canvas often uses .png).
+		if ext != "" {
+			c.JSON(http.StatusBadRequest, Response{
+				Code:    http.StatusBadRequest,
+				Message: "仅支持 PNG/JPEG 图片",
+			})
+			return
+		}
+		ext = ".png"
+	}
+	if err := validateUploadContent(file, ext); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "图片校验失败: " + err.Error(),
+		})
+		return
+	}
+	if err := validateImageUpload(file); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "图片尺寸无效: " + err.Error(),
+		})
+		return
+	}
+
+	userIDs, err := parseWeekSchedulePushUserIDs(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: err.Error(),
+		})
+		return
+	}
+	if len(userIDs) == 0 {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "收件人 user_ids 不能为空",
+		})
+		return
+	}
+	if len(userIDs) > weekSchedulePersonalPushMaxUsers {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: fmt.Sprintf("收件人不能超过 %d 人", weekSchedulePersonalPushMaxUsers),
+		})
+		return
+	}
+
+	title := strings.TrimSpace(c.PostForm("title"))
+	content := strings.TrimSpace(c.PostForm("content"))
+
+	src, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "读取图片失败",
+		})
+		return
+	}
+	defer func() { _ = src.Close() }()
+	imageBytes, err := io.ReadAll(io.LimitReader(src, weekSchedulePersonalPushMaxBytes+1))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "读取图片失败: " + err.Error(),
+		})
+		return
+	}
+	if len(imageBytes) == 0 {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "图片文件不能为空",
+		})
+		return
+	}
+	if len(imageBytes) > weekSchedulePersonalPushMaxBytes {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "图片不能超过 8MB",
+		})
+		return
+	}
+
+	filename := file.Filename
+	if strings.TrimSpace(filename) == "" {
+		filename = "week-schedule.png"
+	}
+
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
+	result, err := svc.PushPersonalScheduleImage(userIDs, title, content, imageBytes, filename)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "作息表推送失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: result.Message,
+		Data:    result,
+	})
+}
+
+func parseWeekSchedulePushUserIDs(c *gin.Context) ([]string, error) {
+	// Prefer JSON array in a single field: user_ids=["a","b"]
+	raw := strings.TrimSpace(c.PostForm("user_ids"))
+	if raw == "" {
+		// Also accept repeated form fields user_ids=a&user_ids=b
+		if values := c.PostFormArray("user_ids"); len(values) > 0 {
+			out := make([]string, 0, len(values))
+			for _, v := range values {
+				if id := strings.TrimSpace(v); id != "" {
+					out = append(out, id)
+				}
+			}
+			return out, nil
+		}
+		// Fallback: user_ids[] style
+		if values := c.PostFormArray("user_ids[]"); len(values) > 0 {
+			out := make([]string, 0, len(values))
+			for _, v := range values {
+				if id := strings.TrimSpace(v); id != "" {
+					out = append(out, id)
+				}
+			}
+			return out, nil
+		}
+		return nil, nil
+	}
+
+	if strings.HasPrefix(raw, "[") {
+		var ids []string
+		if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+			return nil, fmt.Errorf("user_ids 必须是 JSON 字符串数组")
+		}
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if trimmed := strings.TrimSpace(id); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out, nil
+	}
+
+	// Comma-separated fallback
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if id := strings.TrimSpace(p); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 // SyncWeekFromDingTalk 从钉钉拉取大小周配置
 func SyncWeekFromDingTalk(c *gin.Context) {
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	result, err := svc.SyncFromDingTalkConservative()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -5392,6 +6028,10 @@ func SyncWeekFromDingTalk(c *gin.Context) {
 
 // GetWeekSyncLogs 获取大小周同步日志
 func GetWeekSyncLogs(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	pageStr := c.DefaultQuery("page", "1")
 	pageSizeStr := c.DefaultQuery("page_size", "20")
 
@@ -5405,7 +6045,7 @@ func GetWeekSyncLogs(c *gin.Context) {
 		pageSize = 20
 	}
 
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	logs, total, err := svc.GetSyncLogs(page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -5429,6 +6069,10 @@ func GetWeekSyncLogs(c *gin.Context) {
 
 // GetHolidays 获取节假日列表（按年）
 func GetHolidays(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	yearStr := c.DefaultQuery("year", fmt.Sprintf("%d", time.Now().Year()))
 	var year int
 	fmt.Sscanf(yearStr, "%d", &year)
@@ -5436,7 +6080,7 @@ func GetHolidays(c *gin.Context) {
 		year = time.Now().Year()
 	}
 
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	holidays, err := svc.GetHolidaysByYear(year)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -5455,64 +6099,65 @@ func GetHolidays(c *gin.Context) {
 
 // CreateHoliday 创建单个节假日
 func CreateHoliday(c *gin.Context) {
-	var holiday database.StatutoryHoliday
-	if err := c.ShouldBindJSON(&holiday); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    http.StatusBadRequest,
-			Message: "参数错误",
-		})
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
 		return
 	}
-
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	var req statutoryHolidayRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
+		return
+	}
+	if !rejectClientOrganizationID(c, req.OrgID) {
+		return
+	}
+	holiday := database.StatutoryHoliday{OrgID: orgID, Date: req.Date, Name: req.Name, Type: req.Type, Year: req.Year}
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	if err := svc.CreateHoliday(&holiday); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "创建节假日失败: " + err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "创建节假日失败: " + err.Error()})
 		return
 	}
-
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data:    gin.H{"holiday": holiday},
-	})
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"holiday": holiday}})
 }
 
 // BatchCreateHolidays 批量创建节假日
 func BatchCreateHolidays(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	var input struct {
-		Holidays []database.StatutoryHoliday `json:"holidays"`
+		Holidays []statutoryHolidayRequest `json:"holidays" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    http.StatusBadRequest,
-			Message: "参数错误",
-		})
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "参数错误"})
 		return
 	}
-
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
-	created, err := svc.BatchCreateHolidays(input.Holidays)
+	holidays := make([]database.StatutoryHoliday, 0, len(input.Holidays))
+	for _, req := range input.Holidays {
+		if !rejectClientOrganizationID(c, req.OrgID) {
+			return
+		}
+		holidays = append(holidays, database.StatutoryHoliday{
+			OrgID: orgID, Date: req.Date, Name: req.Name, Type: req.Type, Year: req.Year,
+		})
+	}
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
+	created, err := svc.BatchCreateHolidays(holidays)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "批量创建失败: " + err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "批量创建节假日失败: " + err.Error()})
 		return
 	}
-
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data:    gin.H{"created": created, "total": len(input.Holidays)},
-	})
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: gin.H{"created": created, "total": len(holidays)}})
 }
 
 // SyncHolidaysFromJuhe 从聚合数据API同步节假日
 func SyncHolidaysFromJuhe(c *gin.Context) {
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	created, err := svc.SyncHolidaysFromJuhe()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -5531,6 +6176,10 @@ func SyncHolidaysFromJuhe(c *gin.Context) {
 
 // DeleteHoliday 删除节假日
 func DeleteHoliday(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	idStr := c.Param("id")
 	var id uint
 	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
@@ -5541,7 +6190,7 @@ func DeleteHoliday(c *gin.Context) {
 		return
 	}
 
-	svc := service.NewWeekScheduleService(middleware.RequestDB(c))
+	svc := service.NewWeekScheduleServiceWithOrgID(middleware.RequestDB(c), orgID)
 	if err := svc.DeleteHoliday(id); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    http.StatusInternalServerError,
@@ -5755,8 +6404,22 @@ func GetOrCreateCustomShift(c *gin.Context) {
 	})
 }
 
-// UploadFile 文件上传
+// UploadFile 文件上传：按 JWT org_id 建立所有权，磁盘写入 uploads/<safe_org_id>/<stored_name>，
+// 对外返回 /api/v1/files/<id>。禁止客户端传 org_id 决定归属。
 func UploadFile(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	userID := strings.TrimSpace(c.GetString("userID"))
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    http.StatusUnauthorized,
+			Message: "未登录或会话已失效",
+		})
+		return
+	}
+
 	file, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{
@@ -5785,7 +6448,6 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
-	// 检查上传目录
 	if err := validateUploadContent(file, ext); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    http.StatusBadRequest,
@@ -5802,15 +6464,6 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
-	uploadDir := "uploads"
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "创建上传目录失败",
-		})
-		return
-	}
-
 	// 生成随机唯一文件名（避免时间戳可预测）
 	randBytes := make([]byte, 16)
 	if _, err := rand.Read(randBytes); err != nil {
@@ -5820,8 +6473,22 @@ func UploadFile(c *gin.Context) {
 		})
 		return
 	}
-	filename := fmt.Sprintf("%s%s", hex.EncodeToString(randBytes), ext)
-	filePath := filepath.Join(uploadDir, filename)
+	storedName := fmt.Sprintf("%s%s", hex.EncodeToString(randBytes), ext)
+	filePath, err := uploadedFileDiskPath(orgID, storedName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "创建上传路径失败",
+		})
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "创建上传目录失败",
+		})
+		return
+	}
 
 	// 保存文件
 	if err := c.SaveUploadedFile(file, filePath); err != nil {
@@ -5832,41 +6499,108 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
-	// 返回文件URL
-	fileURL := fmt.Sprintf("/api/v1/files/%s", filename)
+	contentType := detectUploadContentType(file, ext)
+	meta := &database.UploadedFile{
+		OrgID:          orgID,
+		UploaderUserID: userID,
+		StoredName:     storedName,
+		OriginalName:   filepath.Base(file.Filename),
+		ContentType:    contentType,
+		Size:           file.Size,
+	}
 
+	db := middleware.RequestDB(c)
+	repo, err := repository.NewUploadedFileRepositoryWithOrgID(db, orgID)
+	if err != nil {
+		_ = os.Remove(filePath)
+		respondMissingOrgContext(c)
+		return
+	}
+	if err := repo.Create(meta); err != nil {
+		_ = os.Remove(filePath)
+		log.Printf("[upload] persist metadata failed org=%s user=%s: %v", orgID, userID, err)
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "保存文件元数据失败",
+		})
+		return
+	}
+
+	fileURL := fmt.Sprintf("/api/v1/files/%d", meta.ID)
 	c.JSON(http.StatusOK, Response{
 		Code:    http.StatusOK,
 		Message: "上传成功",
 		Data: gin.H{
-			"url":  fileURL,
-			"name": file.Filename,
-			"size": file.Size,
+			"id":           meta.ID,
+			"url":          fileURL,
+			"name":         meta.OriginalName,
+			"size":         meta.Size,
+			"content_type": meta.ContentType,
+			"stored_name":  meta.StoredName,
 		},
 	})
 }
 
-// ServeFile 提供文件访问
+// ServeFile 提供文件访问：必须经 JWTAuth + TenantContext。
+// 使用当前 JWT org_id 查询元数据；当前组织没有该文件时统一 404，不暴露是否属于其他企业。
+// 旧版 /api/v1/files/<random_filename> 无元数据时 fail-closed。
 func ServeFile(c *gin.Context) {
-	filename := strings.TrimSpace(c.Param("filename"))
-	if !isSafeUploadFilename(filename) {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    http.StatusBadRequest,
-			Message: "无效的文件名",
-		})
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
 		return
 	}
 
-	filePath := filepath.Join("uploads", filename)
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, Response{
-			Code:    http.StatusNotFound,
-			Message: "文件不存在",
-		})
+	rawID := strings.TrimSpace(c.Param("file_id"))
+	if rawID == "" {
+		// Backward-compatible param name from pre-isolation route.
+		rawID = strings.TrimSpace(c.Param("filename"))
+	}
+	if rawID == "" {
+		respondUploadedFileNotFound(c)
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(filename))
+	// Path traversal / injection via param: reject anything that is not a positive integer id.
+	// Legacy filename URLs are intentionally rejected (fail-closed without ownership metadata).
+	fileID, err := strconv.ParseUint(rawID, 10, 64)
+	if err != nil || fileID == 0 {
+		// Distinguish clearly unsafe path segments (../ etc.) still as not-found / bad-request without leaking.
+		if strings.Contains(rawID, "..") || strings.ContainsAny(rawID, `/\`) {
+			c.JSON(http.StatusBadRequest, Response{
+				Code:    http.StatusBadRequest,
+				Message: "无效的文件标识",
+			})
+			return
+		}
+		// Old random-filename style IDs: refuse without org ownership proof.
+		respondUploadedFileNotFound(c)
+		return
+	}
+
+	db := middleware.RequestDB(c)
+	repo, err := repository.NewUploadedFileRepositoryWithOrgID(db, orgID)
+	if err != nil {
+		respondMissingOrgContext(c)
+		return
+	}
+	meta, err := repo.FindByID(uint(fileID))
+	if err != nil {
+		// Record missing OR belongs to another org (scoped query) → same 404.
+		respondUploadedFileNotFound(c)
+		return
+	}
+
+	filePath, err := uploadedFileDiskPath(meta.OrgID, meta.StoredName)
+	if err != nil {
+		respondUploadedFileNotFound(c)
+		return
+	}
+	if _, err := os.Stat(filePath); err != nil {
+		respondUploadedFileNotFound(c)
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(meta.StoredName))
 	disposition := "attachment"
 	if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".webp" ||
 		ext == ".pdf" || ext == ".txt" || ext == ".csv" || ext == ".md" {
@@ -5874,6 +6608,9 @@ func ServeFile(c *gin.Context) {
 	}
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Header("Referrer-Policy", "no-referrer")
-	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, filename))
+	c.Header("Content-Disposition", fmt.Sprintf("%s; %s", disposition, contentDispositionFilename(meta.OriginalName, meta.StoredName)))
+	if strings.TrimSpace(meta.ContentType) != "" {
+		c.Header("Content-Type", meta.ContentType)
+	}
 	c.File(filePath)
 }

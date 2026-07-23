@@ -1,6 +1,6 @@
 ---
 purpose: 开发、测试、构建、lint 命令
-last_updated: 2026-04-30
+last_updated: 2026-07-20
 source_of_truth:
   - frontend/package.json（前端命令）
   - README.md（项目说明）
@@ -94,7 +94,7 @@ npm run test
 npm run test:e2e
 ```
 
-说明：`npm run test` 使用 Vitest 配置 `vite.config.test.ts`；`npm run test:e2e` 使用 Playwright，会按 `playwright.config.ts` 自动启动专用 Vite dev server，并通过用例内 mock API 避免依赖真实后端。
+说明：`npm run test` 使用 Vitest 配置 `vite.config.test.ts`；`npm run test:e2e` 使用 Playwright，会按 `playwright.config.ts` 自动启动专用 Vite dev server，并通过用例内 mock API 避免依赖真实后端。 On Windows, set `PLAYWRIGHT_REUSE_SERVER=1` only when a dedicated server is already listening on port 5273; the default remains an isolated auto-started server.
 
 ### 代码检查
 ```bash
@@ -154,6 +154,60 @@ mysql -h <host> -u <user> -p <database> < backup.sql
 
 ## 运维脚本
 
+### 钉钉考勤与审批权限预检
+```powershell
+# Windows PowerShell：先构建固定 exe，避免 go run 临时程序被安全软件拦截
+go build -o .\dingtalk_attendance_preflight.exe .\tools\ops\dingtalk_attendance_preflight
+.\dingtalk_attendance_preflight.exe -user <测试员工user_id> -process-code <审批模板process_code> -start 2026-07-01 -end 2026-07-14
+```
+
+```bash
+# Linux / macOS
+go run ./tools/ops/dingtalk_attendance_preflight -user <测试员工user_id> -process-code <审批模板process_code> -start 2026-07-01 -end 2026-07-14
+```
+
+说明：
+- 工具不会发起或审批流程，也不会修改排班、打卡记录或假期余额。
+- PowerShell 不能使用 `\` 续行；请使用一整行命令，或使用 PowerShell 反引号续行。
+- 未传 `-user` 时会尝试使用 `DINGTALK_PREFLIGHT_USER_ID` 或 `DINGTALK_ADMIN_USER_ID`。
+- 未传 `-process-code` 时会尝试使用 `DINGTALK_ATTENDANCE_APPROVAL_PROCESS_CODE` 或 `DINGTALK_OVERTIME_PROCESS_CODE`。
+- 可增加 `-json` 输出结构化检查结果。
+
+### 外部 Doris 考勤同步环境变量
+```text
+EXTERNAL_ATTENDANCE_DATABASE_URL=user:pass@tcp(host:9030)/dwd?parseTime=true
+# 或拆分：EXTERNAL_ATTENDANCE_DB_HOST/PORT/USER/PASSWORD/SCHEMA
+EXTERNAL_ATTENDANCE_SYNC_ENABLED=true|false
+EXTERNAL_ATTENDANCE_SYNC_INTERVAL=15m
+EXTERNAL_ATTENDANCE_SYNC_LOOKBACK_MINUTES=30
+EXTERNAL_ATTENDANCE_QUERY_TIMEOUT=30s
+# 首次无 cursor 回填起点；未设置默认 Unix epoch（全量历史），格式 RFC3339 / "2006-01-02 15:04:05" / "2006-01-02"
+EXTERNAL_ATTENDANCE_INITIAL_START_TIME=2026-04-01
+```
+
+只读联调（禁止 DDL/DML，勿打印 PII）：
+```bash
+# 只读冒烟：GET /api/v1/attendance/external-sync/status（连通性/启用态，不写库）
+# 健康检查走后端 GET /api/v1/attendance/external-sync/status
+# 手动同步 POST /api/v1/attendance/external-sync/run  body: {"source":"attendance"}
+# 集成测试依赖外部时设置 SKIP_INTEGRATION_TESTS=true 跳过
+```
+
+### 钉钉 Stream 事件订阅客户端
+```powershell
+# Windows PowerShell
+go build -o .\dingtalk_stream.exe .\cmd\dingtalk_stream
+.\dingtalk_stream.exe
+```
+
+启动后看到“钉钉 Stream 已连接”或 SDK 的 `connect success` 日志，再到钉钉开发者后台点击“已完成接入，验证连接通道”。
+
+说明：
+- Stream 客户端默认订阅并确认所有已在开发者后台选择的事件，但暂不将事件写入数据库。
+- 默认不输出事件原始内容；仅联调时可配置 `DINGTALK_STREAM_LOG_PAYLOAD=true`，日志可能包含审批业务信息。
+- 如需代理，可配置 `DINGTALK_STREAM_PROXY`。
+- 生产环境建议将该客户端作为独立常驻进程或服务运行。
+
 ### 重新同步加班到钉钉
 ```bash
 cd tools/resync_overtime_to_dingtalk
@@ -185,6 +239,15 @@ go run tools/ops/resync_comp_time/main.go
 ```bash
 docker build -t peopleops:latest .
 ```
+
+### 测试服构建与部署
+```powershell
+.\deploy\build-and-deploy.ps1 -SkipConfigUpload
+```
+
+脚本生成的测试镜像必须包含 `tools/attendance_toolbox`、独立 Python 虚拟环境及运行依赖；镜像构建后会自动执行 `runner.py --defaults` 冒烟校验，失败时不会继续上传部署。
+
+首次构建需要从 Docker Hub 拉取 `python:3.12-slim`。脚本会对 Docker 构建最多重试 3 次；若仍出现 `TLS handshake timeout`，可先执行 `docker pull python:3.12-slim`，成功后再重新运行部署命令。
 
 ### 运行容器
 ```bash

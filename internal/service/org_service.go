@@ -626,43 +626,19 @@ func (s *OrgService) GetDepartmentHistory(scope *OrgDataScope, departmentID stri
 }
 
 func (s *OrgService) ListEmployees(scope *OrgDataScope, page, pageSize int, filters OrgEmployeeFilters) ([]database.User, int64, error) {
-	// self 模式：只返回当前用户自己
-	if scope != nil && scope.IsSelf() && len(scope.UserIDs) > 0 {
-		var user database.User
-		if err := s.db.Where("user_id = ? AND deleted_at IS NULL", scope.UserIDs[0]).First(&user).Error; err != nil {
-			return []database.User{}, 0, nil
-		}
-		if page <= 0 {
-			page = 1
-		}
-		if pageSize <= 0 {
-			pageSize = 10
-		}
-		return []database.User{user}, 1, nil
-	}
-
-	departmentIDs, _, err := s.resolveDepartmentFilter(scope, filters.DepartmentID)
-	if err != nil {
-		return nil, 0, err
-	}
-
 	if page <= 0 {
 		page = 1
 	}
 	if pageSize <= 0 {
 		pageSize = 10
 	}
-
-	query := s.baseEmployeeQuery(departmentIDs)
-	if status := strings.TrimSpace(filters.Status); status != "" {
-		query = query.Where("users.status = ?", status)
+	if pageSize > 1000 {
+		pageSize = 1000
 	}
-	if search := strings.TrimSpace(filters.Search); search != "" {
-		like := "%" + search + "%"
-		query = query.Where(
-			"(users.user_id LIKE ? OR users.name LIKE ? OR users.email LIKE ? OR users.mobile LIKE ? OR users.position LIKE ?)",
-			like, like, like, like, like,
-		)
+
+	query, err := s.buildEmployeeListQuery(scope, filters)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	var total int64
@@ -681,6 +657,37 @@ func (s *OrgService) ListEmployees(scope *OrgDataScope, page, pageSize int, filt
 	}
 
 	return users, total, nil
+}
+
+func (s *OrgService) buildEmployeeListQuery(scope *OrgDataScope, filters OrgEmployeeFilters) (*gorm.DB, error) {
+	var query *gorm.DB
+	if scope != nil && scope.IsSelf() && len(scope.UserIDs) > 0 {
+		orgID, err := resolveServiceOrgID(s.orgID, s.db)
+		if err != nil {
+			return nil, err
+		}
+		query = s.db.Model(&database.User{}).
+			Where("users.org_id = ?", orgID).
+			Where("users.user_id = ? AND users.deleted_at IS NULL", strings.TrimSpace(scope.UserIDs[0]))
+	} else {
+		departmentIDs, _, err := s.resolveDepartmentFilter(scope, filters.DepartmentID)
+		if err != nil {
+			return nil, err
+		}
+		query = s.baseEmployeeQuery(departmentIDs)
+	}
+
+	if status := strings.TrimSpace(filters.Status); status != "" {
+		query = query.Where("users.status = ?", status)
+	}
+	if search := strings.TrimSpace(filters.Search); search != "" {
+		like := "%" + search + "%"
+		query = query.Where(
+			"(users.user_id LIKE ? OR users.name LIKE ? OR users.email LIKE ? OR users.mobile LIKE ? OR users.position LIKE ?)",
+			like, like, like, like, like,
+		)
+	}
+	return query, nil
 }
 
 func (s *OrgService) GetOverview(scope *OrgDataScope, departmentID string) (*OrgOverview, error) {
@@ -945,11 +952,11 @@ func (s *OrgService) GetEmployeeAggregate(scope *OrgDataScope, id string) (*Empl
 }
 
 func (s *OrgService) baseEmployeeQuery(departmentIDs []string) *gorm.DB {
-	orgID := strings.TrimSpace(s.orgID)
-	if orgID == "" {
-		orgID = orgIDFromDB(s.db)
+	orgID, err := resolveServiceOrgID(s.orgID, s.db)
+	if err != nil {
+		// Fail-closed: never join employee profiles without an explicit tenant.
+		return s.db.Model(&database.User{}).Where("1 = 0")
 	}
-	orgID = database.NormalizeOrganizationID(orgID)
 	query := s.db.Model(&database.User{}).
 		Joins("JOIN employee_profiles ON employee_profiles.org_id = ? AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL", orgID).
 		Where("users.org_id = ?", orgID).

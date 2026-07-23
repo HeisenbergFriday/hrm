@@ -89,6 +89,7 @@ var systemPermissionDefinitions = []SystemPermissionDefinition{
 	{Name: "删除审批模板", Code: "approval:delete", Description: "删除审批模板"},
 	{Name: "权限管理", Code: "permission_manage", Description: "权限管理权限"},
 	{Name: "绩效活动管理", Code: "performance:activity:manage", Description: "创建/编辑/发布/启动/锁定/归档绩效活动"},
+	{Name: "绩效活动导入", Code: "performance:activity:import", Description: "通过 Excel 分析并创建绩效模板、草稿活动和目标"},
 	{Name: "绩效自评提交", Code: "performance:self_eval:submit", Description: "提交绩效自评"},
 	{Name: "绩效主管评分", Code: "performance:manager_eval:submit", Description: "主管绩效评分"},
 	{Name: "绩效员工确认", Code: "performance:employee_confirm:submit", Description: "员工确认绩效结果"},
@@ -291,6 +292,17 @@ func (s *PermissionService) effectiveOrgID(orgID string) string {
 	return ""
 }
 
+// normalizePermissionOrgID keeps package-level helpers used by tests/callers that
+// only have a raw org string. Prefer (s *PermissionService).effectiveOrgID in service methods.
+// Empty input stays empty (fail-closed); does not invent default.
+func normalizePermissionOrgID(orgID string) string {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return ""
+	}
+	return database.NormalizeOrganizationID(orgID)
+}
+
 func (s *PermissionService) normalizeUserID(userID string) string {
 	return s.normalizeUserIDInOrg(s.effectiveOrgID(""), userID)
 }
@@ -460,6 +472,10 @@ func (s *PermissionService) AssignDefaultEmployeeRoleIfUnassignedInOrg(orgID, us
 		return false, err
 	}
 	return true, nil
+}
+
+func (s *PermissionService) ensureDefaultEmployeeRole() (*database.Role, error) {
+	return s.ensureDefaultEmployeeRoleInOrg(s.effectiveOrgID(""))
 }
 
 // ensureDefaultEmployeeRoleInOrg finds or creates the default employee role for a single org.

@@ -15,17 +15,46 @@ import (
 )
 
 type ShiftConfigService struct {
-	repo *repository.ShiftConfigRepository
-	db   *gorm.DB
+	repo  *repository.ShiftConfigRepository
+	db    *gorm.DB
+	orgID string
 }
 
 var shiftIDCache sync.Map
 
 func NewShiftConfigService(db *gorm.DB) *ShiftConfigService {
+	orgID, _ := requireOrgIDFromDB(db)
+	return NewShiftConfigServiceWithOrgID(db, orgID)
+}
+
+// NewShiftConfigServiceWithOrgID binds shift-config reads/writes to an explicit tenant.
+// Prefer this when orgID is already resolved (handlers/jobs); empty org stays fail-closed.
+func NewShiftConfigServiceWithOrgID(db *gorm.DB, orgID string) *ShiftConfigService {
+	orgID = strings.TrimSpace(orgID)
 	return &ShiftConfigService{
-		repo: repository.NewShiftConfigRepository(db),
-		db:   db,
+		repo:  repository.NewShiftConfigRepositoryWithOrgID(db, orgID),
+		db:    db,
+		orgID: orgID,
 	}
+}
+
+func (s *ShiftConfigService) requireBoundOrgID() (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("missing organization context")
+	}
+	if orgID := strings.TrimSpace(s.orgID); orgID != "" {
+		return database.NormalizeOrganizationID(orgID), nil
+	}
+	return requireOrgIDFromDB(s.db)
+}
+
+// scopedDB applies org_id filter for direct GORM queries; empty org fail-closed (1=0).
+func (s *ShiftConfigService) scopedDB() *gorm.DB {
+	orgID, err := s.requireBoundOrgID()
+	if err != nil || strings.TrimSpace(orgID) == "" {
+		return s.db.Where("1 = 0")
+	}
+	return s.db.Where("org_id = ?", orgID)
 }
 
 // EmployeeShiftItem 员工下班时间配置（含用户基础信息）
@@ -43,9 +72,11 @@ type EmployeeShiftItem struct {
 
 // GetAllWithUsers 获取全部员工的下班时间配置（含默认下班时间的员工）
 func (s *ShiftConfigService) GetAllWithUsers() ([]EmployeeShiftItem, error) {
+	if _, err := s.requireBoundOrgID(); err != nil {
+		return nil, err
+	}
 	var users []database.User
-	if err := s.db.
-		Order("name").Find(&users).Error; err != nil {
+	if err := s.scopedDB().Order("name").Find(&users).Error; err != nil {
 		return nil, fmt.Errorf("查询用户失败: %w", err)
 	}
 
@@ -60,7 +91,7 @@ func (s *ShiftConfigService) GetAllWithUsers() ([]EmployeeShiftItem, error) {
 
 	deptMap := make(map[string]string)
 	var depts []database.Department
-	if err := s.db.Find(&depts).Error; err == nil {
+	if err := s.scopedDB().Find(&depts).Error; err == nil {
 		for _, d := range depts {
 			deptMap[d.DepartmentID] = d.Name
 		}
@@ -174,8 +205,13 @@ type partialShiftDecision struct {
 
 // SetConfigs 批量/单个设置员工自定义下班时间（仅写本地 DB，无钉钉 API 调用）
 func (s *ShiftConfigService) SetConfigs(input *SetShiftConfigInput) (int, error) {
+	orgID, err := s.requireBoundOrgID()
+	if err != nil {
+		return 0, err
+	}
+
 	var users []database.User
-	s.db.Where("user_id IN ?", input.UserIDs).Find(&users)
+	s.scopedDB().Where("user_id IN ?", input.UserIDs).Find(&users)
 	nameMap := make(map[string]string, len(users))
 	for _, u := range users {
 		nameMap[u.UserID] = u.Name
@@ -184,6 +220,7 @@ func (s *ShiftConfigService) SetConfigs(input *SetShiftConfigInput) (int, error)
 	count := 0
 	for _, uid := range input.UserIDs {
 		cfg := &database.EmployeeShiftConfig{
+			OrgID:    orgID,
 			UserID:   uid,
 			UserName: nameMap[uid],
 			ShiftID:  input.ShiftID,
@@ -205,8 +242,9 @@ func (s *ShiftConfigService) DeleteConfig(userID string) error {
 
 // GetOrCreateShift 查找已有同名班次或创建新班次，返回钉钉班次 ID。
 // 调用钉钉 API 次数：最多 2 次（GetShiftList + CreateShift）。
+// 缺少组织上下文或企业 admin_user_id 时 fail-closed，禁止回退全局环境变量。
 func (s *ShiftConfigService) GetOrCreateShift(name, checkIn, checkOut string) (int64, error) {
-	orgID, err := requireOrgIDFromDB(s.db)
+	orgID, err := s.requireBoundOrgID()
 	if err != nil {
 		return 0, err
 	}
@@ -217,14 +255,14 @@ func (s *ShiftConfigService) GetOrCreateShift(name, checkIn, checkOut string) (i
 
 	shiftKey := normalize(name, checkIn, checkOut)
 
-	if cachedID, ok := getCachedShiftID(shiftKey); ok {
+	if cachedID, ok := getCachedShiftID(orgID, shiftKey); ok {
 		return cachedID, nil
 	}
 
-	if persistedID, err := s.getPersistedShiftID(shiftKey); err != nil {
+	if persistedID, err := s.getPersistedShiftID(orgID, shiftKey); err != nil {
 		return 0, err
 	} else if persistedID > 0 {
-		cacheShiftID(shiftKey, persistedID)
+		cacheShiftID(orgID, shiftKey, persistedID)
 		return persistedID, nil
 	}
 
@@ -250,9 +288,9 @@ func (s *ShiftConfigService) GetOrCreateShift(name, checkIn, checkOut string) (i
 				}
 
 				existingShiftKey := normalize(shiftName, checkInTime, checkOutTime)
-				cacheShiftID(existingShiftKey, id)
+				cacheShiftID(orgID, existingShiftKey, id)
 				if existingShiftKey == shiftKey {
-					if err := s.persistShiftID(name, existingShiftKey, id, checkIn, checkOut); err != nil {
+					if err := s.persistShiftID(orgID, name, existingShiftKey, id, checkIn, checkOut); err != nil {
 						return 0, err
 					}
 					return id, nil
@@ -265,15 +303,22 @@ func (s *ShiftConfigService) GetOrCreateShift(name, checkIn, checkOut string) (i
 	if err != nil {
 		return 0, fmt.Errorf("create shift failed: %w", err)
 	}
-	cacheShiftID(shiftKey, shiftID)
-	if err := s.persistShiftID(name, shiftKey, shiftID, checkIn, checkOut); err != nil {
+	cacheShiftID(orgID, shiftKey, shiftID)
+	if err := s.persistShiftID(orgID, name, shiftKey, shiftID, checkIn, checkOut); err != nil {
 		return 0, err
 	}
 	return shiftID, nil
 }
 
-func getCachedShiftID(shiftKey string) (int64, bool) {
-	if value, ok := shiftIDCache.Load(shiftKey); ok {
+func shiftIDCacheKey(orgID, shiftKey string) string {
+	return database.NormalizeOrganizationID(orgID) + "|" + shiftKey
+}
+
+func getCachedShiftID(orgID, shiftKey string) (int64, bool) {
+	if shiftKey == "" {
+		return 0, false
+	}
+	if value, ok := shiftIDCache.Load(shiftIDCacheKey(orgID, shiftKey)); ok {
 		if id, ok := value.(int64); ok && id > 0 {
 			return id, true
 		}
@@ -281,11 +326,19 @@ func getCachedShiftID(shiftKey string) (int64, bool) {
 	return 0, false
 }
 
-func cacheShiftID(shiftKey string, id int64) {
+func cacheShiftID(orgID, shiftKey string, id int64) {
 	if shiftKey == "" || id <= 0 {
 		return
 	}
-	shiftIDCache.Store(shiftKey, id)
+	shiftIDCache.Store(shiftIDCacheKey(orgID, shiftKey), id)
+}
+
+// ClearShiftIDCacheForTest clears the process-wide shift ID cache so tests do not contaminate each other.
+func ClearShiftIDCacheForTest() {
+	shiftIDCache.Range(func(key, _ any) bool {
+		shiftIDCache.Delete(key)
+		return true
+	})
 }
 
 // normalize 生成班次的稳定签名
@@ -298,10 +351,17 @@ func normalize(name, checkIn, checkOut string) string {
 }
 
 func (s *ShiftConfigService) ApplyAndSync(input *ApplyShiftConfigInput) (*ApplyShiftConfigResult, error) {
-	orgID, err := requireOrgIDFromDB(s.db)
+	// Fail closed before any local write when org/admin context is missing,
+	// so a non-default enterprise never partially persists under the wrong tenant.
+	orgID, err := s.requireBoundOrgID()
 	if err != nil {
 		return nil, err
 	}
+	opUserID, err := dingtalk.ResolveAdminUserID(orgID)
+	if err != nil {
+		return nil, err
+	}
+
 	shiftID := input.ShiftID
 	endTime := input.EndTime
 
@@ -309,7 +369,6 @@ func (s *ShiftConfigService) ApplyAndSync(input *ApplyShiftConfigInput) (*ApplyS
 		if input.Name == "" || input.CheckIn == "" || input.CheckOut == "" {
 			return nil, fmt.Errorf("shift_id or shift creation fields are required")
 		}
-		var err error
 		shiftID, err = s.GetOrCreateShift(input.Name, input.CheckIn, input.CheckOut)
 		if err != nil {
 			return nil, err
@@ -338,13 +397,6 @@ func (s *ShiftConfigService) ApplyAndSync(input *ApplyShiftConfigInput) (*ApplyS
 		UpdatedCount: updatedCount,
 		Status:       "saved",
 		Message:      "saved locally",
-	}
-
-	opUserID, err := dingtalk.ResolveAdminUserID(orgID)
-	if err != nil {
-		result.Status = "partial"
-		result.Message = "saved locally, but DingTalk admin is unavailable for sync: " + err.Error()
-		return result, nil
 	}
 
 	groups, err := dingtalk.GetAttendanceGroupsForOrg(orgID)
@@ -423,18 +475,18 @@ func (s *ShiftConfigService) ApplyAndSync(input *ApplyShiftConfigInput) (*ApplyS
 }
 
 func (s *ShiftConfigService) Preview(input *PreviewShiftConfigInput) (*PreviewShiftConfigResult, error) {
-	orgID, err := requireOrgIDFromDB(s.db)
+	orgID, err := s.requireBoundOrgID()
 	if err != nil {
 		return nil, err
 	}
+
 	shiftName, err := s.resolvePreviewShiftName(input)
 	if err != nil {
 		return nil, err
 	}
 
 	canSyncRest := false
-	opUserID, adminErr := dingtalk.ResolveAdminUserID(orgID)
-	if adminErr == nil {
+	if opUserID, adminErr := dingtalk.ResolveAdminUserID(orgID); adminErr == nil {
 		if groups, groupErr := dingtalk.GetAttendanceGroupsForOrg(orgID); groupErr == nil {
 			if groupID, findErr := dingtalk.FindScheduleGroupID(groups); findErr == nil {
 				if groupDetail, detailErr := dingtalk.GetAttendanceGroupForOrg(orgID, opUserID, groupID); detailErr == nil {
@@ -531,7 +583,10 @@ func (s *ShiftConfigService) buildPartialShiftDecisions(userIDs []string, startD
 	}
 
 	var users []database.User
-	if err := s.db.Where("user_id IN ?", normalizedUsers).Find(&users).Error; err != nil {
+	if _, err := s.requireBoundOrgID(); err != nil {
+		return nil, err
+	}
+	if err := s.scopedDB().Where("user_id IN ?", normalizedUsers).Find(&users).Error; err != nil {
 		return nil, fmt.Errorf("query users failed: %w", err)
 	}
 	userDeptMap := make(map[string]string, len(users))
@@ -542,7 +597,7 @@ func (s *ShiftConfigService) buildPartialShiftDecisions(userIDs []string, startD
 	}
 
 	var holidays []database.StatutoryHoliday
-	if err := s.db.Where("date >= ? AND date <= ?", startDate, endDate).Order("date ASC").Find(&holidays).Error; err != nil {
+	if err := s.scopedDB().Where("date >= ? AND date <= ?", startDate, endDate).Order("date ASC").Find(&holidays).Error; err != nil {
 		return nil, fmt.Errorf("query holidays failed: %w", err)
 	}
 	holidayMap := make(map[string]database.StatutoryHoliday, len(holidays))
@@ -550,7 +605,8 @@ func (s *ShiftConfigService) buildPartialShiftDecisions(userIDs []string, startD
 		holidayMap[holiday.Date] = holiday
 	}
 
-	weekService := NewWeekScheduleService(s.db)
+	orgID, _ := s.requireBoundOrgID()
+	weekService := NewWeekScheduleServiceWithOrgID(s.db, orgID)
 
 	items := make([]partialShiftDecision, 0, len(normalizedUsers)*7)
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
@@ -617,9 +673,9 @@ func hasRestScheduleItems(items []dingtalk.ScheduleItem) bool {
 	return false
 }
 
-func (s *ShiftConfigService) getPersistedShiftID(shiftKey string) (int64, error) {
+func (s *ShiftConfigService) getPersistedShiftID(orgID, shiftKey string) (int64, error) {
 	var record database.DingTalkShiftCatalog
-	err := s.db.Where("shift_key = ?", shiftKey).First(&record).Error
+	err := s.db.Where("org_id = ? AND shift_key = ?", database.NormalizeOrganizationID(orgID), shiftKey).First(&record).Error
 	if err == nil {
 		return record.ShiftID, nil
 	}
@@ -629,12 +685,13 @@ func (s *ShiftConfigService) getPersistedShiftID(shiftKey string) (int64, error)
 	return 0, fmt.Errorf("query local shift catalog failed: %w", err)
 }
 
-func (s *ShiftConfigService) persistShiftID(name, shiftKey string, shiftID int64, checkIn, checkOut string) error {
+func (s *ShiftConfigService) persistShiftID(orgID, name, shiftKey string, shiftID int64, checkIn, checkOut string) error {
 	if name == "" || shiftKey == "" || shiftID <= 0 {
 		return nil
 	}
 
 	record := database.DingTalkShiftCatalog{
+		OrgID:    database.NormalizeOrganizationID(orgID),
 		Name:     name,
 		ShiftKey: shiftKey,
 		ShiftID:  shiftID,
@@ -642,14 +699,17 @@ func (s *ShiftConfigService) persistShiftID(name, shiftKey string, shiftID int64
 		CheckOut: checkOut,
 	}
 	return s.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "shift_key"}},
+		Columns:   []clause.Column{{Name: "org_id"}, {Name: "shift_key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"name", "shift_id", "check_in", "check_out", "updated_at"}),
 	}).Create(&record).Error
 }
 
 func (s *ShiftConfigService) ListShiftCatalogs() ([]ShiftCatalogItem, error) {
+	if _, err := s.requireBoundOrgID(); err != nil {
+		return nil, err
+	}
 	var catalogs []database.DingTalkShiftCatalog
-	if err := s.db.Order("updated_at DESC").Find(&catalogs).Error; err != nil {
+	if err := s.scopedDB().Order("updated_at DESC").Find(&catalogs).Error; err != nil {
 		return nil, fmt.Errorf("query shift catalogs failed: %w", err)
 	}
 
@@ -681,8 +741,11 @@ func (s *ShiftConfigService) resolvePreviewShiftName(input *PreviewShiftConfigIn
 		return input.Name, nil
 	}
 	if input.ShiftID > 0 {
+		if _, err := s.requireBoundOrgID(); err != nil {
+			return "", err
+		}
 		var catalog database.DingTalkShiftCatalog
-		err := s.db.Where("shift_id = ?", input.ShiftID).Order("updated_at DESC").First(&catalog).Error
+		err := s.scopedDB().Where("shift_id = ?", input.ShiftID).Order("updated_at DESC").First(&catalog).Error
 		if err == nil && catalog.Name != "" {
 			return catalog.Name, nil
 		}

@@ -72,7 +72,7 @@ func TestApplyInterviewPayloadStatusDefaultsAndCompletedAt(t *testing.T) {
 }
 
 func TestNotifyInterviewChangedSendsEmployeeAndInterviewer(t *testing.T) {
-	t.Setenv("DINGTALK_APP_HOME_URL", "https://peopleops.example/app")
+	withPerformanceAppHomeForTests(t, "https://peopleops.example/app")
 	originalSender := sendPerformanceActionCardToUser
 	t.Cleanup(func() { sendPerformanceActionCardToUser = originalSender })
 
@@ -84,7 +84,7 @@ func TestNotifyInterviewChangedSendsEmployeeAndInterviewer(t *testing.T) {
 		actionURL   string
 	}
 	sent := make([]sentNotice, 0)
-	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+	sendPerformanceActionCardToUser = func(orgID, userID, title, content, actionTitle, actionURL string) error {
 		sent = append(sent, sentNotice{
 			userID:      userID,
 			title:       title,
@@ -98,6 +98,7 @@ func TestNotifyInterviewChangedSendsEmployeeAndInterviewer(t *testing.T) {
 	scheduledAt := time.Date(2026, 6, 30, 10, 30, 0, 0, time.Local)
 	svc := &PerformanceFollowupService{}
 	svc.notifyInterviewChanged(&database.PerformanceInterviewRecord{
+		OrgID:           "default",
 		ActivityID:      "activity 1",
 		ActivityName:    "2026 Q2 绩效",
 		ParticipantID:   12,
@@ -130,12 +131,12 @@ func TestNotifyInterviewChangedSendsEmployeeAndInterviewer(t *testing.T) {
 }
 
 func TestNotifyAppealStatusChangedSendsEmployee(t *testing.T) {
-	t.Setenv("DINGTALK_APP_HOME_URL", "https://peopleops.example/app")
+	withPerformanceAppHomeForTests(t, "https://peopleops.example/app")
 	originalSender := sendPerformanceActionCardToUser
 	t.Cleanup(func() { sendPerformanceActionCardToUser = originalSender })
 
 	var gotUserID, gotTitle, gotContent, gotURL string
-	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+	sendPerformanceActionCardToUser = func(orgID, userID, title, content, actionTitle, actionURL string) error {
 		gotUserID = userID
 		gotTitle = title
 		gotContent = content
@@ -145,6 +146,7 @@ func TestNotifyAppealStatusChangedSendsEmployee(t *testing.T) {
 
 	svc := &PerformanceFollowupService{}
 	svc.notifyAppealStatusChanged(&database.PerformanceAppealRecord{
+		OrgID:         "default",
 		ActivityID:    "activity-1",
 		ActivityName:  "2026 Q2 绩效",
 		ParticipantID: 18,

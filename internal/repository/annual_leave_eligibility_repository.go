@@ -2,6 +2,7 @@ package repository
 
 import (
 	"peopleops/internal/database"
+	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -21,11 +22,8 @@ func NewAnnualLeaveEligibilityRepositoryWithOrgID(db *gorm.DB, orgID string) *An
 }
 
 func (r *AnnualLeaveEligibilityRepository) scoped() *gorm.DB {
-	tx := r.db
-	if r.orgID != "" {
-		tx = tx.Where("org_id = ?", r.orgID)
-	}
-	return tx
+	// Fail-closed: empty org must never return an unfiltered db session.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *AnnualLeaveEligibilityRepository) FindByUserYear(userID string, year int) ([]database.AnnualLeaveEligibility, error) {
@@ -44,13 +42,15 @@ func (r *AnnualLeaveEligibilityRepository) FindByUserYearQuarter(userID string, 
 }
 
 func (r *AnnualLeaveEligibilityRepository) Upsert(e *database.AnnualLeaveEligibility) error {
-	if r.orgID != "" {
-		merged, err := EnsureSameOrg(r.orgID, e.OrgID)
-		if err != nil {
-			return err
-		}
-		e.OrgID = merged
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
 	}
+	merged, err := EnsureSameOrg(orgID, e.OrgID)
+	if err != nil {
+		return err
+	}
+	e.OrgID = merged
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "org_id"}, {Name: "user_id"}, {Name: "year"}, {Name: "quarter"}},
 		DoUpdates: clause.AssignmentColumns([]string{"entry_date", "confirmation_date", "is_eligible", "eligible_start_date", "eligible_end_date", "retroactive_source_quarter", "calc_version", "calc_reason", "updated_at"}),

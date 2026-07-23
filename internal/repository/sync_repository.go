@@ -1,8 +1,6 @@
 package repository
 
 import (
-	"strings"
-
 	"peopleops/internal/database"
 
 	"gorm.io/gorm"
@@ -10,19 +8,29 @@ import (
 )
 
 type SyncRepository struct {
-	db *gorm.DB
+	db     *gorm.DB
+	orgID  string
+	orgErr error
 }
 
 func NewSyncRepository(db *gorm.DB) *SyncRepository {
-	return &SyncRepository{db: db}
+	orgID, err := database.RequireOrganizationIDFromDB(db)
+	return &SyncRepository{db: db, orgID: orgID, orgErr: err}
 }
 
-func requireSyncOrgID(orgID string) string {
-	orgID = strings.TrimSpace(orgID)
-	if orgID == "" {
-		return "default"
+func NewSyncRepositoryWithOrgID(db *gorm.DB, orgID string) *SyncRepository {
+	normalized, err := RequireOrgID(orgID)
+	return &SyncRepository{db: db, orgID: normalized, orgErr: err}
+}
+
+func (r *SyncRepository) requireOrgID() (string, error) {
+	if r == nil || r.db == nil {
+		return "", ErrMissingOrgID
 	}
-	return orgID
+	if r.orgErr != nil {
+		return "", r.orgErr
+	}
+	return RequireOrgID(r.orgID)
 }
 
 func (r *SyncRepository) DB() *gorm.DB {
@@ -31,7 +39,18 @@ func (r *SyncRepository) DB() *gorm.DB {
 
 // Upsert 更新或创建同步状态
 func (r *SyncRepository) Upsert(status *database.SyncStatus) error {
-	status.OrgID = requireSyncOrgID(status.OrgID)
+	if status == nil {
+		return gorm.ErrInvalidData
+	}
+	orgID, err := r.requireOrgID()
+	if err != nil {
+		return err
+	}
+	merged, err := EnsureSameOrg(orgID, status.OrgID)
+	if err != nil {
+		return err
+	}
+	status.OrgID = merged
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "org_id"}, {Name: "type"}},
 		DoUpdates: clause.AssignmentColumns([]string{"last_sync_time", "status", "message", "updated_at"}),
@@ -39,8 +58,16 @@ func (r *SyncRepository) Upsert(status *database.SyncStatus) error {
 }
 
 func (r *SyncRepository) FindByOrgAndType(orgID, syncType string) (*database.SyncStatus, error) {
+	bound, err := r.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
+	// Prefer bound org; if caller passes an explicit org it must match.
+	if orgID = normalizeOrgID(orgID); orgID != "" && orgID != bound {
+		return nil, ErrOrgMismatch
+	}
 	var status database.SyncStatus
-	err := r.db.Where("org_id = ? AND type = ?", requireSyncOrgID(orgID), syncType).First(&status).Error
+	err = r.db.Where("org_id = ? AND type = ?", bound, syncType).First(&status).Error
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +75,14 @@ func (r *SyncRepository) FindByOrgAndType(orgID, syncType string) (*database.Syn
 }
 
 func (r *SyncRepository) FindAllByOrg(orgID string) ([]database.SyncStatus, error) {
+	bound, err := r.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
+	if orgID = normalizeOrgID(orgID); orgID != "" && orgID != bound {
+		return nil, ErrOrgMismatch
+	}
 	var statuses []database.SyncStatus
-	err := r.db.Where("org_id = ?", requireSyncOrgID(orgID)).Find(&statuses).Error
+	err = r.db.Where("org_id = ?", bound).Find(&statuses).Error
 	return statuses, err
 }

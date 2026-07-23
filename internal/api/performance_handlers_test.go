@@ -3,7 +3,6 @@ package api
 import (
 	"database/sql/driver"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,22 +41,32 @@ func ptrString(s string) *string {
 }
 
 func performanceHandlerAdminContext(t *testing.T) (*gin.Context, *httptest.ResponseRecorder) {
+	return performanceHandlerContextAs(t, performanceHandlerTestOrgID, "admin")
+}
+
+const performanceHandlerTestOrgID = "test-org"
+
+// performanceHandlerContextAs 构造统一的绩效 handler 测试上下文：
+// orgID + userID + tenant/requestmeta Request Context + requestDB。
+// 与 JWTAuth/TenantContext 中间件写入的键保持一致，避免测试绕过组织上下文。
+func performanceHandlerContextAs(t *testing.T, orgID, userID string) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Set("userID", "admin")
-	c.Set("orgID", database.DefaultOrganizationID)
-	c.Request = performanceTestRequest(http.MethodGet, "/", nil)
-	return c, recorder
-}
-
-func performanceTestRequest(method, target string, body io.Reader) *http.Request {
-	req := httptest.NewRequest(method, target, body)
-	info := &requestmeta.RequestInfo{OrgID: database.DefaultOrganizationID}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	info := &requestmeta.RequestInfo{OrgID: orgID}
 	ctx := requestmeta.WithRequestInfo(req.Context(), info)
-	ctx = requestmeta.WithTenant(ctx, database.DefaultOrganizationID)
-	return req.WithContext(ctx)
+	ctx = requestmeta.WithTenant(ctx, orgID)
+	c.Request = req.WithContext(ctx)
+	if orgID != "" {
+		c.Set("orgID", orgID)
+	}
+	c.Set("userID", userID)
+	if database.DB != nil {
+		c.Set("requestDB", database.DB.WithContext(ctx))
+	}
+	return c, recorder
 }
 
 // ===================== Input Validation Tests (no permission check needed for admin) =====================
@@ -991,7 +1000,7 @@ func performanceHandlerTestDBWith(t *testing.T, queries ...apiImportQueryRespons
 func performPerformanceHandlerRequest(t *testing.T, method, path, body string, params gin.Params, handler func(*gin.Context)) *httptest.ResponseRecorder {
 	t.Helper()
 	c, recorder := performanceHandlerAdminContext(t)
-	c.Request = performanceTestRequest(method, path, strings.NewReader(body))
+	c.Request = httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
 		c.Request.Header.Set("Content-Type", "application/json")
 	}
@@ -1666,7 +1675,7 @@ func TestGetPreviousParticipantResultRejectsHiddenPreviousResultForEmployee(t *t
 
 	c, recorder := performanceHandlerAdminContext(t)
 	c.Set("userID", "user-1")
-	c.Request = performanceTestRequest(http.MethodGet, "/api/v1/performance/participants/2/previous-result", nil)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/performance/participants/2/previous-result", nil)
 	c.Params = gin.Params{{Key: "participant_id", Value: "2"}}
 
 	GetPreviousParticipantResult(c)

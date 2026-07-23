@@ -1,8 +1,10 @@
 ---
 purpose: 大小周排班模块业务规则说明
-last_updated: 2026-04-30
+last_updated: 2026-07-20
 source_of_truth:
   - internal/api/handlers.go（排班相关 handler）
+  - internal/service/week_schedule_service.go
+  - internal/dingtalk/dingtalk.go（GetScheduleListBatchByDayForOrg / ResolveAdminUserID / UploadImageMediaForOrg / SendCorpImageToUserForOrg）
   - internal/database/models.go（WeekScheduleRule、WeekScheduleOverride、WeekScheduleSyncLog、StatutoryHoliday 模型）
   - frontend/src/pages/WeekSchedule.tsx（排班管理页面）
 update_when:
@@ -10,13 +12,15 @@ update_when:
   - 修改排班同步逻辑时
   - 修改节假日处理逻辑时
   - 修改手动覆盖逻辑时
+  - 修改多企业排班读取/写入隔离时
+  - 修改作息表个人推送（图片消息）时
 ---
 
 # 大小周排班模块
 
 ## 模块定位
 
-管理大小周排班规则、法定节假日、钉钉班次配置、手动覆盖、双向同步到钉钉考勤组。
+管理大小周排班规则、法定节假日、钉钉班次配置、手动覆盖、双向同步到钉钉考勤组；以及月作息时间表个人推送（文字+图片，不写考勤排班）。
 
 ---
 
@@ -258,7 +262,10 @@ Body：
 ### 同步
 
 #### POST /api/v1/week-schedule/sync/to-dingtalk
-同步到钉钉
+**旧接口**：按日期范围把大小周排班写入钉钉考勤组。
+
+- 页面「作息表推送」按钮**不再调用**本接口。
+- 仅保留 API，供运维/脚本或其他入口使用。
 
 Body：
 ```json
@@ -266,6 +273,13 @@ Body：
     "weeks": 4
 }
 ```
+
+#### POST /api/v1/week-schedule/push/personal
+权限：`attendance_manage`
+
+月作息表个人推送（multipart）：`image`（PNG/JPEG）、`user_ids`（JSON 数组/逗号/重复字段）、`title`、`content`。
+
+行为：按 JWT `org_id` 查用户 → 上传一次图片得 `media_id` → 逐人发送文字 + 图片消息（`msgtype: image`）；优先 `DingTalkUserID`，回退 `UserID`；单人失败不阻断；返回 success/partial/failed 与 `recipients[]`。**不写考勤排班**。
 
 #### POST /api/v1/week-schedule/sync/from-dingtalk
 从钉钉同步
@@ -356,15 +370,41 @@ Body：
 
 ### 同步到钉钉流程
 
-1. **计算每个用户的排班**
-   - 按日期范围计算每天的班次
+1. **解析当前 org 与企业 admin**
+   - `requireOrgIDFromDB` fail-closed
+   - `dingtalk.ResolveAdminUserID(orgID)`；非 default 禁止回退 `DINGTALK_ADMIN_USER_ID`
+2. **计算每个用户的排班**
+   - 按日期范围计算每天的班次（业务规则不变）
+3. **调用钉钉 API（按 org）**
+   - `GetShiftListForOrg` / `GetAttendanceGroupsForOrg` / `BatchSetAttendanceScheduleForOrg`
+   - access_token 与 `op_user_id` 均取自当前企业配置
+4. **记录同步日志**
+   - 写入 `WeekScheduleSyncLog`（仅同步过程开始后；缺配置时不得落库）
 
-2. **调用钉钉 API**
-   - 批量设置用户排班
-   - 钉钉 API：`/topapi/attendance/schedule/listbyparam`
+### 周五自动提醒（可选）
 
-3. **记录同步日志**
-   - 写入 `WeekScheduleSyncLog`
+默认关闭。开启后按本地时区（建议 TZ=Asia/Shanghai）在每周五指定时刻向配置名单发送文字提醒：
+
+- 内容：本周大/小周 + 明天（周六）是否上班
+- 不写考勤排班；不上传图片
+- 环境变量：
+  - WEEK_SCHEDULE_FRIDAY_REMINDER_ENABLED=true
+  - WEEK_SCHEDULE_FRIDAY_REMINDER_HOUR（默认 17）
+  - WEEK_SCHEDULE_FRIDAY_REMINDER_MINUTE（默认 0）
+  - WEEK_SCHEDULE_FRIDAY_REMINDER_USER_IDS：本地 users.user_id 逗号分隔；为空则跳过发送
+
+实现：internal/service/week_schedule_jobs.go + SendPersonalTextNotice。
+
+### 从钉钉回读
+
+- 一律 `GetScheduleListBatchByDayForOrg(orgID, userIDs, workDate)`（含 chunked 辅助函数）
+- 禁止非 default 企业调用默认版 `GetScheduleListBatchByDay` / `GetAccessToken`
+
+### 多企业隔离要点
+
+- 企业 A/B 使用各自 access token 与 admin user id
+- 企业 B 大小周同步不得打到 default 企业接口
+- 缺企业配置时不产生规则/同步日志写库
 
 ---
 
@@ -386,7 +426,8 @@ Body：
 - 法定节假日管理
 - 周历查看
 - 手动覆盖
-- 同步到钉钉
+- 作息表推送（月历 PNG + 文字到选定员工的个人钉钉；默认不预选）
+- 旧「按日期写入考勤排班」接口仍保留为 `/sync/to-dingtalk`，页面主按钮不再调用
 
 ---
 
@@ -406,9 +447,16 @@ Body：
 - 检查是否有手动覆盖
 
 ### 同步到钉钉失败
-- 检查钉钉应用权限（需要"考勤排班权限"）
-- 检查 `DINGTALK_ATTENDANCE_GROUP_ID` 是否正确
-- 检查钉钉班次是否存在
+- 检查当前企业 `organizations.ding_talk_app_key/secret` 与 `ding_talk_admin_user_id` 是否齐全
+- 非 default 企业报 `missing dingtalk admin user id for organization ...` 时，禁止靠全局 `DINGTALK_ADMIN_USER_ID` 兜底
+- 检查钉钉应用权限（需要“考勤排班权限”）
+- 检查 `DINGTALK_ATTENDANCE_GROUP_ID` / 企业内考勤组是否正确
+- 检查钉钉班次是否存在于**当前企业**
+
+### 作息表推送失败
+- 检查钉钉应用是否具备企业内部消息与媒体上传权限
+- 检查收件人 dingtalk_user_id/user_id 是否可通知
+- 单人失败不影响其他人，查看响应 recipients[]
 
 ### 法定节假日不生效
 - 检查 `StatutoryHoliday` 表是否有数据

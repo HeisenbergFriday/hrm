@@ -44,3 +44,40 @@ func TestOrgServiceBaseEmployeeQueryScopesJoinedProfilesByOrg(t *testing.T) {
 		t.Fatalf("vars = %#v, want muteng as join org var", stmt.Vars)
 	}
 }
+
+func TestOrgServiceBuildEmployeeListQuerySelfScopesOrgStatusAndSearch(t *testing.T) {
+	db := newDryRunServiceDB(t, "org-a")
+	svc := NewOrgServiceWithOrgID(db, "org-a")
+	scope := &OrgDataScope{Mode: "self", UserIDs: []string{" shared-user "}}
+
+	query, err := svc.buildEmployeeListQuery(scope, OrgEmployeeFilters{
+		Status: " active ",
+		Search: " Alice ",
+	})
+	if err != nil {
+		t.Fatalf("buildEmployeeListQuery() error = %v", err)
+	}
+
+	var users []database.User
+	stmt := query.Select("users.*").Find(&users).Statement
+	sql := strings.ToLower(stmt.SQL.String())
+	for _, fragment := range []string{"org_id", "user_id", "status", " like "} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("sql = %s, want fragment %q", stmt.SQL.String(), fragment)
+		}
+	}
+
+	wants := []any{"org-a", "shared-user", "active", "%Alice%"}
+	for _, want := range wants {
+		found := false
+		for _, got := range stmt.Vars {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("vars = %#v, want %q", stmt.Vars, want)
+		}
+	}
+}

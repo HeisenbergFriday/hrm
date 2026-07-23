@@ -2,6 +2,7 @@ package repository
 
 import (
 	"peopleops/internal/database"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -20,11 +21,8 @@ func NewOvertimeMatchResultRepositoryWithOrgID(db *gorm.DB, orgID string) *Overt
 }
 
 func (r *OvertimeMatchResultRepository) scoped() *gorm.DB {
-	tx := r.db
-	if r.orgID != "" {
-		tx = tx.Where("org_id = ?", r.orgID)
-	}
-	return tx
+	// Fail-closed: empty org must never return an unfiltered db session.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *OvertimeMatchResultRepository) FindByApprovalID(approvalID uint) (*database.OvertimeMatchResult, error) {
@@ -69,13 +67,15 @@ func (r *OvertimeMatchResultRepository) FindByDateRange(startDate, endDate strin
 }
 
 func (r *OvertimeMatchResultRepository) Create(result *database.OvertimeMatchResult) error {
-	if r.orgID != "" {
-		merged, err := EnsureSameOrg(r.orgID, result.OrgID)
-		if err != nil {
-			return err
-		}
-		result.OrgID = merged
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
 	}
+	merged, err := EnsureSameOrg(orgID, result.OrgID)
+	if err != nil {
+		return err
+	}
+	result.OrgID = merged
 	return r.db.Create(result).Error
 }
 
