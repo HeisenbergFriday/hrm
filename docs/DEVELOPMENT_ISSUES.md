@@ -1,6 +1,6 @@
 ---
 purpose: 开发问题复盘日志——沉淀已定位根因且有复用价值的缺陷与防复发约束，供开发前查阅、开发后更新
-last_updated: 2026-07-21
+last_updated: 2026-07-23
 source_of_truth:
   - 本文件（问题条目与防复发索引）
   - AGENTS.md（开发前必读 / 开发后必记流程）
@@ -55,6 +55,7 @@ update_when:
 |---|---|---|
 | `deploy` `test-server` | 测试服隔离目录/端口/Compose 项目名；完整变量见 `deploy/peopleops.test.env.example`，文档不复制密钥 | `deploy/TEST_SERVER_DEPLOY.md` |
 | `deploy` `upload-and-restart` | 上传失败续传用独立脚本，禁止改 `build-and-deploy.ps1` 行为 | cerebrum Decision Log |
+| `git` `merge` `release` | 跨分支冲突必须按语义单元核对生产代码、配套测试和 `go.mod/go.sum`；禁止按文件整侧选取后直接推送，至少执行编译、全量测试与双远端祖先检查 | [2026-07-23 双远端 master 合并遗漏依赖与安全配套代码](#2026-07-23-p1-双远端-master-合并遗漏依赖与安全配套代码) |
 
 ---
 
@@ -126,6 +127,21 @@ update_when:
 ---
 
 ## 问题条目
+
+### 2026-07-23 P1 双远端 master 合并遗漏依赖与安全配套代码
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-23 |
+| 级别 | P1 |
+| 模块/标签 | `git` `merge` `release` `go-mod` `security` `multi-tenant` `test` |
+| 范围 | 全栈 / 合并 / 发布 |
+| 现象 | 将功能分支合入 GitHub `master` 时出现多文件冲突；初次按文件选择版本后，Go 构建缺少钉钉 Stream SDK 与 SQLite 测试依赖，同时已自动合入的安全测试找不到配套的路由白名单、管理员配置透传和迁移索引常量。若未执行完整验证，代码可能在推送后才暴露编译失败或 fail-open 回退。 |
+| 根因 | 冲突解决以“文件选边”为单位，而实际变更跨越生产代码、测试和依赖清单：选择远端 `go.mod` 丢失当前分支依赖；选择当前生产文件又遗漏远端安全提交的配套符号。Git 自动合并测试文件不代表对应生产实现已经完整合入。 |
+| 修复 | 合并依赖集合并保留 `golang.org/x/text v0.39.0`；恢复钉钉 `AppConfig.AdminUserID` 透传、空组织 fail-closed、按组织排班查询封装、路由只读菜单白名单和迁移索引常量；继续保留统一复合索引迁移以及 `DingTalkEventLog` AutoMigrate。 |
+| 验证 | `go test ./cmd/... ./internal/... ./tools/...` 通过；`go vet` 通过；`golangci-lint` 0 issues；前端 lint、18 files / 280 tests、生产构建通过；Playwright 45 tests（三浏览器）通过。 |
+| 防复发 | 1. 冲突按功能语义单元审查，生产代码、测试、`go.mod/go.sum` 必须联动。<br>2. 选择整侧版本后必须对照另一侧提交列出丢失符号，禁止仅凭“无冲突标记”判定完成。<br>3. 先跑冲突包的定向编译/测试，再跑全量 lint、单测、构建和关键 E2E。<br>4. 推送两个 `master` 前重新 fetch，并确认两个远端当前头都是集成提交的祖先；禁止强推。 |
+| 状态 | fixed |
 
 ### 2026-07-21 P1/P2 UI 交互安全执行序收口（假成功/写门闩/导出/会话）
 

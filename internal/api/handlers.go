@@ -5479,6 +5479,11 @@ func GetDingTalkShifts(c *gin.Context) {
 		Name string `json:"name"`
 	}
 
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+
 	catalogs, catalogErr := service.NewShiftConfigService(middleware.RequestDB(c)).ListShiftCatalogs()
 	if catalogErr == nil && len(catalogs) > 0 {
 		items := make([]ShiftItem, 0, len(catalogs))
@@ -5496,7 +5501,6 @@ func GetDingTalkShifts(c *gin.Context) {
 		return
 	}
 
-	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
 	shifts, err := dingtalk.GetShiftListForOrg(orgID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{

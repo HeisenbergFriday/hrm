@@ -155,7 +155,7 @@ describe('Attendance daily result view', () => {
     await user.click(await screen.findByText('测试员工'))
     await waitFor(() => {
       expect(getDailyResults).toHaveBeenLastCalledWith(
-        expect.objectContaining({ user_id: 'xiaotie:zhengfengyi' }),
+		expect.objectContaining({ user_id: 'xiaotie:test-employee' }),
       )
     })
   })

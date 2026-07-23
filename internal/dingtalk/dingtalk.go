@@ -38,6 +38,7 @@ type AppConfig struct {
 	AppKey      string `json:"app_key"`
 	AppSecret   string `json:"app_secret"`
 	AgentID     string `json:"agent_id"`
+	AdminUserID string `json:"-"`
 	AppHomeURL  string `json:"app_home_url"`
 	RedirectURI string `json:"redirect_uri"`
 	Status      string `json:"status"`
@@ -221,6 +222,7 @@ func configFromAppConfig(cfg AppConfig) Config {
 		AppSecret:   cfg.AppSecret,
 		CorpID:      cfg.CorpID,
 		AgentID:     cfg.AgentID,
+		AdminUserID: cfg.AdminUserID,
 		AppHomeURL:  cfg.AppHomeURL,
 		RedirectURI: cfg.RedirectURI,
 	}.normalized()
@@ -234,6 +236,7 @@ func appConfigFromConfig(cfg Config) AppConfig {
 		AppKey:      cfg.AppKey,
 		AppSecret:   cfg.AppSecret,
 		AgentID:     cfg.AgentID,
+		AdminUserID: cfg.AdminUserID,
 		AppHomeURL:  cfg.AppHomeURL,
 		RedirectURI: cfg.RedirectURI,
 		Status:      "active",
@@ -370,6 +373,9 @@ func ResolveAdminUserID(orgID string) (string, error) {
 
 // ResolveAdminUserIDFromConfig returns op_user_id from a resolved Config or a clear error.
 func ResolveAdminUserIDFromConfig(cfg Config) (string, error) {
+	if strings.TrimSpace(cfg.OrgID) == "" {
+		return "", fmt.Errorf("organization is required for dingtalk admin resolution")
+	}
 	cfg = cfg.normalized()
 	if cfg.AdminUserID != "" {
 		return cfg.AdminUserID, nil
@@ -4198,64 +4204,19 @@ func GetUserScheduleList(userID string, workDateFrom, workDateTo string) ([]map[
 
 // GetScheduleListBatchByDay 鎵归噺鑾峰彇澶氫釜鐢ㄦ埛鏌愬ぉ鐨勬帓鐝?// 浣跨敤 /topapi/attendance/schedule/listbyusers 鎺ュ彛锛屾敮鎸佷竴娆℃煡璇㈠涓敤鎴?
 func GetScheduleListBatchByDay(userIDs []string, workDate string) ([]map[string]interface{}, error) {
-	accessToken, err := GetAccessToken()
-	if err != nil {
-		return nil, err
-	}
-
-	t, err := time.Parse("2006-01-02", workDate)
-	if err != nil {
-		return nil, fmt.Errorf("鏃ユ湡鏍煎紡閿欒: %w", err)
-	}
-	dayMs := t.UnixMilli()
-
-	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
-	if opUserID == "" {
-		return nil, fmt.Errorf("鏈厤缃?DINGTALK_ADMIN_USER_ID 鐜鍙橀噺")
-	}
-
-	body := map[string]interface{}{
-		"op_user_id":     opUserID,
-		"userids":        strings.Join(userIDs, ","),
-		"from_date_time": dayMs,
-		"to_date_time":   dayMs,
-	}
-
-	resp, err := postJSONOAPI(
-		fmt.Sprintf("https://oapi.dingtalk.com/topapi/attendance/schedule/listbyusers?access_token=%s", accessToken),
-		body,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("鎵归噺鑾峰彇 %s 鎺掔彮澶辫触: %w", workDate, err)
-	}
-
-	errcode, _ := resp["errcode"].(float64)
-	if errcode != 0 {
-		errmsg, _ := resp["errmsg"].(string)
-		return nil, fmt.Errorf("鎵归噺鑾峰彇 %s 鎺掔彮澶辫触: %s", workDate, errmsg)
-	}
-
-	result, ok := resp["result"].([]interface{})
-	if !ok {
-		return nil, nil
-	}
-
-	var schedules []map[string]interface{}
-	for _, s := range result {
-		if sm, ok := s.(map[string]interface{}); ok {
-			schedules = append(schedules, sm)
-		}
-	}
-	return schedules, nil
+	return GetScheduleListBatchByDayForOrg(database.DefaultOrganizationID, userIDs, workDate)
 }
 
 // GetScheduleListBatchByDayForOrg returns schedule rows for users on workDate using org credentials.
 func GetScheduleListBatchByDayForOrg(orgID string, userIDs []string, workDate string) ([]map[string]interface{}, error) {
-	orgID = database.NormalizeOrganizationID(orgID)
 	cfg, err := ConfigForOrgID(orgID)
 	if err != nil {
 		return nil, err
 	}
+	return getScheduleListBatchByDayWithConfig(cfg, userIDs, workDate)
+}
+
+func getScheduleListBatchByDayWithConfig(cfg Config, userIDs []string, workDate string) ([]map[string]interface{}, error) {
 	opUserID, err := ResolveAdminUserIDFromConfig(cfg)
 	if err != nil {
 		return nil, err

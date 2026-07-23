@@ -262,8 +262,13 @@ func apiPerformanceRouterPermissionsResponse(permissionCodes []string) apiImport
 	return apiImportQueryResponse{
 		match: func(query string, _ []driver.NamedValue) bool {
 			query = strings.ToLower(query)
-			return (strings.Contains(query, "from `permissions`") || strings.Contains(query, "from permissions")) &&
-				strings.Contains(query, "role_permissions")
+			if !strings.Contains(query, "select distinct `permissions`.") || !strings.Contains(query, "role_permissions") {
+				return false
+			}
+			if strings.Contains(query, "user_roles") {
+				return strings.Contains(query, "user_roles.org_id") && strings.Contains(query, "roles.org_id")
+			}
+			return strings.Contains(query, "role_permissions.role_id in")
 		},
 		columns: []string{"id", "name", "code", "description"},
 		rows:    rows,

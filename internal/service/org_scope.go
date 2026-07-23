@@ -1,9 +1,7 @@
 package service
 
 import (
-	"fmt"
 	"peopleops/internal/database"
-	"peopleops/internal/requestmeta"
 	"strings"
 
 	"gorm.io/gorm"
@@ -23,22 +21,7 @@ func orgIDFromDB(db *gorm.DB) string {
 // the DB session has no explicit org context. Unlike orgIDFromDB, it never
 // falls back to "default" for an empty context.
 func requireOrgIDFromDB(db *gorm.DB) (string, error) {
-	if db == nil || db.Statement == nil {
-		return "", fmt.Errorf("missing organization context")
-	}
-	ctx := db.Statement.Context
-	if info := requestmeta.FromContext(ctx); info != nil {
-		if orgID := strings.TrimSpace(info.OrgID); orgID != "" {
-			return database.NormalizeOrganizationID(orgID), nil
-		}
-		return "", fmt.Errorf("missing organization context")
-	}
-	if tenantID, err := requestmeta.TenantID(ctx); err == nil {
-		if orgID := strings.TrimSpace(tenantID); orgID != "" {
-			return database.NormalizeOrganizationID(orgID), nil
-		}
-	}
-	return "", fmt.Errorf("missing organization context")
+	return database.RequireOrganizationIDFromDB(db)
 }
 
 // resolveServiceOrgID prefers an explicit service-bound org, then the DB

@@ -8,6 +8,11 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	performanceReminderLegacyIndexName = "idx_perf_reminder_round"
+	performanceReminderOrgIndexName    = "idx_perf_reminder_org_round"
+)
+
 // OrgCompositeUniqueSpec describes one multi-tenant composite UNIQUE index that
 // must include org_id as the leading column. Phase 4 unifies phases 1-3 under a
 // single injectable, idempotent, fail-closed migration path.
@@ -275,9 +280,9 @@ func phase4SupplementalOrgCompositeUniqueSpecs() []OrgCompositeUniqueSpec {
 			AllowDefaultOrgBackfill: true, SkipIfMissingTable: true,
 		},
 		{
-			Table: "performance_reminder_logs", NewIndex: "idx_perf_reminder_org_round",
+			Table: "performance_reminder_logs", NewIndex: performanceReminderOrgIndexName,
 			Columns:                 []string{"org_id", "activity_id", "participant_id", "stage", "reminder_key", "reminder_date"},
-			OldIndexes:              []string{"idx_perf_reminder_round"},
+			OldIndexes:              []string{performanceReminderLegacyIndexName},
 			AllowDefaultOrgBackfill: true, SkipIfMissingTable: true,
 		},
 		{

@@ -427,6 +427,7 @@ func SyncAndMatch(c *gin.Context) {
 		userNameMap[u.UserID] = u.Name
 	}
 	approvalCount := 0
+	approvalRepo := repository.NewApprovalRepositoryWithOrgID(db, orgID)
 	for _, inst := range instances {
 		createTime, _ := time.Parse("2006-01-02 15:04:05", inst.CreateTime)
 		finishTime, _ := time.Parse("2006-01-02 15:04:05", inst.FinishTime)
@@ -444,6 +445,7 @@ func SyncAndMatch(c *gin.Context) {
 			applicantName = name
 		}
 		approval := &database.Approval{
+			OrgID:         orgID,
 			ProcessID:     inst.ProcessInstanceID,
 			Title:         inst.Title,
 			ApplicantID:   inst.OriginatorUserID,
@@ -454,16 +456,9 @@ func SyncAndMatch(c *gin.Context) {
 			Content:       content,
 			Extension:     map[string]interface{}{"result": inst.Result, "process_code": processCode},
 		}
-		var existing database.Approval
-		if err := db.Where("org_id = ? AND process_id = ?", orgID, inst.ProcessInstanceID).First(&existing).Error; err != nil {
-			approval.OrgID = orgID
-			db.Create(approval)
-		} else {
-			existing.Status = inst.Status
-			existing.FinishTime = finishTime
-			existing.Content = content
-			existing.ApplicantName = applicantName // 更新姓名
-			db.Save(&existing)
+		if err := approvalRepo.UpsertByOrgProcessID(approval); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"step": "save_approvals", "error": "保存加班审批失败: " + err.Error()})
+			return
 		}
 		approvalCount++
 	}

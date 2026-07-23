@@ -13,6 +13,30 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func orgReadMenuKeys() []string {
+	return []string{
+		"menu:organization-dashboard",
+		"menu:department-tree",
+		"menu:employees",
+		"menu:employee-profile",
+		"menu:employee-flow",
+		"menu:talent-analysis",
+		"menu:attendance",
+		"menu:attendance-stats",
+		"menu:attendance-export",
+		"menu:leave-overtime",
+		"menu:performance-overview",
+	}
+}
+
+func userListReadMenuKeys() []string {
+	return append(orgReadMenuKeys(), "menu:permission", "menu:week-schedule")
+}
+
+func userDetailReadMenuKeys() []string {
+	return append(orgReadMenuKeys(), "menu:permission")
+}
+
 func SetupRouter() *gin.Engine {
 	router := gin.New()
 	router.Use(querySafeGinLogger(), gin.Recovery())
@@ -56,19 +80,7 @@ func SetupRouter() *gin.Engine {
 		authRequired := v1.Group("/")
 		authRequired.Use(middleware.JWTAuth(), middleware.TenantContext())
 		{
-			orgReadMenus := []string{
-				"menu:organization-dashboard",
-				"menu:department-tree",
-				"menu:employees",
-				"menu:employee-profile",
-				"menu:employee-flow",
-				"menu:talent-analysis",
-				"menu:attendance",
-				"menu:attendance-stats",
-				"menu:attendance-export",
-				"menu:leave-overtime",
-				"menu:performance-overview",
-			}
+			orgReadMenus := orgReadMenuKeys()
 			attendanceReadMenus := []string{
 				"menu:attendance",
 				"menu:attendance-stats",
@@ -85,11 +97,11 @@ func SetupRouter() *gin.Engine {
 			{
 				users.GET("", middleware.RequirePermissionOrMenu(
 					[]string{"user_manage", "permission_manage", "attendance_manage", "org:read"},
-					append(append([]string{}, orgReadMenus...), "menu:permission"),
+					userListReadMenuKeys(),
 				), GetUsers)
 				users.GET("/:id", middleware.RequirePermissionOrMenu(
 					[]string{"user_manage", "permission_manage", "org:read"},
-					append(append([]string{}, orgReadMenus...), "menu:permission"),
+					userDetailReadMenuKeys(),
 				), GetUser)
 				users.PUT("/:id", middleware.RequirePermission("user_manage"), UpdateUser)
 			}
