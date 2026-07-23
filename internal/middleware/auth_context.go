@@ -29,6 +29,11 @@ type AuthContext struct {
 	dataScopeLoadErr error
 }
 
+// SetAuthContextForTest injects a prebuilt AuthContext (test helper for handler tests).
+func SetAuthContextForTest(c *gin.Context, authCtx *AuthContext) {
+	c.Set(authContextKey, authCtx)
+}
+
 func GetAuthContext(c *gin.Context) (*AuthContext, error) {
 	if existing, ok := c.Get(authContextKey); ok {
 		if authCtx, ok := existing.(*AuthContext); ok {

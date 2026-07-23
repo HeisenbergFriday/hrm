@@ -71,6 +71,10 @@ func (s *UserService) GetUsers(page, pageSize int) ([]database.User, int64, erro
 	return s.userRepo.FindAll(page, pageSize)
 }
 
+func (s *UserService) SearchUsers(page, pageSize int, search string) ([]database.User, int64, error) {
+	return s.userRepo.FindAllFiltered(page, pageSize, search)
+}
+
 func (s *UserService) GetUsersByDepartment(departmentID string, page, pageSize int) ([]database.User, int64, error) {
 	return s.userRepo.FindByDepartment(departmentID, page, pageSize)
 }

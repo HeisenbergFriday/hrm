@@ -29,6 +29,11 @@ import { useNavigate, useParams } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { employeeAPI, orgAPI, userAPI } from '../services/api'
 import { hasPermission } from '../utils/permission'
+import {
+  canSyncOrgData,
+  confirmOrgSync,
+  missingOrgSyncPermissionTip,
+} from '../utils/orgSyncAction'
 
 const { Title, Text } = Typography
 
@@ -163,6 +168,7 @@ const EmployeeDetail: React.FC = () => {
   const [form] = Form.useForm()
   const [managerForm] = Form.useForm()
   const canMaintainManager = hasPermission('user_manage')
+  const canSync = canSyncOrgData()
 
   const scopeLabel = useMemo(() => {
     if (!detail?.scope) {
@@ -201,6 +207,7 @@ const EmployeeDetail: React.FC = () => {
   }, [id])
 
   const openEdit = () => {
+    if (!canMaintainManager) return
     const profile = detail?.profile
     form.setFieldsValue({
       gender: profile?.gender || undefined,
@@ -272,17 +279,18 @@ const EmployeeDetail: React.FC = () => {
     }
   }
 
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      await orgAPI.syncOrg()
-      message.success('组织数据同步成功')
-      await loadDetail(false)
-    } catch (error) {
-      message.error('组织数据同步失败')
-    } finally {
-      setSyncing(false)
-    }
+  const handleSync = () => {
+    if (!canSync) return
+    confirmOrgSync({
+      onSuccess: async () => {
+        setSyncing(true)
+        try {
+          await loadDetail(false)
+        } finally {
+          setSyncing(false)
+        }
+      },
+    })
   }
 
   const loadManagerUsers = async () => {
@@ -393,12 +401,16 @@ const EmployeeDetail: React.FC = () => {
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/employees')}>
             返回花名册
           </Button>
-          <Button icon={<EditOutlined />} onClick={openEdit}>
-            编辑档案
-          </Button>
-          <Button type="primary" icon={<SyncOutlined />} onClick={() => void handleSync()} loading={syncing}>
-            同步组织数据
-          </Button>
+          <Tooltip title={canMaintainManager ? undefined : '你缺少 user_manage 权限，需要联系管理员添加'}>
+            <Button icon={<EditOutlined />} onClick={openEdit} disabled={!canMaintainManager}>
+              编辑档案
+            </Button>
+          </Tooltip>
+          <Tooltip title={canSync ? undefined : missingOrgSyncPermissionTip}>
+            <Button type="primary" icon={<SyncOutlined />} onClick={handleSync} loading={syncing} disabled={!canSync}>
+              同步组织数据
+            </Button>
+          </Tooltip>
         </Space>
       }
     >

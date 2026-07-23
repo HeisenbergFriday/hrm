@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Avatar, Button, Col, Empty, List, Row, Space, Spin, Statistic, Tabs, Tree, Typography, message } from 'antd'
+import { Alert, Avatar, Button, Col, Empty, List, Row, Space, Spin, Statistic, Tabs, Tree, Tooltip, Typography, message } from 'antd'
 import { ApartmentOutlined, ReloadOutlined, SyncOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -8,6 +8,11 @@ import type { DataNode } from 'antd/es/tree'
 import { useNavigate } from 'react-router-dom'
 import { orgAPI } from '../services/api'
 import { formatDateTime } from '../utils/format'
+import {
+  canSyncOrgData,
+  confirmOrgSync,
+  missingOrgSyncPermissionTip,
+} from '../utils/orgSyncAction'
 
 const { Title, Text } = Typography
 
@@ -260,17 +265,20 @@ const DepartmentTree: React.FC = () => {
     return result
   }, [tree])
 
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      await orgAPI.syncOrg()
-      message.success('组织数据同步成功')
-      await loadTree(false)
-    } catch (error) {
-      message.error('组织数据同步失败')
-    } finally {
-      setSyncing(false)
-    }
+  const canSync = canSyncOrgData()
+
+  const handleSync = () => {
+    if (!canSync) return
+    confirmOrgSync({
+      onSuccess: async () => {
+        setSyncing(true)
+        try {
+          await loadTree(false)
+        } finally {
+          setSyncing(false)
+        }
+      },
+    })
   }
 
   const employeeStatusTag = (value?: string) => (
@@ -318,9 +326,11 @@ const DepartmentTree: React.FC = () => {
           <Button icon={<ReloadOutlined />} onClick={() => void loadTree()} loading={loading}>
             刷新
           </Button>
-          <Button type="primary" icon={<SyncOutlined />} onClick={() => void handleSync()} loading={syncing}>
-            同步组织数据
-          </Button>
+          <Tooltip title={canSync ? undefined : missingOrgSyncPermissionTip}>
+            <Button type="primary" icon={<SyncOutlined />} onClick={handleSync} loading={syncing} disabled={!canSync}>
+              同步组织数据
+            </Button>
+          </Tooltip>
         </div>
       }
     >

@@ -451,7 +451,7 @@ func TestSendManagerEvalReminders_FiltersOnlySelfSubmitted(t *testing.T) {
 		},
 		columns: performanceParticipantStubColumns(),
 		rows: [][]driver.Value{
-			{int64(1), "activity-1", "user-1", "User 1", "dept-1", "Dept", "self_submitted", 80.0, "summary", 0.0, "", false, nil, nil, nil},
+			{int64(1), "test-org", "activity-1", "user-1", "User 1", "dept-1", "Dept", "self_submitted", 80.0, "summary", 0.0, "", false, nil, nil, nil},
 		},
 	})
 
@@ -570,8 +570,8 @@ func TestSendSelfEvalReminders_SkipsNonNotifiableUsers(t *testing.T) {
 			match:   stubTableMatcher("performance_participants"),
 			columns: performanceParticipantStubColumns(),
 			rows: [][]driver.Value{
-				{int64(1), "activity-1", "admin", "Admin User", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
-				{int64(2), "activity-1", "system", "System User", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
+				{int64(1), "test-org", "activity-1", "admin", "Admin User", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
+				{int64(2), "test-org", "activity-1", "system", "System User", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
 			},
 		},
 	)
@@ -600,9 +600,9 @@ func TestSendSelfEvalReminders_DuplicateNonNotifiableUsersDoNotError(t *testing.
 			match:   stubTableMatcher("performance_participants"),
 			columns: performanceParticipantStubColumns(),
 			rows: [][]driver.Value{
-				{int64(1), "activity-1", "admin", "Admin", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
-				{int64(2), "activity-1", "admin", "Admin", "dept-2", "Dept2", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
-				{int64(3), "activity-1", "system", "System", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
+				{int64(1), "test-org", "activity-1", "admin", "Admin", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
+				{int64(2), "test-org", "activity-1", "admin", "Admin", "dept-2", "Dept2", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
+				{int64(3), "test-org", "activity-1", "system", "System", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
 			},
 		},
 	)
@@ -617,7 +617,7 @@ func TestSendSelfEvalReminders_DuplicateNonNotifiableUsersDoNotError(t *testing.
 
 func TestSendSelfEvalReminders_ReturnsFailedRecipientDetails(t *testing.T) {
 	originalSender := sendPerformanceActionCardToUser
-	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+	sendPerformanceActionCardToUser = func(orgID, userID, title, content, actionTitle, actionURL string) error {
 		return errors.New("dingtalk failed")
 	}
 	t.Cleanup(func() {
@@ -636,7 +636,7 @@ func TestSendSelfEvalReminders_ReturnsFailedRecipientDetails(t *testing.T) {
 			match:   stubTableMatcher("performance_participants"),
 			columns: performanceParticipantStubColumns(),
 			rows: [][]driver.Value{
-				{int64(1), "activity-1", "user-1", "张三", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
+				{int64(1), "test-org", "activity-1", "user-1", "张三", "dept-1", "Dept", "target_set", 0.0, "", 0.0, "", false, nil, nil, nil},
 			},
 		},
 	)
@@ -661,9 +661,9 @@ func TestSendManagerEvalReminders_SkipsNonNotifiableManagersAfterAggregation(t *
 		},
 		columns: append(performanceParticipantStubColumns(), "manager_id", "manager_name"),
 		rows: [][]driver.Value{
-			{int64(1), "activity-1", "user-1", "User 1", "dept-1", "Dept", "self_submitted", 80.0, "s1", 0.0, "", false, nil, nil, nil, "admin", "管理员"},
-			{int64(2), "activity-1", "user-2", "User 2", "dept-1", "Dept", "self_submitted", 85.0, "s2", 0.0, "", false, nil, nil, nil, "admin", "管理员"},
-			{int64(3), "activity-1", "user-3", "User 3", "dept-2", "Dept2", "self_submitted", 90.0, "s3", 0.0, "", false, nil, nil, nil, "system", "系统"},
+			{int64(1), "test-org", "activity-1", "user-1", "User 1", "dept-1", "Dept", "self_submitted", 80.0, "s1", 0.0, "", false, nil, nil, nil, "admin", "管理员"},
+			{int64(2), "test-org", "activity-1", "user-2", "User 2", "dept-1", "Dept", "self_submitted", 85.0, "s2", 0.0, "", false, nil, nil, nil, "admin", "管理员"},
+			{int64(3), "test-org", "activity-1", "user-3", "User 3", "dept-2", "Dept2", "self_submitted", 90.0, "s3", 0.0, "", false, nil, nil, nil, "system", "系统"},
 		},
 	})
 	result, err := svc.SendManagerEvalReminders("1")
@@ -874,7 +874,7 @@ func TestTriggerPerformanceInterviewWithManagerSkipsNonNotifiableEmployee(t *tes
 func TestTriggerPerformanceInterviewSkipsHiddenEmployeeGradeNotice(t *testing.T) {
 	originalSender := sendPerformanceActionCardToUser
 	sentTo := make([]string, 0)
-	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+	sendPerformanceActionCardToUser = func(orgID, userID, title, content, actionTitle, actionURL string) error {
 		sentTo = append(sentTo, userID)
 		if userID == "user-1" && strings.Contains(content, "绩效等级") {
 			t.Fatalf("hidden employee received grade notice: title=%q content=%q", title, content)
@@ -1018,7 +1018,7 @@ func TestSendHRConfirmRemindersNoHRPermissionRecipients(t *testing.T) {
 func TestSendHRConfirmRemindersUsesHRPermissionRecipients(t *testing.T) {
 	originalSender := sendPerformanceActionCardToUser
 	sentTo := []string{}
-	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+	sendPerformanceActionCardToUser = func(orgID, userID, title, content, actionTitle, actionURL string) error {
 		sentTo = append(sentTo, userID)
 		return nil
 	}
@@ -1119,9 +1119,9 @@ func coverageParticipantWithScoresResponse(status, managerID string, locked bool
 func coveragePerformanceActivityResponse(status, createdBy string, enableBonus bool) stubQueryResponse {
 	return stubQueryResponse{
 		match:   stubTableMatcher("performance_activities"),
-		columns: []string{"id", "name", "cycle_type", "status", "created_by", "enable_bonus_score"},
+		columns: []string{"id", "org_id", "name", "cycle_type", "status", "created_by", "enable_bonus_score"},
 		rows: [][]driver.Value{
-			{int64(1), "Q2", "quarterly", status, createdBy, enableBonus},
+			{int64(1), "test-org", "Q2", "quarterly", status, createdBy, enableBonus},
 		},
 	}
 }

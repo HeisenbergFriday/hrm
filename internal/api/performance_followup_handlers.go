@@ -87,7 +87,7 @@ func UpdatePerformanceInterview(c *gin.Context) {
 	}
 	canManage, err := hasPerformancePermission(c, "performance:appeal:manage", "performance:activity:manage")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "权限检查失败", Data: nil})
+		respondScopeError(c, err, "权限检查失败")
 		return
 	}
 	if !canManage {
@@ -243,7 +243,7 @@ func WithdrawPerformanceAppeal(c *gin.Context) {
 	}
 	canManage, err := hasPerformancePermission(c, "performance:appeal:manage", "performance:activity:manage")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "权限检查失败", Data: nil})
+		respondScopeError(c, err, "权限检查失败")
 		return
 	}
 	if canManage {
@@ -267,12 +267,12 @@ func performanceFollowupFilterFromQuery(c *gin.Context, manageCodes ...string) (
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	scope, err := resolvePerformanceScope(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		respondScopeError(c, err, "获取数据范围失败")
 		return service.PerformanceFollowupListFilter{}, false
 	}
 	canManage, err := hasPerformancePermission(c, manageCodes...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "权限检查失败", Data: nil})
+		respondScopeError(c, err, "权限检查失败")
 		return service.PerformanceFollowupListFilter{}, false
 	}
 	return service.PerformanceFollowupListFilter{

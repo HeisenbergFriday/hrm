@@ -70,8 +70,8 @@ func newStubIndicatorService(t *testing.T, queries ...stubQueryResponse) *Perfor
 		t.Fatalf("open stub gorm db: %v", err)
 	}
 
-	libRepo := repository.NewPerformanceIndicatorLibraryRepository(db)
-	itemRepo := repository.NewPerformanceIndicatorItemRepository(db)
+	libRepo := repository.NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "test-org")
+	itemRepo := repository.NewPerformanceIndicatorItemRepositoryWithOrgID(db, "test-org")
 	return NewPerformanceIndicatorService(libRepo, itemRepo)
 }
 

@@ -238,7 +238,7 @@ code {
 .app-header-title {
   min-width: 0;
   overflow: hidden;
-  color: var(--color-text-inverse);
+  color: var(--color-text-title);
   font-weight: var(--font-weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -251,14 +251,17 @@ code {
 .app-header-user {
   max-width: 160px;
   overflow: hidden;
-  color: var(--color-text-inverse);
+  color: var(--color-text-primary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.app-header-logout,
+.app-header-logout {
+  color: var(--color-text-secondary);
+}
+
 .app-mobile-menu-button {
-  color: var(--color-text-inverse);
+  color: var(--color-text-primary);
 }
 
 .app-mobile-menu-button {
@@ -270,11 +273,15 @@ code {
 }
 
 .app-header-logout:hover,
-.app-header-logout:focus-visible,
+.app-header-logout:focus-visible {
+  color: var(--color-error) !important;
+  background: rgba(255, 77, 79, 0.08) !important;
+}
+
 .app-mobile-menu-button:hover,
 .app-mobile-menu-button:focus-visible {
-  color: var(--color-text-inverse) !important;
-  background: rgba(255, 255, 255, 0.12) !important;
+  color: var(--color-primary) !important;
+  background: #f1f6ff !important;
 }
 
 .app-content {
@@ -432,7 +439,7 @@ code {
   justify-content: center;
   height: 64px;
   overflow: hidden;
-  color: var(--color-text-inverse);
+  color: var(--color-text-title);
   font-size: 16px;
   font-weight: var(--font-weight-bold);
   white-space: nowrap;
@@ -477,11 +484,23 @@ code {
   align-items: center;
   justify-content: center;
   width: 100%;
+  margin: 0;
+  padding: 0;
   cursor: pointer;
   color: var(--color-text-secondary);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.94);
+  border: 0;
   border-top: 1px solid var(--color-border-light);
-  transition: all 0.3s;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: none;
+  transition: color var(--transition-normal), background var(--transition-normal);
+}
+
+.app-sider .ant-menu-title-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-header {
@@ -699,6 +718,215 @@ code {
 .week-calendar-mobile-panel {
   display: none;
 }
+
+
+/* ========== 大小周管理页 ========== */
+.week-schedule-page .ws-panel-card {
+  margin-bottom: var(--space-6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.week-schedule-page .ws-panel-card > .ant-card-head {
+  background: var(--color-bg-card-header);
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.week-schedule-page .ws-calendar-toolbar {
+  justify-content: flex-end;
+}
+
+.week-schedule-page .ws-month-picker {
+  width: 140px;
+}
+
+.week-schedule-page .ws-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: #f8fafc;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+}
+
+.week-schedule-page .ws-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.week-schedule-page .ws-legend-note {
+  margin-left: auto;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.week-schedule-page .ws-swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  display: inline-block;
+  box-sizing: border-box;
+}
+
+.week-schedule-page .ws-swatch-work { background: #fff566; }
+.week-schedule-page .ws-swatch-rest { background: #fff; }
+.week-schedule-page .ws-swatch-holiday { background: #ff4d4f; border-color: #ff4d4f; }
+.week-schedule-page .ws-swatch-outside { background: #f3f4f6; }
+
+.week-schedule-page .week-calendar-month-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.week-schedule-page .week-calendar-month-card > .ant-card-head {
+  background: #fafbfc;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.week-schedule-page .week-calendar-table {
+  width: 100%;
+  min-width: 920px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  background: #fff;
+}
+
+.week-schedule-page .week-calendar-table thead th {
+  padding: 12px 8px;
+  border: 1px solid #e5e7eb;
+  background: #f8fafc;
+  color: #374151;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.week-schedule-page .ws-week-row td {
+  border: 1px solid #e5e7eb;
+  vertical-align: middle;
+}
+
+.week-schedule-page .ws-week-row.is-current-week td {
+  outline: 1px solid rgba(37, 99, 235, 0.25);
+  outline-offset: -1px;
+}
+
+.week-schedule-page .ws-week-index {
+  width: 104px;
+  padding: 12px 8px;
+  text-align: center;
+  background: #fff;
+}
+
+.week-schedule-page .ws-week-index-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.week-schedule-page .ws-week-index-range {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.week-schedule-page .ws-day-cell {
+  height: 72px;
+  padding: 8px 4px;
+  text-align: center;
+  vertical-align: top;
+}
+
+.week-schedule-page .ws-day-number {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.week-schedule-page .ws-day-cell.is-outside .ws-day-number {
+  opacity: 0.4;
+}
+
+.week-schedule-page .ws-day-cell.is-today .ws-day-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: #fff !important;
+}
+
+.week-schedule-page .ws-day-note {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: inherit;
+}
+
+.week-schedule-page .ws-day-shift {
+  margin-top: 2px;
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.week-schedule-page .ws-size-cell {
+  width: 104px;
+  padding: 10px 8px;
+  text-align: center;
+}
+
+.week-schedule-page .ws-size-label {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.week-schedule-page .ws-size-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6b7280;
+}
+
+.week-schedule-page .ws-size-holidays {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #9ca3af;
+  line-height: 1.4;
+}
+
+.week-schedule-page .ws-push-preview {
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 767.98px) {
+  .week-schedule-page .ws-legend-note {
+    margin-left: 0;
+    width: 100%;
+  }
+  .week-schedule-page .ws-month-picker {
+    width: 100%;
+  }
+}
+
 
 @media (max-width: 767.98px) {
   :root {
@@ -1907,7 +2135,7 @@ code {
 
 .peopleops-mobile-runtime .week-calendar-mobile-day[data-today='true'] .week-calendar-mobile-day-number {
   color: #ffffff;
-  background: #1677ff;
+  background: var(--color-primary);
 }
 
 .peopleops-mobile-runtime .week-calendar-mobile-day:not(:disabled):active {

@@ -295,7 +295,10 @@ func (s *PerformanceReportService) departmentTreeIDs(departmentID string) ([]str
 		return nil, nil
 	}
 	var ids []string
-	orgID := orgIDFromDB(s.db)
+	orgID, err := requireOrgIDFromDB(s.db)
+	if err != nil {
+		return nil, err
+	}
 	query := `
 		WITH RECURSIVE dept_tree AS (
 			SELECT department_id, parent_id

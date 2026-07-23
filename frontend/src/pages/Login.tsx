@@ -15,6 +15,7 @@ import {
   rememberAuthRedirect,
   resolveAuthOrgID,
 } from '../utils/authRedirect'
+import { safeLoginErrorMessage } from '../utils/loginErrorMessage'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -139,7 +140,8 @@ const Login: React.FC = () => {
   useEffect(() => {
     const error = searchParams.get('error')
     if (error) {
-      message.error(decodeURIComponent(error))
+      // 白名单映射，禁止原样展示 URL 参数（防钓鱼文案）
+      message.error(safeLoginErrorMessage(error))
     }
   }, [searchParams])
 

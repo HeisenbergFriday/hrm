@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert, Card, Col, Row, Space, Table, Tag, Typography, Button, Modal, Form, Input, InputNumber,
-  Select, message, Spin, Drawer, Tooltip, Divider, Descriptions, Steps, Segmented, Progress
+  Select, message, Spin, Drawer, Tooltip, Divider, Descriptions, Steps, Segmented, Empty
 } from 'antd'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -14,7 +14,6 @@ import type { ColumnsType } from 'antd/es/table'
 import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
 import {
-  departmentAPI,
   performanceAPI,
   PerformanceActivity,
   PerformanceParticipant,
@@ -35,13 +34,14 @@ import {
   AssessmentManagerCandidate,
   AssessmentManagerCandidateSourceGroup,
   AssessmentManagerSource,
-  userAPI,
 } from '../services/api'
 import PerformanceActivityEditor from '../components/PerformanceActivityEditor'
+import PerformanceExcelImportWizard from '../components/PerformanceExcelImportWizard'
 import {
   BarChartOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  FileExcelOutlined,
   PlusOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
@@ -108,21 +108,23 @@ const PERFORMANCE_VIEW_OPTIONS: Array<{ label: string; value: PerformanceView }>
   { label: 'HR 管理', value: 'hr' },
 ]
 
+const PERFORMANCE_VIEW_STORAGE_KEY = 'peopleops.performance.activeView'
+
 const PERFORMANCE_VIEW_META: Record<PerformanceView, { title: string; description: string; detailTitle: string; icon: React.ReactNode; accent: string; softBg: string }> = {
   employee: {
     title: '我的绩效',
     description: '聚焦我参与的活动、当前待办和结果确认',
     detailTitle: '我的事项',
     icon: <UserOutlined />,
-    accent: '#1677ff',
-    softBg: '#eff6ff',
+    accent: 'var(--color-primary)',
+    softBg: 'var(--color-primary-bg)',
   },
   manager: {
     title: '团队绩效',
     description: '聚焦团队待处理事项、评分与复核进度',
     detailTitle: '团队处理',
     icon: <TeamOutlined />,
-    accent: '#0891b2',
+    accent: 'var(--color-info)',
     softBg: '#ecfeff',
   },
   hr: {
@@ -130,9 +132,38 @@ const PERFORMANCE_VIEW_META: Record<PerformanceView, { title: string; descriptio
     description: '维护活动配置、阶段推进和全员进度',
     detailTitle: 'HR 管控',
     icon: <SafetyCertificateOutlined />,
-    accent: '#4f46e5',
-    softBg: '#eef2ff',
+    accent: 'var(--color-primary-active)',
+    softBg: 'var(--color-primary-bg)',
   },
+}
+
+function readStoredPerformanceView(): PerformanceView | null {
+  try {
+    const stored = window.localStorage.getItem(PERFORMANCE_VIEW_STORAGE_KEY)
+    if (stored === 'employee' || stored === 'manager' || stored === 'hr') return stored
+  } catch {
+    // ignore storage access errors (private mode / SSR-like env)
+  }
+  return null
+}
+
+function writeStoredPerformanceView(view: PerformanceView) {
+  try {
+    window.localStorage.setItem(PERFORMANCE_VIEW_STORAGE_KEY, view)
+  } catch {
+    // ignore storage access errors
+  }
+}
+
+/** Prefer last choice; otherwise HR → manager → employee by available capability. */
+function resolvePreferredPerformanceView(canUseHRView: boolean, canUseManagerView: boolean): PerformanceView {
+  const stored = readStoredPerformanceView()
+  if (stored === 'hr' && canUseHRView) return 'hr'
+  if (stored === 'manager' && canUseManagerView) return 'manager'
+  if (stored === 'employee') return 'employee'
+  if (canUseHRView) return 'hr'
+  if (canUseManagerView) return 'manager'
+  return 'employee'
 }
 
 function normalizeIDArray(value?: string[] | string): string[] {
@@ -213,20 +244,27 @@ function getActivityTemplateDisplay(
 }
 
 function getDepartmentOption(department: any) {
-  const value = String(department.department_id || department.id || '')
+  const value = String(department.department_id || department.id || '').trim()
   const name = department.name || department.department_name || value
   return value ? { value, label: `${name}（${value}）` } : null
 }
 
 function getUserOption(user: any) {
-  const value = String(user.user_id || user.employee_id || user.id || '')
+  // 参与范围必须使用 User.UserID；禁止 fallback 到数据库自增 id / employee_id。
+  const value = String(user?.user_id || '').trim()
+  if (!value) return null
   const name = user.name || user.user_name || user.employee_name || value
   const departmentName = user.department_name ? ` - ${user.department_name}` : ''
-  return value ? { value, label: `${name}（${value}）${departmentName}` } : null
+  return { value, label: `${name}（${value}）${departmentName}` }
+}
+
+function extractErrorMessage(err: any, fallback: string) {
+  return err?.response?.data?.message || err?.response?.data?.error || err?.message || fallback
 }
 
 function getImportedUserOption(user: any) {
-  const value = String(user?.user_id || user?.employee_id || user?.id || '').trim()
+  // 导入接口应输出 User.UserID；参与范围 Select 禁止 fallback employee_id / 数据库 id。
+  const value = String(user?.user_id || '').trim()
   if (!value) return null
   const employeeID = String(user?.employee_id || '').trim()
   const name = String(user?.name || user?.user_name || user?.employee_name || value).trim()
@@ -477,10 +515,11 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   archived: { label: '已归档', color: 'default' },
 }
 
-const STATUS_OPTIONS = Object.entries(STATUS_MAP).map(([value, { label }]) => ({ value, label }))
-
 const ACTIVITY_STATUS_FILTER_IN_PROGRESS = '__in_progress__'
 const ACTIVITY_STATUS_FILTER_CONFIRMED = '__confirmed__'
+const ACTIVITY_STATUS_FILTER_TODO = '__todo__'
+const ACTIVITY_LIST_PAGE_SIZE = 100
+const ACTIVITY_LIST_MAX_PAGES = 50
 const IN_PROGRESS_ACTIVITY_STATUSES = [
   'target_setting',
   'target_approval',
@@ -567,12 +606,6 @@ function canOpenTargetPlan(activity: PerformanceActivity | null | undefined, par
   }
   return activity.flow_type === 'new' && !['locked', 'archived'].includes(activity.status) && MUTENG_LATE_TARGET_ACTIVITY_STATUSES.includes(activity.status)
 }
-const ACTIVITY_STATUS_FILTER_OPTIONS = [
-  { value: ACTIVITY_STATUS_FILTER_IN_PROGRESS, label: '进行中活动' },
-  { value: ACTIVITY_STATUS_FILTER_CONFIRMED, label: '已确认结果' },
-  ...STATUS_OPTIONS,
-]
-
 function resolveActivityStatusFilter(statusFilter?: string) {
   if (!statusFilter) return undefined
   return ACTIVITY_STATUS_FILTER_GROUPS[statusFilter] || [statusFilter]
@@ -791,6 +824,7 @@ const PERFORMANCE_PERMISSION_LABELS: Record<string, string> = {
   'performance:goal:manage': '绩效目标管理',
   'performance:self_eval:submit': '绩效自评提交',
   'performance:manager_eval:submit': '绩效主管评分',
+  'performance:manager_confirm:submit': '绩效主管确认',
   'performance:result:view': '绩效结果查看',
   'performance:hr_confirm:submit': '绩效HR确认',
   'performance:department_eval:submit': '绩效部门评分',
@@ -801,6 +835,142 @@ const PERFORMANCE_PERMISSION_LABELS: Record<string, string> = {
   'performance:appeal:manage': '绩效申诉处理',
   'performance:assessment_manager:update': '考核上级调整',
   'performance:assessment_manager:batch_update': '批量考核上级调整',
+}
+
+/** 绩效等级标签色：用 antd 语义色，避免旧主色 #1677ff 等硬编码 */
+const PERFORMANCE_LEVEL_TAG_COLORS: Record<string, string> = {
+  S: 'magenta',
+  A: 'blue',
+  B: 'green',
+  C: 'gold',
+  D: 'red',
+}
+
+/** 阶段推进/锁定类写操作二次确认文案（仅 UI 护栏，不改 API/状态机） */
+const ACTIVITY_ACTION_CONFIRM: Record<string, { title: string; content: string; okText?: string; danger?: boolean }> = {
+  'open-target-setting': {
+    title: '开启目标设定',
+    content: '确认开启目标设定阶段？开启后参与人可开始填写目标。',
+    okText: '确认开启',
+  },
+  'open-self-evaluation': {
+    title: '开启自评',
+    content: '确认开启自评阶段？开启后参与人可提交自评。',
+    okText: '确认开启',
+  },
+  'open-manager-evaluation': {
+    title: '开启主管评分',
+    content: '确认开启主管评分阶段？',
+    okText: '确认开启',
+  },
+  'open-employee-confirmation': {
+    title: '开启员工确认',
+    content: '确认开启员工确认阶段？',
+    okText: '确认开启',
+  },
+  'open-manager-confirmation': {
+    title: '开启主管确认',
+    content: '确认开启主管确认阶段？',
+    okText: '确认开启',
+  },
+  'open-hr-confirmation': {
+    title: '开启 HR 确认',
+    content: '确认开启 HR 确认阶段？',
+    okText: '确认开启',
+  },
+  'open-department-evaluation': {
+    title: '开启部门评分',
+    content: '确认开启部门评分阶段？',
+    okText: '确认开启',
+  },
+  'open-hr-review': {
+    title: '开启 HR 审核',
+    content: '确认开启 HR 审核阶段？',
+    okText: '确认开启',
+  },
+  'open-result-publish': {
+    title: '开启结果公布',
+    content: '确认进入结果公布阶段？公布后员工可按权限查看结果。',
+    okText: '确认开启',
+  },
+  'open-performance-interview': {
+    title: '开启绩效面谈',
+    content: '确认进入绩效面谈阶段？',
+    okText: '确认开启',
+  },
+  'open-performance-appeal': {
+    title: '开启绩效申诉',
+    content: '确认进入绩效申诉阶段？',
+    okText: '确认开启',
+  },
+  'open-target-approval': {
+    title: '开启目标审批',
+    content: '确认开启目标审批阶段？',
+    okText: '确认开启',
+  },
+  publish: {
+    title: '直接开启自评',
+    content: '确认跳过目标阶段，直接开启自评？此操作会改变活动阶段。',
+    okText: '确认开启',
+  },
+  lock: {
+    title: '锁定活动',
+    content: '确认锁定活动？锁定后绩效结果将冻结，不可再修改。',
+    okText: '确认锁定',
+    danger: true,
+  },
+  archive: {
+    title: '归档活动',
+    content: '确认归档该绩效活动？归档后活动将进入归档列表。',
+    okText: '确认归档',
+  },
+  close: {
+    title: '关闭活动',
+    content: '确认关闭该绩效活动？',
+    okText: '确认关闭',
+    danger: true,
+  },
+  'confirm-results': {
+    title: '确认结果',
+    content: '确认批量确认绩效结果？',
+    okText: '确认',
+  },
+}
+
+function confirmActivityWriteAction(
+  action: string,
+  activity: PerformanceActivity,
+  run: (action: string, activity: PerformanceActivity) => void | Promise<void>,
+) {
+  const config = ACTIVITY_ACTION_CONFIRM[action]
+  if (!config) {
+    return run(action, activity)
+  }
+  Modal.confirm({
+    title: config.title,
+    content: config.content,
+    okText: config.okText || '确认',
+    cancelText: '取消',
+    okButtonProps: config.danger ? { danger: true } : undefined,
+    onOk: () => run(action, activity),
+  })
+}
+
+function confirmParticipantWriteAction(options: {
+  title: string
+  content: string
+  okText?: string
+  danger?: boolean
+  onOk: () => void | Promise<void>
+}) {
+  Modal.confirm({
+    title: options.title,
+    content: options.content,
+    okText: options.okText || '确认',
+    cancelText: '取消',
+    okButtonProps: options.danger ? { danger: true } : undefined,
+    onOk: options.onOk,
+  })
 }
 
 function unwrapReminderResult<T>(res: any): T | undefined {
@@ -924,6 +1094,23 @@ const ParticipantActions = React.memo(function ParticipantActions({
   if (!activityId) return null
 
   const isMutengFlow = activity?.flow_type === 'new'
+  /** 适用态下缺权：disabled + Tooltip，不隐藏 */
+  const wrapPerm = (permissionCode: string, button: React.ReactElement, allowed = true) => {
+    if (!allowed) {
+      const permissionName = PERFORMANCE_PERMISSION_LABELS[permissionCode] || permissionCode
+      return (
+        <Tooltip key={button.key || permissionCode} title={`你缺少${permissionName}权限，需要联系管理员添加`}>
+          <span>
+            {React.cloneElement(button, {
+              disabled: true,
+              onClick: undefined,
+            } as Partial<React.ComponentProps<typeof Button>>)}
+          </span>
+        </Tooltip>
+      )
+    }
+    return button
+  }
   const reloadActivityDetail = async () => {
     if (activity) await onReloadActivityDetail(activity)
   }
@@ -1088,53 +1275,91 @@ const ParticipantActions = React.memo(function ParticipantActions({
   const mutengAdminLinks = () => {
     if (!isMutengFlow) return null
     const items: React.ReactNode[] = []
-    if (hasAnyPermission('performance:result:view', 'performance:manager_eval:submit', 'performance:manager_confirm:submit', 'performance:department_eval:submit', 'performance:hr_review:submit', 'performance:result_publish:manage', 'performance:appeal:manage', 'performance:level_adjust:manage', 'performance:activity:manage')) {
-      items.push(
-        <Button key="previous-result" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-previous-result-${record.id}`} onClick={() => navigateTo(`/performance-result/${activityId}/${record.id}`)}>上期结果</Button>,
-      )
-    }
+    const canViewPrevious = hasAnyPermission('performance:result:view', 'performance:manager_eval:submit', 'performance:manager_confirm:submit', 'performance:department_eval:submit', 'performance:hr_review:submit', 'performance:result_publish:manage', 'performance:appeal:manage', 'performance:level_adjust:manage', 'performance:activity:manage')
+    items.push(wrapPerm(
+      'performance:result:view',
+      <Button
+        key="previous-result"
+        size="small"
+        type="link"
+        style={participantActionButtonStyle}
+        data-testid={`performance-participant-previous-result-${record.id}`}
+        onClick={async () => {
+          try {
+            const res: any = await performanceAPI.getPreviousParticipantResult(record.id)
+            const payload = res?.data ?? res
+            const prevActivityId = payload?.activity?.id
+            const prevParticipantId = payload?.participant?.id
+            if (!prevActivityId || !prevParticipantId) {
+              message.info('暂无上期绩效结果')
+              return
+            }
+            navigateTo(`/performance-result/${prevActivityId}/${prevParticipantId}`)
+          } catch (err: any) {
+            message.error(err?.response?.data?.message || '获取上期结果失败')
+          }
+        }}
+      >
+        上期结果
+      </Button>,
+      canViewPrevious,
+    ))
     if (
       isMutengReviewPipelineOpen(activity) &&
-      ['manager_submitted', 'manager_confirmed'].includes(record.status) &&
-      hasAnyPermission('performance:department_eval:submit', 'performance:level_adjust:manage', 'performance:activity:manage')
+      ['manager_submitted', 'manager_confirmed'].includes(record.status)
     ) {
-      items.push(
+      const canDeptEval = hasAnyPermission('performance:department_eval:submit', 'performance:level_adjust:manage', 'performance:activity:manage')
+      items.push(wrapPerm(
+        'performance:department_eval:submit',
         <Button key="department-eval" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-department-eval-${record.id}`} onClick={openDepartmentEvaluationModal}>部门评分</Button>,
-      )
+        canDeptEval,
+      ))
     }
-    if (isMutengResultPublished(record) && hasPermission('performance:result_visibility:manage')) {
-      items.push(
+    if (isMutengResultPublished(record)) {
+      items.push(wrapPerm(
+        'performance:result_visibility:manage',
         <Button key="visibility" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-visibility-${record.id}`} onClick={openResultVisibilityModal}>
           {record.result_hidden ? '解除屏蔽' : '屏蔽'}
         </Button>,
-      )
+        hasPermission('performance:result_visibility:manage'),
+      ))
     }
-    if (hasPermission('performance:activity:manage')) {
-      items.push(
-        <Button key="progress" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-progress-${record.id}`} onClick={openProgressModal}>调进度</Button>,
-        <Button key="remove" size="small" type="link" danger style={participantActionButtonStyle} data-testid={`performance-participant-remove-${record.id}`} onClick={openRemoveModal}>移除</Button>,
-      )
-    }
+    items.push(wrapPerm(
+      'performance:activity:manage',
+      <Button key="progress" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-progress-${record.id}`} onClick={openProgressModal}>调进度</Button>,
+      hasPermission('performance:activity:manage'),
+    ))
+    items.push(wrapPerm(
+      'performance:activity:manage',
+      <Button key="remove" size="small" type="link" danger style={participantActionButtonStyle} data-testid={`performance-participant-remove-${record.id}`} onClick={openRemoveModal}>移除</Button>,
+      hasPermission('performance:activity:manage'),
+    ))
     return items
   }
 
-  const archivedTargetButton = isMutengGoalSettingActivity(activity) && canOpenTargetPlan(activity, record) && hasPermission('performance:goal:manage') ? (
-    <Button key="target" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-target-${record.id}`}
-      onClick={() => navigateTo(`/performance-goal-setting/${activityId}/${record.id}`)}
-    >目标</Button>
-  ) : null
-
-  if (isArchived && !hasPermission('performance:result:view') && !archivedTargetButton) return null
+  const archivedTargetButton = isMutengGoalSettingActivity(activity) && canOpenTargetPlan(activity, record)
+    ? wrapPerm(
+      'performance:goal:manage',
+      <Button key="target" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-target-${record.id}`}
+        onClick={() => navigateTo(`/performance-goal-setting/${activityId}/${record.id}`)}
+      >目标</Button>,
+      hasPermission('performance:goal:manage'),
+    )
+    : null
 
   if (isArchived) {
     const adminLinks = mutengAdminLinks()
     return (
       <div style={participantActionListStyle}>
         {archivedTargetButton}
-        {!isMutengGoalSettingActivity(activity) && hasPermission('performance:result:view') && (
-          <Button size="small" type="link" style={participantActionButtonStyle}
-            onClick={() => navigateTo(`/performance-result/${activityId}/${record.id}`)}
-          >查看</Button>
+        {!isMutengGoalSettingActivity(activity) && (
+          wrapPerm(
+            'performance:result:view',
+            <Button size="small" type="link" style={participantActionButtonStyle}
+              onClick={() => navigateTo(`/performance-result/${activityId}/${record.id}`)}
+            >查看</Button>,
+            hasPermission('performance:result:view'),
+          )
         )}
         {canShowSelfReviewRecords(record) && (
           <Button size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-self-records-${record.id}`}
@@ -1148,11 +1373,11 @@ const ParticipantActions = React.memo(function ParticipantActions({
 
   const links: React.ReactNode[] = []
 
-  if (hasPermission('performance:assessment_manager:update')) {
-    links.push(
-      <Button key="manager" size="small" type="link" style={participantActionButtonStyle} onClick={() => onOpenAssessmentManager(record)}>调上级</Button>,
-    )
-  }
+  links.push(wrapPerm(
+    'performance:assessment_manager:update',
+    <Button key="manager" size="small" type="link" style={participantActionButtonStyle} onClick={() => onOpenAssessmentManager(record)}>调上级</Button>,
+    hasPermission('performance:assessment_manager:update'),
+  ))
 
   const canSelfEvaluateRecord = (
     isMutengFlow
@@ -1160,79 +1385,106 @@ const ParticipantActions = React.memo(function ParticipantActions({
       : SELF_EVAL_EDITABLE_ACTIVITY_STATUSES.includes(activityStatus || '')
   ) && SELF_EVAL_EDITABLE_PARTICIPANT_STATUSES.includes(record.status)
 
-  if (canOpenTargetPlan(activity, record) && hasPermission('performance:goal:manage')) {
+  if (canOpenTargetPlan(activity, record)) {
     const isSeparatedReviewActivity = isSeparatedMutengReviewActivity(activity)
+    const canGoal = hasPermission('performance:goal:manage')
     if (!isSeparatedReviewActivity) {
-      links.push(
+      links.push(wrapPerm(
+        'performance:goal:manage',
         <Button key="target" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-target-${record.id}`}
           onClick={() => navigateTo(`/performance-goal-setting/${activityId}/${record.id}`)}
         >目标</Button>,
-      )
+        canGoal,
+      ))
     }
     if (activity?.flow_type === 'new' && ['target_setting', 'target_approval', 'self_evaluation'].includes(activityStatus || '') && (!isSeparatedMutengActivity(activity) || isSeparatedReviewActivity)) {
-      links.push(
+      links.push(wrapPerm(
+        'performance:goal:manage',
         <Button key="review-supplement" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-review-supplement-${record.id}`}
           onClick={() => navigateTo(`/performance-goal-setting/${activityId}/${record.id}?phase=review`)}
         >补录</Button>,
-      )
+        canGoal,
+      ))
     }
   }
 
-  if (canSelfEvaluateRecord && hasPermission('performance:self_eval:submit')) {
-    links.push(
+  if (canSelfEvaluateRecord) {
+    links.push(wrapPerm(
+      'performance:self_eval:submit',
       <Button key="self" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-self-${record.id}`}
         onClick={() => navigateTo(`/performance-self-eval/${activityId}/${record.id}`)}
       >{PERSONAL_SELF_EVAL_STATUSES.includes(record.status) ? '自评' : '改自评'}</Button>,
-    )
+      hasPermission('performance:self_eval:submit'),
+    ))
   }
 
   if (
     (isMutengFlow ? isMutengReviewPipelineOpen(activity) : activityStatus === 'manager_evaluation') &&
-    ['self_submitted', 'manager_submitted', 'manager_recheck'].includes(record.status) &&
-    hasPermission('performance:manager_eval:submit')
+    ['self_submitted', 'manager_submitted', 'manager_recheck'].includes(record.status)
   ) {
     const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
-    links.push(
-      managerEvalBlockedReason ? (
+    const canMgr = hasPermission('performance:manager_eval:submit')
+    if (!canMgr) {
+      links.push(wrapPerm(
+        'performance:manager_eval:submit',
+        <Button key="mgr" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-manager-${record.id}`}>评分</Button>,
+        false,
+      ))
+    } else if (managerEvalBlockedReason) {
+      links.push(
         <Tooltip key="mgr" title={managerEvalBlockedReason}>
           <span>
             <Button size="small" type="link" disabled style={participantActionButtonStyle} data-testid={`performance-participant-manager-${record.id}`}>评分</Button>
           </span>
-        </Tooltip>
-      ) : (
+        </Tooltip>,
+      )
+    } else {
+      links.push(
         <Button key="mgr" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-manager-${record.id}`}
           onClick={() => navigateTo(`/performance-manager-eval/${activityId}/${record.id}`)}
-        >评分</Button>
-      ),
-    )
+        >评分</Button>,
+      )
+    }
   }
 
-  if (!isMutengFlow && ['manager_confirmation', 'hr_confirmation'].includes(activityStatus || '') && record.status === 'manager_recheck' && hasPermission('performance:manager_confirm:submit')) {
+  if (!isMutengFlow && ['manager_confirmation', 'hr_confirmation'].includes(activityStatus || '') && record.status === 'manager_recheck') {
     const managerEvalBlockedReason = getManagerEvaluationBlockedReason(record)
-    links.push(
-      managerEvalBlockedReason ? (
+    const canConfirm = hasPermission('performance:manager_confirm:submit')
+    if (!canConfirm) {
+      links.push(wrapPerm(
+        'performance:manager_confirm:submit',
+        <Button key="manager-recheck" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-manager-recheck-${record.id}`}>复核</Button>,
+        false,
+      ))
+    } else if (managerEvalBlockedReason) {
+      links.push(
         <Tooltip key="manager-recheck" title={managerEvalBlockedReason}>
           <span>
             <Button size="small" type="link" disabled style={participantActionButtonStyle} data-testid={`performance-participant-manager-recheck-${record.id}`}>复核</Button>
           </span>
-        </Tooltip>
-      ) : (
+        </Tooltip>,
+      )
+    } else {
+      links.push(
         <Button key="manager-recheck" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-manager-recheck-${record.id}`}
           onClick={() => navigateTo(`/performance-manager-eval/${activityId}/${record.id}`)}
-        >复核</Button>
-      ),
-    )
+        >复核</Button>,
+      )
+    }
   }
 
   if (
-    (isMutengFlow ? isMutengResultPublished(record) : ['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status)) &&
-    hasPermission('performance:result:view')
+    isMutengFlow
+      ? isMutengResultPublished(record)
+      : ['manager_submitted', 'employee_confirmed', 'manager_recheck', 'manager_confirmed', 'hr_confirmed', 'locked', 'result_confirmed'].includes(record.status)
   ) {
-    links.push(
+    links.push(wrapPerm(
+      'performance:result:view',
       <Button key="result" size="small" type="link" style={participantActionButtonStyle} data-testid={`performance-participant-result-${record.id}`}
         onClick={() => navigateTo(`/performance-result/${activityId}/${record.id}`)}
       >结果</Button>,
-    )
+      hasPermission('performance:result:view'),
+    ))
   }
 
   if (canShowSelfReviewRecords(record)) {
@@ -1243,48 +1495,76 @@ const ParticipantActions = React.memo(function ParticipantActions({
     )
   }
 
-  const canReviewByHR = isMutengFlow && isMutengReviewPipelineOpen(activity) && record.status === 'manager_confirmed' && hasAnyPermission('performance:hr_review:submit', 'performance:activity:manage')
-  const canConfirmByHR = activityStatus === 'hr_confirmation' && record.status === 'manager_confirmed' && hasPermission('performance:hr_confirm:submit')
-  if (canReviewByHR || canConfirmByHR) {
-    const hrActionLabel = canReviewByHR ? 'HR审核' : 'HR确认'
-    links.push(
+  const stageCanReviewByHR = isMutengFlow && isMutengReviewPipelineOpen(activity) && record.status === 'manager_confirmed'
+  const stageCanConfirmByHR = activityStatus === 'hr_confirmation' && record.status === 'manager_confirmed'
+  if (stageCanReviewByHR || stageCanConfirmByHR) {
+    const canReviewByHR = stageCanReviewByHR && hasAnyPermission('performance:hr_review:submit', 'performance:activity:manage')
+    const canConfirmByHR = stageCanConfirmByHR && hasPermission('performance:hr_confirm:submit')
+    const hrActionLabel = stageCanReviewByHR ? 'HR审核' : 'HR确认'
+    const hrPermCode = stageCanReviewByHR ? 'performance:hr_review:submit' : 'performance:hr_confirm:submit'
+    const allowed = canReviewByHR || canConfirmByHR
+    links.push(wrapPerm(
+      hrPermCode,
       <Button key="hr-confirm" size="small" type="link" style={{ ...participantActionButtonStyle, color: 'var(--color-primary)' }} data-testid={`performance-participant-hr-confirm-${record.id}`}
-        onClick={async () => {
-          try {
-            await performanceAPI.confirmHRResult(record.id)
-            message.success(`${hrActionLabel}成功`)
-            if (activity) await onReloadActivityDetail(activity)
-          } catch (err: any) {
-            message.error(err?.response?.data?.message || `${hrActionLabel}失败`)
-          }
+        onClick={() => {
+          confirmParticipantWriteAction({
+            title: `${hrActionLabel}：${record.employee_name}`,
+            content: stageCanReviewByHR
+              ? '确认完成 HR 审核？审核通过后结果将按流程公布，操作后不可轻易回退。'
+              : '确认完成 HR 确认？确认后该参与人绩效结果将进入已确认状态。',
+            okText: `确认${hrActionLabel}`,
+            onOk: async () => {
+              try {
+                await performanceAPI.confirmHRResult(record.id)
+                message.success(`${hrActionLabel}成功`)
+                if (activity) await onReloadActivityDetail(activity)
+              } catch (err: any) {
+                message.error(err?.response?.data?.message || `${hrActionLabel}失败`)
+                return Promise.reject(err)
+              }
+            },
+          })
         }}
       >{hrActionLabel}</Button>,
-    )
+      allowed,
+    ))
   }
 
   if (
     (isMutengFlow ? isMutengTargetWorkflowOpen(activity) : activityStatus === 'target_approval') &&
-    record.status === 'target_pending_approval' &&
-    hasAnyPermission('performance:goal:manage', 'performance:hr_review:submit', 'performance:activity:manage')
+    record.status === 'target_pending_approval'
   ) {
-    links.push(
+    const canApproveGoal = hasAnyPermission('performance:goal:manage', 'performance:hr_review:submit', 'performance:activity:manage')
+    links.push(wrapPerm(
+      'performance:goal:manage',
       <Button key="approve" size="small" type="link" style={{ ...participantActionButtonStyle, color: 'var(--color-info)' }} data-testid={`performance-participant-approve-${record.id}`}
-        onClick={async () => {
-          try {
-            await performanceAPI.approveGoalRecords(record.id)
-            message.success('目标已通过')
-            if (activity) await onReloadActivityDetail(activity)
-          } catch (err: any) {
-            message.error(err?.response?.data?.message || '审批失败')
-          }
+        onClick={() => {
+          confirmParticipantWriteAction({
+            title: `通过目标：${record.employee_name}`,
+            content: '确认通过该员工的目标设定？通过后目标将生效。',
+            okText: '确认通过',
+            onOk: async () => {
+              try {
+                await performanceAPI.approveGoalRecords(record.id)
+                message.success('目标已通过')
+                if (activity) await onReloadActivityDetail(activity)
+              } catch (err: any) {
+                message.error(err?.response?.data?.message || '审批失败')
+                return Promise.reject(err)
+              }
+            },
+          })
         }}
       >通过</Button>,
-    )
-    links.push(
+      canApproveGoal,
+    ))
+    links.push(wrapPerm(
+      'performance:goal:manage',
       <Button key="reject" size="small" type="link" danger style={participantActionButtonStyle} data-testid={`performance-participant-reject-${record.id}`}
         onClick={() => onRejectGoalRecords(record)}
       >驳回</Button>,
-    )
+      canApproveGoal,
+    ))
   }
 
   const adminLinks = mutengAdminLinks()
@@ -1298,7 +1578,24 @@ const ParticipantActions = React.memo(function ParticipantActions({
 const PerformanceOverview: React.FC = () => {
   const navigate = useNavigate()
   const currentUser = useAuthStore(state => state.user)
-  const [activeView, setActiveView] = useState<PerformanceView>('hr')
+  const canUseManagerView = hasPermission('performance:manager_eval:submit') ||
+    hasPermission('performance:goal:manage') ||
+    hasPermission('performance:manager_confirm:submit')
+  const canImportActivity = hasPermission('performance:activity:import') ||
+    hasPermission('performance:activity:manage')
+  const canUseHRView = canImportActivity ||
+    hasPermission('performance:result:view') ||
+    hasPermission('performance:distribution:manage') ||
+    hasPermission('performance:hr_confirm:submit') ||
+    hasPermission('performance:assessment_manager:batch_update') ||
+    hasPermission('performance:hr_review:submit') ||
+    hasPermission('performance:result_publish:manage') ||
+    hasPermission('performance:result_visibility:manage') ||
+    hasPermission('performance:appeal:manage') ||
+    hasPermission('performance:department_eval:submit')
+  const [activeView, setActiveView] = useState<PerformanceView>(() =>
+    resolvePreferredPerformanceView(canUseHRView, canUseManagerView),
+  )
   const activityListRef = React.useRef<HTMLDivElement | null>(null)
   const [, forceRender] = React.useState(0)
   const forceUpdate = () => forceRender(n => n + 1)
@@ -1306,6 +1603,7 @@ const PerformanceOverview: React.FC = () => {
   const [activitiesLoading, setActivitiesLoading] = useState(false)
   const [activitiesTotal, setActivitiesTotal] = useState(0)
   const [activityModalVisible, setActivityModalVisible] = useState(false)
+  const [excelImportOpen, setExcelImportOpen] = useState(false)
   const [activitySaving, setActivitySaving] = useState(false)
   const [participantImporting, setParticipantImporting] = useState(false)
   const [editingActivity, setEditingActivity] = useState<PerformanceActivity | null>(null)
@@ -1374,19 +1672,6 @@ const PerformanceOverview: React.FC = () => {
   const [activitySearchText, setActivitySearchText] = useState('')
   const [activityStatusFilter, setActivityStatusFilter] = useState<string | undefined>(undefined)
 
-  const canUseManagerView = hasPermission('performance:manager_eval:submit') ||
-    hasPermission('performance:goal:manage') ||
-    hasPermission('performance:manager_confirm:submit')
-  const canUseHRView = hasPermission('performance:activity:manage') ||
-    hasPermission('performance:result:view') ||
-    hasPermission('performance:distribution:manage') ||
-    hasPermission('performance:hr_confirm:submit') ||
-    hasPermission('performance:assessment_manager:batch_update') ||
-    hasPermission('performance:hr_review:submit') ||
-    hasPermission('performance:result_publish:manage') ||
-    hasPermission('performance:result_visibility:manage') ||
-    hasPermission('performance:appeal:manage') ||
-    hasPermission('performance:department_eval:submit')
   const performanceViewOptions = React.useMemo(
     () => PERFORMANCE_VIEW_OPTIONS.filter(option => {
       if (option.value === 'manager') return canUseManagerView
@@ -1398,7 +1683,9 @@ const PerformanceOverview: React.FC = () => {
 
   useEffect(() => {
     if (performanceViewOptions.some(option => option.value === activeView)) return
-    setActiveView(performanceViewOptions[0]?.value || 'employee')
+    const fallback = performanceViewOptions[0]?.value || 'employee'
+    setActiveView(fallback)
+    writeStoredPerformanceView(fallback)
     setActivityStatusFilter(undefined)
     setSelectedParticipantIds([])
   }, [activeView, performanceViewOptions])
@@ -1462,46 +1749,65 @@ const PerformanceOverview: React.FC = () => {
     [managerCandidateSources, selectedManagerSource],
   )
 
-  // 加载活动列表
-  const loadActivities = useCallback(async () => {
+  // 加载活动列表：分页拉全量，避免 page_size=100 截断导致芯片/列表不一致
+  const loadActivities = useCallback(async (opts?: { silent?: boolean }) => {
     setActivitiesLoading(true)
     try {
-      const res: any = await performanceAPI.getActivities({ page: 1, page_size: 100 })
-      const data = res.data || res
-      setActivities(data.items || [])
-      setActivitiesTotal(data.total || 0)
+      const allItems: PerformanceActivity[] = []
+      let page = 1
+      let total = 0
+      while (page <= ACTIVITY_LIST_MAX_PAGES) {
+        const res: any = await performanceAPI.getActivities({ page, page_size: ACTIVITY_LIST_PAGE_SIZE })
+        const data = res?.data || res
+        const pageItems = Array.isArray(data?.items)
+          ? data.items
+          : Array.isArray(data?.list)
+            ? data.list
+            : Array.isArray(data)
+              ? data
+              : []
+        if (page === 1) {
+          total = Number(data?.total ?? pageItems.length) || 0
+        }
+        allItems.push(...pageItems)
+        if (pageItems.length < ACTIVITY_LIST_PAGE_SIZE || allItems.length >= total) {
+          break
+        }
+        page += 1
+      }
+      setActivities(allItems)
+      setActivitiesTotal(total || allItems.length)
+      return { ok: true as const }
     } catch (err: any) {
-      message.error(err?.response?.data?.message || '加载活动列表失败')
+      if (!opts?.silent) {
+        message.error(extractErrorMessage(err, '加载活动列表失败'))
+      }
+      return { ok: false as const, error: extractErrorMessage(err, '加载活动列表失败') }
     } finally {
       setActivitiesLoading(false)
     }
   }, [])
 
-  // 加载活动适用范围选项
-  const loadScopeOptions = useCallback(async () => {
+  // 加载活动适用范围选项（绩效专用接口，不扩大通用 /users）
+  const loadScopeOptions = useCallback(async (opts?: { silent?: boolean }) => {
     setScopeOptionsLoading(true)
     try {
-      const [departmentResult, userResult] = await Promise.allSettled([
-        departmentAPI.getDepartments(),
-        userAPI.getUsers({ page: 1, page_size: 2000 }),
-      ])
-
-      const failed: string[] = []
-      if (departmentResult.status === 'fulfilled') {
-        setDepartments(getListFromResponse(departmentResult.value, ['departments', 'items']))
-      } else {
-        failed.push('部门')
+      const res: any = await performanceAPI.getScopeOptions({ page: 1, page_size: 2000 })
+      const data = res?.data || res
+      setDepartments(Array.isArray(data?.departments) ? data.departments : [])
+      setUsers(Array.isArray(data?.employees) ? data.employees : [])
+      const warnings = Array.isArray(data?.warnings) ? data.warnings.filter(Boolean) : []
+      if (!opts?.silent && warnings.length) {
+        message.warning(warnings[0])
       }
-
-      if (userResult.status === 'fulfilled') {
-        setUsers(getListFromResponse(userResult.value, ['items', 'users', 'employees']))
-      } else {
-        failed.push('员工')
+      return { ok: true as const }
+    } catch (err: any) {
+      setDepartments([])
+      setUsers([])
+      if (!opts?.silent) {
+        message.error(extractErrorMessage(err, '部门、员工选项加载失败'))
       }
-
-      if (failed.length) {
-        message.error(`${failed.join('、')}选项加载失败`)
-      }
+      return { ok: false as const, error: extractErrorMessage(err, '部门、员工选项加载失败') }
     } finally {
       setScopeOptionsLoading(false)
     }
@@ -1516,15 +1822,15 @@ const PerformanceOverview: React.FC = () => {
         status: 'active',
       })
       setIndicatorLibraries(getListFromResponse(res, ['items', 'libraries']))
-    } catch {
+    } catch (err: any) {
       setIndicatorLibraries([])
-      message.error('指标库选项加载失败')
+      message.error(extractErrorMessage(err, '指标库选项加载失败'))
     } finally {
       setIndicatorLibrariesLoading(false)
     }
   }, [])
 
-  const loadPerformanceTemplates = useCallback(async () => {
+  const loadPerformanceTemplates = useCallback(async (opts?: { silent?: boolean }) => {
     setPerformanceTemplatesLoading(true)
     try {
       const res: any = await performanceAPI.getTemplates({
@@ -1533,13 +1839,34 @@ const PerformanceOverview: React.FC = () => {
         status: 'active',
       })
       setPerformanceTemplates(getListFromResponse(res, ['items', 'templates']))
-    } catch {
+      return { ok: true as const }
+    } catch (err: any) {
       setPerformanceTemplates([])
-      message.error('流程模板选项加载失败')
+      if (!opts?.silent) {
+        message.error(extractErrorMessage(err, '流程模板选项加载失败'))
+      }
+      return { ok: false as const, error: extractErrorMessage(err, '流程模板选项加载失败') }
     } finally {
       setPerformanceTemplatesLoading(false)
     }
   }, [])
+
+  // 首次加载：合并错误提示，失败模块可独立重试
+  const loadInitialPageData = useCallback(async () => {
+    const results = await Promise.all([
+      loadActivities({ silent: true }),
+      loadScopeOptions({ silent: true }),
+      loadPerformanceTemplates({ silent: true }),
+    ])
+    const failures = results
+      .filter((item): item is { ok: false; error: string } => !item.ok)
+      .map(item => item.error)
+    if (failures.length === 1) {
+      message.error(failures[0])
+    } else if (failures.length > 1) {
+      message.error(`页面初始化失败：${failures.join('；')}`)
+    }
+  }, [loadActivities, loadScopeOptions, loadPerformanceTemplates])
 
   const loadPreviousActivities = useCallback(async (excludeId?: number) => {
     setPreviousActivityLoading(true)
@@ -1560,10 +1887,8 @@ const PerformanceOverview: React.FC = () => {
 
   // 首次加载活动列表
   React.useEffect(() => {
-    loadActivities()
-    loadScopeOptions()
-    loadPerformanceTemplates()
-  }, [loadActivities, loadScopeOptions, loadPerformanceTemplates])
+    loadInitialPageData()
+  }, [loadInitialPageData])
 
   // 加载活动详情
   const loadActivityDetail = useCallback(async (activity: PerformanceActivity) => {
@@ -1804,8 +2129,8 @@ const PerformanceOverview: React.FC = () => {
     }
   }
 
-  // 活动状态操作
-  const handleActivityAction = async (action: string, activity: PerformanceActivity) => {
+  // 活动状态操作（执行体）；对外入口 handleActivityAction 会按需弹确认，不改 API/状态机
+  const executeActivityAction = async (action: string, activity: PerformanceActivity) => {
     try {
       const apiMap: Record<string, (id: number) => Promise<any>> = {
         start: performanceAPI.startActivity,
@@ -1831,8 +2156,12 @@ const PerformanceOverview: React.FC = () => {
       }
       const apiFn = apiMap[action]
       if (!apiFn) return
-      await apiFn(activity.id)
+      const res: any = await apiFn(activity.id)
       message.success('操作成功')
+      const warnings = res?.data?.warnings || res?.warnings
+      if (Array.isArray(warnings) && warnings.length > 0) {
+        message.warning(String(warnings[0]))
+      }
       loadActivities()
       if (detailDrawerVisible && currentActivity?.id === activity.id) {
         const detailRes: any = await performanceAPI.getActivity(activity.id)
@@ -1840,8 +2169,14 @@ const PerformanceOverview: React.FC = () => {
         await loadActivityDetail(updated)
       }
     } catch (err: any) {
-      message.error(err?.response?.data?.message || '操作失败')
+      message.error(extractErrorMessage(err, '操作失败'))
+      // 返回 rejected promise 给 Modal.confirm，失败时保持弹窗；调用方勿再额外 throw 未捕获错误
+      return Promise.reject(err)
     }
+  }
+
+  const handleActivityAction = (action: string, activity: PerformanceActivity) => {
+    confirmActivityWriteAction(action, activity, executeActivityAction)
   }
 
   const showSelfEvalReminderResult = (result?: PerformanceSelfEvalReminderResult) => {
@@ -1883,13 +2218,22 @@ const PerformanceOverview: React.FC = () => {
     showReminderIssueDetails('自评提醒发送明细', result)
   }
 
-  const handleSendSelfEvalReminder = async (activity: PerformanceActivity) => {
-    try {
-      const res: any = await performanceAPI.sendSelfEvalReminder(activity.id)
-      showSelfEvalReminderResult(unwrapSelfEvalReminderResult(res))
-    } catch (err: any) {
-      message.error(err?.response?.data?.message || '发送提醒失败')
-    }
+  const handleSendSelfEvalReminder = (activity: PerformanceActivity) => {
+    Modal.confirm({
+      title: '发送自评提醒',
+      content: `将向活动「${activity.name}」中待自评人员发送钉钉提醒。确认发送？`,
+      okText: '确认发送',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const res: any = await performanceAPI.sendSelfEvalReminder(activity.id)
+          showSelfEvalReminderResult(unwrapSelfEvalReminderResult(res))
+        } catch (err: any) {
+          message.error(err?.response?.data?.message || '发送提醒失败')
+          return Promise.reject(err)
+        }
+      },
+    })
   }
 
   const showManagerEvalReminderResult = (result?: PerformanceManagerEvalReminderResult) => {
@@ -1929,13 +2273,22 @@ const PerformanceOverview: React.FC = () => {
     message.warning('评分提醒未发送，请检查接收人配置')
   }
 
-  const handleSendManagerEvalReminder = async (activity: PerformanceActivity) => {
-    try {
-      const res: any = await performanceAPI.sendManagerEvalReminder(activity.id)
-      showManagerEvalReminderResult(unwrapManagerEvalReminderResult(res))
-    } catch (err: any) {
-      message.error(err?.response?.data?.message || '发送提醒失败')
-    }
+  const handleSendManagerEvalReminder = (activity: PerformanceActivity) => {
+    Modal.confirm({
+      title: '发送评分提醒',
+      content: `将向活动「${activity.name}」中待评分主管发送钉钉提醒。确认发送？`,
+      okText: '确认发送',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const res: any = await performanceAPI.sendManagerEvalReminder(activity.id)
+          showManagerEvalReminderResult(unwrapManagerEvalReminderResult(res))
+        } catch (err: any) {
+          message.error(err?.response?.data?.message || '发送提醒失败')
+          return Promise.reject(err)
+        }
+      },
+    })
   }
 
   const showHRConfirmReminderResult = (result?: PerformanceHRConfirmReminderResult) => {
@@ -1975,13 +2328,22 @@ const PerformanceOverview: React.FC = () => {
     message.warning('HR确认提醒未发送，请检查接收人配置')
   }
 
-  const handleSendHRConfirmReminder = async (activity: PerformanceActivity) => {
-    try {
-      const res: any = await performanceAPI.sendHRConfirmReminder(activity.id)
-      showHRConfirmReminderResult(unwrapHRConfirmReminderResult(res))
-    } catch (err: any) {
-      message.error(err?.response?.data?.message || '发送提醒失败')
-    }
+  const handleSendHRConfirmReminder = (activity: PerformanceActivity) => {
+    Modal.confirm({
+      title: '发送 HR 确认提醒',
+      content: `将向活动「${activity.name}」中待 HR 确认人员发送钉钉提醒。确认发送？`,
+      okText: '确认发送',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const res: any = await performanceAPI.sendHRConfirmReminder(activity.id)
+          showHRConfirmReminderResult(unwrapHRConfirmReminderResult(res))
+        } catch (err: any) {
+          message.error(err?.response?.data?.message || '发送提醒失败')
+          return Promise.reject(err)
+        }
+      },
+    })
   }
 
   const handleForceLockOverdueHR = (activity: PerformanceActivity) => {
@@ -1991,7 +2353,7 @@ const PerformanceOverview: React.FC = () => {
       okText: '确认强制锁定',
       okButtonProps: { danger: true },
       cancelText: '取消',
-      onOk: () => handleActivityAction('force-lock-overdue-hr', activity),
+      onOk: () => executeActivityAction('force-lock-overdue-hr', activity),
     })
   }
 
@@ -2046,19 +2408,15 @@ const PerformanceOverview: React.FC = () => {
   const renderActivityManageButton = useCallback((button: React.ReactElement) =>
     renderPermissionButton('performance:activity:manage', button), [renderPermissionButton])
 
-  const renderHiddenPermissionButton = useCallback((
-    permissionCode: string,
-    button: React.ReactElement,
-  ) => hasPermission(permissionCode) ? button : null, [])
-
+  // 详情操作：缺权时 disable + Tooltip，避免 sticky 操作栏出现空白/无说明
   const renderDetailActivityManageButton = useCallback((button: React.ReactElement) =>
-    renderHiddenPermissionButton('performance:activity:manage', button), [renderHiddenPermissionButton])
+    renderPermissionButton('performance:activity:manage', button), [renderPermissionButton])
 
   const renderDetailDistributionButton = useCallback((button: React.ReactElement) =>
-    renderHiddenPermissionButton('performance:distribution:manage', button), [renderHiddenPermissionButton])
+    renderPermissionButton('performance:distribution:manage', button), [renderPermissionButton])
 
   const renderDetailManagerEvalButton = useCallback((button: React.ReactElement) =>
-    renderHiddenPermissionButton('performance:manager_eval:submit', button), [renderHiddenPermissionButton])
+    renderPermissionButton('performance:manager_eval:submit', button), [renderPermissionButton])
 
   const withActivityActionStyle = useCallback((button: React.ReactElement) => {
     const props = button.props as { style?: React.CSSProperties }
@@ -2302,7 +2660,7 @@ const PerformanceOverview: React.FC = () => {
 
     if (!['locked', 'archived'].includes(activity.status)) {
       actions.push(
-        renderHiddenPermissionButton(
+        renderPermissionButton(
           'performance:assessment_manager:batch_update',
           <Button key="batch-manager" size="small" data-testid={`performance-detail-batch-manager-${activity.id}`} onClick={() => openAssessmentManagerModal()}>批量调整考核上级</Button>,
         ),
@@ -2505,6 +2863,142 @@ const PerformanceOverview: React.FC = () => {
     return null
   }, [navigate, renderPermissionButton])
 
+  /** List-level primary stage action only (same handlers as detail drawer). 权限由 getActionButtons 统一 wrap。 */
+  const getListStagePrimaryButton = useCallback((record: PerformanceActivity): React.ReactElement | null => {
+    if (activeView !== 'hr') return null
+    const isMutengFlow = record.flow_type === 'new'
+    const linkStyle = activityActionButtonStyle
+
+    if (record.status === 'draft') {
+      return (
+        <Button
+          key="open-target"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-open-target-${record.id}`}
+          onClick={() => handleActivityAction('open-target-setting', record)}
+        >
+          {isSeparatedMutengReviewActivity(record) ? '开启目标承接' : '开启目标设定'}
+        </Button>
+      )
+    }
+    if (record.status === 'target_setting' && !isMutengGoalSettingActivity(record)) {
+      return (
+        <Button
+          key="open-self"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-open-self-${record.id}`}
+          onClick={() => handleActivityAction('open-self-evaluation', record)}
+        >
+          开启自评
+        </Button>
+      )
+    }
+    if (isMutengFlow && !isMutengGoalSettingActivity(record) && record.status === 'target_approval') {
+      return (
+        <Button
+          key="open-self"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-open-self-${record.id}`}
+          onClick={() => handleActivityAction('open-self-evaluation', record)}
+        >
+          开启自评
+        </Button>
+      )
+    }
+    if (!isMutengFlow && record.status === 'self_evaluation') {
+      return (
+        <Button
+          key="open-manager"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-open-manager-${record.id}`}
+          onClick={() => handleActivityAction('open-manager-evaluation', record)}
+        >
+          开启主管评分
+        </Button>
+      )
+    }
+    if (!isMutengFlow && record.status === 'manager_evaluation') {
+      return (
+        <Button
+          key="open-employee-confirm"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-open-employee-confirm-${record.id}`}
+          onClick={() => handleActivityAction('open-employee-confirmation', record)}
+        >
+          开启员工确认
+        </Button>
+      )
+    }
+    if (!isMutengFlow && record.status === 'employee_confirmation') {
+      return (
+        <Button
+          key="open-manager-confirm"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-open-manager-confirm-${record.id}`}
+          onClick={() => handleActivityAction('open-manager-confirmation', record)}
+        >
+          开启主管确认
+        </Button>
+      )
+    }
+    if (!isMutengFlow && record.status === 'manager_confirmation') {
+      return (
+        <Button
+          key="open-hr-confirm"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-open-hr-confirm-${record.id}`}
+          onClick={() => handleActivityAction('open-hr-confirmation', record)}
+        >
+          开启HR确认
+        </Button>
+      )
+    }
+    if (!isMutengFlow && record.status === 'hr_confirmation') {
+      return (
+        <Button
+          key="lock"
+          size="small"
+          type="link"
+          danger
+          style={linkStyle}
+          data-testid={`performance-activity-lock-${record.id}`}
+          onClick={() => handleActivityAction('lock', record)}
+        >
+          锁定活动
+        </Button>
+      )
+    }
+    if (record.status === 'locked' || record.status === 'result_confirmed' || (isMutengFlow && ['result_publish', 'interview', 'appeal'].includes(record.status))) {
+      return (
+        <Button
+          key="archive"
+          size="small"
+          type="link"
+          style={linkStyle}
+          data-testid={`performance-activity-archive-${record.id}`}
+          onClick={() => handleActivityAction('archive', record)}
+        >
+          归档
+        </Button>
+      )
+    }
+    return null
+  }, [activeView, handleActivityAction])
+
   // 活动列表操作按钮
   const getActionButtons = useCallback((record: PerformanceActivity) => {
     const buttons: React.ReactNode[] = []
@@ -2512,6 +3006,11 @@ const PerformanceOverview: React.FC = () => {
 
     if (personalActionButton) {
       buttons.push(personalActionButton)
+    }
+
+    const stagePrimary = getListStagePrimaryButton(record)
+    if (stagePrimary) {
+      buttons.push(stagePrimary)
     }
 
     buttons.push(
@@ -2525,11 +3024,11 @@ const PerformanceOverview: React.FC = () => {
       if (buttonKey.startsWith('my-')) return button
 
       const styledButton = withActivityActionStyle(button)
-      return buttonKey !== 'view'
-        ? renderActivityManageButton(styledButton)
-        : styledButton
+      // Stage primary + other manage actions go through permission wrapper; detail view is always free.
+      if (buttonKey === 'view') return styledButton
+      return renderActivityManageButton(styledButton)
     })
-  }, [loadActivityDetail, renderActivityManageButton, renderMyParticipantActionButton, withActivityActionStyle])
+  }, [getListStagePrimaryButton, loadActivityDetail, renderActivityManageButton, renderMyParticipantActionButton, withActivityActionStyle])
 
   const renderActivityActions = useCallback((record: PerformanceActivity) => (
     <div style={activityActionListStyle}>
@@ -2650,7 +3149,7 @@ const PerformanceOverview: React.FC = () => {
       title: '操作',
       key: 'actions',
       fixed: 'right',
-      width: 150,
+      width: 220,
       onCell: () => ({ style: { verticalAlign: 'middle' } }),
       render: (_, record) => renderActivityActions(record),
     },
@@ -2750,14 +3249,22 @@ const PerformanceOverview: React.FC = () => {
     if (record.status === 'target_pending_approval') {
       links.push(renderPermissionButton(
         'performance:goal:manage',
-        <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }} onClick={async () => {
-          try {
-            await performanceAPI.approveGoalRecords(record.id)
-            message.success('目标已通过')
-            if (currentActivity) loadActivityDetail(currentActivity)
-          } catch (err: any) {
-            message.error(err?.response?.data?.message || '审批失败')
-          }
+        <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }} onClick={() => {
+          confirmParticipantWriteAction({
+            title: `通过目标：${record.employee_name}`,
+            content: '确认通过该员工的目标设定？通过后目标将生效。',
+            okText: '确认通过',
+            onOk: async () => {
+              try {
+                await performanceAPI.approveGoalRecords(record.id)
+                message.success('目标已通过')
+                if (currentActivity) loadActivityDetail(currentActivity)
+              } catch (err: any) {
+                message.error(err?.response?.data?.message || '审批失败')
+                return Promise.reject(err)
+              }
+            },
+          })
         }}>通过</Button>,
       ))
       links.push(renderPermissionButton(
@@ -2883,8 +3390,7 @@ const PerformanceOverview: React.FC = () => {
       render: (_: string, record: PerformanceParticipant) => {
         const v = getParticipantDisplayLevel(record, currentActivity)
         if (!v) return <Text type="secondary">-</Text>
-        const colorMap: Record<string, string> = { S: '#f50', A: '#1677ff', B: '#52c41a', C: '#faad14', D: '#ff4d4f' }
-        return <StatusTag color={colorMap[v] || 'default'}>{v}</StatusTag>
+        return <StatusTag color={PERFORMANCE_LEVEL_TAG_COLORS[v] || 'default'}>{v}</StatusTag>
       }
     },
     {
@@ -3018,28 +3524,44 @@ const PerformanceOverview: React.FC = () => {
         if (currentActivity?.flow_type === 'new' && isMutengReviewPipelineOpen(currentActivity) && record.status === 'manager_confirmed' && hasAnyPermission('performance:hr_review:submit', 'performance:activity:manage')) {
           links.push(
             <Button key="hr-review" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }} data-testid={`performance-participant-hr-confirm-${record.id}`}
-              onClick={async () => {
-                try {
-                  await performanceAPI.confirmHRResult(record.id)
-                  message.success('HR审核完成，结果已公布')
-                  if (currentActivity) loadActivityDetail(currentActivity)
-                } catch (err: any) {
-                  message.error(err?.response?.data?.message || 'HR审核失败')
-                }
+              onClick={() => {
+                confirmParticipantWriteAction({
+                  title: `HR审核：${record.employee_name}`,
+                  content: '确认完成 HR 审核？审核通过后结果将按流程公布，操作后不可轻易回退。',
+                  okText: '确认HR审核',
+                  onOk: async () => {
+                    try {
+                      await performanceAPI.confirmHRResult(record.id)
+                      message.success('HR审核完成，结果已公布')
+                      if (currentActivity) loadActivityDetail(currentActivity)
+                    } catch (err: any) {
+                      message.error(err?.response?.data?.message || 'HR审核失败')
+                      return Promise.reject(err)
+                    }
+                  },
+                })
               }}
             >HR审核</Button>
           )
         } else if (currentActivity?.flow_type !== 'new' && currentActivity?.status === 'hr_confirmation' && record.status === 'manager_confirmed' && hasPermission('performance:hr_confirm:submit')) {
           links.push(
             <Button key="hr-confirm" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-primary)' }} data-testid={`performance-participant-hr-confirm-${record.id}`}
-              onClick={async () => {
-                try {
-                  await performanceAPI.confirmHRResult(record.id)
-                  message.success('HR确认成功')
-                  if (currentActivity) loadActivityDetail(currentActivity)
-                } catch (err: any) {
-                  message.error(err?.response?.data?.message || 'HR确认失败')
-                }
+              onClick={() => {
+                confirmParticipantWriteAction({
+                  title: `HR确认：${record.employee_name}`,
+                  content: '确认完成 HR 确认？确认后该参与人绩效结果将进入已确认状态。',
+                  okText: '确认HR确认',
+                  onOk: async () => {
+                    try {
+                      await performanceAPI.confirmHRResult(record.id)
+                      message.success('HR确认成功')
+                      if (currentActivity) loadActivityDetail(currentActivity)
+                    } catch (err: any) {
+                      message.error(err?.response?.data?.message || 'HR确认失败')
+                      return Promise.reject(err)
+                    }
+                  },
+                })
               }}
             >HR确认</Button>
           )
@@ -3047,14 +3569,22 @@ const PerformanceOverview: React.FC = () => {
         if (record.status === 'target_pending_approval' && hasPermission('performance:goal:manage')) {
           links.push(
             <Button key="approve" size="small" type="link" style={{ ...linkStyle, color: 'var(--color-info)' }} data-testid={`performance-participant-approve-${record.id}`}
-              onClick={async () => {
-                try {
-                  await performanceAPI.approveGoalRecords(record.id)
-                  message.success('目标已通过')
-                  if (currentActivity) loadActivityDetail(currentActivity)
-                } catch (err: any) {
-                  message.error(err?.response?.data?.message || '审批失败')
-                }
+              onClick={() => {
+                confirmParticipantWriteAction({
+                  title: `通过目标：${record.employee_name}`,
+                  content: '确认通过该员工的目标设定？通过后目标将生效。',
+                  okText: '确认通过',
+                  onOk: async () => {
+                    try {
+                      await performanceAPI.approveGoalRecords(record.id)
+                      message.success('目标已通过')
+                      if (currentActivity) loadActivityDetail(currentActivity)
+                    } catch (err: any) {
+                      message.error(err?.response?.data?.message || '审批失败')
+                      return Promise.reject(err)
+                    }
+                  },
+                })
               }}
             >通过</Button>
           )
@@ -3102,7 +3632,7 @@ const PerformanceOverview: React.FC = () => {
       dataIndex: 'final_level',
       key: 'final_level',
       width: 80,
-      render: (v: string) => v ? <StatusTag color={({ S: '#f50', A: '#1677ff', B: '#52c41a', C: '#faad14', D: '#ff4d4f' } as Record<string, string>)[v] || 'default'}>{v}</StatusTag> : <Text type="secondary">-</Text>,
+      render: (v: string) => v ? <StatusTag color={PERFORMANCE_LEVEL_TAG_COLORS[v] || 'default'}>{v}</StatusTag> : <Text type="secondary">-</Text>,
     },
     { title: '操作', key: 'actions', fixed: 'right', width: 130, render: (_, record) => renderEmployeeParticipantActions(record) || <Text type="secondary">暂无操作</Text> },
   ]
@@ -3144,7 +3674,7 @@ const PerformanceOverview: React.FC = () => {
       dataIndex: 'final_level',
       key: 'final_level',
       width: 80,
-      render: (v: string) => v ? <StatusTag color={({ S: '#f50', A: '#1677ff', B: '#52c41a', C: '#faad14', D: '#ff4d4f' } as Record<string, string>)[v] || 'default'}>{v}</StatusTag> : <Text type="secondary">-</Text>,
+      render: (v: string) => v ? <StatusTag color={PERFORMANCE_LEVEL_TAG_COLORS[v] || 'default'}>{v}</StatusTag> : <Text type="secondary">-</Text>,
     },
     { title: '操作', key: 'actions', fixed: 'right', width: 160, render: (_, record) => renderManagerParticipantActions(record) },
   ]
@@ -3173,13 +3703,35 @@ const PerformanceOverview: React.FC = () => {
     }),
     [activities, activeView, canUseHRView, canUseManagerView],
   )
+  const isEmployeeTodoActivity = useCallback((item: PerformanceActivity) => (
+    Boolean(item.my_participant && renderMyParticipantActionButton(item))
+  ), [renderMyParticipantActionButton])
+  const isManagerTodoActivity = useCallback((item: PerformanceActivity) => (
+    ['target_setting', 'manager_evaluation', 'manager_confirmation'].includes(item.status)
+  ), [])
   const filteredActivities = React.useMemo(
     () => viewActivities.filter(item => {
       const matchName = !activitySearchText || item.name?.toLowerCase().includes(activitySearchText.toLowerCase())
+      if (activityStatusFilter === ACTIVITY_STATUS_FILTER_TODO) {
+        const matchTodo = activeView === 'employee'
+          ? isEmployeeTodoActivity(item)
+          : activeView === 'manager'
+            ? isManagerTodoActivity(item)
+            : true
+        return matchName && matchTodo
+      }
       const matchStatus = !selectedActivityStatuses || selectedActivityStatuses.includes(item.status)
       return matchName && matchStatus
     }),
-    [viewActivities, activitySearchText, selectedActivityStatuses],
+    [
+      viewActivities,
+      activitySearchText,
+      activityStatusFilter,
+      selectedActivityStatuses,
+      activeView,
+      isEmployeeTodoActivity,
+      isManagerTodoActivity,
+    ],
   )
   const handleActivityStatClick = useCallback((statusFilter?: string) => {
     setActivityStatusFilter(statusFilter)
@@ -3190,26 +3742,22 @@ const PerformanceOverview: React.FC = () => {
   const inProgressCount = viewActivities.filter(a => IN_PROGRESS_ACTIVITY_STATUSES.includes(a.status)).length
   const confirmedCount = viewActivities.filter(a => CONFIRMED_ACTIVITY_STATUSES.includes(a.status)).length
   const archivedCount = viewActivities.filter(a => a.status === 'archived').length
-  const employeeTodoCount = viewActivities.filter(a => Boolean(a.my_participant && renderMyParticipantActionButton(a))).length
-  const managerTodoCount = viewActivities.filter(a => ['target_setting', 'manager_evaluation', 'manager_confirmation'].includes(a.status)).length
-  const activityStatCards = [
-    { title: '绩效活动总数', value: activitiesTotal, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
-    { title: '进行中活动', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe', filter: ACTIVITY_STATUS_FILTER_IN_PROGRESS },
-    { title: '已确认结果', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
-    { title: '已归档活动', value: archivedCount, color: 'var(--color-text-secondary)', bg: 'var(--color-bg-hover)', filter: 'archived' },
-  ]
+  const employeeTodoCount = viewActivities.filter(isEmployeeTodoActivity).length
+  const managerTodoCount = viewActivities.filter(isManagerTodoActivity).length
+  // 芯片与列表同源：总数用已加载 viewActivities 长度，避免 total 与子集不一致
   const roleActivityStatCards = activeView === 'employee' ? [
-    { title: '我的绩效活动', value: viewActivities.length, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
-    { title: '待我处理', value: employeeTodoCount, color: '#b45309', bg: '#fef3c7', filter: undefined },
+    { title: '我的绩效活动', value: viewActivities.length, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined as string | undefined },
+    { title: '待我处理', value: employeeTodoCount, color: '#b45309', bg: '#fef3c7', filter: ACTIVITY_STATUS_FILTER_TODO },
     { title: '进行中', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe', filter: ACTIVITY_STATUS_FILTER_IN_PROGRESS },
     { title: '已完成', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
   ] : activeView === 'manager' ? [
-    { title: '团队绩效活动', value: viewActivities.length, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
-    { title: '待团队处理', value: managerTodoCount, color: '#b45309', bg: '#fef3c7', filter: undefined },
+    { title: '团队绩效活动', value: viewActivities.length, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined as string | undefined },
+    { title: '待团队处理', value: managerTodoCount, color: '#b45309', bg: '#fef3c7', filter: ACTIVITY_STATUS_FILTER_TODO },
     { title: '评分阶段', value: viewActivities.filter(a => a.status === 'manager_evaluation').length, color: '#0369a1', bg: '#e0f2fe', filter: 'manager_evaluation' },
     { title: '已完成', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
   ] : [
-    { title: '绩效活动总数', value: activitiesTotal, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined },
+    // 总数优先 activitiesTotal（服务端 total），与已加载列表取 max，避免截断时低估
+    { title: '绩效活动总数', value: Math.max(activitiesTotal, viewActivities.length), color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filter: undefined as string | undefined },
     { title: '进行中活动', value: inProgressCount, color: '#0369a1', bg: '#e0f2fe', filter: ACTIVITY_STATUS_FILTER_IN_PROGRESS },
     { title: '已确认结果', value: confirmedCount, color: 'var(--color-success)', bg: '#dcfce7', filter: ACTIVITY_STATUS_FILTER_CONFIRMED },
     { title: '已归档活动', value: archivedCount, color: 'var(--color-text-secondary)', bg: 'var(--color-bg-hover)', filter: 'archived' },
@@ -3225,34 +3773,7 @@ const PerformanceOverview: React.FC = () => {
     : activeView === 'manager'
       ? '待团队处理'
       : '阶段待推进'
-  const latestActivity = filteredActivities[0] || viewActivities[0]
   const completionPercent = viewActivities.length > 0 ? Math.round((confirmedCount / viewActivities.length) * 100) : 0
-  const workbenchInsights = [
-    {
-      label: primaryTodoLabel,
-      value: primaryTodoCount,
-      hint: activeView === 'hr' ? '需要关注阶段推进' : '优先处理这些事项',
-      icon: <ClockCircleOutlined />,
-      color: '#b45309',
-      bg: '#fffbeb',
-    },
-    {
-      label: '最近活动',
-      value: latestActivity ? '查看列表' : '暂无活动',
-      hint: latestActivity ? `最近活动状态：${STATUS_MAP[latestActivity.status]?.label || latestActivity.status}` : '当前视角暂无数据',
-      icon: <BarChartOutlined />,
-      color: viewMeta.accent,
-      bg: viewMeta.softBg,
-    },
-    {
-      label: '完成率',
-      value: `${completionPercent}%`,
-      hint: `${confirmedCount}/${viewActivities.length || 0} 已完成`,
-      icon: <CheckCircleOutlined />,
-      color: 'var(--color-success)',
-      bg: '#f0fdf4',
-    },
-  ]
   const detailParticipants = React.useMemo(() => {
     if (activeView === 'employee') {
       const mine = participants.filter(participant => participantMatchesCurrentUser(participant, currentUser))
@@ -3280,8 +3801,34 @@ const PerformanceOverview: React.FC = () => {
 
   const activityListActions = (
     <Space>
-      {activeView === 'hr' && hasPermission('performance:activity:manage') && (
-        <Button type="primary" data-testid="performance-create-activity" icon={<PlusOutlined />} onClick={() => openActivityModal()}>新建活动</Button>
+      {activeView === 'hr' && (
+        <Tooltip title={hasPermission('performance:activity:manage') ? undefined : '你缺少绩效活动管理权限，需要联系管理员添加'}>
+          <span>
+            <Button
+              type="primary"
+              data-testid="performance-create-activity"
+              icon={<PlusOutlined />}
+              disabled={!hasPermission('performance:activity:manage')}
+              onClick={() => openActivityModal()}
+            >
+              新建活动
+            </Button>
+          </span>
+        </Tooltip>
+      )}
+      {activeView === 'hr' && (
+        <Tooltip title={canImportActivity ? undefined : '你缺少绩效活动导入权限，需要联系管理员添加'}>
+          <span>
+            <Button
+              data-testid="performance-import-excel"
+              icon={<FileExcelOutlined />}
+              disabled={!canImportActivity}
+              onClick={() => setExcelImportOpen(true)}
+            >
+              Excel导入
+            </Button>
+          </span>
+        </Tooltip>
       )}
       <Button data-testid="performance-refresh-activities" icon={<ReloadOutlined />} onClick={() => loadActivities()} disabled={activitiesLoading}>刷新</Button>
     </Space>
@@ -3295,15 +3842,11 @@ const PerformanceOverview: React.FC = () => {
       subtitle="绩效活动管理与评分工作台"
     >
 
-      <Card
-        data-testid="performance-overview-card"
-        style={{ borderRadius: 'var(--radius-xl)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)' }}
-        styles={{ header: { background: 'var(--color-bg-card-header)', borderBottom: '1px solid var(--color-border-light)' } }}
-      >
+      <div data-testid="performance-overview-card">
         <div
           style={{
-            margin: '-8px -8px 18px',
-            padding: '22px 24px',
+            marginBottom: 16,
+            padding: '16px 20px',
             borderRadius: 'var(--radius-lg)',
             background: `linear-gradient(135deg, ${viewMeta.softBg} 0%, #ffffff 58%, #f8fafc 100%)`,
             border: '1px solid var(--color-border-light)',
@@ -3312,152 +3855,125 @@ const PerformanceOverview: React.FC = () => {
           <div
             style={{
               display: 'flex',
-              alignItems: 'flex-start',
+              alignItems: 'center',
               justifyContent: 'space-between',
               gap: 16,
               flexWrap: 'wrap',
-              marginBottom: 18,
             }}
           >
-            <Space align="start" size={12}>
+            <Space align="center" size={12} wrap>
               <div
                 style={{
-                  width: 46,
-                  height: 46,
+                  width: 40,
+                  height: 40,
                   borderRadius: 'var(--radius-md)',
                   background: viewMeta.accent,
                   color: '#fff',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: 22,
+                  fontSize: 20,
                   flexShrink: 0,
                 }}
               >
                 {viewMeta.icon}
               </div>
               <div>
-                <Text strong style={{ fontSize: 22, color: 'var(--color-text-title)' }}>
-                  {viewMeta.title}工作台
+                <Text strong style={{ fontSize: 18, color: 'var(--color-text-title)' }}>
+                  {viewMeta.title}
                 </Text>
-                <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', marginTop: 6 }}>
+                <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>
                   {viewMeta.description}
                 </div>
               </div>
+              <Tag
+                icon={<ClockCircleOutlined />}
+                color={primaryTodoCount > 0 ? 'warning' : 'default'}
+                style={{ borderRadius: 'var(--radius-pill)', marginInlineStart: 4 }}
+              >
+                {primaryTodoLabel} {primaryTodoCount}
+              </Tag>
+              <Tag
+                icon={<CheckCircleOutlined />}
+                color="success"
+                style={{ borderRadius: 'var(--radius-pill)' }}
+              >
+                完成率 {completionPercent}%
+              </Tag>
             </Space>
-            <Segmented
-              value={activeView}
-              options={performanceViewOptions}
-              onChange={(value) => {
-                setActiveView(value as PerformanceView)
-                setActivityStatusFilter(undefined)
-                setSelectedParticipantIds([])
-              }}
-            />
+            <Space wrap>
+              <Segmented
+                value={activeView}
+                options={performanceViewOptions}
+                onChange={(value) => {
+                  const next = value as PerformanceView
+                  setActiveView(next)
+                  writeStoredPerformanceView(next)
+                  setActivityStatusFilter(undefined)
+                  setSelectedParticipantIds([])
+                }}
+              />
+              {activityListActions}
+            </Space>
           </div>
-
-          <Row gutter={[12, 12]}>
-            {workbenchInsights.map((item) => (
-              <Col xs={24} md={8} key={item.label}>
-                <div
-                  style={{
-                    minHeight: 92,
-                    padding: '14px 16px',
-                    background: '#fff',
-                    border: '1px solid var(--color-border-light)',
-                    borderRadius: 'var(--radius-md)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: 'var(--radius-md)',
-                      background: item.bg,
-                      color: item.color,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: 18,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {item.icon}
-                  </div>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)' }}>{item.label}</div>
-                    <div style={{ color: 'var(--color-text-title)', fontSize: 20, fontWeight: 'var(--font-weight-bold)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {item.value}
-                    </div>
-                    <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>{item.hint}</div>
-                  </div>
-                  {item.label === '完成率' && (
-                    <Progress type="circle" percent={completionPercent} size={46} strokeColor={String(item.color)} />
-                  )}
-                </div>
-              </Col>
-            ))}
-          </Row>
         </div>
 
-        <Row gutter={[12, 12]} style={{ marginBottom: 18 }}>
+        {/* Compact filter chips (replaces heavy 4-card stat row) */}
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            marginBottom: 16,
+            alignItems: 'center',
+          }}
+          data-testid="performance-stat-filters"
+        >
           {roleActivityStatCards.map((item) => {
-            const active = item.filter !== undefined && activityStatusFilter === item.filter
+            const isAllChip = item.filter === undefined
+            const active = isAllChip
+              ? activityStatusFilter === undefined
+              : activityStatusFilter === item.filter
             return (
-              <Col xs={24} sm={12} lg={6} key={item.title}>
-                <button
-                  type="button"
-                  aria-label={`查看${item.title}`}
-                  onClick={() => handleActivityStatClick(item.filter)}
-                  style={{
-                    background: active ? item.bg : 'var(--color-bg-card)',
-                    borderRadius: 'var(--radius-md)',
-                    padding: '14px 16px',
-                    border: active ? `1px solid ${item.color}` : '1px solid var(--color-border-light)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'flex-start',
-                    gap: 8,
-                    width: '100%',
-                    minHeight: 104,
-                    font: 'inherit',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    transition: 'border-color 0.2s, background 0.2s, transform 0.2s',
-                  }}
-                >
-                  <div style={{
-                    width: 34, height: 34, borderRadius: 'var(--radius-md)', background: item.bg,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 18, color: item.color, fontWeight: 'var(--font-weight-bold)', flexShrink: 0,
-                  }}>
-                    {item.value}
-                  </div>
-                  <Text style={{ color: 'var(--color-text)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.title}</Text>
-                </button>
-              </Col>
+              <button
+                key={item.title}
+                type="button"
+                aria-label={`查看${item.title}`}
+                onClick={() => handleActivityStatClick(item.filter)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '6px 12px',
+                  borderRadius: 'var(--radius-pill)',
+                  border: active ? `1px solid ${item.color}` : '1px solid var(--color-border-light)',
+                  background: active ? item.bg : 'var(--color-bg-card)',
+                  color: 'var(--color-text)',
+                  font: 'inherit',
+                  cursor: 'pointer',
+                  transition: 'border-color 0.2s, background 0.2s',
+                }}
+              >
+                <span style={{
+                  minWidth: 22,
+                  height: 22,
+                  borderRadius: 'var(--radius-pill)',
+                  background: item.bg,
+                  color: item.color,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  padding: '0 6px',
+                }}>
+                  {item.value}
+                </span>
+                <span style={{ fontSize: 'var(--font-size-sm)', fontWeight: 500 }}>{item.title}</span>
+              </button>
             )
           })}
-        </Row>
-
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: 12,
-              marginBottom: 16,
-            }}
-          >
-            <Text strong style={{ fontSize: 16, color: 'var(--color-text-title)' }}>
-              待办与活动
-            </Text>
-            {activityListActions}
-          </div>
+        </div>
 
           <PerformanceActivityEditor
             visible={activityModalVisible}
@@ -3498,33 +4014,23 @@ const PerformanceOverview: React.FC = () => {
                 padding: '10px 12px',
                 marginBottom: 14,
                 borderRadius: 'var(--radius-md)',
-                background: '#f8fafc',
+                background: 'var(--color-bg-subtle)',
                 border: '1px solid var(--color-border-light)',
               }}
             >
               <div>
                 <Text strong style={{ color: 'var(--color-text-title)' }}>{viewMeta.title}列表</Text>
                 <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>
-                  共 {filteredActivities.length} 条，按当前角色显示最相关字段
+                  共 {filteredActivities.length} 条 · 用上方芯片筛选状态，列表展示当前阶段主操作
                 </div>
               </div>
-              <Space wrap>
-                <Input.Search
-                  placeholder="搜索活动名称"
-                  allowClear
-                  onSearch={setActivitySearchText}
-                  onChange={e => { if (!e.target.value) setActivitySearchText('') }}
-                  style={{ width: 220 }}
-                />
-                <Select
-                  placeholder="筛选状态"
-                  allowClear
-                  style={{ width: 140 }}
-                  value={activityStatusFilter}
-                  onChange={setActivityStatusFilter}
-                  options={ACTIVITY_STATUS_FILTER_OPTIONS}
-                />
-              </Space>
+              <Input.Search
+                placeholder="搜索活动名称"
+                allowClear
+                onSearch={setActivitySearchText}
+                onChange={e => { if (!e.target.value) setActivitySearchText('') }}
+                style={{ width: 220 }}
+              />
             </div>
             <Spin spinning={activitiesLoading}>
               <Table
@@ -3534,12 +4040,35 @@ const PerformanceOverview: React.FC = () => {
                 pagination={{ pageSize: 10 }}
                 size="small"
                 scroll={{ x: 1202 }}
+                locale={{
+                  emptyText: (
+                    <Empty
+                      description={
+                        activitySearchText || activityStatusFilter
+                          ? '当前筛选条件下无绩效活动'
+                          : '暂无绩效活动'
+                      }
+                    >
+                      {(activitySearchText || activityStatusFilter) ? (
+                        <Button
+                          type="link"
+                          onClick={() => {
+                            setActivitySearchText('')
+                            setActivityStatusFilter(undefined)
+                          }}
+                        >
+                          清除筛选
+                        </Button>
+                      ) : null}
+                    </Empty>
+                  ),
+                }}
               />
             </Spin>
           </PageCard>
           </div>
 
-      </Card>
+      </div>
 
       <Drawer
         title={`活动详情：${currentActivity?.name || ''}`}
@@ -3547,14 +4076,14 @@ const PerformanceOverview: React.FC = () => {
         width="min(1000px, 100vw)"
         open={detailDrawerVisible}
         onClose={closeDetailDrawer}
-        styles={{ footer: { paddingTop: 12 } }}
+        styles={{ body: { paddingTop: 12 }, footer: { paddingTop: 12 } }}
       >
         {currentActivity && (
           <div data-testid="performance-detail-content">
             <div
               style={{
-                padding: '16px 18px',
-                marginBottom: 16,
+                padding: '14px 16px',
+                marginBottom: 12,
                 borderRadius: 'var(--radius-lg)',
                 background: viewMeta.softBg,
                 border: '1px solid var(--color-border-light)',
@@ -3564,22 +4093,22 @@ const PerformanceOverview: React.FC = () => {
                 <Space size={12}>
                   <div
                     style={{
-                      width: 42,
-                      height: 42,
+                      width: 40,
+                      height: 40,
                       borderRadius: 'var(--radius-md)',
                       background: viewMeta.accent,
                       color: '#fff',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      fontSize: 20,
+                      fontSize: 18,
                     }}
                   >
                     {viewMeta.icon}
                   </div>
                   <div>
-                    <Text strong style={{ fontSize: 18, color: 'var(--color-text-title)' }}>{currentActivity.name}</Text>
-                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', marginTop: 4 }}>
+                    <Text strong style={{ fontSize: 16, color: 'var(--color-text-title)' }}>{currentActivity.name}</Text>
+                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>
                       {viewMeta.detailTitle} · {formatDateTime(currentActivity.start_date)} ~ {formatDateTime(currentActivity.end_date)}
                     </div>
                   </div>
@@ -3592,82 +4121,44 @@ const PerformanceOverview: React.FC = () => {
                 </Space>
               </div>
             </div>
+
+            {/* Sticky stage actions so HR can advance without scrolling */}
+            {detailActions && (
+              <div
+                data-testid="performance-detail-actions"
+                style={{
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 5,
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 8,
+                  marginBottom: 12,
+                  padding: '10px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--color-bg-card)',
+                  border: '1px solid var(--color-border-light)',
+                  boxShadow: 'var(--shadow-sm)',
+                }}
+              >
+                {detailActions}
+              </div>
+            )}
+
             <Steps
               current={currentActivityStepItems.findIndex(item => item.status === 'process')}
               items={currentActivityStepItems}
-              style={{ marginBottom: 20 }}
+              style={{ marginBottom: 16 }}
               size="small"
+              responsive
             />
-            <Descriptions column={3} size="small" style={{ marginBottom: 16 }} bordered>
-              <Descriptions.Item label="状态">
-                <StatusTag color={STATUS_MAP[currentActivity.status]?.color}>{STATUS_MAP[currentActivity.status]?.label}</StatusTag>
-              </Descriptions.Item>
+            <Descriptions column={2} size="small" style={{ marginBottom: 16 }} bordered>
               <Descriptions.Item label="周期类型">{getCycleLabel(currentActivity.cycle_type)}</Descriptions.Item>
-              <Descriptions.Item label="流程类型">
-                <Tag color={currentActivity.flow_type === 'new' ? 'purple' : 'default'}>
-                  {currentActivity.flow_type === 'new' ? '新流程' : '旧流程'}
-                </Tag>
-              </Descriptions.Item>
               <Descriptions.Item label="绩效周期">{formatDateTime(currentActivity.start_date)} ~ {formatDateTime(currentActivity.end_date)}</Descriptions.Item>
               <Descriptions.Item label="自评时间">{formatDateTime(currentActivity.self_eval_start_at)} ~ {formatDateTime(currentActivity.self_eval_end_at)}</Descriptions.Item>
               <Descriptions.Item label="主管评分">{formatDateTime(currentActivity.manager_eval_start_at)} ~ {formatDateTime(currentActivity.manager_eval_end_at)}</Descriptions.Item>
-              <Descriptions.Item label="结果确认">{formatDateTime(currentActivity.result_confirm_start_at)} ~ {formatDateTime(currentActivity.result_confirm_end_at)}</Descriptions.Item>
+              <Descriptions.Item label="结果确认" span={2}>{formatDateTime(currentActivity.result_confirm_start_at)} ~ {formatDateTime(currentActivity.result_confirm_end_at)}</Descriptions.Item>
             </Descriptions>
-
-            {/* 操作按钮 - 紧凑布局 */}
-            {detailActions && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-              {detailActions}
-              {false && (
-                <>
-              {currentActivity.status === 'draft' && (
-                <>
-                  <Button type="primary" size="small" onClick={() => handleActivityAction('open-target-setting', currentActivity)}>开启目标设定</Button>
-                  <Button size="small" onClick={() => handleActivityAction('publish', currentActivity)}>直接开启自评</Button>
-                </>
-              )}
-              {currentActivity.status === 'target_setting' && (
-                <Button type="primary" size="small" onClick={() => handleActivityAction('open-self-evaluation', currentActivity)}>开启自评</Button>
-              )}
-              {currentActivity.status === 'self_evaluation' && (
-                <>
-                  <Button type="primary" size="small" onClick={() => handleActivityAction('open-manager-evaluation', currentActivity)}>开启主管评分</Button>
-                  <Button size="small" onClick={async () => { try { await performanceAPI.sendSelfEvalReminder(currentActivity.id); message.success('已发送自评提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒自评</Button>
-                </>
-              )}
-              {currentActivity.status === 'manager_evaluation' && (
-                <>
-                  <Button type="primary" size="small" onClick={() => handleActivityAction('open-employee-confirmation', currentActivity)}>开启员工确认</Button>
-                  <Button size="small" onClick={() => setDistributionModalVisible(true)}>强制分布</Button>
-                    <Button size="small" onClick={() => { const selectable = participants.filter(p => (p.status === 'self_submitted' || p.status === 'manager_submitted') && isAssessmentManagerConfigured(p)); setBatchEvalSelected(selectable.map(p => p.id)); setBatchEvalModalVisible(true) }}>批量评分</Button>
-                  <Button size="small" onClick={async () => { try { await performanceAPI.sendManagerEvalReminder(currentActivity.id); message.success('已发送评分提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒评分</Button>
-                </>
-              )}
-              {currentActivity.status === 'employee_confirmation' && (
-                <Button type="primary" size="small" onClick={() => handleActivityAction('open-manager-confirmation', currentActivity)}>开启主管确认</Button>
-              )}
-              {currentActivity.status === 'manager_confirmation' && (
-                <Button type="primary" size="small" onClick={() => handleActivityAction('open-hr-confirmation', currentActivity)}>开启HR确认</Button>
-              )}
-              {currentActivity.status === 'hr_confirmation' && (
-                <>
-                  <Button size="small" onClick={async () => { try { await performanceAPI.sendHRConfirmReminder(currentActivity.id); message.success('已发送HR确认提醒') } catch (err: any) { message.error(err?.response?.data?.message || '发送提醒失败') } }}>提醒HR确认</Button>
-                  {hrDeadlineStatus?.can_force_lock && (
-                    <Button danger size="small" onClick={() => handleForceLockOverdueHR(currentActivity)}>逾期强制锁定</Button>
-                  )}
-                  <Button type="primary" danger size="small" onClick={() => handleActivityAction('lock', currentActivity)}>锁定活动</Button>
-                </>
-              )}
-              {currentActivity.status === 'locked' && (
-                <Button size="small" onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
-              )}
-              {currentActivity.status === 'result_confirmed' && (
-                <Button size="small" onClick={() => handleActivityAction('archive', currentActivity)}>归档活动</Button>
-              )}
-                </>
-              )}
-            </div>
-            )}
 
             <Divider style={{ margin: '8px 0 10px' }} orientationMargin={0}>统计摘要</Divider>
             {activeView === 'hr' && currentActivity.status === 'hr_confirmation' && hrDeadlineStatus && (
@@ -3707,8 +4198,8 @@ const PerformanceOverview: React.FC = () => {
                     const dist = distributionCheck.distribution?.[level]
                     if (!dist) return null
                     const statusColor = dist.status === 'exceeded' ? 'exception' : dist.status === 'warning' ? 'normal' : 'success'
-                    const bg = dist.status === 'exceeded' ? '#fff2f0' : dist.status === 'warning' ? '#fffbe6' : '#f6ffed'
-                    const barColor = dist.status === 'exceeded' ? '#ff4d4f' : dist.status === 'warning' ? '#faad14' : '#52c41a'
+                    const bg = dist.status === 'exceeded' ? 'var(--color-error-bg)' : dist.status === 'warning' ? '#fffbe6' : 'var(--color-success-bg)'
+                    const barColor = dist.status === 'exceeded' ? 'var(--color-error)' : dist.status === 'warning' ? 'var(--color-warning)' : 'var(--color-success)'
                     return (
                       <Col span={4} key={level} style={{ minWidth: 0 }}>
                         <div style={{
@@ -3764,6 +4255,7 @@ const PerformanceOverview: React.FC = () => {
                 pagination={{ pageSize: 10, size: 'small' }}
                 size="small"
                 scroll={{ x: activeView === 'hr' ? 1250 : 720 }}
+                locale={{ emptyText: '暂无参与人' }}
               />
             </Spin>
           </div>
@@ -3892,7 +4384,13 @@ const PerformanceOverview: React.FC = () => {
         {(() => {
           const formVals = distributionForm.getFieldsValue()
           const levels = ['S', 'A', 'B', 'C', 'D']
-          const colors: Record<string, string> = { S: '#f50', A: '#1677ff', B: '#52c41a', C: '#faad14', D: '#ff4d4f' }
+          const colors: Record<string, string> = {
+            S: 'var(--color-error)',
+            A: 'var(--color-primary)',
+            B: 'var(--color-success)',
+            C: 'var(--color-warning)',
+            D: 'var(--color-error-dark)',
+          }
           const total = levels.reduce((sum, l) => sum + (Number(formVals[`percent_${l}`]) || 0), 0)
           return (
             <div style={{ marginBottom: 16 }}>
@@ -3957,6 +4455,14 @@ const PerformanceOverview: React.FC = () => {
       </Modal>
 
       {/* 批量主管评分弹窗 */}
+      <PerformanceExcelImportWizard
+        open={excelImportOpen}
+        onCancel={() => setExcelImportOpen(false)}
+        onCommitted={() => {
+          void loadActivities()
+        }}
+      />
+
       <Modal
         title="批量主管评分"
         open={batchEvalModalVisible}
@@ -3997,10 +4503,10 @@ const PerformanceOverview: React.FC = () => {
           </Form.Item>
           <Form.Item label="绩效等级">
             <StatusTag color={
-              batchEvalScore >= 100 ? '#f50' :
-              batchEvalScore >= 90 ? '#2db7f5' :
-              batchEvalScore >= 80 ? '#87d068' :
-              batchEvalScore >= 60 ? '#faad14' : '#ff4d4f'
+              batchEvalScore >= 100 ? 'magenta' :
+              batchEvalScore >= 90 ? 'blue' :
+              batchEvalScore >= 80 ? 'green' :
+              batchEvalScore >= 60 ? 'gold' : 'red'
             } style={{ fontSize: 14, padding: '4px 12px' }}>
               {batchEvalScore >= 100 ? 'S - 杰出' :
                batchEvalScore >= 90 ? 'A - 优秀' :

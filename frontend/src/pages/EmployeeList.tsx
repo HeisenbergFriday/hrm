@@ -1,11 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Alert,
   Button,
   Col,
   Empty,
   Input,
+  Modal,
   Row,
   Select,
+  Skeleton,
   Space,
   Spin,
   Tag,
@@ -20,6 +23,8 @@ import { departmentAPI, orgAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
+import { hasPermission } from '../utils/permission'
+import { maskEmail, maskMobile } from '../utils/maskPii'
 
 const { Text } = Typography
 const { Search } = Input
@@ -74,7 +79,10 @@ const emptySummary: OverviewSummary = {
   planned_regularization_count: 0,
 }
 
-const renderDistributionItems = (items: DistributionItem[]) => {
+const renderDistributionItems = (items: DistributionItem[], loading?: boolean) => {
+  if (loading) {
+    return <Skeleton active paragraph={{ rows: 2 }} title={false} />
+  }
   if (!items.length) {
     return <Empty description="暂无分布数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
   }
@@ -102,8 +110,8 @@ const renderDistributionItems = (items: DistributionItem[]) => {
 
 const statConfig = [
   { key: 'active', title: '在职人数', icon: <UserOutlined />, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
-  { key: 'probation', title: '试用期人数', icon: <TeamOutlined />, color: '#0369a1', bg: '#e0f2fe' },
-  { key: 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: '#b45309', bg: '#fef3c7' },
+  { key: 'probation', title: '试用期人数', icon: <TeamOutlined />, color: 'var(--color-info)', bg: '#e0f2fe' },
+  { key: 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: 'var(--color-warning-dark)', bg: '#fef3c7' },
 ] as const
 
 const getPositionDiagnosticText = (record: EmployeeItem) => {
@@ -121,6 +129,7 @@ const EmployeeList: React.FC = () => {
   const [departments, setDepartments] = useState<Department[]>([])
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -128,15 +137,21 @@ const EmployeeList: React.FC = () => {
   const [search, setSearch] = useState('')
   const [departmentID, setDepartmentID] = useState<string>()
   const [status, setStatus] = useState<string>()
+  const loadSeqRef = useRef(0)
 
   const departmentNameMap = useMemo(() => {
     const entries = departments.map((department) => [department.department_id, department.name])
     return Object.fromEntries(entries) as Record<string, string>
   }, [departments])
 
+  const hasActiveFilters = Boolean(search || departmentID || status)
+
   const scopeLabel = useMemo(() => {
+    if (loading && !overview?.scope) {
+      return '加载中…'
+    }
     if (!overview?.scope) {
-      return '正在加载数据范围...'
+      return '—'
     }
     if (overview.scope.mode === 'all') {
       return '全组织'
@@ -145,10 +160,12 @@ const EmployeeList: React.FC = () => {
       return overview.scope.department_names.join(' / ')
     }
     return '部门范围'
-  }, [overview])
+  }, [overview, loading])
 
   const loadData = async (showLoading = true) => {
+    const seq = ++loadSeqRef.current
     if (showLoading) setLoading(true)
+    setLoadError(false)
     try {
       const [departmentRes, overviewRes, employeeRes] = await Promise.all([
         departmentAPI.getDepartments(),
@@ -161,37 +178,63 @@ const EmployeeList: React.FC = () => {
           status,
         }),
       ])
+      // 忽略过期响应，避免筛选/翻页竞态覆盖新结果
+      if (seq !== loadSeqRef.current) return
       setDepartments(departmentRes.data.departments || [])
       setOverview(overviewRes.data.overview || null)
       setEmployees(employeeRes.data.items || [])
       setTotal(employeeRes.data.total || 0)
     } catch {
+      if (seq !== loadSeqRef.current) return
+      setLoadError(true)
       message.error('获取组织数据失败')
     } finally {
-      if (showLoading) setLoading(false)
+      if (seq === loadSeqRef.current && showLoading) setLoading(false)
     }
   }
 
   useEffect(() => { void loadData() }, [page, pageSize, search, departmentID, status])
 
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      await orgAPI.syncOrg()
-      message.success('组织数据同步成功')
-      await loadData(false)
-    } catch {
-      message.error('组织数据同步失败')
-    } finally {
-      setSyncing(false)
-    }
+  const clearFilters = () => {
+    setPage(1)
+    setSearch('')
+    setDepartmentID(undefined)
+    setStatus(undefined)
   }
 
-  const summaryValues = [
-    overview?.summary.active_employees ?? emptySummary.active_employees,
-    overview?.summary.probation_employee_count ?? emptySummary.probation_employee_count,
-    overview?.summary.planned_regularization_count ?? emptySummary.planned_regularization_count,
-  ]
+  const canSyncOrg = hasPermission('attendance_manage')
+
+  const handleSync = () => {
+    if (!canSyncOrg) return
+    Modal.confirm({
+      title: '同步组织数据',
+      content: '将从钉钉重新拉取部门与员工数据并写入本系统，可能耗时较长。确认开始同步？',
+      okText: '确认同步',
+      cancelText: '取消',
+      onOk: async () => {
+        setSyncing(true)
+        try {
+          await orgAPI.syncOrg()
+          message.success('组织数据同步成功')
+          await loadData(false)
+        } catch {
+          message.error('组织数据同步失败')
+          return Promise.reject(new Error('sync failed'))
+        } finally {
+          setSyncing(false)
+        }
+      },
+    })
+  }
+
+  const overviewLoading = loading && !overview
+  const summaryValues: Array<number | string> = overviewLoading
+    ? ['…', '…', '…']
+    : [
+      overview?.summary.active_employees ?? emptySummary.active_employees,
+      overview?.summary.probation_employee_count ?? emptySummary.probation_employee_count,
+      overview?.summary.planned_regularization_count ?? emptySummary.planned_regularization_count,
+    ]
 
   const columns = [
     {
@@ -199,7 +242,11 @@ const EmployeeList: React.FC = () => {
       render: (_: string, record: EmployeeItem) => (
         <div>
           <a
-            onClick={() => navigate(`/employees/${record.id}`)}
+            href={`/employees/${record.id}`}
+            onClick={(e) => {
+              e.preventDefault()
+              navigate(`/employees/${record.id}`)
+            }}
             style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-primary)', fontSize: 'var(--font-size-base)' }}
           >
             {record.name}
@@ -211,13 +258,13 @@ const EmployeeList: React.FC = () => {
     {
       title: '部门', dataIndex: 'department_id', key: 'department_id',
       render: (value: string) => (
-        <span style={{ color: '#374151' }}>{departmentNameMap[value] || value || '-'}</span>
+        <span style={{ color: 'var(--color-text-primary)' }}>{departmentNameMap[value] || value || '-'}</span>
       ),
     },
     {
       title: '岗位', dataIndex: 'position', key: 'position',
       render: (value: string, record: EmployeeItem) => value ? (
-        <span style={{ color: '#374151' }}>{value}</span>
+        <span style={{ color: 'var(--color-text-primary)' }}>{value}</span>
       ) : (
         <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{getPositionDiagnosticText(record)}</span>}>
           <Tag color="orange">未同步岗位</Tag>
@@ -228,8 +275,8 @@ const EmployeeList: React.FC = () => {
       title: '联系方式', key: 'contact',
       render: (_: unknown, record: EmployeeItem) => (
         <div>
-          <div style={{ color: '#374151' }}>{record.email || '-'}</div>
-          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>{record.mobile || '-'}</div>
+          <div style={{ color: 'var(--color-text-primary)' }}>{maskEmail(record.email)}</div>
+          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>{maskMobile(record.mobile)}</div>
         </div>
       ),
     },
@@ -247,11 +294,27 @@ const EmployeeList: React.FC = () => {
     <PageContainer
       title="组织花名册"
       icon={<TeamOutlined />}
-      subtitle={<>数据范围：<span style={{ color: 'var(--color-primary)', fontWeight: 'var(--font-weight-semibold)' }}>{scopeLabel}</span></>}
+      subtitle={
+        loading && !overview?.scope
+          ? <span style={{ color: 'var(--color-text-secondary)' }}>数据范围加载中…</span>
+          : <>数据范围：<span style={{ color: 'var(--color-primary)', fontWeight: 'var(--font-weight-semibold)' }}>{scopeLabel}</span></>
+      }
       extra={
         <Space>
           <Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>刷新</Button>
-          <Button type="primary" icon={<SyncOutlined />} onClick={() => void handleSync()} loading={syncing}>同步组织数据</Button>
+          <Tooltip title={canSyncOrg ? undefined : '你缺少 attendance_manage 权限，需要联系管理员添加'}>
+            <span>
+              <Button
+                type="primary"
+                icon={<SyncOutlined />}
+                onClick={handleSync}
+                loading={syncing}
+                disabled={!canSyncOrg}
+              >
+                同步组织数据
+              </Button>
+            </span>
+          </Tooltip>
         </Space>
       }
     >
@@ -285,8 +348,12 @@ const EmployeeList: React.FC = () => {
               </div>
               <div>
                 <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.title}</Text>
-                <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text-title)', lineHeight: 1.2, marginTop: 2 }}>
-                  {summaryValues[idx]}
+                <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text-title)', lineHeight: 1.2, marginTop: 2, minHeight: 34 }}>
+                  {overviewLoading ? (
+                    <Skeleton.Input active size="small" style={{ width: 56, height: 28 }} />
+                  ) : (
+                    summaryValues[idx]
+                  )}
                 </div>
               </div>
             </div>
@@ -305,7 +372,7 @@ const EmployeeList: React.FC = () => {
             <PageCard
               title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>{section.title}</span>}
             >
-              {renderDistributionItems(section.data)}
+              {renderDistributionItems(section.data, overviewLoading)}
             </PageCard>
           </Col>
         ))}
@@ -340,7 +407,20 @@ const EmployeeList: React.FC = () => {
               { label: '离职/停用', value: 'inactive' },
             ]}
           />
+          {hasActiveFilters ? (
+            <Button type="link" onClick={clearFilters}>清除筛选</Button>
+          ) : null}
         </Space>
+
+        {loadError ? (
+          <Alert
+            type="error"
+            showIcon
+            message="花名册数据加载失败"
+            action={<Button size="small" onClick={() => void loadData()}>重试</Button>}
+            style={{ marginBottom: 16 }}
+          />
+        ) : null}
 
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
@@ -358,6 +438,23 @@ const EmployeeList: React.FC = () => {
               showSizeChanger: false,
               showTotal: (value) => <span style={{ color: 'var(--color-text-secondary)' }}>共 {value} 人</span>,
               onChange: (nextPage, nextPageSize) => { setPage(nextPage); setPageSize(nextPageSize) },
+            }}
+            locale={{
+              emptyText: (
+                <Empty
+                  description={
+                    loadError
+                      ? '加载失败'
+                      : hasActiveFilters
+                        ? '当前筛选条件下无员工'
+                        : '暂无员工数据'
+                  }
+                >
+                  {hasActiveFilters && !loadError ? (
+                    <Button type="link" onClick={clearFilters}>清除筛选</Button>
+                  ) : null}
+                </Empty>
+              ),
             }}
           />
         )}

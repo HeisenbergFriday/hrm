@@ -9,6 +9,7 @@ const menuKeys = [
 
 const allPerformancePermissions = [
   'performance:activity:manage',
+  'performance:activity:import',
   'performance:distribution:manage',
   'performance:manager_eval:submit',
   'performance:goal:manage',
@@ -21,10 +22,16 @@ const allPerformancePermissions = [
 
 type MockOptions = {
   permissions?: string[]
+  /** 默认完整绩效菜单；高风险入口用例可收窄或置空 */
+  menuKeys?: string[]
 }
 
-async function seedAuth(page: Page, permissions = allPerformancePermissions) {
-  await page.addInitScript(({ keys, perms }) => {
+async function seedAuth(
+  page: Page,
+  permissions = allPerformancePermissions,
+  keys: string[] = menuKeys,
+) {
+  await page.addInitScript(({ nextKeys, perms }) => {
     window.localStorage.setItem(
       'peopleops-auth',
       JSON.stringify({
@@ -32,18 +39,18 @@ async function seedAuth(page: Page, permissions = allPerformancePermissions) {
           user: {
             id: 'tester',
             name: 'E2E Tester',
-            menu_keys: keys,
+            menu_keys: nextKeys,
             permissions: perms,
           },
           token: 'mock-token',
           isLoggedIn: true,
-          menuKeys: keys,
+          menuKeys: nextKeys,
           permissions: perms,
         },
         version: 0,
       }),
     )
-  }, { keys: menuKeys, perms: permissions })
+  }, { nextKeys: keys, perms: permissions })
 }
 
 function activityFixture(id: number, name: string, status: string) {
@@ -191,12 +198,24 @@ async function json(route: Route, data: unknown, status = 200) {
 }
 
 async function setupPerformanceMock(page: Page, options: MockOptions = {}) {
-  await seedAuth(page, options.permissions)
+  const resolvedMenuKeys = options.menuKeys ?? menuKeys
+  const resolvedPermissions = options.permissions ?? allPerformancePermissions
+  await seedAuth(page, resolvedPermissions, resolvedMenuKeys)
 
   const activities = new Map<number, any>([
     [101, activityFixture(101, 'Draft Cycle', 'draft')],
     [102, activityFixture(102, 'Target Setting Cycle', 'target_setting')],
     [103, activityFixture(103, 'Manager Review Cycle', 'manager_evaluation')],
+    // 沐腾新流程：用于「上期结果」跳转验收
+    [110, {
+      ...activityFixture(110, 'Muteng Current Cycle', 'manager_evaluation'),
+      flow_type: 'new',
+      previous_review_activity_id: 109,
+    }],
+    [109, {
+      ...activityFixture(109, 'Muteng Previous Cycle', 'archived'),
+      flow_type: 'new',
+    }],
   ])
   const participants = new Map<number, any>([
     [201, participantFixture(201, 'pending', 'Alice Target')],
@@ -204,6 +223,8 @@ async function setupPerformanceMock(page: Page, options: MockOptions = {}) {
     [203, participantFixture(203, 'self_submitted', 'Mina Manager')],
     [204, participantFixture(204, 'manager_submitted', 'Riley Result')],
     [205, participantFixture(205, 'target_pending_approval', 'Taylor Approval')],
+    [210, { ...participantFixture(210, 'manager_submitted', 'Prev Link User'), activity_id: 110, employee_id: 'emp-prev' }],
+    [209, { ...participantFixture(209, 'result_confirmed', 'Prev Link User'), activity_id: 109, employee_id: 'emp-prev' }],
   ])
 
   await page.route('**/api/v1/**', async (route) => {
@@ -217,8 +238,8 @@ async function setupPerformanceMock(page: Page, options: MockOptions = {}) {
         user: {
           id: 'tester',
           name: 'E2E Tester',
-          menu_keys: menuKeys,
-          permissions: options.permissions ?? allPerformancePermissions,
+          menu_keys: resolvedMenuKeys,
+          permissions: resolvedPermissions,
         },
       })
     }
@@ -233,6 +254,84 @@ async function setupPerformanceMock(page: Page, options: MockOptions = {}) {
       return json(route, {
         items: [{ id: 'emp-1', user_id: 'emp-1', employee_id: 'E001', name: 'Alice Target', department_name: 'Product', status: 'active' }],
         total: 1,
+      })
+    }
+
+    if (method === 'GET' && path === '/performance/scope-options') {
+      return json(route, {
+        employees: [{ user_id: 'emp-1', name: 'Alice Target', department_name: 'Product', position: 'PM' }],
+      })
+    }
+
+    if (method === 'POST' && path === '/performance/imports/analyze') {
+      return json(route, {
+        batch_id: 'excel-e2e-batch',
+        status: 'analyzed',
+        created_at: '2026-07-17T08:00:00Z',
+        preview: {
+          source_type: 'xiaotie',
+          source_label: '小铁文娱',
+          file_name: 'xiaotie-performance.xlsx',
+          file_sha256: 'e2e-sha256',
+          requires_review: true,
+          issues: [{ level: 'warning', code: 'weight_rescaled', message: '权重已按模板比例换算' }],
+          drafts: [{
+            draft_key: 'xiaotie_staff',
+            selected: true,
+            source_sheet: '普通员工绩效',
+            template_name: '普通员工月度绩效模板',
+            activity_name: '2026年7月普通员工绩效',
+            flow_type: 'old',
+            activity_kind: 'review_scoring',
+            cycle_type: 'monthly',
+            start_date: '2026-07-01',
+            end_date: '2026-07-31',
+            enable_bonus_score: false,
+            employee_name: 'Alice Target',
+            employee_user_id: 'emp-1',
+            employee_match: 'matched',
+            source_weight_total: 100,
+            sections: [{
+              name: '业绩指标',
+              section_type: 'performance',
+              weight: 70,
+              is_score_required: true,
+              is_comment_required: false,
+              items: [{ name: '目标交付', description: '按期完成', weight: 100, max_score: 100 }],
+            }],
+            goals: [{
+              section_type: 'performance',
+              goal_type: 'quantitative',
+              is_fixed: false,
+              item_name: '目标交付',
+              item_definition: '按期完成',
+              weight: 70,
+              scoring_rule: '按完成度评分',
+              sort_order: 1,
+            }],
+          }],
+        },
+      })
+    }
+
+    if (method === 'GET' && path === '/performance/imports/excel-e2e-batch') {
+      return json(route, { batch_id: 'excel-e2e-batch', status: 'analyzed', created_at: '2026-07-17T08:00:00Z' })
+    }
+
+    if (method === 'POST' && path === '/performance/imports/excel-e2e-batch/commit') {
+      return json(route, {
+        batch_id: 'excel-e2e-batch',
+        created: [{
+          draft_key: 'xiaotie_staff',
+          template_id: 301,
+          template_reused: false,
+          activity_id: 401,
+          activity_name: '2026年7月普通员工绩效',
+          participant_id: 501,
+          employee_user_id: 'emp-1',
+          goal_count: 1,
+        }],
+        warnings: [],
       })
     }
 
@@ -251,9 +350,14 @@ async function setupPerformanceMock(page: Page, options: MockOptions = {}) {
     const activityParticipantsMatch = path.match(/^\/performance\/activities\/(\d+)\/participants$/)
     if (method === 'GET' && activityParticipantsMatch) {
       const activityId = Number(activityParticipantsMatch[1])
-      const items = activityId === 103
-        ? [participants.get(203), participants.get(204)]
-        : [participants.get(201), participants.get(205)]
+      let items: any[]
+      if (activityId === 103) {
+        items = [participants.get(203), participants.get(204)]
+      } else if (activityId === 110) {
+        items = [participants.get(210)]
+      } else {
+        items = [participants.get(201), participants.get(205)]
+      }
       return json(route, { items, total: items.length })
     }
 
@@ -461,9 +565,18 @@ async function setupPerformanceMock(page: Page, options: MockOptions = {}) {
     if (method === 'GET' && participantMatch) {
       const participantId = Number(participantMatch[1])
       const participant = participants.get(participantId)
-      const activity = participantId === 204
-        ? { ...activities.get(103), status: 'employee_confirmation', enable_bonus_score: true }
-        : activities.get(participantId === 203 ? 103 : 102)
+      let activity: any
+      if (participantId === 204) {
+        activity = { ...activities.get(103), status: 'employee_confirmation', enable_bonus_score: true }
+      } else if (participantId === 209) {
+        activity = activities.get(109)
+      } else if (participantId === 210) {
+        activity = activities.get(110)
+      } else if (participantId === 203) {
+        activity = activities.get(103)
+      } else {
+        activity = activities.get(102)
+      }
       return json(route, { participant, activity })
     }
 
@@ -520,6 +633,21 @@ async function setupPerformanceMock(page: Page, options: MockOptions = {}) {
       return json(route, { ok: true })
     }
 
+    // 上期结果：当前参与人 210 → 上期活动 109 / 参与人 209；其它默认空
+    const previousResultMatch = path.match(/^\/performance\/participants\/(\d+)\/previous-result$/)
+    if (method === 'GET' && previousResultMatch) {
+      const participantId = Number(previousResultMatch[1])
+      if (participantId === 210) {
+        return json(route, {
+          activity: activities.get(109),
+          participant: participants.get(209),
+          goal_records: goalRecords(209),
+          versions: [],
+        })
+      }
+      return json(route, {})
+    }
+
     return json(route, { message: `Unhandled mock route: ${method} ${path}` }, 404)
   })
 }
@@ -569,6 +697,8 @@ test.describe('performance module', () => {
       response.url().includes('/performance/activities/101/open-target-setting') && response.request().method() === 'POST',
     )
     await page.getByTestId('performance-detail-open-target-101').click()
+    // 阶段推进写操作有二次确认
+    await page.getByRole('button', { name: '确认开启' }).click()
     await openTargetResponse
 
     await page.locator('.ant-drawer-close').click()
@@ -582,6 +712,32 @@ test.describe('performance module', () => {
     await expect(page).toHaveURL(/\/performance-goal-setting\/102\/201/)
   })
 
+  test('imports an Excel performance template through the four-step wizard', async ({ page }) => {
+    await setupPerformanceMock(page)
+    await page.goto('/performance-overview')
+
+    await page.getByTestId('performance-import-excel').click()
+    await expect(page.getByText('Excel 导入绩效活动')).toBeVisible()
+
+    await page.locator('.ant-modal input[type="file"]').setInputFiles({
+      name: 'xiaotie-performance.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      buffer: Buffer.from('mock xlsx content'),
+    })
+    await page.getByRole('button', { name: '开始识别' }).click()
+
+    await expect(page.getByText('普通员工月度绩效模板')).toBeVisible()
+    await expect(page.getByText('权重已按模板比例换算')).toBeVisible()
+    await page.getByRole('button', { name: '去补充确认' }).click()
+
+    await expect(page.getByText('请确认活动周期和日期')).toBeVisible()
+    await page.getByRole('button', { name: '确认创建（1）' }).click()
+
+    await expect(page.locator('.ant-result-title').filter({ hasText: '绩效模板和草稿活动已创建' })).toBeVisible()
+    await expect(page.getByText('活动ID 401')).toBeVisible()
+    await expect(page.getByText('目标 1 项')).toBeVisible()
+  })
+
   test('disables protected controls and blocks guarded routes without operation permission', async ({ page }) => {
     await setupPerformanceMock(page, {
       permissions: ['performance:result:view'],
@@ -591,7 +747,10 @@ test.describe('performance module', () => {
     await expect(page.getByTestId('performance-overview-page')).toBeVisible()
     await page.getByTestId('performance-activity-view-101').click()
     await expect(page.getByTestId('performance-detail-content')).toBeVisible()
-    await expect(page.getByTestId('performance-detail-open-target-101')).toHaveCount(0)
+    // 缺权仍展示按钮，但 disabled + Tooltip（不再 hide）
+    const openTarget = page.getByTestId('performance-detail-open-target-101')
+    await expect(openTarget).toBeVisible()
+    await expect(openTarget).toBeDisabled()
 
     await page.goto('/performance-goal-setting/102/201')
     await expect(page.locator('.ant-result')).toBeVisible()
@@ -673,5 +832,64 @@ test.describe('performance module', () => {
     )
     await page.getByTestId('performance-result-confirm-employee').click()
     await confirmResponse
+  })
+
+  // ---------- 高风险入口：原手工 3 条，现自动化 ----------
+
+  test('empty menuKeys: home shows no-role empty state and does not 403-loop', async ({ page }) => {
+    await setupPerformanceMock(page, {
+      menuKeys: [],
+      permissions: [],
+    })
+
+    await page.goto('/')
+    await expect(page.getByText('暂无数据权限')).toBeVisible()
+    await expect(page.getByText('您尚未被分配任何角色，请联系管理员配置权限后再使用系统功能。')).toBeVisible()
+    await expect(page.getByText('无访问权限')).toHaveCount(0)
+
+    // 其它页 403 后返回首页应回到友好空态，而不是再次死循环
+    await page.goto('/attendance')
+    await expect(page.getByText('无访问权限')).toBeVisible()
+    await page.getByRole('button', { name: '返回首页' }).click()
+    await expect(page).toHaveURL(/\/$|\/\?/)
+    await expect(page.getByText('暂无数据权限')).toBeVisible()
+    await expect(page.getByText('无访问权限')).toHaveCount(0)
+  })
+
+  test('deep-link self-eval works with feature permission only (no overview menu)', async ({ page }) => {
+    await setupPerformanceMock(page, {
+      menuKeys: ['menu:home'],
+      permissions: ['performance:self_eval:submit'],
+    })
+
+    await page.goto('/performance-self-eval/102/202')
+    await expect(page.getByTestId('performance-self-eval-page')).toBeVisible()
+    await expect(page.getByText('无访问权限')).toHaveCount(0)
+
+    // 列表总览仍要求菜单
+    await page.goto('/performance-overview')
+    await expect(page.getByText('无访问权限')).toBeVisible()
+  })
+
+  test('previous-result navigates to previous activity ids, not current', async ({ page }) => {
+    await setupPerformanceMock(page)
+    await page.goto('/performance-overview')
+    await expect(page.getByTestId('performance-overview-page')).toBeVisible()
+    await expect(page.getByText('Muteng Current Cycle')).toBeVisible()
+
+    await page.getByTestId('performance-activity-view-110').click()
+    await expect(page.getByTestId('performance-detail-content')).toBeVisible()
+
+    const previousResponse = page.waitForResponse(response =>
+      response.url().includes('/performance/participants/210/previous-result')
+      && response.request().method() === 'GET'
+      && response.ok(),
+    )
+    await page.getByTestId('performance-participant-previous-result-210').click()
+    await previousResponse
+
+    await expect(page).toHaveURL(/\/performance-result\/109\/209/)
+    await expect(page).not.toHaveURL(/\/performance-result\/110\/210/)
+    await expect(page.getByTestId('performance-result-page')).toBeVisible()
   })
 })

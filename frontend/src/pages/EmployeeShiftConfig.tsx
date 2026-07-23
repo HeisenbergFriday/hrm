@@ -19,6 +19,7 @@ import { ClockCircleOutlined, DeleteOutlined, SettingOutlined, TeamOutlined } fr
 import { shiftConfigAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import StatusTag from '../components/StatusTag'
+import { hasPermission } from '../utils/permission'
 
 const { RangePicker } = DatePicker
 const { Text } = Typography
@@ -113,6 +114,7 @@ function previewReasonLabel(item: ShiftPreviewItem): string {
 
 export default function EmployeeShiftConfig() {
   const qc = useQueryClient()
+  const canManage = hasPermission('attendance_manage')
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
   const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [batchForm, setBatchForm] = useState<BatchFormState>(makeDefaultBatchForm(false))
@@ -332,6 +334,10 @@ export default function EmployeeShiftConfig() {
   }
 
   const handleBatchSet = () => {
+    if (!canManage) {
+      message.warning('你缺少 attendance_manage 权限，需要联系管理员添加')
+      return
+    }
     if (selectedRowKeys.length === 0) {
       message.warning('请先勾选员工')
       return
@@ -446,9 +452,11 @@ export default function EmployeeShiftConfig() {
       />
 
       <div className="employee-shift-toolbar" style={{ marginBottom: 'var(--space-3)', display: 'flex', gap: 'var(--space-2)' }}>
-        <Button type="primary" icon={<TeamOutlined />} disabled={selectedRowKeys.length === 0} onClick={handleBatchSet}>
-          一站式设置(已选 {selectedRowKeys.length} 人)
-        </Button>
+        <Tooltip title={canManage ? undefined : '你缺少 attendance_manage 权限，需要联系管理员添加'}>
+          <Button type="primary" icon={<TeamOutlined />} disabled={!canManage || selectedRowKeys.length === 0} onClick={handleBatchSet}>
+            一站式设置(已选 {selectedRowKeys.length} 人)
+          </Button>
+        </Tooltip>
         <Text type="secondary" style={{ lineHeight: '32px' }}>
           已缓存班次 {shiftOptions.length} 个
         </Text>

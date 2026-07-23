@@ -107,10 +107,15 @@ func Init() error {
 		return err
 	}
 	if err := migrateMultitenantUniqueIndexes(); err != nil {
-		log.Printf("迁移多租户唯一索引失败: %v", err)
+		log.Printf("legacy multitenant compatibility migration failed: %v", err)
 		return err
 	}
-	log.Println("表结构迁移成功")
+	// Legacy compatibility code can still touch indexes; verify the final state again.
+	if err := MigrateOrgCompositeUniqueIndexes(DB); err != nil {
+		log.Printf("final organization composite unique index verification failed: %v", err)
+		return err
+	}
+	log.Println("table schema migration completed")
 
 	// 种子数据
 	log.Println("开始填充种子数据...")
@@ -125,6 +130,9 @@ func Init() error {
 	migratePerformanceFollowupMenuPermissions()
 	migrateAttendanceToolboxMenuPermissions()
 	migrateLiedeOrganizationAdminRoles()
+	if err := remapCrossOrgUserRoleBindings(); err != nil {
+		log.Printf("[migrate] remap cross-org user_roles failed: %v", err)
+	}
 
 	// 绩效表已随主库 migrate() 一并迁移，无需独立数据源
 	log.Println("绩效模块使用主库")
@@ -169,6 +177,27 @@ func CurrentOrganizationIDFromDB(db *gorm.DB) string {
 		}
 	}
 	return DefaultOrganizationID
+}
+
+// RequireOrganizationIDFromDB returns the tenant org from the DB session and fails closed
+// when no explicit organization is present. Unlike CurrentOrganizationIDFromDB it never
+// invents "default" for an empty context.
+func RequireOrganizationIDFromDB(db *gorm.DB) (string, error) {
+	if db == nil || db.Statement == nil {
+		return "", fmt.Errorf("missing organization context")
+	}
+	if info := requestmeta.FromContext(db.Statement.Context); info != nil {
+		if orgID := strings.TrimSpace(info.OrgID); orgID != "" {
+			return NormalizeOrganizationID(orgID), nil
+		}
+		return "", fmt.Errorf("missing organization context")
+	}
+	if tenantID, err := requestmeta.TenantID(db.Statement.Context); err == nil {
+		if orgID := strings.TrimSpace(tenantID); orgID != "" {
+			return NormalizeOrganizationID(orgID), nil
+		}
+	}
+	return "", fmt.Errorf("missing organization context")
 }
 
 func statementHasOrganizationField(db *gorm.DB) bool {
@@ -249,18 +278,21 @@ func setCreateOrganizationID(db *gorm.DB) {
 }
 
 type envOrganization struct {
-	OrgID           string `json:"org_id"`
-	Name            string `json:"name"`
-	CorpID          string `json:"corp_id"`
-	DingTalkAppKey  string `json:"dingtalk_app_key"`
-	DingTalkSecret  string `json:"dingtalk_secret"`
-	DingTalkAgentID string `json:"dingtalk_agent_id"`
-	AppKey          string `json:"app_key"`
-	AppSecret       string `json:"app_secret"`
-	AgentID         string `json:"agent_id"`
-	AppHomeURL      string `json:"app_home_url"`
-	RedirectURI     string `json:"redirect_uri"`
-	Status          string `json:"status"`
+	OrgID               string            `json:"org_id"`
+	Name                string            `json:"name"`
+	CorpID              string            `json:"corp_id"`
+	DingTalkAppKey      string            `json:"dingtalk_app_key"`
+	DingTalkSecret      string            `json:"dingtalk_secret"`
+	DingTalkAgentID     string            `json:"dingtalk_agent_id"`
+	DingTalkAdminUserID string            `json:"dingtalk_admin_user_id"`
+	AdminUserID         string            `json:"admin_user_id"`
+	AppKey              string            `json:"app_key"`
+	AppSecret           string            `json:"app_secret"`
+	AgentID             string            `json:"agent_id"`
+	AppHomeURL          string            `json:"app_home_url"`
+	RedirectURI         string            `json:"redirect_uri"`
+	Status              string            `json:"status"`
+	ProcessCodes        map[string]string `json:"process_codes"`
 }
 
 func migrateOrganizationData() error {
@@ -279,7 +311,8 @@ func migrateOrganizationData() error {
 		if err := ensureUserDingTalkColumn(); err != nil {
 			return err
 		}
-		if err := DB.Exec("UPDATE `users` SET `ding_talk_user_id` = `user_id` WHERE (`ding_talk_user_id` IS NULL OR `ding_talk_user_id` = '') AND `user_id` <> ''").Error; err != nil {
+		// Fail-closed same-org collision audit before set-based backfill.
+		if err := backfillUserDingTalkID("user_id"); err != nil {
 			return err
 		}
 	}
@@ -309,68 +342,12 @@ func migrateRolePermissionOrganizationScope() error {
 		return nil
 	}
 
-	if DB.Migrator().HasTable(&UserRole{}) && DB.Migrator().HasTable(&User{}) {
-		if err := DB.Exec(`
-			UPDATE user_roles ur
-			JOIN users u ON u.user_id = ur.user_id
-			SET ur.org_id = u.org_id
-			WHERE u.deleted_at IS NULL
-		`).Error; err != nil {
-			return err
-		}
-	}
-
-	if err := cloneGlobalRoleConfigsToOrganizations(); err != nil {
-		return err
-	}
-
-	if DB.Migrator().HasTable(&UserRole{}) {
-		if err := remapUserRolesToOrganizationRoles(); err != nil {
-			return err
-		}
-		if err := DB.Exec(`
-			DELETE ur
-			FROM user_roles ur
-			JOIN (
-				SELECT org_id, user_id, MAX(id) AS keep_id
-				FROM user_roles
-				WHERE deleted_at IS NULL
-				GROUP BY org_id, user_id
-				HAVING COUNT(*) > 1
-			) dup ON dup.org_id = ur.org_id AND dup.user_id = ur.user_id
-			WHERE ur.deleted_at IS NULL
-			  AND ur.id <> dup.keep_id
-		`).Error; err != nil {
-			return err
-		}
-	}
-
-	if err := dropUniqueIndexesForColumn("roles", "name", "idx_roles_org_name"); err != nil {
-		return err
-	}
-	if err := ensureCompositeUniqueIndex("roles", "idx_roles_org_name", "org_id", "name"); err != nil {
-		return err
-	}
-	if err := dropUniqueIndexesForColumn("user_roles", "user_id", "idx_user_roles_org_user"); err != nil {
-		return err
-	}
-	if err := ensureCompositeUniqueIndex("user_roles", "idx_user_roles_org_user", "org_id", "user_id"); err != nil {
-		return err
-	}
-	if err := dropUniqueIndexesForColumn("menu_permissions", "role_id", "idx_menu_permissions_org_role"); err != nil {
-		return err
-	}
-	if err := ensureCompositeUniqueIndex("menu_permissions", "idx_menu_permissions_org_role", "org_id", "role_id"); err != nil {
-		return err
-	}
-	if err := dropUniqueIndexesForColumn("data_permissions", "role_id", "idx_data_permissions_org_role"); err != nil {
-		return err
-	}
-	if err := ensureCompositeUniqueIndex("data_permissions", "idx_data_permissions_org_role", "org_id", "role_id"); err != nil {
-		return err
-	}
-
-	return nil
+	// Role/user-role organization ownership is now governed by the unified
+	// organization composite-index migration. Do not infer or rewrite
+	// user_roles.org_id from users.user_id here: the same user_id may legally
+	// exist in multiple organizations, and rewriting after the unique index is
+	// installed can turn valid cross-org rows into an unreviewed collision.
+	return cloneGlobalRoleConfigsToOrganizations()
 }
 
 func cloneGlobalRoleConfigsToOrganizations() error {
@@ -822,6 +799,75 @@ func organizationFromEnvConfig(cfg envOrganization) Organization {
 		AppHomeURL:      cfg.AppHomeURL,
 		RedirectURI:     cfg.RedirectURI,
 		Status:          cfg.Status,
+		Extension: organizationExtensionWithDingTalkProcessCodes(
+			nil,
+			cfg.ProcessCodes,
+		),
+	}
+}
+
+const dingTalkProcessCodesExtensionKey = "dingtalk_process_codes"
+
+func organizationExtensionWithDingTalkProcessCodes(extension map[string]interface{}, processCodes map[string]string) map[string]interface{} {
+	out := map[string]interface{}{}
+	for k, v := range extension {
+		out[k] = v
+	}
+	if len(processCodes) == 0 {
+		return out
+	}
+	codes := map[string]string{}
+	for k, v := range processCodes {
+		key := strings.TrimSpace(k)
+		val := strings.TrimSpace(v)
+		if key == "" || val == "" {
+			continue
+		}
+		codes[key] = val
+	}
+	if len(codes) == 0 {
+		return out
+	}
+	out[dingTalkProcessCodesExtensionKey] = codes
+	return out
+}
+
+func organizationDingTalkProcessCodes(extension map[string]interface{}) map[string]string {
+	if extension == nil {
+		return map[string]string{}
+	}
+	raw, ok := extension[dingTalkProcessCodesExtensionKey]
+	if !ok || raw == nil {
+		return map[string]string{}
+	}
+	switch typed := raw.(type) {
+	case map[string]string:
+		out := make(map[string]string, len(typed))
+		for k, v := range typed {
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if k != "" && v != "" {
+				out[k] = v
+			}
+		}
+		return out
+	case map[string]interface{}:
+		out := make(map[string]string, len(typed))
+		for k, v := range typed {
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			if s, ok := v.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					out[k] = s
+				}
+			}
+		}
+		return out
+	default:
+		return map[string]string{}
 	}
 }
 
@@ -835,6 +881,19 @@ func firstNonEmpty(values ...string) string {
 }
 
 func organizationScopedTables() []string {
+	// Authoritative list is organizationScopedTableNameSet. Do not rely on package
+	// global DB / GORM Statement.Parse (nil DB panics under unit tests).
+	tables := make([]string, 0, len(organizationScopedTableNameSet))
+	for table := range organizationScopedTableNameSet {
+		tables = append(tables, table)
+	}
+	sort.Strings(tables)
+	return tables
+}
+
+// organizationScopedModelTables is retained for callers that still want model-driven
+// discovery when a live DB is available; production scoping uses the static set.
+func organizationScopedModelTables() []string {
 	models := []interface{}{
 		&User{},
 		&Department{},
@@ -897,6 +956,9 @@ func organizationScopedTables() []string {
 	tables := make([]string, 0, len(models))
 	seen := make(map[string]struct{}, len(models))
 	for _, model := range models {
+		if DB == nil {
+			break
+		}
 		stmt := &gorm.Statement{DB: DB}
 		if err := stmt.Parse(model); err != nil || stmt.Schema == nil {
 			continue
@@ -969,9 +1031,20 @@ var organizationScopedTableNameSet = map[string]struct{}{
 	"performance_relationship_change_logs": {},
 	"performance_goal_records":             {},
 	"performance_goal_approval_logs":       {},
+	"performance_import_batches":           {},
 	"performance_company_finances":         {},
 	"performance_indicator_libraries":      {},
 	"performance_indicator_items":          {},
+	"uploaded_files":                       {},
+	"organization_users":                   {},
+	"ding_talk_event_logs":                 {},
+	"external_attendance_raw":              {},
+	"external_attendance_approve_links":    {},
+	"external_user_department_raw":         {},
+	"user_department_relations":            {},
+	"external_sync_cursors":                {},
+	"external_sync_jobs":                   {},
+	"external_sync_locks":                  {},
 }
 
 func isOrganizationScopedTable(table string) bool {
@@ -1124,6 +1197,12 @@ func migrate() error {
 	}
 
 	// 建新表（年假/调休）优先，不依赖其他表
+	// Upgrade every existing tenant-scoped unique key before AutoMigrate.
+	// This audits same-org conflicts and removes legacy global unique indexes first.
+	if err := PrepareOrgCompositeUniqueIndexes(DB); err != nil {
+		return fmt.Errorf("prepare organization composite unique indexes: %w", err)
+	}
+
 	if err := DB.AutoMigrate(
 		&LeaveRuleConfig{},
 		&AnnualLeaveEligibility{},
@@ -1136,8 +1215,6 @@ func migrate() error {
 	); err != nil {
 		return err
 	}
-
-	// AnnualLeaveConsumeLog 单独迁移，失败只打日志不阻断
 	if err := DB.AutoMigrate(&AnnualLeaveConsumeLog{}); err != nil {
 		log.Printf("[migrate] AnnualLeaveConsumeLog 迁移失败（忽略）: %v", err)
 	}
@@ -1147,12 +1224,6 @@ func migrate() error {
 	if err := migrateOvertimeMatchSchema(); err != nil {
 		return err
 	}
-	if err := migrateAnnualLeaveGrantIndexes(); err != nil {
-		return err
-	}
-
-	// WeekScheduleRule 建唯一索引前先去重，避免历史重复数据导致迁移失败
-	deduplicateWeekScheduleRules()
 	if err := migrateUserRolesSingleRole(); err != nil {
 		return err
 	}
@@ -1214,12 +1285,6 @@ func migrate() error {
 		return err
 	}
 
-	if err := migrateUserMobileUniqueIndex(); err != nil {
-		return err
-	}
-	if err := migrateRoleNameUniqueIndex(); err != nil {
-		return err
-	}
 	if err := migrateOrganizationData(); err != nil {
 		return err
 	}
@@ -1239,11 +1304,19 @@ func migrate() error {
 	if err := migratePerformanceParticipantAssessmentManagerSchema(); err != nil {
 		return err
 	}
+	if err := MigratePerformanceParticipantOrgIDsFromActivity(DB); err != nil {
+		return err
+	}
 	if err := migrateMutengParticipantPipeline(); err != nil {
 		return err
 	}
 
-	return cleanupDeletedWeekScheduleRules()
+	// Verify the complete tenant unique-index contract after AutoMigrate and legacy field migrations.
+	if err := MigrateOrgCompositeUniqueIndexes(DB); err != nil {
+		return fmt.Errorf("verify organization composite unique indexes: %w", err)
+	}
+
+	return nil
 }
 
 func ensureNullableOrgIDColumn(table string) error {
@@ -1587,99 +1660,10 @@ func migrateUserManagerColumns() {
 }
 
 func migrateMultitenantUniqueIndexes() error {
-	if DB == nil {
-		return nil
-	}
-
-	if DB.Migrator().HasTable(&EmployeeProfile{}) {
-		if err := DB.Exec(`
-			UPDATE employee_profiles ep
-			JOIN (
-				SELECT user_id, MIN(org_id) AS org_id
-				FROM users
-				WHERE deleted_at IS NULL
-				GROUP BY user_id
-				HAVING COUNT(*) = 1
-			) u ON u.user_id = ep.user_id
-			SET ep.org_id = u.org_id
-			WHERE ep.org_id IS NULL OR ep.org_id = '' OR ep.org_id = 'default'
-		`).Error; err != nil {
-			return err
-		}
-	}
-
-	// 考勤表补齐 org_id：钉钉 UserID 在不同企业可能重号，唯一索引和过滤都必须带上 org_id。
-	// 回填规则：对同一 user_id 只在一个组织出现的考勤记录，直接采用该组织；否则保持 default 兜底。
-	if DB.Migrator().HasTable(&Attendance{}) {
-		if err := DB.Exec(`
-			UPDATE attendances a
-			JOIN (
-				SELECT user_id, MIN(org_id) AS org_id
-				FROM users
-				WHERE deleted_at IS NULL
-				GROUP BY user_id
-				HAVING COUNT(*) = 1
-			) u ON u.user_id = a.user_id
-			SET a.org_id = u.org_id
-			WHERE a.org_id IS NULL OR a.org_id = '' OR a.org_id = 'default'
-		`).Error; err != nil {
-			return err
-		}
-	}
-
-	if DB.Migrator().HasTable(&SyncStatus{}) {
-		if err := DB.Exec(`
-			UPDATE sync_statuses
-			SET org_id = 'default'
-			WHERE org_id IS NULL OR org_id = ''
-		`).Error; err != nil {
-			return err
-		}
-		if err := DB.Exec("ALTER TABLE sync_statuses MODIFY COLUMN org_id varchar(64) NOT NULL DEFAULT 'default'").Error; err != nil {
-			return err
-		}
-	}
-
-	for _, idx := range []struct {
-		table string
-		name  string
-	}{
-		{"users", "uni_users_mobile"},
-		{"users", "uni_users_email"},
-		{"users", "idx_org_email"},
-		{"employee_profiles", "uni_employee_profiles_user_id"},
-		{"employee_profiles", "uni_employee_profiles_employee_id"},
-		{"attendances", "idx_user_time_type"},
-		{"sync_statuses", "uni_sync_statuses_type"},
-		{"sync_statuses", "idx_sync_statuses_type"},
-	} {
-		if err := dropIndexIfExists(idx.table, idx.name); err != nil {
-			return err
-		}
-	}
-
-	if err := createIndexIfMissing("employee_profiles", "idx_employee_profiles_org_user", true, "org_id", "user_id"); err != nil {
-		return err
-	}
-	if err := createIndexIfMissing("employee_profiles", "idx_employee_profiles_org_employee", true, "org_id", "employee_id"); err != nil {
-		return err
-	}
-	if err := createIndexIfMissing("users", "idx_org_email", true, "org_id", "email"); err != nil {
-		return err
-	}
-	if err := createIndexIfMissing("users", "idx_users_org_mobile", false, "org_id", "mobile"); err != nil {
-		return err
-	}
-	if err := createIndexIfMissing("attendances", "idx_org_user_time_type", true, "org_id", "user_id", "check_time", "check_type"); err != nil {
-		return err
-	}
-	if err := createIndexIfMissing("sync_statuses", "idx_org_sync_type", true, "org_id", "type"); err != nil {
-		return err
-	}
-	if err := migrateApprovalsOrgProcessUniqueIndex(); err != nil {
-		return err
-	}
-
+	// Organization-scoped unique indexes and their legacy data handling are
+	// centralized in PrepareOrgCompositeUniqueIndexes/MigrateOrgCompositeUniqueIndexes.
+	// Keep this compatibility hook side-effect free so old migrations cannot
+	// rewrite org_id or delete business rows after the composite indexes exist.
 	return nil
 }
 
@@ -1764,169 +1748,8 @@ func createIndexIfMissing(table, indexName string, unique bool, columns ...strin
 }
 
 func migrateAnnualLeaveConsumeLogSchema() error {
-	if !DB.Migrator().HasTable(&AnnualLeaveConsumeLog{}) {
-		return nil
-	}
-	if !DB.Migrator().HasColumn(&AnnualLeaveConsumeLog{}, "RequestRef") {
-		if err := DB.Migrator().AddColumn(&AnnualLeaveConsumeLog{}, "RequestRef"); err != nil {
-			return err
-		}
-	}
-	if err := DB.Exec(`
-		UPDATE annual_leave_consume_logs
-		SET request_ref = CASE
-			WHEN approval_ref IS NULL OR approval_ref = '' THEN CONCAT('legacy:', id)
-			ELSE CONCAT('approval:', approval_ref)
-		END
-		WHERE request_ref IS NULL OR request_ref = ''
-	`).Error; err != nil {
-		return err
-	}
-	if oldIndex, err := findUniqueIndexByColumn("annual_leave_consume_logs", "approval_ref"); err != nil {
-		return err
-	} else if oldIndex != "" {
-		if err := DB.Migrator().DropIndex(&AnnualLeaveConsumeLog{}, oldIndex); err != nil {
-			return err
-		}
-	}
-	if !DB.Migrator().HasIndex(&AnnualLeaveConsumeLog{}, "idx_leave_consume_approval_ref") {
-		if err := DB.Exec("CREATE INDEX `idx_leave_consume_approval_ref` ON `annual_leave_consume_logs` (`approval_ref`)").Error; err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate key name") {
-			return err
-		}
-	}
-	if !DB.Migrator().HasIndex(&AnnualLeaveConsumeLog{}, "idx_leave_consume_request_grant") {
-		if err := DB.Exec("CREATE UNIQUE INDEX `idx_leave_consume_request_grant` ON `annual_leave_consume_logs` (`request_ref`, `grant_id`)").Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func migrateAnnualLeaveGrantIndexes() error {
-	if !DB.Migrator().HasTable(&AnnualLeaveGrant{}) || DB.Migrator().HasIndex(&AnnualLeaveGrant{}, "idx_leave_grant_user_year_q_type") {
-		return nil
-	}
-	type duplicateGrant struct {
-		UserID    string
-		Year      int
-		Quarter   int
-		GrantType string
-		Count     int64
-	}
-	var duplicates []duplicateGrant
-	if err := DB.Raw(`
-		SELECT user_id, year, quarter, grant_type, COUNT(*) AS count
-		FROM annual_leave_grants
-		GROUP BY user_id, year, quarter, grant_type
-		HAVING COUNT(*) > 1
-		LIMIT 10
-	`).Scan(&duplicates).Error; err != nil {
-		return err
-	}
-	if len(duplicates) > 0 {
-		log.Printf("[migrate] 跳过创建 idx_leave_grant_user_year_q_type，发现重复年假发放记录: %+v", duplicates)
-		return nil
-	}
-	return DB.Exec("CREATE UNIQUE INDEX `idx_leave_grant_user_year_q_type` ON `annual_leave_grants` (`user_id`, `year`, `quarter`, `grant_type`)").Error
-}
-
-func migrateUserMobileUniqueIndex() error {
-	if !DB.Migrator().HasTable(&User{}) {
-		return nil
-	}
-
-	var indexCount int64
-	if err := DB.Raw(`
-		SELECT COUNT(*)
-		FROM information_schema.STATISTICS
-		WHERE TABLE_SCHEMA = DATABASE()
-		  AND TABLE_NAME = 'users'
-		  AND INDEX_NAME = 'uni_users_mobile'
-	`).Scan(&indexCount).Error; err != nil {
-		return err
-	}
-	if indexCount > 0 {
-		return nil
-	}
-
-	type duplicateMobile struct {
-		Mobile string
-		Count  int64
-	}
-	var duplicates []duplicateMobile
-	if err := DB.Raw(`
-		SELECT mobile, COUNT(*) AS count
-		FROM users
-		WHERE mobile IS NOT NULL
-		GROUP BY mobile
-		HAVING COUNT(*) > 1
-		LIMIT 5
-	`).Scan(&duplicates).Error; err != nil {
-		return err
-	}
-	if len(duplicates) > 0 {
-		log.Printf("[migrate] 跳过创建 uni_users_mobile，发现 %d 个重复手机号样本，请先清理历史 users.mobile 数据", len(duplicates))
-		return nil
-	}
-
-	if err := DB.Exec("CREATE UNIQUE INDEX `uni_users_mobile` ON `users` (`mobile`)").Error; err != nil {
-		lowerErr := strings.ToLower(err.Error())
-		if strings.Contains(lowerErr, "duplicate entry") || strings.Contains(lowerErr, "duplicate key name") {
-			log.Printf("[migrate] 跳过创建 uni_users_mobile: %v", err)
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func migrateRoleNameUniqueIndex() error {
-	if !DB.Migrator().HasTable(&Role{}) {
-		return nil
-	}
-
-	var indexCount int64
-	if err := DB.Raw(`
-		SELECT COUNT(*)
-		FROM information_schema.STATISTICS
-		WHERE TABLE_SCHEMA = DATABASE()
-		  AND TABLE_NAME = 'roles'
-		  AND INDEX_NAME = 'uni_roles_name'
-	`).Scan(&indexCount).Error; err != nil {
-		return err
-	}
-	if indexCount > 0 {
-		return nil
-	}
-
-	type duplicateRoleName struct {
-		Name  string
-		Count int64
-	}
-	var duplicates []duplicateRoleName
-	if err := DB.Raw(`
-		SELECT name, COUNT(*) AS count
-		FROM roles
-		GROUP BY name
-		HAVING COUNT(*) > 1
-		LIMIT 5
-	`).Scan(&duplicates).Error; err != nil {
-		return err
-	}
-	if len(duplicates) > 0 {
-		log.Printf("[migrate] 跳过创建 uni_roles_name，发现 %d 个重复角色名样本，请先清理历史 roles.name 数据", len(duplicates))
-		return nil
-	}
-
-	if err := DB.Exec("CREATE UNIQUE INDEX `uni_roles_name` ON `roles` (`name`)").Error; err != nil {
-		lowerErr := strings.ToLower(err.Error())
-		if strings.Contains(lowerErr, "duplicate entry") || strings.Contains(lowerErr, "duplicate key name") {
-			log.Printf("[migrate] 跳过创建 uni_roles_name: %v", err)
-			return nil
-		}
-		return err
-	}
-	return nil
+	// Schema expand + request_ref backfill only; unique-index replacement is phase-4.
+	return MigrateAnnualLeaveConsumeLogSchema(DB)
 }
 
 func migrateOvertimeMatchSchema() error {
@@ -2042,148 +1865,22 @@ func migrateUserRolesSingleRole() error {
 		}
 	}
 
-	if err := DB.Exec(`
-		UPDATE user_roles ur
-		LEFT JOIN (
-			SELECT user_id, MIN(org_id) AS org_id
-			FROM users
-			WHERE deleted_at IS NULL
-			GROUP BY user_id
-		) u ON u.user_id = ur.user_id
-		SET ur.org_id = COALESCE(NULLIF(ur.org_id, ''), u.org_id, 'default')
-	`).Error; err != nil {
-		return err
-	}
-
-	if err := DB.Unscoped().Where("deleted_at IS NOT NULL").Delete(&UserRole{}).Error; err != nil {
-		return err
-	}
-
-	if err := DB.Exec(`
-		DELETE ur
-		FROM user_roles ur
-		JOIN (
-			SELECT org_id, user_id, MAX(id) AS keep_id
-			FROM user_roles
-			WHERE deleted_at IS NULL
-			GROUP BY org_id, user_id
-			HAVING COUNT(*) > 1
-		) dup ON dup.org_id = ur.org_id AND dup.user_id = ur.user_id
-		WHERE ur.deleted_at IS NULL
-		  AND ur.id <> dup.keep_id
-	`).Error; err != nil {
-		return err
-	}
-
-	type indexInfo struct {
-		IndexName string
-	}
-	var oldIndexes []indexInfo
-	if err := DB.Raw(`
-		SELECT INDEX_NAME
-		FROM information_schema.STATISTICS
-		WHERE TABLE_SCHEMA = DATABASE()
-		  AND TABLE_NAME = 'user_roles'
-		  AND INDEX_NAME = 'idx_user_roles_user_id'
-		GROUP BY INDEX_NAME
-	`).Scan(&oldIndexes).Error; err != nil {
-		return err
-	}
-	if len(oldIndexes) > 0 {
-		if err := DB.Exec("DROP INDEX `idx_user_roles_user_id` ON `user_roles`").Error; err != nil {
-			return err
-		}
-	}
-
-	var newIndexes []indexInfo
-	if err := DB.Raw(`
-		SELECT INDEX_NAME
-		FROM information_schema.STATISTICS
-		WHERE TABLE_SCHEMA = DATABASE()
-		  AND TABLE_NAME = 'user_roles'
-		  AND INDEX_NAME = 'idx_user_roles_org_user'
-		GROUP BY INDEX_NAME
-	`).Scan(&newIndexes).Error; err != nil {
-		return err
-	}
-	if len(newIndexes) == 0 {
-		if err := DB.Exec("CREATE UNIQUE INDEX `idx_user_roles_org_user` ON `user_roles` (`org_id`, `user_id`)").Error; err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "duplicate key name") {
-				return nil
-			}
-			return err
-		}
-	}
-	return nil
+	// Only normalize missing legacy values. Organization ownership for an
+	// existing row must not be inferred from user_id or deduplicated here.
+	return DB.Exec(`
+		UPDATE user_roles
+		SET org_id = 'default'
+		WHERE org_id IS NULL OR org_id = ''
+	`).Error
 }
 
 func migrateShiftCatalogSchema() error {
-	if !DB.Migrator().HasColumn(&DingTalkShiftCatalog{}, "ShiftKey") {
-		if err := DB.Migrator().AddColumn(&DingTalkShiftCatalog{}, "ShiftKey"); err != nil {
-			return err
-		}
-	}
-
-	var catalogs []DingTalkShiftCatalog
-	if err := DB.Find(&catalogs).Error; err != nil {
-		return err
-	}
-	for _, catalog := range catalogs {
-		shiftKey := normalizeShiftCatalogKey(catalog.Name, catalog.CheckIn, catalog.CheckOut)
-		if shiftKey == "" || catalog.ShiftKey == shiftKey {
-			continue
-		}
-		if err := DB.Model(&DingTalkShiftCatalog{}).
-			Where("id = ?", catalog.ID).
-			Update("shift_key", shiftKey).Error; err != nil {
-			return err
-		}
-	}
-
-	if DB.Migrator().HasIndex(&DingTalkShiftCatalog{}, "idx_dingtalk_shift_catalogs_name") {
-		if err := DB.Migrator().DropIndex(&DingTalkShiftCatalog{}, "idx_dingtalk_shift_catalogs_name"); err != nil {
-			return err
-		}
-	}
-	if err := DB.Exec("CREATE INDEX `idx_dingtalk_shift_catalogs_name` ON `dingtalk_shift_catalogs` (`name`)").Error; err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate key name") {
-		return err
-	}
-	if !DB.Migrator().HasIndex(&DingTalkShiftCatalog{}, "idx_dingtalk_shift_catalogs_shift_key") {
-		if err := DB.Exec("CREATE UNIQUE INDEX `idx_dingtalk_shift_catalogs_shift_key` ON `dingtalk_shift_catalogs` (`shift_key`)").Error; err != nil {
-			return err
-		}
-	}
-
-	return nil
+	// Set-based schema expand + empty shift_key backfill; unique indexes are phase-4.
+	return MigrateShiftCatalogSchema(DB)
 }
 
 func normalizeShiftCatalogKey(name, checkIn, checkOut string) string {
 	return strings.ToLower(strings.TrimSpace(name)) + "|" + strings.TrimSpace(checkIn) + "|" + strings.TrimSpace(checkOut)
-}
-
-func cleanupDeletedWeekScheduleRules() error {
-	return DB.Unscoped().
-		Where("deleted_at IS NOT NULL").
-		Delete(&WeekScheduleRule{}).Error
-}
-
-// deduplicateWeekScheduleRules 在建唯一索引前去除 (scope_type, scope_id) 重复行，保留 id 最大的一条
-func deduplicateWeekScheduleRules() {
-	// 检查表是否存在
-	if !DB.Migrator().HasTable(&WeekScheduleRule{}) {
-		return
-	}
-	// 检查唯一索引是否已存在（已有索引则不需要去重）
-	if DB.Migrator().HasIndex(&WeekScheduleRule{}, "idx_scope") {
-		return
-	}
-	if err := DB.Exec(`
-		DELETE w1 FROM week_schedule_rules w1
-		INNER JOIN week_schedule_rules w2
-		ON w1.scope_type = w2.scope_type AND w1.scope_id = w2.scope_id AND w1.id < w2.id
-	`).Error; err != nil {
-		log.Printf("[migrate] 去重 week_schedule_rules 失败（忽略）: %v", err)
-	}
 }
 
 func HashPassword(password string) (string, error) {
@@ -2540,16 +2237,6 @@ func seedUserRoles() {
 var liedeAdminOrgIDs = []string{"default", "xiaotie", "muteng"}
 
 func migrateLiedeOrganizationAdminRoles() {
-	adminRole, err := ensureRolePreset("管理员", "系统管理员")
-	if err != nil {
-		log.Printf("[migrate] 确保管理员角色失败: %v", err)
-		return
-	}
-	if err := ensureAdminRoleFullAccess(adminRole.ID); err != nil {
-		log.Printf("[migrate] 确保管理员角色权限失败: %v", err)
-		return
-	}
-
 	users, err := findLiedeAdminUsers()
 	if err != nil {
 		log.Printf("[migrate] 查找列德用户失败: %v", err)
@@ -2562,12 +2249,26 @@ func migrateLiedeOrganizationAdminRoles() {
 
 	usersByOrg := make(map[string][]User, len(users))
 	for _, user := range users {
-		if strings.TrimSpace(user.OrgID) != "" {
-			usersByOrg[user.OrgID] = append(usersByOrg[user.OrgID], user)
+		orgID := strings.TrimSpace(user.OrgID)
+		if orgID == "" {
+			continue
 		}
+		usersByOrg[orgID] = append(usersByOrg[orgID], user)
 	}
 
 	for _, orgID := range liedeAdminOrgIDs {
+		// Critical: admin role must belong to the same org as the user_roles row.
+		// A cross-org role_id is filtered out by permission JOINs (roles.org_id = user_roles.org_id).
+		adminRole, err := ensureRolePresetInOrg(orgID, "管理员", "系统管理员")
+		if err != nil {
+			log.Printf("[migrate] 确保组织管理员角色失败: org_id=%s err=%v", orgID, err)
+			continue
+		}
+		if err := ensureAdminRoleFullAccessInOrg(orgID, adminRole.ID); err != nil {
+			log.Printf("[migrate] 确保组织管理员角色权限失败: org_id=%s role_id=%d err=%v", orgID, adminRole.ID, err)
+			continue
+		}
+
 		orgUsers := usersByOrg[orgID]
 		if len(orgUsers) == 0 {
 			log.Printf("[migrate] 未找到列德在组织内的本地用户，跳过授权: org_id=%s", orgID)
@@ -2584,7 +2285,7 @@ func migrateLiedeOrganizationAdminRoles() {
 				log.Printf("[migrate] 授权列德为组织管理员失败: org_id=%s user_id=%s err=%v", orgID, user.UserID, err)
 				continue
 			}
-			log.Printf("[migrate] 已确保列德为组织管理员: org_id=%s user_id=%s", orgID, user.UserID)
+			log.Printf("[migrate] 已确保列德为组织管理员: org_id=%s user_id=%s role_id=%d", orgID, user.UserID, adminRole.ID)
 		}
 	}
 }
@@ -2606,8 +2307,9 @@ func findLiedeAdminUsers() ([]User, error) {
 	}
 
 	var nameMatches []User
+	// Avoid MySQL-only FIELD(); order is only for stable iteration and tests on SQLite.
 	if err := DB.Where("deleted_at IS NULL AND name LIKE ?", "%列德%").
-		Order("FIELD(org_id, 'default', 'xiaotie', 'muteng') DESC, id ASC").
+		Order("id ASC").
 		Find(&nameMatches).Error; err != nil {
 		return nil, err
 	}
@@ -2616,7 +2318,7 @@ func findLiedeAdminUsers() ([]User, error) {
 	if adminUserID := strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID")); adminUserID != "" {
 		var envMatches []User
 		if err := DB.Where("deleted_at IS NULL AND user_id = ?", adminUserID).
-			Order("FIELD(org_id, 'default', 'xiaotie', 'muteng') DESC, id ASC").
+			Order("id ASC").
 			Find(&envMatches).Error; err != nil {
 			return nil, err
 		}
@@ -2626,7 +2328,70 @@ func findLiedeAdminUsers() ([]User, error) {
 	return users, nil
 }
 
+// remapCrossOrgUserRoleBindings rewrites user_roles whose role_id points at another
+// organization's role. Permission resolution requires roles.org_id = user_roles.org_id.
+func remapCrossOrgUserRoleBindings() error {
+	if DB == nil {
+		return nil
+	}
+	type poisonedBinding struct {
+		UserRoleID uint   `gorm:"column:user_role_id"`
+		OrgID      string `gorm:"column:org_id"`
+		UserID     string `gorm:"column:user_id"`
+		RoleID     uint   `gorm:"column:role_id"`
+		RoleName   string `gorm:"column:role_name"`
+	}
+	var rows []poisonedBinding
+	if err := DB.Table("user_roles").
+		Select("user_roles.id AS user_role_id, user_roles.org_id AS org_id, user_roles.user_id AS user_id, user_roles.role_id AS role_id, roles.name AS role_name").
+		Joins("JOIN roles ON roles.id = user_roles.role_id AND roles.deleted_at IS NULL").
+		Where("user_roles.deleted_at IS NULL AND user_roles.org_id <> roles.org_id").
+		Scan(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		orgID := strings.TrimSpace(row.OrgID)
+		roleName := strings.TrimSpace(row.RoleName)
+		if orgID == "" || roleName == "" || row.UserRoleID == 0 {
+			continue
+		}
+		target, err := ensureRolePresetInOrg(orgID, roleName, roleName)
+		if err != nil {
+			return fmt.Errorf("ensure target role org=%s name=%s: %w", orgID, roleName, err)
+		}
+		if roleName == "管理员" {
+			if err := ensureAdminRoleFullAccessInOrg(orgID, target.ID); err != nil {
+				log.Printf("[migrate] ensure admin full access after remap failed: org_id=%s role_id=%d err=%v", orgID, target.ID, err)
+			}
+		}
+		if target.ID == row.RoleID {
+			continue
+		}
+		if err := DB.Model(&UserRole{}).Where("id = ?", row.UserRoleID).Update("role_id", target.ID).Error; err != nil {
+			return fmt.Errorf("remap user_role id=%d: %w", row.UserRoleID, err)
+		}
+		log.Printf("[migrate] remapped cross-org user_role: org_id=%s user_id=%s role=%s %d->%d",
+			orgID, row.UserID, roleName, row.RoleID, target.ID)
+	}
+	return nil
+}
+
 func ensureAdminRoleFullAccess(roleID uint) error {
+	// Backward-compatible entry: treat role as belonging to default org only when
+	// the caller does not know the org. Prefer ensureAdminRoleFullAccessInOrg.
+	return ensureAdminRoleFullAccessInOrg(DefaultOrganizationID, roleID)
+}
+
+func ensureAdminRoleFullAccessInOrg(orgID string, roleID uint) error {
+	orgID = NormalizeOrganizationID(strings.TrimSpace(orgID))
+	if roleID == 0 {
+		return fmt.Errorf("ensureAdminRoleFullAccessInOrg: role_id required")
+	}
+	var role Role
+	if err := DB.Where("id = ? AND org_id = ? AND deleted_at IS NULL", roleID, orgID).First(&role).Error; err != nil {
+		return fmt.Errorf("ensureAdminRoleFullAccessInOrg: role %d not in org %s: %w", roleID, orgID, err)
+	}
+
 	var permissions []Permission
 	if err := DB.Where("deleted_at IS NULL").Find(&permissions).Error; err != nil {
 		return err
@@ -2646,20 +2411,27 @@ func ensureAdminRoleFullAccess(roleID uint) error {
 			return err
 		}
 	}
-	if err := ensureRoleMenuPermission(roleID, menuKeys); err != nil {
+	if err := ensureRoleMenuPermissionInOrg(orgID, roleID, menuKeys); err != nil {
 		return err
 	}
-	return ensureRoleDataPermission(roleID, "all", "[]")
+	return ensureRoleDataPermissionInOrg(orgID, roleID, "all", "[]")
 }
 
 func ensureUserRoleInOrg(orgID, userID string, roleID uint) error {
 	orgID = strings.TrimSpace(orgID)
 	if orgID == "" {
-		orgID = "default"
+		return fmt.Errorf("ensureUserRoleInOrg: org_id required")
 	}
+	orgID = NormalizeOrganizationID(orgID)
 	userID = strings.TrimSpace(userID)
 	if userID == "" || roleID == 0 {
-		return nil
+		return fmt.Errorf("ensureUserRoleInOrg: user_id and role_id required")
+	}
+
+	// Fail closed: never bind a role that belongs to a different organization.
+	var role Role
+	if err := DB.Where("id = ? AND org_id = ? AND deleted_at IS NULL", roleID, orgID).First(&role).Error; err != nil {
+		return fmt.Errorf("ensureUserRoleInOrg: role %d not in org %s: %w", roleID, orgID, err)
 	}
 
 	var existing UserRole
@@ -2841,7 +2613,7 @@ func migratePerformanceIndicatorRolePresets() {
 	}
 
 	for _, preset := range performanceIndicatorRolePresets {
-		role, err := ensureRolePreset(preset.Name, preset.Description)
+		role, err := ensureRolePresetInOrg(DefaultOrganizationID, preset.Name, preset.Description)
 		if err != nil {
 			log.Printf("迁移绩效指标库角色：角色 %s 创建/恢复失败: %v", preset.Name, err)
 			continue
@@ -2851,20 +2623,42 @@ func migratePerformanceIndicatorRolePresets() {
 				log.Printf("迁移绩效指标库角色：角色 %s 补充权限 %s 失败: %v", preset.Name, code, err)
 			}
 		}
-		if err := ensureRoleMenuPermission(role.ID, []string{"menu:home", "menu:performance-indicator-library"}); err != nil {
+		if err := ensureRoleMenuPermissionInOrg(role.OrgID, role.ID, []string{"menu:home", "menu:performance-indicator-library"}); err != nil {
 			log.Printf("迁移绩效指标库角色：角色 %s 补充菜单权限失败: %v", preset.Name, err)
 		}
-		if err := ensureRoleDataPermission(role.ID, preset.DataScope, preset.DepartmentKeys); err != nil {
+		if err := ensureRoleDataPermissionInOrg(role.OrgID, role.ID, preset.DataScope, preset.DepartmentKeys); err != nil {
 			log.Printf("迁移绩效指标库角色：角色 %s 补充数据权限失败: %v", preset.Name, err)
 		}
 	}
 }
 
 func ensureRolePreset(name, description string) (Role, error) {
+	// Legacy entry point: only create/find in the default organization.
+	// Multi-tenant callers must use ensureRolePresetInOrg.
+	return ensureRolePresetInOrg(DefaultOrganizationID, name, description)
+}
+
+// ensureRolePresetInOrg finds or creates a role by (org_id, name).
+// It never reuses another organization's role of the same name.
+func ensureRolePresetInOrg(orgID, name, description string) (Role, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return Role{}, fmt.Errorf("ensureRolePresetInOrg: org_id required")
+	}
+	orgID = NormalizeOrganizationID(orgID)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Role{}, fmt.Errorf("ensureRolePresetInOrg: name required")
+	}
+	description = strings.TrimSpace(description)
+	if description == "" {
+		description = name
+	}
+
 	var role Role
-	err := DB.Unscoped().Where("name = ?", name).First(&role).Error
+	err := DB.Unscoped().Where("org_id = ? AND name = ?", orgID, name).First(&role).Error
 	if err == gorm.ErrRecordNotFound {
-		role = Role{OrgID: DefaultOrganizationID, Name: name, Description: description}
+		role = Role{OrgID: orgID, Name: name, Description: description}
 		return role, DB.Create(&role).Error
 	}
 	if err != nil {
@@ -2877,6 +2671,10 @@ func ensureRolePreset(name, description string) (Role, error) {
 	if strings.TrimSpace(role.Description) == "" {
 		updates["description"] = description
 		role.Description = description
+	}
+	// Hard guarantee: never return a role that drifted to another org.
+	if strings.TrimSpace(role.OrgID) != orgID {
+		return Role{}, fmt.Errorf("ensureRolePresetInOrg: role %d org mismatch want=%s got=%s", role.ID, orgID, role.OrgID)
 	}
 	if len(updates) > 0 {
 		if err := DB.Unscoped().Model(&role).Updates(updates).Error; err != nil {
@@ -2909,10 +2707,25 @@ func ensureRolePermission(roleID uint, permissionCode string, permMap map[string
 	return nil
 }
 
+// ensureRoleMenuPermission is a legacy wrapper that assumes default-org menu rows.
+// Prefer ensureRoleMenuPermissionInOrg.
 func ensureRoleMenuPermission(roleID uint, menuKeys []string) error {
+	return ensureRoleMenuPermissionInOrg(DefaultOrganizationID, roleID, menuKeys)
+}
+
+func ensureRoleMenuPermissionInOrg(orgID string, roleID uint, menuKeys []string) error {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return fmt.Errorf("ensureRoleMenuPermissionInOrg: org_id required")
+	}
+	orgID = NormalizeOrganizationID(orgID)
+	if roleID == 0 {
+		return fmt.Errorf("ensureRoleMenuPermissionInOrg: role_id required")
+	}
+
 	var existing MenuPermission
 	err := DB.Unscoped().
-		Where("role_id = ?", roleID).
+		Where("org_id = ? AND role_id = ?", orgID, roleID).
 		Order("deleted_at IS NULL DESC, id ASC").
 		First(&existing).Error
 	if err == gorm.ErrRecordNotFound {
@@ -2920,7 +2733,7 @@ func ensureRoleMenuPermission(roleID uint, menuKeys []string) error {
 		if err != nil {
 			return err
 		}
-		return DB.Create(&MenuPermission{OrgID: DefaultOrganizationID, RoleID: roleID, MenuKeys: string(payload)}).Error
+		return DB.Create(&MenuPermission{OrgID: orgID, RoleID: roleID, MenuKeys: string(payload)}).Error
 	}
 	if err != nil {
 		return err
@@ -2943,6 +2756,9 @@ func ensureRoleMenuPermission(roleID uint, menuKeys []string) error {
 	}
 	if existing.DeletedAt.Valid {
 		updates["deleted_at"] = nil
+	}
+	if strings.TrimSpace(existing.OrgID) != orgID {
+		updates["org_id"] = orgID
 	}
 	if len(updates) == 0 {
 		return nil
@@ -2971,7 +2787,21 @@ func stringSliceContains(values []string, target string) bool {
 	return false
 }
 
+// ensureRoleDataPermission is a legacy wrapper that assumes default-org data rows.
+// Prefer ensureRoleDataPermissionInOrg.
 func ensureRoleDataPermission(roleID uint, scope string, departmentKeys string) error {
+	return ensureRoleDataPermissionInOrg(DefaultOrganizationID, roleID, scope, departmentKeys)
+}
+
+func ensureRoleDataPermissionInOrg(orgID string, roleID uint, scope string, departmentKeys string) error {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return fmt.Errorf("ensureRoleDataPermissionInOrg: org_id required")
+	}
+	orgID = NormalizeOrganizationID(orgID)
+	if roleID == 0 {
+		return fmt.Errorf("ensureRoleDataPermissionInOrg: role_id required")
+	}
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		scope = "department"
@@ -2982,11 +2812,11 @@ func ensureRoleDataPermission(roleID uint, scope string, departmentKeys string) 
 	}
 	var existing DataPermission
 	err := DB.Unscoped().
-		Where("role_id = ?", roleID).
+		Where("org_id = ? AND role_id = ?", orgID, roleID).
 		Order("deleted_at IS NULL DESC, id ASC").
 		First(&existing).Error
 	if err == gorm.ErrRecordNotFound {
-		return DB.Create(&DataPermission{OrgID: DefaultOrganizationID, RoleID: roleID, Scope: scope, DepartmentKeys: departmentKeys}).Error
+		return DB.Create(&DataPermission{OrgID: orgID, RoleID: roleID, Scope: scope, DepartmentKeys: departmentKeys}).Error
 	}
 	if err != nil {
 		return err
@@ -3000,6 +2830,9 @@ func ensureRoleDataPermission(roleID uint, scope string, departmentKeys string) 
 	}
 	if strings.TrimSpace(existing.DepartmentKeys) == "" {
 		updates["department_keys"] = departmentKeys
+	}
+	if strings.TrimSpace(existing.OrgID) != orgID {
+		updates["org_id"] = orgID
 	}
 	if len(updates) == 0 {
 		return nil
@@ -3076,7 +2909,7 @@ func migrateMenuPermissions() {
 			log.Printf("迁移菜单权限：序列化角色 %d 菜单失败: %v", role.ID, err)
 			continue
 		}
-		if err := DB.Create(&MenuPermission{OrgID: DefaultOrganizationID, RoleID: role.ID, MenuKeys: string(payload)}).Error; err != nil {
+		if err := DB.Create(&MenuPermission{OrgID: NormalizeOrganizationID(role.OrgID), RoleID: role.ID, MenuKeys: string(payload)}).Error; err != nil {
 			log.Printf("迁移菜单权限：写入角色 %d 菜单失败: %v", role.ID, err)
 		}
 	}
@@ -3099,7 +2932,7 @@ func migratePerformanceReportMenuPermissions() {
 			stringSliceContains(normalized, "menu:performance-reports") {
 			continue
 		}
-		if err := ensureRoleMenuPermission(record.RoleID, []string{"menu:performance-reports"}); err != nil {
+		if err := ensureRoleMenuPermissionInOrg(record.OrgID, record.RoleID, []string{"menu:performance-reports"}); err != nil {
 			log.Printf("迁移绩效报表菜单权限：角色 %d 补充菜单失败: %v", record.RoleID, err)
 		}
 	}
@@ -3125,7 +2958,7 @@ func migratePerformanceFollowupMenuPermissions() {
 			stringSliceContains(normalized, "menu:performance-appeals") {
 			continue
 		}
-		if err := ensureRoleMenuPermission(record.RoleID, []string{"menu:performance-interviews", "menu:performance-appeals"}); err != nil {
+		if err := ensureRoleMenuPermissionInOrg(record.OrgID, record.RoleID, []string{"menu:performance-interviews", "menu:performance-appeals"}); err != nil {
 			log.Printf("迁移绩效后续模块菜单权限：角色 %d 补充菜单失败: %v", record.RoleID, err)
 		}
 	}
@@ -3163,7 +2996,7 @@ func migrateAttendanceToolboxMenuPermissions() {
 		if !hasAttendanceMenu {
 			continue
 		}
-		if err := ensureRoleMenuPermission(record.RoleID, []string{"menu:attendance-toolbox"}); err != nil {
+		if err := ensureRoleMenuPermissionInOrg(record.OrgID, record.RoleID, []string{"menu:attendance-toolbox"}); err != nil {
 			log.Printf("迁移考勤工具箱菜单权限：角色 %d 补充菜单失败: %v", record.RoleID, err)
 		}
 	}

@@ -1,5 +1,5 @@
-import { useEffect, useState, lazy, Suspense } from 'react'
-import { Layout, Menu, ConfigProvider, Spin, message, Button, Drawer, Grid } from 'antd'
+import { useEffect, useMemo, useState, lazy, Suspense } from 'react'
+import { Layout, Menu, ConfigProvider, Spin, message, Button, Drawer, Grid, Empty, Result } from 'antd'
 import type { MenuProps } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
@@ -10,9 +10,9 @@ import {
   LogoutOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
-import { menuConfig, logoutMenuItem, filterMenuByKeys, menuPermissionKey } from './config/menu'
+import { menuConfig, filterMenuByKeys, menuPermissionKey } from './config/menu'
 import { authAPI, refreshMenuKeys } from './services/api'
-import RouteGuard from './components/RouteGuard'
+import RouteGuard, { resolveFallbackPath } from './components/RouteGuard'
 import ErrorBoundary from './components/ErrorBoundary'
 import MobileTableEnhancer from './components/MobileTableEnhancer'
 import {
@@ -25,6 +25,7 @@ import {
   rememberAuthRedirect,
 } from './utils/authRedirect'
 import { resolveMobileLayout, useMobileRuntime } from './utils/responsive'
+import { useAuthStore } from './store/authStore'
 
 const Login = lazy(() => import('./pages/Login'))
 const Callback = lazy(() => import('./pages/Callback'))
@@ -42,6 +43,7 @@ const Attendance = lazy(() => import('./pages/Attendance'))
 const AttendanceStats = lazy(() => import('./pages/AttendanceStats'))
 const AttendanceExport = lazy(() => import('./pages/AttendanceExport'))
 const AttendanceProcessing = lazy(() => import('./pages/AttendanceProcessing'))
+const AttendanceExternalSync = lazy(() => import('./pages/AttendanceExternalSync'))
 const AttendanceToolbox = lazy(() => import('./pages/AttendanceToolbox'))
 const WeekSchedule = lazy(() => import('./pages/WeekSchedule'))
 const EmployeeShiftConfig = lazy(() => import('./pages/EmployeeShiftConfig'))
@@ -66,9 +68,24 @@ const PerformanceGoalSetting = lazy(() => import('./pages/PerformanceGoalSetting
 const Permission = lazy(() => import('./pages/Permission'))
 const Setting = lazy(() => import('./pages/Setting'))
 
-import { useAuthStore } from './store/authStore'
-
 const { Header, Sider, Content } = Layout
+
+/** 全局中文 locale：强制 Table/Empty 空状态为中文，避免个别版本回退到 "No data" */
+const appLocale = {
+  ...zhCN,
+  Empty: {
+    ...zhCN.Empty,
+    description: '暂无数据',
+  },
+  Table: {
+    ...zhCN.Table,
+    emptyText: '暂无数据',
+  },
+}
+
+const renderAppEmpty = () => (
+  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />
+)
 
 const appTheme = {
   token: {
@@ -125,6 +142,7 @@ const routeMenuKeys: Record<string, string> = {
   '/attendance-stats': menuPermissionKey('attendance-stats'),
   '/attendance-export': menuPermissionKey('attendance-export'),
   '/attendance-processing': menuPermissionKey('attendance-processing'),
+  '/attendance/external-sync': menuPermissionKey('attendance-external-sync'),
   '/attendance-toolbox': menuPermissionKey('attendance-toolbox'),
   '/week-schedule': menuPermissionKey('week-schedule'),
   '/employee-shift-config': menuPermissionKey('employee-shift-config'),
@@ -180,20 +198,21 @@ function findMenuTitle(items: ReturnType<typeof filterMenuByKeys>, key: string):
   return ''
 }
 
-function buildSiderMenuItems(
+export function buildSiderMenuItems(
   items: ReturnType<typeof filterMenuByKeys>,
-  onLogout: () => void,
 ): MenuProps['items'] {
-  const visibleItems: NonNullable<MenuProps['items']> = items.map(item => {
+  return items.map(item => {
     if (item.children) {
       return {
         key: item.key,
         icon: item.icon,
         label: item.label,
+        title: item.title,
         children: item.children.map(child => ({
           key: child.key,
           icon: child.icon,
           label: child.label,
+          title: child.title,
         })),
       }
     }
@@ -202,19 +221,9 @@ function buildSiderMenuItems(
       key: item.key,
       icon: item.icon,
       label: item.label,
+      title: item.title,
     }
   })
-
-  if (items.length > 0) {
-    visibleItems.push({
-      key: logoutMenuItem.key,
-      icon: logoutMenuItem.icon,
-      label: logoutMenuItem.label,
-      onClick: onLogout,
-    })
-  }
-
-  return visibleItems
 }
 
 function PageLoading() {
@@ -269,8 +278,11 @@ function App() {
   const isMobile = resolveMobileLayout(screens.md, mobileRuntime)
 
   const handleLogout = async () => {
+    // 必须走 authAPI（axios 实例带 withCredentials + CSRF），禁止裸 axios.post：
+    // JWT 存在 HttpOnly cookie 时，POST /auth/logout 会校验 X-CSRF-Token，缺头会 403，
+    // 若仅清前端则服务端会话仍有效（与组织切换路径 authAPI.logout 保持一致）。
     try {
-      await axios.post('/api/v1/auth/logout')
+      await authAPI.logout()
     } catch (err) {
       console.warn('[logout] request failed', err)
     } finally {
@@ -281,9 +293,17 @@ function App() {
     }
   }
   const filteredMenuItems = filterMenuByKeys(menuConfig, menuKeys)
-  const siderMenuItems = buildSiderMenuItems(filteredMenuItems, handleLogout)
-  const defaultOpenKeys = defaultOpenKeysForPath(location.pathname)
+  const siderMenuItems = buildSiderMenuItems(filteredMenuItems)
+  const pathOpenKeys = defaultOpenKeysForPath(location.pathname)
+  const [openKeys, setOpenKeys] = useState<string[]>(() => pathOpenKeys)
+  const fallbackHomePath = useMemo(() => resolveFallbackPath(menuKeys), [menuKeys])
   const currentTitle = findMenuTitle(filteredMenuItems, selectedMenuKey) || '人事管理系统'
+
+  // 跨模块导航时合并展开当前分组，避免 defaultOpenKeys 只生效一次导致分组仍折叠
+  useEffect(() => {
+    const nextOpen = defaultOpenKeysForPath(location.pathname)
+    setOpenKeys((prev) => Array.from(new Set([...prev, ...nextOpen])))
+  }, [location.pathname])
 
   useEffect(() => {
     let cancelled = false
@@ -444,7 +464,7 @@ function App() {
 
   if (authPaths.includes(location.pathname)) {
     return (
-      <ConfigProvider locale={zhCN} theme={appTheme}>
+      <ConfigProvider locale={appLocale} theme={appTheme} renderEmpty={renderAppEmpty}>
         <AuthRoutes />
       </ConfigProvider>
     )
@@ -452,7 +472,7 @@ function App() {
 
   if (sessionChecking) {
     return (
-      <ConfigProvider locale={zhCN} theme={appTheme}>
+      <ConfigProvider locale={appLocale} theme={appTheme} renderEmpty={renderAppEmpty}>
         <PageLoading />
       </ConfigProvider>
     )
@@ -471,7 +491,7 @@ function App() {
     }
 
     return (
-      <ConfigProvider locale={zhCN} theme={appTheme}>
+      <ConfigProvider locale={appLocale} theme={appTheme} renderEmpty={renderAppEmpty}>
         <ErrorBoundary resetKey={location.pathname}>
           <Suspense fallback={<PageLoading />}>
             <Login />
@@ -482,12 +502,13 @@ function App() {
   }
 
   return (
-    <ConfigProvider locale={zhCN} theme={appTheme}>
+    <ConfigProvider locale={appLocale} theme={appTheme} renderEmpty={renderAppEmpty}>
       <MobileTableEnhancer />
       <Layout className={isMobile ? 'app-layout app-layout-mobile' : 'app-layout'}>
         {!isMobile ? (
           <Sider
             className={collapsed ? 'app-sider app-sider-collapsed' : 'app-sider'}
+            width={232}
             collapsible
             collapsed={collapsed}
             collapsedWidth={80}
@@ -500,7 +521,8 @@ function App() {
                 theme="light"
                 mode="inline"
                 selectedKeys={[selectedMenuKey]}
-                defaultOpenKeys={defaultOpenKeys}
+                openKeys={collapsed ? [] : openKeys}
+                onOpenChange={(keys) => setOpenKeys(keys as string[])}
                 items={siderMenuItems}
               />
             </div>
@@ -525,12 +547,13 @@ function App() {
           <Menu
             mode="inline"
             selectedKeys={[selectedMenuKey]}
-            defaultOpenKeys={defaultOpenKeys}
+            openKeys={openKeys}
+            onOpenChange={(keys) => setOpenKeys(keys as string[])}
             items={siderMenuItems}
             onClick={() => setMobileMenuOpen(false)}
           />
         </Drawer>
-        <Layout className="app-main-layout" style={{ marginLeft: isMobile ? 0 : collapsed ? 80 : 200 }}>
+        <Layout className="app-main-layout" style={{ marginLeft: isMobile ? 0 : collapsed ? 80 : 232 }}>
           <Header className="app-header">
             <Button
               type="text"
@@ -541,14 +564,15 @@ function App() {
             />
             <span className="app-header-title">{isMobile ? currentTitle : ''}</span>
             <span className="app-header-spacer" />
-            <span className="app-header-user">{user?.name || '管理员'}</span>
+            <span className="app-header-user app-user-chip">{user?.name || '管理员'}</span>
             <Button
               type="text"
               className="app-header-logout"
               icon={<LogoutOutlined />}
+              aria-label="退出登录"
               onClick={handleLogout}
             >
-              退出
+              退出登录
             </Button>
           </Header>
           <Content className="app-content">
@@ -565,6 +589,7 @@ function App() {
                 <Route path="/attendance-stats" element={<RouteGuard menuKey="menu:attendance-stats"><AttendanceStats /></RouteGuard>} />
                 <Route path="/attendance-export" element={<RouteGuard menuKey="menu:attendance-export"><AttendanceExport /></RouteGuard>} />
                 <Route path="/attendance-processing" element={<RouteGuard menuKey="menu:attendance-processing"><AttendanceProcessing /></RouteGuard>} />
+                <Route path="/attendance/external-sync" element={<RouteGuard menuKey="menu:attendance-external-sync"><AttendanceExternalSync /></RouteGuard>} />
                 <Route path="/attendance-toolbox" element={<RouteGuard menuKey="menu:attendance-toolbox"><AttendanceToolbox /></RouteGuard>} />
                 <Route path="/week-schedule" element={<RouteGuard menuKey="menu:week-schedule"><WeekSchedule /></RouteGuard>} />
                 <Route path="/employee-shift-config" element={<RouteGuard menuKey="menu:employee-shift-config"><EmployeeShiftConfig /></RouteGuard>} />
@@ -585,13 +610,29 @@ function App() {
                 <Route path="/performance-interviews" element={<RouteGuard menuKey="menu:performance-interviews" permissionCode={['performance:result:view', 'performance:interview:manage', 'performance:activity:manage', 'performance:department_eval:submit']}><PerformanceInterviews /></RouteGuard>} />
                 <Route path="/performance-appeals" element={<RouteGuard menuKey="menu:performance-appeals" permissionCode={['performance:result:view', 'performance:appeal:manage', 'performance:activity:manage', 'performance:hr_review:submit', 'performance:result_publish:manage']}><PerformanceAppeals /></RouteGuard>} />
                 <Route path="/performance-indicator-library" element={<RouteGuard menuKey="menu:performance-indicator-library"><PerformanceIndicatorLibrary /></RouteGuard>} />
-                <Route path="/performance-result/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode={['performance:result:view', 'performance:activity:manage', 'performance:department_eval:submit', 'performance:hr_review:submit', 'performance:result_publish:manage', 'performance:appeal:manage', 'performance:level_adjust:manage']}><PerformanceResultView /></RouteGuard>} />
-                <Route path="/performance-self-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:self_eval:submit"><PerformanceSelfEval /></RouteGuard>} />
-                <Route path="/performance-manager-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:manager_eval:submit"><PerformanceManagerEval /></RouteGuard>} />
-                <Route path="/performance-goal-setting/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" permissionCode="performance:goal:manage"><PerformanceGoalSetting /></RouteGuard>} />
+                {/* 任务深链：menuOptional，钉钉通知只带功能权限也能进，不强制 overview 菜单 */}
+                <Route path="/performance-result/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" menuOptional permissionCode={['performance:result:view', 'performance:activity:manage', 'performance:department_eval:submit', 'performance:hr_review:submit', 'performance:result_publish:manage', 'performance:appeal:manage', 'performance:level_adjust:manage', 'performance:manager_eval:submit', 'performance:manager_confirm:submit']}><PerformanceResultView /></RouteGuard>} />
+                <Route path="/performance-self-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" menuOptional permissionCode="performance:self_eval:submit"><PerformanceSelfEval /></RouteGuard>} />
+                <Route path="/performance-manager-eval/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" menuOptional permissionCode="performance:manager_eval:submit"><PerformanceManagerEval /></RouteGuard>} />
+                <Route path="/performance-goal-setting/:activityId/:participantId" element={<RouteGuard menuKey="menu:performance-overview" menuOptional permissionCode="performance:goal:manage"><PerformanceGoalSetting /></RouteGuard>} />
                 <Route path="/permission" element={<RouteGuard menuKey="menu:permission"><Permission /></RouteGuard>} />
                 <Route path="/log" element={<Navigate to="/audit-logs" replace />} />
                 <Route path="/setting" element={<RouteGuard menuKey="menu:setting"><Setting /></RouteGuard>} />
+                <Route
+                  path="*"
+                  element={
+                    <Result
+                      status="404"
+                      title="页面不存在"
+                      subTitle="您访问的地址不存在或已被移除。"
+                      extra={
+                        <Button type="primary" onClick={() => navigate(fallbackHomePath, { replace: true })}>
+                          返回首页
+                        </Button>
+                      }
+                    />
+                  }
+                />
               </Routes>
             </Suspense>
             </ErrorBoundary>

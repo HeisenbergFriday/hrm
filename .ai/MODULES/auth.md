@@ -1,6 +1,6 @@
 ---
 purpose: 认证模块业务规则说明
-last_updated: 2026-07-06
+last_updated: 2026-07-20
 source_of_truth:
   - internal/api/handlers.go（认证相关 handler）
   - internal/middleware/jwt.go（JWT 中间件）
@@ -234,7 +234,7 @@ type Claims struct {
 
 - `JWTAuth` 从 `Authorization: Bearer <token>` 或 HttpOnly Cookie 读取 token，不接受 URL query token。
 - JWT 验签后必须加载当前用户，并要求 `users.status = active` 且未删除；禁用用户不能登录，也不能继续使用未过期 token。
-- JWT 中的 `org_id` 是后续业务数据隔离的上下文来源；旧 token 未携带 `org_id` 时会回退到 `default`，随后以当前用户记录的 `OrgID` 为准。
+- JWT 中的 `org_id` 是后续业务数据隔离的上下文来源；JWT **必须**携带 `org_id`。缺省时 `JWTAuth` 返回 401 且 `code=token_missing_org_id`，**禁止**回退 `default`；前端应引导重新登录。
 - 登录成功会写入 `UserSession`，新 token 必须带 `session_id` 和当前 `session_version`；旧版缺少这些声明或版本不匹配的 token 会被拒绝，用户需重新登录。
 - 浏览器登录态通过 `peopleops_auth` HttpOnly Cookie 维护，写操作通过 `peopleops_csrf` + `X-CSRF-Token` 双提交校验。
 - JWT 默认有效期为 480 分钟，可通过 `JWT_TTL_MINUTES` 配置，代码会限制在 5-1440 分钟范围内。
@@ -414,3 +414,27 @@ api.interceptors.response.use(
 - 当前电脑端扫码登录应优先在本系统预选本地企业：登录页展示活跃企业列表，选中的 `org_id` 会传给 `/auth/dingtalk/qr/start`，后端用同一个本地企业生成 OAuth 二维码并写入 `state`。
 - 如果用户在本系统选择的企业与钉钉官方组织选择页实际选择的组织不一致，回调必须拦截：只有 `corpId` 匹配所选企业，或钉钉明确返回企业内 `userid/associated_user_id` 时才允许继续；仅有 `unionId/openId` 不能作为“选择了该企业”的证明。
 - 如果某个域名固定对应一个本地企业，可以设置 `DINGTALK_QR_DEFAULT_ORG_ID`（如 `default`）让无参数电脑扫码同时使用该企业生成 OAuth 二维码并写入 `state`；不要用企业 A 的 OAuth 二维码回调到企业 B，否则 `unionId` 可能无法在企业 B 换取 `userid`。
+
+### 2026-07-20 服务构造器必须绑定组织（长期约束）
+
+钉钉内免登与扫码回调在已解析 `orgID` / `resolvedOrgID` 之后，更新本地用户**必须**使用：
+
+- 内免登：`service.NewUserServiceWithOrgID(middleware.RequestDB(c), orgID)`
+- 扫码回调：`service.NewUserServiceWithOrgID(middleware.RequestDB(c), resolvedOrgID)`
+
+**禁止**使用未绑定组织的 `NewUserService(...)` 去做 tenant-scoped 写操作。
+
+原因与回归：
+
+- 实体字段 `User.OrgID` **不能**代替仓储/服务构造时的组织绑定。
+- tenant-scoped repository 在缺少 orgID 时 fail-closed，会报 `repository: orgID required for tenant-scoped operation`（见 `docs/DEVELOPMENT_ISSUES.md` 2026-07-20 条目）。
+- 空组织继续 fail-closed；跨组织实体继续拒绝。
+- 回归点：登录路径更新用户、缺 org 写、跨 org 写、`TestUserRepository_*` 与 `Test.*(DingTalk|Dingtalk)`。
+
+### 2026-07-20 首次补用户 / 登出审计 / 会话 TenantContext
+
+- `ensureLocalUserForDingTalkLogin`：先 `TrimSpace` 校验 `orgID` 非空（空值返回 `repository.ErrMissingOrgID`），**禁止**先 `NormalizeOrganizationID("")` 变成 `default` 再写库；创建用户用 `NewUserServiceWithOrgID`，默认角色用 `NewPermissionServiceWithOrgID`，档案继续 `employeeServiceForOrg`。
+- `SyncUsers` / `SyncOrgData` 在已有 `orgID` 时 permission 服务必须 `NewPermissionServiceWithOrgID`。
+- `/auth/logout`、`/auth/me` 路由：`JWTAuth` **之后**必须挂 `TenantContext`。
+- `Logout` 写 `OperationLog` 时必须 `OrgID = JWT org`；缺 org 跳过审计写库并打安全日志；session 撤销条件保持 `org_id + user_id + session_id`。
+- `createOperationAuditLog` 同步写入 `OrgID`。

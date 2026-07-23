@@ -37,9 +37,17 @@ func performanceBackgroundDB(c *gin.Context) *gorm.DB {
 	if database.DB == nil {
 		return nil
 	}
-	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
+	// 后台 goroutine 脱离请求生命周期，必须同时注入 RequestInfo 与 Tenant 上下文：
+	// NewPerformanceService 优先读 requestmeta.TenantID，再回退 RequestInfo.OrgID。
+	orgID := strings.TrimSpace(c.GetString("orgID"))
+	if orgID == "" {
+		return nil
+	}
+	orgID = database.NormalizeOrganizationID(orgID)
 	info := &requestmeta.RequestInfo{OrgID: orgID}
-	return database.DB.WithContext(requestmeta.WithRequestInfo(context.Background(), info))
+	ctx := requestmeta.WithRequestInfo(context.Background(), info)
+	ctx = requestmeta.WithTenant(ctx, orgID)
+	return database.DB.WithContext(ctx)
 }
 
 func performanceNotificationDB(db *gorm.DB) *gorm.DB {
@@ -47,6 +55,47 @@ func performanceNotificationDB(db *gorm.DB) *gorm.DB {
 		return db
 	}
 	return database.DB
+}
+
+// resolveNotificationOrgID returns the first non-empty org from entity candidates, then request/tenant context.
+// It never silently falls back to "default"; missing org yields "".
+func resolveNotificationOrgID(db *gorm.DB, entityOrgIDs ...string) string {
+	for _, candidate := range entityOrgIDs {
+		if orgID := strings.TrimSpace(candidate); orgID != "" {
+			return orgID
+		}
+	}
+	if db != nil && db.Statement != nil && db.Statement.Context != nil {
+		if tenantOrgID, terr := requestmeta.TenantID(db.Statement.Context); terr == nil {
+			if orgID := strings.TrimSpace(tenantOrgID); orgID != "" {
+				return orgID
+			}
+		}
+		if info := requestmeta.FromContext(db.Statement.Context); info != nil {
+			if orgID := strings.TrimSpace(info.OrgID); orgID != "" {
+				return orgID
+			}
+		}
+	}
+	return ""
+}
+
+// requireNotificationOrgID is the fail-closed variant used before any DingTalk send.
+func requireNotificationOrgID(db *gorm.DB, entityOrgIDs ...string) (string, error) {
+	orgID := resolveNotificationOrgID(db, entityOrgIDs...)
+	if orgID == "" {
+		return "", service.ErrPerformanceNoticeMissingOrg
+	}
+	return orgID, nil
+}
+
+func performanceServiceForNotification(db *gorm.DB, orgCandidates ...string) (*service.PerformanceService, error) {
+	db = performanceNotificationDB(db)
+	orgID, err := requireNotificationOrgID(db, orgCandidates...)
+	if err != nil {
+		return nil, err
+	}
+	return service.NewPerformanceServiceWithOrgID(db, orgID), nil
 }
 
 func addPerformanceIdentityValues(values map[string]struct{}, rawValues ...string) {
@@ -127,20 +176,33 @@ func logPerformanceNotifyError(action, userID string, err error) {
 }
 
 // resolvePerformanceScope 获取用户的数据范围（绩效模块专用）
+// 必须绑定当前请求 org，避免空 org 回落到 default 造成跨企业串权限。
+// 本函数不写 HTTP 响应；调用方用 respondScopeError 统一映射。
 func resolvePerformanceScope(c *gin.Context) (*service.OrgDataScope, error) {
 	userID := currentOperatorID(c)
-	svc := service.NewPermissionService(middleware.RequestDB(c))
-	return svc.GetUserPerformanceScope(userID)
+	orgID, err := currentOrgID(c)
+	if err != nil {
+		return nil, err
+	}
+	svc := service.NewPermissionServiceWithOrgID(middleware.RequestDB(c), orgID)
+	return svc.GetUserPerformanceScopeInOrg(orgID, userID)
 }
 
-// requirePermission 检查当前用户是否具有指定权限码，不满足则返回 403 并中止
+// requirePermission 检查当前用户是否具有指定权限码，不满足则返回 403 并中止。
+// 所有请求必须先绑定企业上下文；缺 org 时只写一次 401。
+// admin/system 仅在已确认 org 后跳过功能权限码检查。
 func requirePermission(c *gin.Context, codes ...string) bool {
+	orgID, err := currentOrgID(c)
+	if err != nil {
+		respondMissingOrgContext(c)
+		return false
+	}
 	userID := currentOperatorID(c)
 	if userID == "admin" || userID == "system" {
 		return true
 	}
-	svc := service.NewPermissionService(middleware.RequestDB(c))
-	ok, err := svc.HasAnyPermission(userID, codes...)
+	svc := service.NewPermissionServiceWithOrgID(middleware.RequestDB(c), orgID)
+	ok, err := svc.HasAnyPermissionInOrg(orgID, userID, codes...)
 	if err != nil || !ok {
 		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "权限不足", Data: nil})
 		return false
@@ -152,12 +214,17 @@ func hasPerformancePermission(c *gin.Context, codes ...string) (bool, error) {
 	if len(codes) == 0 {
 		return false, nil
 	}
+	// 必须先绑定企业；admin/system 也不得在无 org 时放行。
+	orgID, err := currentOrgID(c)
+	if err != nil {
+		return false, err
+	}
 	userID := currentOperatorID(c)
 	if userID == "admin" || userID == "system" {
 		return true, nil
 	}
-	svc := service.NewPermissionService(middleware.RequestDB(c))
-	return svc.HasAnyPermission(userID, codes...)
+	svc := service.NewPermissionServiceWithOrgID(middleware.RequestDB(c), orgID)
+	return svc.HasAnyPermissionInOrg(orgID, userID, codes...)
 }
 
 // resolveAndVerifyScope 获取 scope 并验证指定部门是否在可见范围内
@@ -177,7 +244,7 @@ func respondIndicatorScopeError(c *gin.Context, err error, forbiddenMessage stri
 		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: forbiddenMessage, Data: nil})
 		return
 	}
-	c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+	respondScopeError(c, err, "获取数据范围失败")
 }
 
 func verifyIndicatorDepartmentAccess(c *gin.Context, departmentID string, forbiddenMessage string) bool {
@@ -251,7 +318,7 @@ func verifyPerformanceParticipantAccess(c *gin.Context, participant *database.Pe
 
 	hasSelfPermission, err := hasPerformancePermission(c, selfCodes...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "权限检查失败", Data: nil})
+		respondScopeError(c, err, "权限检查失败")
 		return false
 	}
 	if hasSelfPermission && currentOperatorMatchesIdentity(c, participant.EmployeeID) {
@@ -260,7 +327,7 @@ func verifyPerformanceParticipantAccess(c *gin.Context, participant *database.Pe
 
 	hasManagerPermission, err := hasPerformancePermission(c, managerCodes...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "权限检查失败", Data: nil})
+		respondScopeError(c, err, "权限检查失败")
 		return false
 	}
 	if hasManagerPermission && participant.ManagerID != nil && currentOperatorMatchesIdentity(c, *participant.ManagerID) {
@@ -269,7 +336,7 @@ func verifyPerformanceParticipantAccess(c *gin.Context, participant *database.Pe
 
 	hasPrivilegedPermission, err := hasPerformancePermission(c, privilegedCodes...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "权限检查失败", Data: nil})
+		respondScopeError(c, err, "权限检查失败")
 		return false
 	}
 	if hasPrivilegedPermission {
@@ -297,7 +364,7 @@ func verifyPerformanceActivityAccess(c *gin.Context, activity *database.Performa
 
 	scope, err := resolvePerformanceScope(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		respondScopeError(c, err, "获取数据范围失败")
 		return false
 	}
 	if scope == nil || scope.IsAll() {
@@ -427,7 +494,7 @@ func GetPerformanceActivities(c *gin.Context) {
 	// 获取用户的数据范围（部门隔离）
 	scope, err := resolvePerformanceScope(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		respondScopeError(c, err, "获取数据范围失败")
 		return
 	}
 
@@ -881,7 +948,7 @@ func GetPerformanceParticipants(c *gin.Context) {
 	// 获取用户的数据范围（部门隔离）
 	scope, err := resolvePerformanceScope(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		respondScopeError(c, err, "获取数据范围失败")
 		return
 	}
 
@@ -930,7 +997,7 @@ func GetPerformanceReport(c *gin.Context) {
 	}
 	scope, err := resolvePerformanceScope(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		respondScopeError(c, err, "获取数据范围失败")
 		return
 	}
 	reportSvc := service.NewPerformanceReportService(middleware.RequestDB(c))
@@ -952,7 +1019,7 @@ func ExportPerformanceReport(c *gin.Context) {
 	}
 	scope, err := resolvePerformanceScope(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		respondScopeError(c, err, "获取数据范围失败")
 		return
 	}
 	reportSvc := service.NewPerformanceReportService(middleware.RequestDB(c))
@@ -1867,11 +1934,11 @@ func ConfirmManagerResultHandler(c *gin.Context) {
 	go func() {
 		participant, err := notifySvc.GetParticipant(strconv.Itoa(participantID))
 		if err == nil && participant != nil && shouldNotifyParticipant(*participant) {
-			if err := dingtalk.SendCorpActionCardToUserForOrg(participant.OrgID, participant.EmployeeID,
+			if err := service.SendPerformanceActionCard(participant.OrgID, participant.EmployeeID,
 				"绩效结果锁定通知",
 				fmt.Sprintf("您的绩效结果已锁定，最终等级为 %s。", participant.FinalLevel),
 				"查看绩效结果",
-				service.PerformanceResultURL(participant.ActivityID, participant.ID)); err != nil {
+				service.PerformanceResultURL(participant.OrgID, participant.ActivityID, participant.ID)); err != nil {
 				logPerformanceNotifyError("notify employee on manager confirm lock", participant.EmployeeID, err)
 			}
 		}
@@ -2069,11 +2136,111 @@ func OpenTargetSettingHandler(c *gin.Context) {
 		return
 	}
 	svc := service.NewPerformanceService(middleware.RequestDB(c))
-	if err := svc.OpenTargetSetting(activityID, currentOperatorID(c)); err != nil {
+	warnings, err := svc.OpenTargetSetting(activityID, currentOperatorID(c))
+	if err != nil {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error(), Data: nil})
 		return
 	}
-	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "目标设定已开启", Data: nil})
+	data := gin.H{}
+	if len(warnings) > 0 {
+		data["warnings"] = warnings
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "目标设定已开启", Data: data})
+}
+
+// GetPerformanceScopeOptions 返回绩效活动编辑器用的部门/员工选项（精简字段，performanceRead）。
+func GetPerformanceScopeOptions(c *gin.Context) {
+	orgID, err := currentOrgID(c)
+	if err != nil {
+		respondMissingOrgContext(c)
+		return
+	}
+	scope, err := resolvePerformanceScope(c)
+	if err != nil {
+		respondScopeError(c, err, "获取数据范围失败")
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "2000"))
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 2000
+	}
+	if pageSize > 5000 {
+		pageSize = 5000
+	}
+
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
+	departments, err := orgService.GetVisibleDepartments(scope)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取部门选项失败", Data: gin.H{"error": err.Error()}})
+		return
+	}
+
+	users, total, err := orgService.ListEmployees(scope, page, pageSize, service.OrgEmployeeFilters{
+		Status: "active",
+		Search: strings.TrimSpace(c.Query("keyword")),
+	})
+	if err != nil {
+		if errors.Is(err, service.ErrOrgAccessDenied) {
+			respondOrgAccessDenied(c)
+			return
+		}
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取员工选项失败", Data: gin.H{"error": err.Error()}})
+		return
+	}
+
+	deptNameByID := make(map[string]string, len(departments))
+	deptOptions := make([]gin.H, 0, len(departments))
+	for _, dept := range departments {
+		deptID := strings.TrimSpace(dept.DepartmentID)
+		if deptID == "" {
+			continue
+		}
+		name := strings.TrimSpace(dept.Name)
+		deptNameByID[deptID] = name
+		deptOptions = append(deptOptions, gin.H{
+			"department_id": deptID,
+			"name":          name,
+		})
+	}
+
+	employeeOptions := make([]gin.H, 0, len(users))
+	skippedWithoutUserID := 0
+	for _, user := range users {
+		userID := strings.TrimSpace(user.UserID)
+		if userID == "" {
+			skippedWithoutUserID++
+			continue
+		}
+		deptID := strings.TrimSpace(user.DepartmentID)
+		employeeOptions = append(employeeOptions, gin.H{
+			"user_id":         userID,
+			"name":            strings.TrimSpace(user.Name),
+			"department_id":   deptID,
+			"department_name": deptNameByID[deptID],
+			"status":          strings.TrimSpace(user.Status),
+		})
+	}
+
+	warnings := make([]string, 0)
+	if skippedWithoutUserID > 0 {
+		warnings = append(warnings, fmt.Sprintf("有 %d 名在职员工缺少 user_id，已从选项中跳过", skippedWithoutUserID))
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data: gin.H{
+			"departments": deptOptions,
+			"employees":   employeeOptions,
+			"total":       total,
+			"warnings":    warnings,
+		},
+	})
 }
 
 func OpenTargetApprovalHandler(c *gin.Context) {
@@ -2514,11 +2681,11 @@ func SubmitReviewSelfEvaluation(c *gin.Context) {
 	// 2. 获取参与人信息，用于钉钉消息推送
 	if participant != nil && participant.ManagerID != nil && *participant.ManagerID != "" {
 		go func() {
-			if notifyErr := dingtalk.SendCorpActionCardToUserForOrg(participant.OrgID, *participant.ManagerID,
+			if notifyErr := service.SendPerformanceActionCard(participant.OrgID, *participant.ManagerID,
 				fmt.Sprintf("【绩效提醒】%s 已提交自评", participant.EmployeeName),
 				fmt.Sprintf("员工：%s\n部门：%s\n岗位：%s\n\n请及时进行主管评分。", participant.EmployeeName, participant.DepartmentName, participant.Position),
 				"去完成评分",
-				service.PerformanceManagerEvalURL(participant.ActivityID, participant.ID)); notifyErr != nil {
+				service.PerformanceManagerEvalURL(participant.OrgID, participant.ActivityID, participant.ID)); notifyErr != nil {
 				logPerformanceNotifyError("notify manager on self eval", *participant.ManagerID, notifyErr)
 			}
 		}()
@@ -2713,22 +2880,37 @@ func notifyEmployeeOnManagerEval(participantID, finalLevel, comment string) erro
 }
 
 func notifyEmployeeOnManagerEvalWithDB(db *gorm.DB, participantID, finalLevel, comment string) error {
-	svc := service.NewPerformanceService(performanceNotificationDB(db))
-	participant, err := svc.GetParticipant(participantID)
+	// First load participant without strict org so we can resolve tenant from the row.
+	db = performanceNotificationDB(db)
+	var participant database.PerformanceParticipant
+	if err := db.Where("id = ? AND deleted_at IS NULL", participantID).First(&participant).Error; err != nil {
+		return err
+	}
+	svc, err := performanceServiceForNotification(db, participant.OrgID)
 	if err != nil {
 		return err
 	}
-	if participant == nil {
+	// Re-load through scoped service for consistency.
+	loaded, err := svc.GetParticipant(participantID)
+	if err != nil {
+		return err
+	}
+	if loaded == nil {
 		return fmt.Errorf("participant %s not found", participantID)
 	}
-	if !shouldNotifyParticipant(*participant) {
+	participant = *loaded
+	if !shouldNotifyParticipant(participant) {
 		return nil
 	}
-	if err := dingtalk.SendCorpActionCardToUserForOrg(participant.OrgID, participant.EmployeeID,
+	orgID, err := requireNotificationOrgID(db, participant.OrgID)
+	if err != nil {
+		return err
+	}
+	if err := service.SendPerformanceActionCard(orgID, participant.EmployeeID,
 		"【绩效提醒】您的评分结果已出具",
 		fmt.Sprintf("员工：%s\n最终等级：%s\n主管评语：%s\n\n如对结果有疑问，请联系主管。", participant.EmployeeName, finalLevel, comment),
 		"查看绩效结果",
-		service.PerformanceResultURL(participant.ActivityID, participant.ID)); err != nil {
+		service.PerformanceResultURL(orgID, participant.ActivityID, participant.ID)); err != nil {
 		if dingtalk.IsUserNotNotifiableError(err) {
 			logPerformanceNotifyError("notify employee on manager eval", participant.EmployeeID, err)
 			return nil
@@ -2768,16 +2950,25 @@ func notifyParticipantsOnSelfEvaluationOpen(activityID string) error {
 
 func notifyParticipantsOnSelfEvaluationOpenWithDB(db *gorm.DB, activityID string) error {
 	db = performanceNotificationDB(db)
-	svc := service.NewPerformanceService(db)
+	if db == nil {
+		return errors.New("database not available for self-evaluation notification")
+	}
+	// Prefer direct DB read for activity org to avoid default-org false negative on multi-tenant rows.
+	var activityRow database.PerformanceActivity
+	if err := db.Where("id = ? AND deleted_at IS NULL", activityID).First(&activityRow).Error; err != nil {
+		return err
+	}
+	orgID, err := requireNotificationOrgID(db, activityRow.OrgID)
+	if err != nil {
+		return err
+	}
+	svc := service.NewPerformanceServiceWithOrgID(db, orgID)
 	activity, err := svc.GetActivity(activityID)
 	if err != nil {
 		return err
 	}
-
 	var participants []database.PerformanceParticipant
-	if err := db.
-		Where("activity_id = ? AND deleted_at IS NULL", activityID).
-		Find(&participants).Error; err != nil {
+	if err := db.Where("activity_id = ? AND org_id = ? AND deleted_at IS NULL", activityID, orgID).Find(&participants).Error; err != nil {
 		return err
 	}
 
@@ -2791,6 +2982,11 @@ func notifyParticipantsOnSelfEvaluationOpenWithDB(db *gorm.DB, activityID string
 		if !shouldNotifyParticipant(participant) {
 			continue
 		}
+		sendOrgID, orgErr := requireNotificationOrgID(db, participant.OrgID, activity.OrgID, orgID)
+		if orgErr != nil {
+			failures = append(failures, fmt.Sprintf("%s(%s): %v", participant.EmployeeName, participant.EmployeeID, orgErr))
+			continue
+		}
 
 		content := fmt.Sprintf(
 			"员工：%s\n活动：%s\n自评时间：%s\n%s\n\n请及时完成自评。提交完成后将不再收到后续自评提醒。",
@@ -2799,7 +2995,7 @@ func notifyParticipantsOnSelfEvaluationOpenWithDB(db *gorm.DB, activityID string
 			window,
 			service.SelfEvalDeadlineReminderText(activity.SelfEvalEndAt),
 		)
-		if err := dingtalk.SendCorpActionCardToUserForOrg(participant.OrgID, participant.EmployeeID, title, content, "去完成自评", service.PerformanceSelfEvalURL(activityID, participant.ID)); err != nil {
+		if err := service.SendPerformanceActionCard(sendOrgID, participant.EmployeeID, title, content, "去完成自评", service.PerformanceSelfEvalURL(sendOrgID, activityID, participant.ID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logPerformanceNotifyError("notify participant on self evaluation open", participant.EmployeeID, err)
 				skipped++
@@ -2830,14 +3026,25 @@ func notifyParticipantsResultReady(activityID string) error {
 
 func notifyParticipantsResultReadyWithDB(db *gorm.DB, activityID string) error {
 	db = performanceNotificationDB(db)
-	svc := service.NewPerformanceService(db)
+	if db == nil {
+		return errors.New("database not available for performance notification")
+	}
+	var activityRow database.PerformanceActivity
+	if err := db.Where("id = ? AND deleted_at IS NULL", activityID).First(&activityRow).Error; err != nil {
+		return fmt.Errorf("活动不存在: %v", err)
+	}
+	orgID, err := requireNotificationOrgID(db, activityRow.OrgID)
+	if err != nil {
+		return err
+	}
+	svc := service.NewPerformanceServiceWithOrgID(db, orgID)
 	activity, err := svc.GetActivity(activityID)
 	if err != nil || activity == nil {
 		return fmt.Errorf("活动不存在: %v", err)
 	}
 	var participants []database.PerformanceParticipant
 	if err := db.
-		Where("activity_id = ? AND deleted_at IS NULL AND status IN ?", activityID, resultNotificationParticipantStatuses()).
+		Where("activity_id = ? AND org_id = ? AND deleted_at IS NULL AND status IN ?", activityID, orgID, resultNotificationParticipantStatuses()).
 		Where("result_hidden = ?", false).
 		Find(&participants).Error; err != nil {
 		return err
@@ -2852,11 +3059,16 @@ func notifyParticipantsResultReadyWithDB(db *gorm.DB, activityID string) error {
 		if !shouldNotifyParticipant(p) {
 			continue
 		}
-		if err := dingtalk.SendCorpActionCardToUserForOrg(p.OrgID, p.EmployeeID,
+		sendOrgID, orgErr := requireNotificationOrgID(db, p.OrgID, activity.OrgID, orgID)
+		if orgErr != nil {
+			failures = append(failures, fmt.Sprintf("%s(%s): %v", p.EmployeeName, p.EmployeeID, orgErr))
+			continue
+		}
+		if err := service.SendPerformanceActionCard(sendOrgID, p.EmployeeID,
 			"绩效结果确认通知",
 			fmt.Sprintf("活动：%s\n您的绩效结果已出，请进入系统确认。", activity.Name),
 			"去确认结果",
-			service.PerformanceResultURL(activityID, p.ID)); err != nil {
+			service.PerformanceResultURL(sendOrgID, activityID, p.ID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logPerformanceNotifyError("notify participant result ready", p.EmployeeID, err)
 				skipped++
@@ -2893,14 +3105,25 @@ func resultNotificationParticipantStatuses() []string {
 
 func notifyParticipantsPerformanceInterviewOpenWithDB(db *gorm.DB, activityID string) error {
 	db = performanceNotificationDB(db)
-	svc := service.NewPerformanceService(db)
+	if db == nil {
+		return errors.New("database not available for performance notification")
+	}
+	var activityRow database.PerformanceActivity
+	if err := db.Where("id = ? AND deleted_at IS NULL", activityID).First(&activityRow).Error; err != nil {
+		return fmt.Errorf("活动不存在: %v", err)
+	}
+	orgID, err := requireNotificationOrgID(db, activityRow.OrgID)
+	if err != nil {
+		return err
+	}
+	svc := service.NewPerformanceServiceWithOrgID(db, orgID)
 	activity, err := svc.GetActivity(activityID)
 	if err != nil || activity == nil {
 		return fmt.Errorf("活动不存在: %v", err)
 	}
 	var participants []database.PerformanceParticipant
 	if err := db.
-		Where("activity_id = ? AND deleted_at IS NULL AND status IN ?", activityID, resultNotificationParticipantStatuses()).
+		Where("activity_id = ? AND org_id = ? AND deleted_at IS NULL AND status IN ?", activityID, orgID, resultNotificationParticipantStatuses()).
 		Where("result_hidden = ?", false).
 		Find(&participants).Error; err != nil {
 		return err
@@ -2915,11 +3138,16 @@ func notifyParticipantsPerformanceInterviewOpenWithDB(db *gorm.DB, activityID st
 		if !shouldNotifyParticipant(p) {
 			continue
 		}
-		if err := dingtalk.SendCorpActionCardToUserForOrg(p.OrgID, p.EmployeeID,
+		sendOrgID, orgErr := requireNotificationOrgID(db, p.OrgID, activity.OrgID, orgID)
+		if orgErr != nil {
+			failures = append(failures, fmt.Sprintf("%s(%s): %v", p.EmployeeName, p.EmployeeID, orgErr))
+			continue
+		}
+		if err := service.SendPerformanceActionCard(sendOrgID, p.EmployeeID,
 			"绩效面谈通知",
 			fmt.Sprintf("活动：%s\n绩效面谈阶段已开启，请关注部门/中心负责人的面谈安排。", activity.Name),
 			"查看绩效结果",
-			service.PerformanceResultURL(activityID, p.ID)); err != nil {
+			service.PerformanceResultURL(sendOrgID, activityID, p.ID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logPerformanceNotifyError("notify participant performance interview open", p.EmployeeID, err)
 				skipped++
@@ -2947,14 +3175,25 @@ func notifyParticipantsResultLocked(activityID string) error {
 
 func notifyParticipantsResultLockedWithDB(db *gorm.DB, activityID string) error {
 	db = performanceNotificationDB(db)
-	svc := service.NewPerformanceService(db)
+	if db == nil {
+		return errors.New("database not available for performance notification")
+	}
+	var activityRow database.PerformanceActivity
+	if err := db.Where("id = ? AND deleted_at IS NULL", activityID).First(&activityRow).Error; err != nil {
+		return fmt.Errorf("活动不存在: %v", err)
+	}
+	orgID, err := requireNotificationOrgID(db, activityRow.OrgID)
+	if err != nil {
+		return err
+	}
+	svc := service.NewPerformanceServiceWithOrgID(db, orgID)
 	activity, err := svc.GetActivity(activityID)
 	if err != nil || activity == nil {
 		return fmt.Errorf("活动不存在: %v", err)
 	}
 	var participants []database.PerformanceParticipant
 	if err := db.
-		Where("activity_id = ? AND deleted_at IS NULL AND is_locked = ?", activityID, true).
+		Where("activity_id = ? AND org_id = ? AND deleted_at IS NULL AND is_locked = ?", activityID, orgID, true).
 		Where("result_hidden = ?", false).
 		Find(&participants).Error; err != nil {
 		return err
@@ -2969,11 +3208,16 @@ func notifyParticipantsResultLockedWithDB(db *gorm.DB, activityID string) error 
 		if !shouldNotifyParticipant(p) {
 			continue
 		}
-		if err := dingtalk.SendCorpActionCardToUserForOrg(p.OrgID, p.EmployeeID,
+		sendOrgID, orgErr := requireNotificationOrgID(db, p.OrgID, activity.OrgID, orgID)
+		if orgErr != nil {
+			failures = append(failures, fmt.Sprintf("%s(%s): %v", p.EmployeeName, p.EmployeeID, orgErr))
+			continue
+		}
+		if err := service.SendPerformanceActionCard(sendOrgID, p.EmployeeID,
 			"绩效结果锁定通知",
 			fmt.Sprintf("活动：%s\n您的绩效结果已锁定，最终等级为 %s。", activity.Name, p.FinalLevel),
 			"查看绩效结果",
-			service.PerformanceResultURL(activityID, p.ID)); err != nil {
+			service.PerformanceResultURL(sendOrgID, activityID, p.ID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logPerformanceNotifyError("notify participant result locked", p.EmployeeID, err)
 				skipped++
@@ -2999,7 +3243,8 @@ func shouldNotifyParticipant(participant database.PerformanceParticipant) bool {
 	if strings.TrimSpace(participant.EmployeeID) == "" {
 		return false
 	}
-	if !dingtalk.IsNotifiableUserID(participant.EmployeeID) {
+	// Fail closed when participant has no org; never use global user lookup.
+	if !dingtalk.IsNotifiableUserIDForOrg(participant.OrgID, participant.EmployeeID) {
 		return false
 	}
 
@@ -3251,7 +3496,7 @@ func GetIndicatorLibraries(c *gin.Context) {
 	// 获取用户的数据范围（部门隔离）
 	scope, err := resolvePerformanceScope(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		respondScopeError(c, err, "获取数据范围失败")
 		return
 	}
 
@@ -3708,7 +3953,7 @@ func SearchIndicatorItems(c *gin.Context) {
 
 	scope, err := resolvePerformanceScope(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取数据范围失败", Data: gin.H{"error": err.Error()}})
+		respondScopeError(c, err, "获取数据范围失败")
 		return
 	}
 

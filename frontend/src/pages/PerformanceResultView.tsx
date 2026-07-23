@@ -8,7 +8,7 @@ import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { ArrowLeftOutlined, CheckCircleOutlined, LockOutlined, EditOutlined, PrinterOutlined, FileExcelOutlined, FileTextOutlined } from '@ant-design/icons'
 import { performanceAPI, PerformanceActivity, PerformanceGoalRecord, PerformanceParticipant } from '../services/api'
-import { withFileAccessToken } from '../utils/authFileUrl'
+import AuthorizedImage from '../components/AuthorizedImage'
 
 const { Title, Text } = Typography
 
@@ -1422,9 +1422,9 @@ const PerformanceResultView: React.FC = () => {
                           <Image.PreviewGroup>
                             <Space wrap size={4}>
                               {attachments.map((url: string, idx: number) => (
-                                <Image
+                                <AuthorizedImage
                                   key={idx}
-                                  src={withFileAccessToken(url)}
+                                  src={url}
                                   width={48}
                                   height={48}
                                   style={{ objectFit: 'cover', borderRadius: 4 }}

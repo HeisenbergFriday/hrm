@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"peopleops/internal/database"
 	"sort"
 	"strconv"
@@ -44,13 +46,15 @@ type AppConfig struct {
 var ErrUserNotNotifiable = errors.New("dingtalk user is not active/notifiable")
 
 type Config struct {
-	OrgID       string
-	AppKey      string
-	AppSecret   string
-	CorpID      string
-	AgentID     string
-	AppHomeURL  string
-	RedirectURI string
+	OrgID        string
+	AppKey       string
+	AppSecret    string
+	CorpID       string
+	AgentID      string
+	AdminUserID  string
+	AppHomeURL   string
+	RedirectURI  string
+	ProcessCodes map[string]string
 }
 
 type accessTokenCacheEntry struct {
@@ -108,17 +112,24 @@ func Init() error {
 // GetCorpID 杩斿洖浼佷笟 CorpId锛屼緵鍓嶇 JS-SDK 浣跨敤
 func DefaultConfig() Config {
 	return Config{
-		OrgID:       database.DefaultOrganizationID,
-		AppKey:      firstNonEmpty(appKey, os.Getenv("DINGTALK_APP_KEY")),
-		AppSecret:   firstNonEmpty(appSecret, os.Getenv("DINGTALK_APP_SECRET")),
-		CorpID:      firstNonEmpty(corpID, os.Getenv("DINGTALK_CORP_ID")),
-		AgentID:     os.Getenv("DINGTALK_AGENT_ID"),
-		AppHomeURL:  firstNonEmpty(os.Getenv("DINGTALK_APP_HOME_URL"), os.Getenv("APP_BASE_URL"), os.Getenv("FRONTEND_BASE_URL")),
-		RedirectURI: os.Getenv("DINGTALK_REDIRECT_URI"),
+		OrgID:        database.DefaultOrganizationID,
+		AppKey:       firstNonEmpty(appKey, os.Getenv("DINGTALK_APP_KEY")),
+		AppSecret:    firstNonEmpty(appSecret, os.Getenv("DINGTALK_APP_SECRET")),
+		CorpID:       firstNonEmpty(corpID, os.Getenv("DINGTALK_CORP_ID")),
+		AgentID:      os.Getenv("DINGTALK_AGENT_ID"),
+		AdminUserID:  os.Getenv("DINGTALK_ADMIN_USER_ID"),
+		AppHomeURL:   firstNonEmpty(os.Getenv("DINGTALK_APP_HOME_URL"), os.Getenv("APP_BASE_URL"), os.Getenv("FRONTEND_BASE_URL")),
+		RedirectURI:  os.Getenv("DINGTALK_REDIRECT_URI"),
+		ProcessCodes: processCodesFromEnv(),
 	}
 }
 
 func ConfigForOrgID(orgID string) (Config, error) {
+	// Fail closed: empty org must not silently become "default" and reuse env credentials.
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return Config{}, fmt.Errorf("orgID is empty")
+	}
 	orgID = database.NormalizeOrganizationID(orgID)
 	if database.DB != nil {
 		var org database.Organization
@@ -126,7 +137,7 @@ func ConfigForOrgID(orgID string) (Config, error) {
 		if err == nil {
 			return ConfigFromOrganization(org), nil
 		}
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return Config{}, err
 		}
 	}
@@ -137,15 +148,22 @@ func ConfigForOrgID(orgID string) (Config, error) {
 }
 
 func ConfigFromOrganization(org database.Organization) Config {
-	return Config{
-		OrgID:       database.NormalizeOrganizationID(org.OrgID),
-		AppKey:      strings.TrimSpace(org.DingTalkAppKey),
-		AppSecret:   strings.TrimSpace(org.DingTalkSecret),
-		CorpID:      strings.TrimSpace(org.CorpID),
-		AgentID:     strings.TrimSpace(org.DingTalkAgentID),
-		AppHomeURL:  strings.TrimRight(strings.TrimSpace(org.AppHomeURL), "/"),
-		RedirectURI: strings.TrimSpace(org.RedirectURI),
+	cfg := Config{
+		OrgID:        database.NormalizeOrganizationID(org.OrgID),
+		AppKey:       strings.TrimSpace(org.DingTalkAppKey),
+		AppSecret:    strings.TrimSpace(org.DingTalkSecret),
+		CorpID:       strings.TrimSpace(org.CorpID),
+		AgentID:      strings.TrimSpace(org.DingTalkAgentID),
+		AdminUserID:  strings.TrimSpace(org.DingTalkAdminUserID),
+		AppHomeURL:   strings.TrimRight(strings.TrimSpace(org.AppHomeURL), "/"),
+		RedirectURI:  strings.TrimSpace(org.RedirectURI),
+		ProcessCodes: processCodesFromOrganizationExtension(org.Extension),
 	}
+	// default org: env fallback for admin is encapsulated here.
+	if cfg.OrgID == database.DefaultOrganizationID && cfg.AdminUserID == "" {
+		cfg.AdminUserID = strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID"))
+	}
+	return cfg
 }
 
 func (cfg Config) normalized() Config {
@@ -154,8 +172,10 @@ func (cfg Config) normalized() Config {
 	cfg.AppSecret = strings.TrimSpace(cfg.AppSecret)
 	cfg.CorpID = strings.TrimSpace(cfg.CorpID)
 	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+	cfg.AdminUserID = strings.TrimSpace(cfg.AdminUserID)
 	cfg.AppHomeURL = strings.TrimRight(strings.TrimSpace(cfg.AppHomeURL), "/")
 	cfg.RedirectURI = strings.TrimSpace(cfg.RedirectURI)
+	cfg.ProcessCodes = normalizeProcessCodes(cfg.ProcessCodes)
 	return cfg
 }
 
@@ -270,14 +290,23 @@ func GetConfiguredAppHomeURL() string {
 }
 
 func GetConfiguredAppHomeURLForOrg(orgID string) string {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return ""
+	}
 	cfg, err := ConfigForOrgID(orgID)
 	if err != nil {
 		return ""
 	}
-	if homeURL := cfg.normalized().AppHomeURL; homeURL != "" {
+	cfg = cfg.normalized()
+	if homeURL := cfg.AppHomeURL; homeURL != "" {
 		return homeURL
 	}
-	return GetConfiguredAppHomeURL()
+	// Only default org may fall back to process-wide env home.
+	if cfg.OrgID == database.DefaultOrganizationID {
+		return GetConfiguredAppHomeURL()
+	}
+	return ""
 }
 
 func GetAppHomeURL() string {
@@ -303,6 +332,103 @@ func BuildAppURL(appPath string) string {
 		return appPath
 	}
 	return baseURL + "/" + strings.TrimLeft(appPath, "/")
+}
+
+// BuildAppURLForOrg builds an absolute app URL for a specific organization home.
+// Empty orgID fails closed. Non-default orgs without configured home return "".
+func BuildAppURLForOrg(orgID, appPath string) string {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return ""
+	}
+	appPath = strings.TrimSpace(appPath)
+	if strings.HasPrefix(appPath, "http://") || strings.HasPrefix(appPath, "https://") {
+		return appPath
+	}
+	baseURL := strings.TrimRight(GetConfiguredAppHomeURLForOrg(orgID), "/")
+	if baseURL == "" {
+		if orgID == database.DefaultOrganizationID {
+			return BuildAppURL(appPath)
+		}
+		return ""
+	}
+	if appPath == "" {
+		return baseURL
+	}
+	return baseURL + "/" + strings.TrimLeft(appPath, "/")
+}
+
+// ResolveAdminUserID returns the enterprise op_user_id for org-scoped DingTalk writes.
+// Non-default orgs never fall back to DINGTALK_ADMIN_USER_ID.
+func ResolveAdminUserID(orgID string) (string, error) {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return "", err
+	}
+	return ResolveAdminUserIDFromConfig(cfg)
+}
+
+// ResolveAdminUserIDFromConfig returns op_user_id from a resolved Config or a clear error.
+func ResolveAdminUserIDFromConfig(cfg Config) (string, error) {
+	cfg = cfg.normalized()
+	if cfg.AdminUserID != "" {
+		return cfg.AdminUserID, nil
+	}
+	if cfg.OrgID == database.DefaultOrganizationID {
+		if envID := strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID")); envID != "" {
+			return envID, nil
+		}
+	}
+	return "", fmt.Errorf("dingtalk admin user id not configured for org %s", cfg.OrgID)
+}
+
+func processCodesFromEnv() map[string]string {
+	return normalizeProcessCodes(map[string]string{
+		"leave":                 os.Getenv("DINGTALK_PROCESS_LEAVE"),
+		"overtime":              os.Getenv("DINGTALK_PROCESS_OVERTIME"),
+		"attendance_correction": os.Getenv("DINGTALK_PROCESS_ATTENDANCE_CORRECTION"),
+		"position_transfer":     os.Getenv("DINGTALK_PROCESS_POSITION_TRANSFER"),
+	})
+}
+
+func processCodesFromOrganizationExtension(extension map[string]interface{}) map[string]string {
+	if extension == nil {
+		return nil
+	}
+	raw, ok := extension["dingtalk_process_codes"]
+	if !ok || raw == nil {
+		return nil
+	}
+	codes := map[string]string{}
+	switch values := raw.(type) {
+	case map[string]interface{}:
+		for key, value := range values {
+			codes[key] = fmt.Sprint(value)
+		}
+	case map[string]string:
+		for key, value := range values {
+			codes[key] = value
+		}
+	}
+	return normalizeProcessCodes(codes)
+}
+
+func normalizeProcessCodes(codes map[string]string) map[string]string {
+	if len(codes) == 0 {
+		return nil
+	}
+	normalized := make(map[string]string, len(codes))
+	for key, value := range codes {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			normalized[key] = value
+		}
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func buildCallbackURL(appHomeURL string) string {
@@ -3010,6 +3136,19 @@ func GetApprovalsForOrg(orgID, processCode, startDate, endDate string) ([]Approv
 	return allInstances, nil
 }
 
+// GetApprovalDetailForOrg 按组织凭证拉取单个审批实例详情。
+func GetApprovalDetailForOrg(orgID, instanceID string) (*ApprovalInstance, error) {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return nil, fmt.Errorf("process_instance_id is required")
+	}
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
+	return getApprovalDetail(accessToken, instanceID)
+}
+
 func getApprovalDetail(accessToken, instanceID string) (*ApprovalInstance, error) {
 	body := map[string]interface{}{
 		"process_instance_id": instanceID,
@@ -3656,6 +3795,12 @@ func FindRestClassID(group map[string]interface{}) int64 {
 	return 0
 }
 
+// GetAttendanceGroupRestClassIDForOrg resolves rest shift class id for an attendance group under org.
+func GetAttendanceGroupRestClassIDForOrg(orgID string, group map[string]interface{}) int64 {
+	_ = orgID
+	return FindRestClassID(group)
+}
+
 func GetAttendanceGroupRestClassID(group map[string]interface{}) int64 {
 	restClassID := FindRestClassID(group)
 	if restClassID == 0 {
@@ -4095,6 +4240,58 @@ func GetScheduleListBatchByDay(userIDs []string, workDate string) ([]map[string]
 		return nil, nil
 	}
 
+	var schedules []map[string]interface{}
+	for _, s := range result {
+		if sm, ok := s.(map[string]interface{}); ok {
+			schedules = append(schedules, sm)
+		}
+	}
+	return schedules, nil
+}
+
+// GetScheduleListBatchByDayForOrg returns schedule rows for users on workDate using org credentials.
+func GetScheduleListBatchByDayForOrg(orgID string, userIDs []string, workDate string) ([]map[string]interface{}, error) {
+	orgID = database.NormalizeOrganizationID(orgID)
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return nil, err
+	}
+	opUserID, err := ResolveAdminUserIDFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	accessToken, err := getAccessTokenWithConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	t, err := time.Parse("2006-01-02", workDate)
+	if err != nil {
+		return nil, fmt.Errorf("日期格式错误: %w", err)
+	}
+	dayMs := t.UnixMilli()
+	body := map[string]interface{}{
+		"op_user_id":     opUserID,
+		"userids":        strings.Join(userIDs, ","),
+		"from_date_time": dayMs,
+		"to_date_time":   dayMs,
+	}
+	resp, err := postJSONOAPI(
+		fmt.Sprintf("https://oapi.dingtalk.com/topapi/attendance/schedule/listbyusers?access_token=%s", accessToken),
+		body,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("批量获取 %s 排班失败: %w", workDate, err)
+	}
+	errcode, _ := resp["errcode"].(float64)
+	if errcode != 0 {
+		errmsg, _ := resp["errmsg"].(string)
+		return nil, fmt.Errorf("批量获取 %s 排班失败: %s", workDate, errmsg)
+	}
+	result, ok := resp["result"].([]interface{})
+	if !ok {
+		return nil, nil
+	}
 	var schedules []map[string]interface{}
 	for _, s := range result {
 		if sm, ok := s.(map[string]interface{}); ok {
@@ -4577,11 +4774,16 @@ func sendCorpMessagePayloadToUser(userID, title string, body map[string]interfac
 }
 
 func sendCorpMessagePayloadToUserForOrg(orgID, userID, title string, body map[string]interface{}) error {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return fmt.Errorf("orgID is empty")
+	}
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return fmt.Errorf("userID is empty")
 	}
-	if !IsNotifiableUserID(userID) {
+	// Must use org-scoped notifiable check; never fall back to default-org lookup.
+	if !IsNotifiableUserIDForOrg(orgID, userID) {
 		return fmt.Errorf("%w: %s", ErrUserNotNotifiable, userID)
 	}
 	cfg, err := ConfigForOrgID(orgID)
@@ -4640,6 +4842,124 @@ func buildCorpActionCardPayload(userID, title, content, actionTitle, actionURL s
 	})
 }
 
+func buildCorpImagePayload(userID, mediaID string) map[string]interface{} {
+	return buildCorpPayload(userID, map[string]interface{}{
+		"msgtype": "image",
+		"image": map[string]interface{}{
+			"media_id": strings.TrimSpace(mediaID),
+		},
+	})
+}
+
+// UploadImageMediaForOrg uploads a PNG/JPEG image to DingTalk media storage and returns media_id.
+func UploadImageMediaForOrg(orgID, filename string, content []byte) (string, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return "", fmt.Errorf("orgID is empty")
+	}
+	if len(content) == 0 {
+		return "", fmt.Errorf("image content is empty")
+	}
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		filename = "schedule.png"
+	}
+	filename = filepath.Base(filename)
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return "", err
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("media", filename)
+	if err != nil {
+		return "", err
+	}
+	if _, err := part.Write(content); err != nil {
+		return "", err
+	}
+	if err := writer.Close(); err != nil {
+		return "", err
+	}
+	url := fmt.Sprintf("https://oapi.dingtalk.com/media/upload?access_token=%s&type=image", accessToken)
+	req, err := http.NewRequest("POST", url, &body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("media upload response invalid: %w", err)
+	}
+	if errcode, _ := parsed["errcode"].(float64); errcode != 0 {
+		errmsg, _ := parsed["errmsg"].(string)
+		return "", fmt.Errorf("media upload failed: %s", errmsg)
+	}
+	mediaID, _ := parsed["media_id"].(string)
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return "", fmt.Errorf("media upload missing media_id")
+	}
+	return mediaID, nil
+}
+
+// SendCorpImageToUserForOrg sends an image corp message to one user.
+func SendCorpImageToUserForOrg(orgID, userID, mediaID string) error {
+	orgID = strings.TrimSpace(orgID)
+	userID = strings.TrimSpace(userID)
+	mediaID = strings.TrimSpace(mediaID)
+	if orgID == "" {
+		return fmt.Errorf("orgID is empty")
+	}
+	if userID == "" {
+		return fmt.Errorf("userID is empty")
+	}
+	if mediaID == "" {
+		return fmt.Errorf("media_id is empty")
+	}
+	if !IsNotifiableUserIDForOrg(orgID, userID) {
+		return fmt.Errorf("%w: %s", ErrUserNotNotifiable, userID)
+	}
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return err
+	}
+	body := buildCorpImagePayload(userID, mediaID)
+	if cfg, err := ConfigForOrgID(orgID); err == nil {
+		agentID := cfg.normalized().AgentID
+		if agentID != "" {
+			if agentNum, convErr := strconv.ParseInt(agentID, 10, 64); convErr == nil {
+				body["agent_id"] = agentNum
+			} else {
+				body["agent_id"] = agentID
+			}
+		}
+	}
+	resp, err := postJSONOAPI(
+		fmt.Sprintf("https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token=%s", accessToken),
+		body,
+	)
+	if err != nil {
+		return err
+	}
+	if errcode, _ := resp["errcode"].(float64); errcode != 0 {
+		errmsg, _ := resp["errmsg"].(string)
+		return fmt.Errorf("%s", errmsg)
+	}
+	return nil
+}
+
 func buildCorpPayload(userID string, msg map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"agent_id":    getDingTalkAgentID(),
@@ -4676,8 +4996,14 @@ func formatCorpMessageMarkdown(title, content string) string {
 }
 
 func IsNotifiableUserID(userID string) bool {
+	return IsNotifiableUserIDForOrg(database.DefaultOrganizationID, userID)
+}
+
+// IsNotifiableUserIDForOrg checks whether a user in a given org can receive corp messages.
+func IsNotifiableUserIDForOrg(orgID, userID string) bool {
+	orgID = strings.TrimSpace(orgID)
 	trimmed := strings.TrimSpace(userID)
-	if trimmed == "" || strings.EqualFold(trimmed, "admin") || strings.EqualFold(trimmed, "system") {
+	if orgID == "" || trimmed == "" || strings.EqualFold(trimmed, "admin") || strings.EqualFold(trimmed, "system") {
 		return false
 	}
 	if database.DB == nil {
@@ -4687,14 +5013,14 @@ func IsNotifiableUserID(userID string) bool {
 	var user database.User
 	err := database.DB.
 		Select("user_id", "status").
-		Where("user_id = ? AND deleted_at IS NULL", trimmed).
+		Where("org_id = ? AND user_id = ? AND deleted_at IS NULL", orgID, trimmed).
 		First(&user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		logrus.Infof("dingtalk notifiable user %s not found locally, allow send attempt", trimmed)
+		logrus.Infof("dingtalk notifiable user org=%s user=%s not found locally, allow send attempt", orgID, trimmed)
 		return true
 	}
 	if err != nil {
-		logrus.Warnf("check dingtalk notifiable user failed for %s: %v", trimmed, err)
+		logrus.Warnf("check dingtalk notifiable user failed org=%s user=%s: %v", orgID, trimmed, err)
 		return false
 	}
 

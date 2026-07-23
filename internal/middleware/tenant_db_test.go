@@ -50,8 +50,11 @@ func TestTenantDB_WritesOrgIntoContextForThreeOrgs(t *testing.T) {
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest("GET", "/whatever", nil)
 			c.Set("orgID", org)
-			// 手动模拟 RequestMetrics 注入 requestDB。
-			db := newTenantDBFixture(t)
+			// 手动模拟 RequestMetrics 注入 requestDB（含空 RequestInfo，供 SetOrgID）。
+			info := &requestmeta.RequestInfo{RequestID: "t", Route: "/whatever"}
+			ctx := requestmeta.WithRequestInfo(c.Request.Context(), info)
+			c.Request = c.Request.WithContext(ctx)
+			db := newTenantDBFixture(t).WithContext(ctx)
 			c.Set(requestDBKey, db)
 
 			tenantDB, err := TenantDB(c)
@@ -64,6 +67,10 @@ func TestTenantDB_WritesOrgIntoContextForThreeOrgs(t *testing.T) {
 			}
 			if got != org {
 				t.Fatalf("got = %q, want %q", got, org)
+			}
+			// RequestInfo.OrgID 也必须被回写，供 CurrentOrganizationIDFromDB 使用。
+			if info.OrgID != org {
+				t.Fatalf("RequestInfo.OrgID = %q, want %q", info.OrgID, org)
 			}
 		})
 	}

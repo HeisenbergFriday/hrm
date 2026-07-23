@@ -1,4 +1,4 @@
-"""
+﻿"""
 calc_leave.py
 ──────────────────────────────────────────────────────────────────────────────
 功能：
@@ -29,6 +29,7 @@ calc_leave.py
 
 import argparse
 import decimal
+import json
 import os
 import re
 from datetime import date, datetime, timedelta
@@ -45,6 +46,8 @@ SCHEDULE_FILE = os.path.join(BASE_DIR, "作息表.xlsx")
 
 # ── 清洗：允许通过的审批状态 ──────────────────────────────────────────────────
 KEEP_STATUSES = {"完成", "审批中", "已修改"}
+# 明确作废态（含历史别名）。优先按包含匹配，避免「已撤销」之外的文案漏过。
+REVOKED_STATUS_KEYWORDS = ("撤销", "终止", "作废", "删除", "取消")
 
 # ── 标准工作时间 ──────────────────────────────────────────────────────────────
 WORK_START  = (9,  0)
@@ -91,6 +94,8 @@ ROW_APPROVAL_STATUS = 12
 ROW_APPROVAL_RESULT = 13
 ROW_IS_INTERN = 14
 ROW_SOURCE_ROW = 15
+
+MATERNITY_OVERRIDE_APPROVAL_PREFIX = "MANUAL-MATERNITY-"
 
 SYSTEM_DURATION_DEPTS = {"售后运营组", "电话客服组", "成都运营", "成都客服"}
 
@@ -1360,6 +1365,20 @@ def _approval_status_rank(status) -> int:
     return -1
 
 
+def is_revoked_approval(status=None, result=None) -> bool:
+    """True when approval status/result indicates a revoked/terminated record."""
+    status_text = str(status or "").strip()
+    result_text = str(result or "").strip()
+    if status_text == "已撤销":
+        return True
+    for keyword in REVOKED_STATUS_KEYWORDS:
+        if keyword and keyword in status_text:
+            return True
+        if keyword and keyword in result_text:
+            return True
+    return False
+
+
 def has_modified_status(*rows: tuple) -> bool:
     return any(str(row[ROW_APPROVAL_STATUS] or "").strip() == "已修改" for row in rows)
 
@@ -1441,17 +1460,17 @@ def clean_export(export_file: str) -> list[tuple]:
         status = row[col[normalize_header_name("审批状态")]]
         result = row[col[normalize_header_name("审批结果")]]
 
-        # 过滤：剔除已撤销
-        if str(status or "").strip() == "已撤销":
+        # 过滤：剔除已撤销/终止/作废（含状态或结果文案中的关键字）
+        if is_revoked_approval(status, result):
             skipped += 1
             revoked += 1
             continue
         # 过滤：仅保留指定审批状态
-        if status not in KEEP_STATUSES:
+        if str(status or "").strip() not in KEEP_STATUSES:
             skipped += 1
             continue
         # 过滤：完成 + 拒绝 也剔除
-        if status == "完成" and result == "拒绝":
+        if str(status or "").strip() == "完成" and str(result or "").strip() == "拒绝":
             skipped += 1
             continue
 
@@ -1505,6 +1524,107 @@ def clean_export(export_file: str) -> list[tuple]:
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  成都员工判断                                                            ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
+
+def parse_maternity_leave_overrides(raw_overrides) -> list[dict]:
+    """解析长期产假人工兜底配置，返回规范化日期。"""
+    if raw_overrides in (None, "", []):
+        return []
+    if isinstance(raw_overrides, str):
+        try:
+            raw_overrides = json.loads(raw_overrides)
+        except json.JSONDecodeError as exc:
+            raise ValueError("长期产假人员配置不是有效 JSON。") from exc
+    if not isinstance(raw_overrides, list):
+        raise ValueError("长期产假人员配置必须是数组。")
+
+    result = []
+    for index, item in enumerate(raw_overrides, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"长期产假第 {index} 行格式不正确。")
+        emp_id = normalize_employee_id(item.get("employee_no") or item.get("emp_id")) or ""
+        name = normalize_employee_name(item.get("name")) or ""
+        start_dt = to_datetime(item.get("start_date"))
+        end_dt = to_datetime(item.get("end_date"))
+        if not name or start_dt is None or end_dt is None:
+            raise ValueError(f"长期产假第 {index} 行必须填写姓名、开始日期和结束日期。")
+        if start_dt.date() > end_dt.date():
+            raise ValueError(f"长期产假第 {index} 行开始日期不能晚于结束日期。")
+        result.append({
+            "employee_no": emp_id,
+            "name": name,
+            "start_date": start_dt.date(),
+            "end_date": end_dt.date(),
+        })
+    return result
+
+
+def _same_maternity_employee(row: tuple, override: dict) -> bool:
+    row_emp_id = normalize_employee_id(row[ROW_EMP_ID]) or ""
+    row_name = normalize_employee_name(row[ROW_EMP_NAME]) or ""
+    override_emp_id = override["employee_no"]
+    if row_emp_id and override_emp_id:
+        return row_emp_id == override_emp_id
+    return bool(row_name and row_name == override["name"])
+
+
+def merge_maternity_leave_overrides(
+    src_rows: list[tuple],
+    raw_overrides,
+    schedule_ctx: dict,
+) -> list[tuple]:
+    """钉钉当月没有对应产假时，追加长期产假人工兜底记录。"""
+    overrides = parse_maternity_leave_overrides(raw_overrides)
+    if not overrides:
+        return src_rows
+
+    month_start = schedule_ctx["month_start"]
+    month_end = schedule_ctx["month_end"]
+    merged_rows = list(src_rows)
+    added = skipped_existing = skipped_outside = 0
+    next_source_row = max(
+        [int(row[ROW_SOURCE_ROW]) for row in merged_rows[1:] if row[ROW_SOURCE_ROW]] or [1]
+    ) + 1
+
+    for index, override in enumerate(overrides, start=1):
+        start_date = override["start_date"]
+        end_date = override["end_date"]
+        if end_date < month_start or start_date > month_end:
+            skipped_outside += 1
+            continue
+
+        has_existing = False
+        for row in merged_rows[1:]:
+            if "产假" not in str(row[ROW_LEAVE_TYPE] or ""):
+                continue
+            if not _same_maternity_employee(row, override):
+                continue
+            row_start = to_datetime(row[ROW_START])
+            row_end = to_datetime(row[ROW_END])
+            if row_start and row_end and row_start.date() <= end_date and start_date <= row_end.date():
+                has_existing = True
+                break
+        if has_existing:
+            skipped_existing += 1
+            continue
+
+        merged_rows.append((
+            override["employee_no"], override["name"], "", "", "",
+            "产假",
+            datetime.combine(start_date, datetime.min.time()).replace(hour=9),
+            datetime.combine(end_date, datetime.min.time()).replace(hour=18, minute=30),
+            None, None, None,
+            f"{MATERNITY_OVERRIDE_APPROVAL_PREFIX}{index}",
+            "完成", "同意", False, next_source_row,
+        ))
+        next_source_row += 1
+        added += 1
+
+    print(
+        f"[长期产假] 人工配置 {len(overrides)} 人，补入 {added} 人，"
+        f"钉钉已有跳过 {skipped_existing} 人，非当前月跳过 {skipped_outside} 人"
+    )
+    return merged_rows
+
 
 def is_chengdu_row(row, special_chengdu_names: set[str] | tuple[str, ...] | None = None):
     """检查一/二/三级部门是否含"成都"，或姓名是否在成都作息名单内。"""
@@ -1571,7 +1691,7 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
             ws_intern.append(new_header)
             continue
 
-        if not row[ROW_EMP_ID]:  # 空行跳过
+        if not row[ROW_EMP_ID] and not row[ROW_EMP_NAME]:  # 工号可空，姓名也空才视为空行
             continue
 
         offsite_rule = find_offsite_duration_override(row, offsite_duration_overrides)
@@ -1587,6 +1707,11 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
             if is_cd and (normalize_employee_name(row[ROW_EMP_NAME]) or "") in special_chengdu_name_set:
                 special_chengdu_matched += 1
             final_h, final_days, remark = calc_final_fields(row[:9], schedule_ctx, is_chengdu=is_cd)
+            if (
+                str(row[ROW_APPROVAL_ID] or "").startswith(MATERNITY_OVERRIDE_APPROVAL_PREFIX)
+                and not remark
+            ):
+                remark = "长期产假人工兜底"
         is_intern, intern_match_source = decide_intern_target(
             row, employee_type_map, special_employee_name_set
         )

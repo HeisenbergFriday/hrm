@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"peopleops/internal/database"
 	"peopleops/internal/repository"
 	"sort"
@@ -10,6 +11,12 @@ import (
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
+
+// ErrUserNotInOrg indicates the target user does not belong to the current organization.
+var ErrUserNotInOrg = errors.New("permission: user not found in organization")
+
+// ErrRoleNotInOrg indicates the target role does not belong to the current organization.
+var ErrRoleNotInOrg = errors.New("permission: role not found in organization")
 
 type PermissionService struct {
 	db                 *gorm.DB
@@ -25,37 +32,41 @@ type PermissionService struct {
 }
 
 func NewPermissionService(db *gorm.DB) *PermissionService {
-	return &PermissionService{
-		db:                 db,
-		orgID:              database.CurrentOrganizationIDFromDB(db),
-		roleRepo:           repository.NewRoleRepository(db),
-		permissionRepo:     repository.NewPermissionRepository(db),
-		userRoleRepo:       repository.NewUserRoleRepository(db),
-		rolePermissionRepo: repository.NewRolePermissionRepository(db),
-		menuPermRepo:       repository.NewMenuPermissionRepository(db),
-		dataPermRepo:       repository.NewDataPermissionRepository(db),
-		deptRepo:           repository.NewDepartmentRepository(db),
-		userRepo:           repository.NewUserRepository(db),
-	}
+	// Strict: only use explicit request/tenant org; never invent "default".
+	orgID, _ := database.RequireOrganizationIDFromDB(db)
+	return NewPermissionServiceWithOrgID(db, orgID)
 }
 
 // NewPermissionServiceWithOrgID 多租户构造：deptRepo/userRepo 携带 orgID 过滤。
 // 用于 handler 层将当前请求的组织隔离下推到权限相关查询，
 // 避免 resolveManagedDepartmentScope 拉全库部门造成跨企业串权限。
-// orgID 为空时行为等同旧构造（不加过滤）。
+// orgID 为空时保持空绑定（fail-closed on tenant methods），禁止静默 default。
 func NewPermissionServiceWithOrgID(db *gorm.DB, orgID string) *PermissionService {
-	return &PermissionService{
+	orgID = strings.TrimSpace(orgID)
+	if orgID != "" {
+		orgID = database.NormalizeOrganizationID(orgID)
+	}
+	svc := &PermissionService{
 		db:                 db,
 		orgID:              orgID,
 		roleRepo:           repository.NewRoleRepository(db),
 		permissionRepo:     repository.NewPermissionRepository(db),
 		userRoleRepo:       repository.NewUserRoleRepository(db),
 		rolePermissionRepo: repository.NewRolePermissionRepository(db),
-		menuPermRepo:       repository.NewMenuPermissionRepository(db),
-		dataPermRepo:       repository.NewDataPermissionRepository(db),
-		deptRepo:           repository.NewDepartmentRepositoryWithOrgID(db, orgID),
-		userRepo:           repository.NewUserRepositoryWithOrgID(db, orgID),
 	}
+	if orgID != "" {
+		svc.menuPermRepo = repository.NewMenuPermissionRepositoryWithOrgID(db, orgID)
+		svc.dataPermRepo = repository.NewDataPermissionRepositoryWithOrgID(db, orgID)
+		svc.deptRepo = repository.NewDepartmentRepositoryWithOrgID(db, orgID)
+		svc.userRepo = repository.NewUserRepositoryWithOrgID(db, orgID)
+	} else {
+		// Unbound repos fail closed on tenant reads; permission catalogs remain global.
+		svc.menuPermRepo = repository.NewMenuPermissionRepository(db)
+		svc.dataPermRepo = repository.NewDataPermissionRepository(db)
+		svc.deptRepo = repository.NewDepartmentRepository(db)
+		svc.userRepo = repository.NewUserRepository(db)
+	}
+	return svc
 }
 
 type SystemPermissionDefinition struct {
@@ -68,6 +79,9 @@ var systemPermissionDefinitions = []SystemPermissionDefinition{
 	{Name: "用户管理", Code: "user_manage", Description: "用户管理权限"},
 	{Name: "部门管理", Code: "department_manage", Description: "部门管理权限"},
 	{Name: "考勤管理", Code: "attendance_manage", Description: "考勤管理权限"},
+	{Name: "考勤工具箱操作", Code: "attendance_toolbox_operate", Description: "考勤工具箱计算、下载与普通操作"},
+	{Name: "考勤工具箱钉钉同步", Code: "attendance_toolbox_dingtalk_sync", Description: "考勤工具箱钉钉同步"},
+	{Name: "考勤工具箱规则编辑", Code: "attendance_toolbox_rules_edit", Description: "考勤工具箱加班规则编辑与应用"},
 	{Name: "审批管理", Code: "approval_manage", Description: "审批管理权限"},
 	{Name: "同步审批", Code: "approval:sync", Description: "同步审批模板/实例数据"},
 	{Name: "创建审批模板", Code: "approval:create", Description: "创建审批模板"},
@@ -75,6 +89,7 @@ var systemPermissionDefinitions = []SystemPermissionDefinition{
 	{Name: "删除审批模板", Code: "approval:delete", Description: "删除审批模板"},
 	{Name: "权限管理", Code: "permission_manage", Description: "权限管理权限"},
 	{Name: "绩效活动管理", Code: "performance:activity:manage", Description: "创建/编辑/发布/启动/锁定/归档绩效活动"},
+	{Name: "绩效活动导入", Code: "performance:activity:import", Description: "通过 Excel 分析并创建绩效模板、草稿活动和目标"},
 	{Name: "绩效自评提交", Code: "performance:self_eval:submit", Description: "提交绩效自评"},
 	{Name: "绩效主管评分", Code: "performance:manager_eval:submit", Description: "主管绩效评分"},
 	{Name: "绩效员工确认", Code: "performance:employee_confirm:submit", Description: "员工确认绩效结果"},
@@ -138,21 +153,43 @@ func (s *PermissionService) EnsureSystemPermissions() error {
 }
 
 func (s *PermissionService) GetRoles() ([]database.Role, int64, error) {
-	return s.roleRepo.FindAll()
+	orgID := s.effectiveOrgID("")
+	if orgID == "" {
+		// Fail-closed: never list roles across all tenants via FindAll().
+		return nil, 0, repository.ErrMissingOrgID
+	}
+	return s.roleRepo.FindAllByOrg(orgID)
 }
 
 func (s *PermissionService) CreateRole(role *database.Role) error {
-	if role != nil && strings.TrimSpace(role.OrgID) == "" {
-		role.OrgID = s.orgID
+	if role == nil {
+		return gorm.ErrInvalidData
 	}
+	orgID := s.effectiveOrgID(role.OrgID)
+	if orgID == "" {
+		return repository.ErrMissingOrgID
+	}
+	if trimmed := strings.TrimSpace(role.OrgID); trimmed != "" && database.NormalizeOrganizationID(trimmed) != orgID {
+		return ErrRoleNotInOrg
+	}
+	role.OrgID = orgID
 	return s.roleRepo.Create(role)
 }
 
 func (s *PermissionService) UpdateRole(role *database.Role) error {
-	if _, err := s.requireRole(role.ID); err != nil {
+	if role == nil {
+		return gorm.ErrInvalidData
+	}
+	orgID := s.effectiveOrgID("")
+	if orgID == "" {
+		return repository.ErrMissingOrgID
+	}
+	if _, err := s.requireRoleInOrg(orgID, role.ID); err != nil {
 		return err
 	}
-	return s.roleRepo.Update(role)
+	// Prevent callers from re-parenting a role into another organization.
+	// UpdateInOrg uses the service-bound org as the sole filter authority.
+	return s.roleRepo.UpdateInOrg(orgID, role)
 }
 
 func (s *PermissionService) GetPermissions() ([]database.Permission, int64, error) {
@@ -166,7 +203,11 @@ func (s *PermissionService) GetRolePermissions(roleID uint) ([]database.Permissi
 	if err := s.EnsureSystemPermissions(); err != nil {
 		return nil, err
 	}
-	if _, err := s.requireRole(roleID); err != nil {
+	orgID := s.effectiveOrgID("")
+	if orgID == "" {
+		return nil, repository.ErrMissingOrgID
+	}
+	if _, err := s.requireRoleInOrg(orgID, roleID); err != nil {
 		return nil, err
 	}
 	return s.rolePermissionRepo.FindByRoleID(roleID)
@@ -176,7 +217,11 @@ func (s *PermissionService) SaveRolePermissions(roleID uint, permissionIDs []uin
 	if err := s.EnsureSystemPermissions(); err != nil {
 		return err
 	}
-	if _, err := s.requireRole(roleID); err != nil {
+	orgID := s.effectiveOrgID("")
+	if orgID == "" {
+		return repository.ErrMissingOrgID
+	}
+	if _, err := s.requireRoleInOrg(orgID, roleID); err != nil {
 		return err
 	}
 	seen := make(map[uint]struct{}, len(permissionIDs))
@@ -232,16 +277,34 @@ func (s *PermissionService) SaveRolePermissions(roleID uint, permissionIDs []uin
 	})
 }
 
+// effectiveOrgID resolves the tenant for permission lookups.
+// Explicit orgID wins; otherwise use the service-bound org (from request DB context).
+// Empty context returns "" (fail-closed) — never invents "default".
+func (s *PermissionService) effectiveOrgID(orgID string) string {
+	if o := strings.TrimSpace(orgID); o != "" {
+		return database.NormalizeOrganizationID(o)
+	}
+	if s != nil {
+		if o := strings.TrimSpace(s.orgID); o != "" {
+			return database.NormalizeOrganizationID(o)
+		}
+	}
+	return ""
+}
+
+// normalizePermissionOrgID keeps package-level helpers used by tests/callers that
+// only have a raw org string. Prefer (s *PermissionService).effectiveOrgID in service methods.
+// Empty input stays empty (fail-closed); does not invent default.
 func normalizePermissionOrgID(orgID string) string {
 	orgID = strings.TrimSpace(orgID)
 	if orgID == "" {
-		return "default"
+		return ""
 	}
-	return orgID
+	return database.NormalizeOrganizationID(orgID)
 }
 
 func (s *PermissionService) normalizeUserID(userID string) string {
-	return s.normalizeUserIDInOrg("", userID)
+	return s.normalizeUserIDInOrg(s.effectiveOrgID(""), userID)
 }
 
 func (s *PermissionService) normalizeUserIDInOrg(orgID, userID string) string {
@@ -249,13 +312,14 @@ func (s *PermissionService) normalizeUserIDInOrg(orgID, userID string) string {
 	if normalized == "" {
 		return normalized
 	}
-	orgID = strings.TrimSpace(orgID)
+	orgID = s.effectiveOrgID(orgID)
 	if orgID != "" {
 		if user, err := s.userRepo.FindByOrgAndUserID(orgID, normalized); err == nil && user.UserID != "" {
 			return user.UserID
 		}
 	}
 	// 先按 user_id 字段查询（钉钉 userId 等字符串标识，即使外观像数字）
+	// userRepo may already be org-scoped via NewPermissionServiceWithOrgID / CurrentOrganizationIDFromDB.
 	if user, err := s.userRepo.FindByUserID(normalized); err == nil && user.UserID != "" {
 		return user.UserID
 	}
@@ -282,11 +346,15 @@ func looksNumericID(value string) bool {
 
 // GetUserPermissions 返回用户通过角色获得的所有权限码
 func (s *PermissionService) GetUserPermissions(userID string) ([]string, error) {
-	return s.GetUserPermissionsInOrg("", userID)
+	return s.GetUserPermissionsInOrg(s.effectiveOrgID(""), userID)
 }
 
 func (s *PermissionService) GetUserPermissionsInOrg(orgID, userID string) ([]string, error) {
-	perms, err := s.rolePermissionRepo.FindByUserRole(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID))
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return nil, repository.ErrMissingOrgID
+	}
+	perms, err := s.rolePermissionRepo.FindByUserRole(orgID, s.normalizeUserIDInOrg(orgID, userID))
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +367,7 @@ func (s *PermissionService) GetUserPermissionsInOrg(orgID, userID string) ([]str
 
 // HasPermission 检查用户是否具有指定权限码
 func (s *PermissionService) HasPermission(userID string, permissionCode string) (bool, error) {
-	return s.HasPermissionInOrg("", userID, permissionCode)
+	return s.HasPermissionInOrg(s.effectiveOrgID(""), userID, permissionCode)
 }
 
 func (s *PermissionService) HasPermissionInOrg(orgID, userID string, permissionCode string) (bool, error) {
@@ -317,7 +385,7 @@ func (s *PermissionService) HasPermissionInOrg(orgID, userID string, permissionC
 
 // HasAnyPermission 检查用户是否具有任一指定权限码
 func (s *PermissionService) HasAnyPermission(userID string, codes ...string) (bool, error) {
-	return s.HasAnyPermissionInOrg("", userID, codes...)
+	return s.HasAnyPermissionInOrg(s.effectiveOrgID(""), userID, codes...)
 }
 
 func (s *PermissionService) HasAnyPermissionInOrg(orgID, userID string, codes ...string) (bool, error) {
@@ -339,34 +407,56 @@ func (s *PermissionService) HasAnyPermissionInOrg(orgID, userID string, codes ..
 
 // GetUserRoles 获取用户当前角色。数据库约束保证同一用户最多只有一个角色。
 func (s *PermissionService) GetUserRoles(userID string) ([]database.Role, error) {
-	return s.GetUserRolesInOrg("", userID)
+	return s.GetUserRolesInOrg(s.effectiveOrgID(""), userID)
 }
 
 func (s *PermissionService) GetUserRolesInOrg(orgID, userID string) ([]database.Role, error) {
-	return s.userRoleRepo.FindByUserID(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID))
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return nil, repository.ErrMissingOrgID
+	}
+	return s.userRoleRepo.FindByUserID(orgID, s.normalizeUserIDInOrg(orgID, userID))
 }
 
 // AssignUserRole 设置用户角色，会替换该用户原有角色。
 func (s *PermissionService) AssignUserRole(userID string, roleID uint) error {
-	return s.AssignUserRoleInOrg("", userID, roleID)
+	return s.AssignUserRoleInOrg(s.effectiveOrgID(""), userID, roleID)
 }
 
 func (s *PermissionService) AssignUserRoleInOrg(orgID, userID string, roleID uint) error {
-	return s.userRoleRepo.Assign(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID), roleID)
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return repository.ErrMissingOrgID
+	}
+	normalized, err := s.requireUserInOrg(orgID, userID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.requireRoleInOrg(orgID, roleID); err != nil {
+		return err
+	}
+	return s.userRoleRepo.Assign(orgID, normalized, roleID)
 }
 
 // AssignDefaultEmployeeRoleIfUnassigned assigns the default employee role only when the user has no role.
 func (s *PermissionService) AssignDefaultEmployeeRoleIfUnassigned(userID string) (bool, error) {
-	return s.AssignDefaultEmployeeRoleIfUnassignedInOrg("", userID)
+	return s.AssignDefaultEmployeeRoleIfUnassignedInOrg(s.effectiveOrgID(""), userID)
 }
 
 func (s *PermissionService) AssignDefaultEmployeeRoleIfUnassignedInOrg(orgID, userID string) (bool, error) {
-	normalized := s.normalizeUserIDInOrg(orgID, userID)
-	if normalized == "" {
-		return false, nil
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return false, repository.ErrMissingOrgID
+	}
+	normalized, err := s.requireUserInOrg(orgID, userID)
+	if err != nil {
+		if errors.Is(err, ErrUserNotInOrg) || errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
 	}
 
-	roles, err := s.userRoleRepo.FindByUserID(normalizePermissionOrgID(orgID), normalized)
+	roles, err := s.userRoleRepo.FindByUserID(orgID, normalized)
 	if err != nil {
 		return false, err
 	}
@@ -374,19 +464,29 @@ func (s *PermissionService) AssignDefaultEmployeeRoleIfUnassignedInOrg(orgID, us
 		return false, nil
 	}
 
-	role, err := s.ensureDefaultEmployeeRole()
+	role, err := s.ensureDefaultEmployeeRoleInOrg(orgID)
 	if err != nil {
 		return false, err
 	}
-	if err := s.userRoleRepo.Assign(normalizePermissionOrgID(orgID), normalized, role.ID); err != nil {
+	if err := s.userRoleRepo.Assign(orgID, normalized, role.ID); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 func (s *PermissionService) ensureDefaultEmployeeRole() (*database.Role, error) {
+	return s.ensureDefaultEmployeeRoleInOrg(s.effectiveOrgID(""))
+}
+
+// ensureDefaultEmployeeRoleInOrg finds or creates the default employee role for a single org.
+// It never reuses another organization's role of the same name.
+func (s *PermissionService) ensureDefaultEmployeeRoleInOrg(orgID string) (*database.Role, error) {
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return nil, repository.ErrMissingOrgID
+	}
 	var role database.Role
-	err := s.db.Unscoped().Where("name = ?", DefaultEmployeeRoleName).First(&role).Error
+	err := s.db.Unscoped().Where("org_id = ? AND name = ?", orgID, DefaultEmployeeRoleName).First(&role).Error
 	if err == nil {
 		if role.DeletedAt.Valid {
 			if err := s.db.Unscoped().Model(&role).Update("deleted_at", nil).Error; err != nil {
@@ -394,15 +494,20 @@ func (s *PermissionService) ensureDefaultEmployeeRole() (*database.Role, error) 
 			}
 			role.DeletedAt.Valid = false
 		}
+		// Hard guarantee: never return a role that drifted to another org.
+		if strings.TrimSpace(role.OrgID) != orgID {
+			return nil, ErrRoleNotInOrg
+		}
 		return &role, nil
 	}
 	if err != gorm.ErrRecordNotFound {
 		return nil, err
 	}
 
-	role = database.Role{Name: DefaultEmployeeRoleName, Description: DefaultEmployeeRoleName}
-	if strings.TrimSpace(role.OrgID) == "" {
-		role.OrgID = s.orgID
+	role = database.Role{
+		OrgID:       orgID,
+		Name:        DefaultEmployeeRoleName,
+		Description: DefaultEmployeeRoleName,
 	}
 	if err := s.db.Create(&role).Error; err != nil {
 		return nil, err
@@ -458,35 +563,58 @@ func (s *PermissionService) grantDefaultEmployeeRoleMenuPermissions(roleID uint)
 
 // RemoveUserRole removes a role from a user.
 func (s *PermissionService) RemoveUserRole(userID string, roleID uint) error {
-	return s.RemoveUserRoleInOrg("", userID, roleID)
+	return s.RemoveUserRoleInOrg(s.effectiveOrgID(""), userID, roleID)
 }
 
 func (s *PermissionService) RemoveUserRoleInOrg(orgID, userID string, roleID uint) error {
-	return s.userRoleRepo.Remove(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID), roleID)
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return repository.ErrMissingOrgID
+	}
+	normalized, err := s.requireUserInOrg(orgID, userID)
+	if err != nil {
+		return err
+	}
+	// Role must exist in current org; removing with a cross-org role_id is a not-found.
+	if _, err := s.requireRoleInOrg(orgID, roleID); err != nil {
+		return err
+	}
+	return s.userRoleRepo.Remove(orgID, normalized, roleID)
 }
 
 // GetRoleUsers 获取角色下的所有用户
 func (s *PermissionService) GetRoleUsers(roleID uint) ([]database.User, error) {
-	return s.GetRoleUsersInOrg("", roleID)
+	return s.GetRoleUsersInOrg(s.effectiveOrgID(""), roleID)
 }
 
 func (s *PermissionService) GetRoleUsersInOrg(orgID string, roleID uint) ([]database.User, error) {
-	return s.userRoleRepo.FindByRoleID(normalizePermissionOrgID(orgID), roleID)
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return nil, repository.ErrMissingOrgID
+	}
+	if _, err := s.requireRoleInOrg(orgID, roleID); err != nil {
+		return nil, err
+	}
+	return s.userRoleRepo.FindByRoleID(orgID, roleID)
 }
 
 // HasUserRole 检查用户是否有某角色
 func (s *PermissionService) HasUserRole(userID string, roleName string) (bool, error) {
-	return s.HasUserRoleInOrg("", userID, roleName)
+	return s.HasUserRoleInOrg(s.effectiveOrgID(""), userID, roleName)
 }
 
 func (s *PermissionService) HasUserRoleInOrg(orgID, userID string, roleName string) (bool, error) {
-	return s.userRoleRepo.HasRole(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID), roleName)
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return false, repository.ErrMissingOrgID
+	}
+	return s.userRoleRepo.HasRole(orgID, s.normalizeUserIDInOrg(orgID, userID), roleName)
 }
 
 // GetUserPerformanceScope 根据 data_permissions 配置返回绩效数据可见范围
 // 返回 nil 表示全量权限，返回非 nil 的 OrgDataScope 表示受限范围
 func (s *PermissionService) GetUserPerformanceScope(userID string) (*OrgDataScope, error) {
-	return s.GetUserPerformanceScopeInOrg("", userID)
+	return s.GetUserPerformanceScopeInOrg(s.effectiveOrgID(""), userID)
 }
 
 func (s *PermissionService) GetUserPerformanceScopeInOrg(orgID, userID string) (*OrgDataScope, error) {
@@ -555,11 +683,15 @@ func (s *PermissionService) SaveDataPermission(roleID uint, scope string, depart
 
 // GetUserMenuKeys 根据用户角色从 menu_permissions 表聚合菜单权限。
 func (s *PermissionService) GetUserMenuKeys(userID string) ([]string, error) {
-	return s.GetUserMenuKeysInOrg("", userID)
+	return s.GetUserMenuKeysInOrg(s.effectiveOrgID(""), userID)
 }
 
 func (s *PermissionService) GetUserMenuKeysInOrg(orgID, userID string) ([]string, error) {
-	records, err := s.menuPermRepo.FindByUserRole(normalizePermissionOrgID(orgID), s.normalizeUserIDInOrg(orgID, userID))
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return nil, repository.ErrMissingOrgID
+	}
+	records, err := s.menuPermRepo.FindByUserRole(orgID, s.normalizeUserIDInOrg(orgID, userID))
 	if err != nil {
 		return nil, err
 	}
@@ -598,7 +730,7 @@ func (s *PermissionService) GetRoleMenuKeys(roleID uint) ([]string, error) {
 
 // HasMenuPermission 检查用户是否具有指定菜单权限。
 func (s *PermissionService) HasMenuPermission(userID string, menuKey string) (bool, error) {
-	return s.HasMenuPermissionInOrg("", userID, menuKey)
+	return s.HasMenuPermissionInOrg(s.effectiveOrgID(""), userID, menuKey)
 }
 
 func (s *PermissionService) HasMenuPermissionInOrg(orgID, userID string, menuKey string) (bool, error) {
@@ -619,20 +751,24 @@ func (s *PermissionService) HasMenuPermissionInOrg(orgID, userID string, menuKey
 // 数据库约束保证同一用户最多只有一个角色，保留 all > department > self 作为兼容兜底。
 // 返回 nil 表示全量权限（admin 或 all scope）。
 func (s *PermissionService) ResolveUserScope(userID string) (*OrgDataScope, error) {
-	return s.ResolveUserScopeInOrg("", userID)
+	return s.ResolveUserScopeInOrg(s.effectiveOrgID(""), userID)
 }
 
 func (s *PermissionService) ResolveUserScopeInOrg(orgID, userID string) (*OrgDataScope, error) {
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return nil, repository.ErrMissingOrgID
+	}
 	// admin 用户全量权限
 	if userID == "admin" {
 		return nil, nil
 	}
 
 	stringUserID := s.normalizeUserIDInOrg(orgID, userID)
-	logrus.WithFields(logrus.Fields{"orgID": normalizePermissionOrgID(orgID), "numericID": userID, "stringUserID": stringUserID}).Debug("ResolveUserScope: ID转换")
+	logrus.WithFields(logrus.Fields{"orgID": orgID, "numericID": userID, "stringUserID": stringUserID}).Debug("ResolveUserScope: ID转换")
 
 	// 获取用户所有角色
-	roles, err := s.userRoleRepo.FindByUserID(normalizePermissionOrgID(orgID), stringUserID)
+	roles, err := s.userRoleRepo.FindByUserID(orgID, stringUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -850,21 +986,76 @@ func sortedKeys(keySet map[string]struct{}) []string {
 }
 
 func (s *PermissionService) requireRole(roleID uint) (*database.Role, error) {
+	return s.requireRoleInOrg(s.effectiveOrgID(""), roleID)
+}
+
+// requireRoleInOrg loads a role that must belong to orgID.
+// Cross-org role IDs return ErrRoleNotInOrg (wrapped around gorm.ErrRecordNotFound).
+func (s *PermissionService) requireRoleInOrg(orgID string, roleID uint) (*database.Role, error) {
 	if roleID == 0 {
-		return nil, gorm.ErrRecordNotFound
+		return nil, ErrRoleNotInOrg
 	}
-	return s.roleRepo.FindByID(roleID)
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return nil, repository.ErrMissingOrgID
+	}
+	role, err := s.roleRepo.FindByIDAndOrg(roleID, orgID)
+	if err != nil {
+		if errors.Is(err, repository.ErrMissingOrgID) {
+			return nil, err
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrRoleNotInOrg
+		}
+		return nil, err
+	}
+	return role, nil
 }
 
 func (s *PermissionService) requireUser(userID string) (string, error) {
-	normalized := s.normalizeUserID(userID)
-	if normalized == "" {
-		return "", gorm.ErrRecordNotFound
+	return s.requireUserInOrg(s.effectiveOrgID(""), userID)
+}
+
+// requireUserInOrg resolves and verifies the user belongs to orgID.
+// Missing / cross-org users return ErrUserNotInOrg.
+func (s *PermissionService) requireUserInOrg(orgID, userID string) (string, error) {
+	orgID = s.effectiveOrgID(orgID)
+	if orgID == "" {
+		return "", repository.ErrMissingOrgID
 	}
-	if _, err := s.userRepo.FindByUserID(normalized); err == nil {
-		return normalized, nil
-	} else if err != gorm.ErrRecordNotFound {
+	normalized := strings.TrimSpace(userID)
+	if normalized == "" {
+		return "", ErrUserNotInOrg
+	}
+
+	// Prefer exact (org_id, user_id) lookup — never fall back across organizations.
+	if user, err := s.userRepo.FindByOrgAndUserID(orgID, normalized); err == nil && user.UserID != "" {
+		return user.UserID, nil
+	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", err
 	}
-	return "", gorm.ErrRecordNotFound
+
+	// Numeric primary-key path still constrained to org via scoped userRepo when org-bound.
+	if looksNumericID(normalized) {
+		if user, err := s.userRepo.FindByID(normalized); err == nil && user.UserID != "" {
+			if strings.TrimSpace(user.OrgID) != "" && strings.TrimSpace(user.OrgID) != orgID {
+				return "", ErrUserNotInOrg
+			}
+			// When userRepo is org-scoped FindByID already filters; double-check when present.
+			if s.orgID != "" && strings.TrimSpace(user.OrgID) != "" && user.OrgID != s.orgID {
+				return "", ErrUserNotInOrg
+			}
+			// Confirm membership by org+user_id for unscoped repos.
+			if _, err := s.userRepo.FindByOrgAndUserID(orgID, user.UserID); err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return "", ErrUserNotInOrg
+				}
+				return "", err
+			}
+			return user.UserID, nil
+		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", err
+		}
+	}
+	return "", ErrUserNotInOrg
 }

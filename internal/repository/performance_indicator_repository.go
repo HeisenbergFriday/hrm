@@ -4,6 +4,7 @@ import (
 	"peopleops/internal/database"
 	"peopleops/internal/requestmeta"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -18,7 +19,8 @@ func NewPerformanceIndicatorLibraryRepository(db *gorm.DB) *PerformanceIndicator
 }
 
 func NewPerformanceIndicatorLibraryRepositoryWithOrgID(db *gorm.DB, orgID string) *PerformanceIndicatorLibraryRepository {
-	return &PerformanceIndicatorLibraryRepository{db: db, orgID: strings.TrimSpace(orgID)}
+	orgID = strings.TrimSpace(orgID)
+	return &PerformanceIndicatorLibraryRepository{db: performanceRepositoryDB(db, orgID), orgID: orgID}
 }
 
 func tenantOrgIDFromDB(db *gorm.DB) string {
@@ -32,25 +34,43 @@ func tenantOrgIDFromDB(db *gorm.DB) string {
 	return strings.TrimSpace(orgID)
 }
 
-func (r *PerformanceIndicatorLibraryRepository) scoped() *gorm.DB {
-	tx := r.db
-	if strings.TrimSpace(r.orgID) != "" {
-		tx = tx.Where("org_id = ?", strings.TrimSpace(r.orgID))
+func (r *PerformanceIndicatorLibraryRepository) boundOrgID() string {
+	if r == nil {
+		return ""
 	}
-	return tx
+	return strings.TrimSpace(r.orgID)
+}
+
+func (r *PerformanceIndicatorLibraryRepository) requireBoundOrg() (string, error) {
+	orgID := r.boundOrgID()
+	if orgID == "" {
+		return "", ErrMissingOrgID
+	}
+	return orgID, nil
+}
+
+// scoped never returns the raw db without an org filter. Empty org uses 1=0.
+func (r *PerformanceIndicatorLibraryRepository) scoped() *gorm.DB {
+	return r.db.Scopes(ScopeOrg(r.boundOrgID(), "org_id"))
 }
 
 func (r *PerformanceIndicatorLibraryRepository) Create(lib *database.PerformanceIndicatorLibrary) error {
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(lib.OrgID) == "" {
-		lib.OrgID = strings.TrimSpace(r.orgID)
+	orgID, err := r.requireBoundOrg()
+	if err != nil {
+		return err
 	}
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(lib.OrgID) != strings.TrimSpace(r.orgID) {
-		return ErrOrgMismatch
+	merged, err := EnsureSameOrg(orgID, lib.OrgID)
+	if err != nil {
+		return err
 	}
+	lib.OrgID = merged
 	return r.scoped().Create(lib).Error
 }
 
 func (r *PerformanceIndicatorLibraryRepository) GetByID(id uint) (*database.PerformanceIndicatorLibrary, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, err
+	}
 	var lib database.PerformanceIndicatorLibrary
 	if err := r.scoped().Where("id = ? AND deleted_at IS NULL", id).First(&lib).Error; err != nil {
 		return nil, err
@@ -59,23 +79,33 @@ func (r *PerformanceIndicatorLibraryRepository) GetByID(id uint) (*database.Perf
 }
 
 func (r *PerformanceIndicatorLibraryRepository) Update(lib *database.PerformanceIndicatorLibrary) error {
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(lib.OrgID) == "" {
-		lib.OrgID = strings.TrimSpace(r.orgID)
+	orgID, err := r.requireBoundOrg()
+	if err != nil {
+		return err
 	}
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(lib.OrgID) != strings.TrimSpace(r.orgID) {
-		return ErrOrgMismatch
+	merged, err := EnsureSameOrg(orgID, lib.OrgID)
+	if err != nil {
+		return err
 	}
+	lib.OrgID = merged
 	return r.scoped().Save(lib).Error
 }
 
 func (r *PerformanceIndicatorLibraryRepository) Delete(id uint, deletedBy string) error {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return err
+	}
+	now := time.Now()
 	return r.scoped().Model(&database.PerformanceIndicatorLibrary{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"deleted_at": gorm.Expr("NOW()"),
+		"deleted_at": now,
 		"updated_by": deletedBy,
 	}).Error
 }
 
 func (r *PerformanceIndicatorLibraryRepository) FindAll(page, pageSize int, departmentID, keyword, status string, visibleDepartmentIDs []string, templateIDs ...*uint) ([]database.PerformanceIndicatorLibrary, int64, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, 0, err
+	}
 	var items []database.PerformanceIndicatorLibrary
 	var total int64
 
@@ -114,6 +144,9 @@ func (r *PerformanceIndicatorLibraryRepository) FindAll(page, pageSize int, depa
 }
 
 func (r *PerformanceIndicatorLibraryRepository) FindByDepartment(departmentID string, templateIDs ...*uint) ([]database.PerformanceIndicatorLibrary, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, err
+	}
 	var items []database.PerformanceIndicatorLibrary
 	query := r.scoped().Where("department_id = ? AND deleted_at IS NULL AND status = ?", departmentID, "active")
 	if len(templateIDs) > 0 && templateIDs[0] != nil && *templateIDs[0] > 0 {
@@ -126,6 +159,9 @@ func (r *PerformanceIndicatorLibraryRepository) FindByDepartment(departmentID st
 }
 
 func (r *PerformanceIndicatorLibraryRepository) Archive(id uint, updatedBy string) error {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return err
+	}
 	return r.scoped().Model(&database.PerformanceIndicatorLibrary{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"status":     "archived",
 		"updated_by": updatedBy,
@@ -142,28 +178,46 @@ func NewPerformanceIndicatorItemRepository(db *gorm.DB) *PerformanceIndicatorIte
 }
 
 func NewPerformanceIndicatorItemRepositoryWithOrgID(db *gorm.DB, orgID string) *PerformanceIndicatorItemRepository {
-	return &PerformanceIndicatorItemRepository{db: db, orgID: strings.TrimSpace(orgID)}
+	orgID = strings.TrimSpace(orgID)
+	return &PerformanceIndicatorItemRepository{db: performanceRepositoryDB(db, orgID), orgID: orgID}
+}
+
+func (r *PerformanceIndicatorItemRepository) boundOrgID() string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.orgID)
+}
+
+func (r *PerformanceIndicatorItemRepository) requireBoundOrg() (string, error) {
+	orgID := r.boundOrgID()
+	if orgID == "" {
+		return "", ErrMissingOrgID
+	}
+	return orgID, nil
 }
 
 func (r *PerformanceIndicatorItemRepository) scoped() *gorm.DB {
-	tx := r.db
-	if strings.TrimSpace(r.orgID) != "" {
-		tx = tx.Where("org_id = ?", strings.TrimSpace(r.orgID))
-	}
-	return tx
+	return r.db.Scopes(ScopeOrg(r.boundOrgID(), "org_id"))
 }
 
 func (r *PerformanceIndicatorItemRepository) Create(item *database.PerformanceIndicatorItem) error {
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(item.OrgID) == "" {
-		item.OrgID = strings.TrimSpace(r.orgID)
+	orgID, err := r.requireBoundOrg()
+	if err != nil {
+		return err
 	}
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(item.OrgID) != strings.TrimSpace(r.orgID) {
-		return ErrOrgMismatch
+	merged, err := EnsureSameOrg(orgID, item.OrgID)
+	if err != nil {
+		return err
 	}
+	item.OrgID = merged
 	return r.scoped().Create(item).Error
 }
 
 func (r *PerformanceIndicatorItemRepository) GetByID(id uint) (*database.PerformanceIndicatorItem, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, err
+	}
 	var item database.PerformanceIndicatorItem
 	if err := r.scoped().Where("id = ? AND deleted_at IS NULL", id).First(&item).Error; err != nil {
 		return nil, err
@@ -172,23 +226,33 @@ func (r *PerformanceIndicatorItemRepository) GetByID(id uint) (*database.Perform
 }
 
 func (r *PerformanceIndicatorItemRepository) Update(item *database.PerformanceIndicatorItem) error {
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(item.OrgID) == "" {
-		item.OrgID = strings.TrimSpace(r.orgID)
+	orgID, err := r.requireBoundOrg()
+	if err != nil {
+		return err
 	}
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(item.OrgID) != strings.TrimSpace(r.orgID) {
-		return ErrOrgMismatch
+	merged, err := EnsureSameOrg(orgID, item.OrgID)
+	if err != nil {
+		return err
 	}
+	item.OrgID = merged
 	return r.scoped().Save(item).Error
 }
 
 func (r *PerformanceIndicatorItemRepository) Delete(id uint, deletedBy string) error {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return err
+	}
+	now := time.Now()
 	return r.scoped().Model(&database.PerformanceIndicatorItem{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"deleted_at": gorm.Expr("NOW()"),
+		"deleted_at": now,
 		"updated_by": deletedBy,
 	}).Error
 }
 
 func (r *PerformanceIndicatorItemRepository) FindByLibrary(libraryID uint, sectionType string) ([]database.PerformanceIndicatorItem, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, err
+	}
 	var items []database.PerformanceIndicatorItem
 	query := r.scoped().Where("library_id = ? AND deleted_at IS NULL", libraryID)
 	if sectionType != "" {
@@ -201,18 +265,18 @@ func (r *PerformanceIndicatorItemRepository) FindByLibrary(libraryID uint, secti
 }
 
 func (r *PerformanceIndicatorItemRepository) Search(libraryIDs []uint, keyword string, sectionType string, visibleDepartmentIDs []string) ([]database.PerformanceIndicatorItem, error) {
+	orgID, err := r.requireBoundOrg()
+	if err != nil {
+		return nil, err
+	}
 	var items []database.PerformanceIndicatorItem
 	query := r.db.Model(&database.PerformanceIndicatorItem{}).
-		Where("performance_indicator_items.deleted_at IS NULL")
-	if strings.TrimSpace(r.orgID) != "" {
-		query = query.Where("performance_indicator_items.org_id = ?", strings.TrimSpace(r.orgID))
-	}
+		Where("performance_indicator_items.deleted_at IS NULL").
+		Where("performance_indicator_items.org_id = ?", orgID)
 	if len(visibleDepartmentIDs) > 0 {
 		query = query.Joins("JOIN performance_indicator_libraries ON performance_indicator_libraries.id = performance_indicator_items.library_id AND performance_indicator_libraries.deleted_at IS NULL").
-			Where("performance_indicator_libraries.department_id IN ?", visibleDepartmentIDs)
-		if strings.TrimSpace(r.orgID) != "" {
-			query = query.Where("performance_indicator_libraries.org_id = ?", strings.TrimSpace(r.orgID))
-		}
+			Where("performance_indicator_libraries.department_id IN ?", visibleDepartmentIDs).
+			Where("performance_indicator_libraries.org_id = ?", orgID)
 	}
 	if len(libraryIDs) > 0 {
 		query = query.Where("performance_indicator_items.library_id IN ?", libraryIDs)
@@ -234,20 +298,27 @@ func (r *PerformanceIndicatorItemRepository) BatchCreate(items []database.Perfor
 	if len(items) == 0 {
 		return nil
 	}
+	orgID, err := r.requireBoundOrg()
+	if err != nil {
+		return err
+	}
 	for i := range items {
-		if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(items[i].OrgID) == "" {
-			items[i].OrgID = strings.TrimSpace(r.orgID)
+		merged, err := EnsureSameOrg(orgID, items[i].OrgID)
+		if err != nil {
+			return err
 		}
-		if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(items[i].OrgID) != strings.TrimSpace(r.orgID) {
-			return ErrOrgMismatch
-		}
+		items[i].OrgID = merged
 	}
 	return r.scoped().Create(&items).Error
 }
 
 func (r *PerformanceIndicatorItemRepository) DeleteByLibrary(libraryID uint, deletedBy string) error {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return err
+	}
+	now := time.Now()
 	return r.scoped().Model(&database.PerformanceIndicatorItem{}).Where("library_id = ?", libraryID).Updates(map[string]interface{}{
-		"deleted_at": gorm.Expr("NOW()"),
+		"deleted_at": now,
 		"updated_by": deletedBy,
 	}).Error
 }

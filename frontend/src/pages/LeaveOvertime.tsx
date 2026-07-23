@@ -4,6 +4,7 @@ import {
   Button,
   Col,
   DatePicker,
+  Empty,
   Form,
   Input,
   InputNumber,
@@ -42,42 +43,84 @@ const formatWorkingYears = (value?: number) =>
 const formatDays = (value?: number) =>
   `${Number.isFinite(value) ? Number(value) : 0} 天`
 
+/** 查询失败与真空数据分离；idle 时提示先查询 */
+function tableQueryEmptyText(opts: {
+  queried: boolean
+  isError: boolean
+  idleText: string
+  emptyText: string
+  onRetry?: () => void
+}): React.ReactNode {
+  if (!opts.queried) return opts.idleText
+  if (opts.isError) {
+    return (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description={
+          <Space direction="vertical" size={4}>
+            <span>加载失败，请重试</span>
+            {opts.onRetry ? (
+              <Button type="link" size="small" onClick={opts.onRetry}>重试</Button>
+            ) : null}
+          </Space>
+        }
+      />
+    )
+  }
+  return opts.emptyText
+}
+
+const manageAttendanceTooltip = '你缺少 attendance_manage 权限，需要联系管理员添加'
+
 const EmployeeSelect: React.FC<{
   value?: string
   onChange?: (userId: string) => void
   style?: React.CSSProperties
 }> = ({ value, onChange, style }) => {
-  const { data } = useQuery({
-    queryKey: ['employees-all'],
-    queryFn: () => orgAPI.getEmployees({ page: 1, page_size: 500 }),
-    staleTime: 60_000,
+  const [keyword, setKeyword] = useState('')
+  const [debouncedKeyword, setDebouncedKeyword] = useState('')
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedKeyword(keyword.trim()), 300)
+    return () => window.clearTimeout(timer)
+  }, [keyword])
+
+  // 远程搜索：避免 page_size=500 截断导致选不到人
+  const { data, isFetching } = useQuery({
+    queryKey: ['employees-select', debouncedKeyword],
+    queryFn: () => orgAPI.getEmployees({
+      page: 1,
+      page_size: 50,
+      search: debouncedKeyword || undefined,
+    }),
+    staleTime: 30_000,
   })
 
   const employees: any[] = (data as any)?.data?.items ?? []
 
   useEffect(() => {
-    if (!value && employees.length === 1 && employees[0]?.user_id) {
+    if (!value && !debouncedKeyword && employees.length === 1 && employees[0]?.user_id) {
       onChange?.(employees[0].user_id)
     }
-  }, [employees, onChange, value])
+  }, [employees, onChange, value, debouncedKeyword])
 
   return (
     <Select
       showSearch
       allowClear
+      filterOption={false}
       placeholder="输入姓名搜索"
       value={value || undefined}
       onChange={onChange}
-      filterOption={(input, opt) =>
-        ((opt?.label as string) ?? '').toLowerCase().includes(input.toLowerCase())
-      }
+      onSearch={setKeyword}
+      notFoundContent={isFetching ? <Spin size="small" /> : '无匹配员工'}
       options={employees
         .filter((employee: any) => employee?.user_id && employee.user_id !== 'admin')
         .map((employee: any) => ({
           value: employee.user_id,
           label: employee.name,
         }))}
-      style={{ width: 160, ...style }}
+      style={{ width: 180, ...style }}
     />
   )
 }
@@ -88,7 +131,7 @@ const EligibilityTab: React.FC = () => {
   const [year, setYear] = useState(dayjs().year())
   const [queryKey, setQueryKey] = useState<{ user_id: string; year: number } | null>(null)
 
-  const { data, isFetching } = useQuery({
+  const { data, isFetching, isError, refetch } = useQuery({
     queryKey: ['leave-eligibility', queryKey],
     queryFn: () => leaveAPI.getEligibility(queryKey!),
     enabled: !!queryKey,
@@ -102,6 +145,17 @@ const EligibilityTab: React.FC = () => {
     },
     onError: () => message.error('资格重算失败'),
   })
+
+  const handleRecalc = () => {
+    if (!userID) return
+    Modal.confirm({
+      title: '重算年假资格',
+      content: `将按当前规则重新计算该员工 ${year} 年的年假资格，可能覆盖既有资格结果。确认执行？`,
+      okText: '确认重算',
+      cancelText: '取消',
+      onOk: () => recalcMutation.mutateAsync(),
+    })
+  }
 
   const columns = [
     { title: '季度', dataIndex: 'quarter', key: 'quarter', render: (q: number) => `Q${q}` },
@@ -136,13 +190,44 @@ const EligibilityTab: React.FC = () => {
         <Button type="primary" icon={<SearchOutlined />} onClick={() => setQueryKey({ user_id: userID, year })} disabled={!userID}>
           查询
         </Button>
-        {canManageAttendance && (
-          <Button icon={<SyncOutlined />} onClick={() => recalcMutation.mutate()} loading={recalcMutation.isPending} disabled={!userID}>
-            重算资格
-          </Button>
-        )}
+        <Tooltip title={canManageAttendance ? undefined : manageAttendanceTooltip}>
+          <span>
+            <Button
+              icon={<SyncOutlined />}
+              onClick={handleRecalc}
+              loading={recalcMutation.isPending}
+              disabled={!canManageAttendance || !userID}
+            >
+              重算资格
+            </Button>
+          </span>
+        </Tooltip>
       </Space>
-      <Table columns={columns} dataSource={(data as any)?.data || []} rowKey="quarter" loading={isFetching} pagination={false} />
+      {isError && queryKey ? (
+        <Alert
+          type="error"
+          showIcon
+          message="年假资格加载失败"
+          style={{ marginBottom: 12 }}
+          action={<Button size="small" onClick={() => void refetch()}>重试</Button>}
+        />
+      ) : null}
+      <Table
+        columns={columns}
+        dataSource={isError ? [] : (data as any)?.data || []}
+        rowKey="quarter"
+        loading={isFetching}
+        pagination={false}
+        locale={{
+          emptyText: tableQueryEmptyText({
+            queried: !!queryKey,
+            isError,
+            idleText: '请先选择员工后查询',
+            emptyText: '暂无年假资格数据',
+            onRetry: () => void refetch(),
+          }),
+        }}
+      />
     </div>
   )
 }
@@ -162,7 +247,7 @@ const GrantTab: React.FC = () => {
   const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [batchForm] = Form.useForm()
 
-  const { data, isFetching, refetch } = useQuery({
+  const { data, isFetching, isError, refetch } = useQuery({
     queryKey: ['leave-grants', queryKey],
     queryFn: () => leaveAPI.getGrants(queryKey!),
     enabled: !!queryKey,
@@ -198,6 +283,17 @@ const GrantTab: React.FC = () => {
     },
     onError: (err: any) => message.error(err?.response?.data?.error || '同步失败'),
   })
+
+  const handleRegrant = () => {
+    if (!userID) return
+    Modal.confirm({
+      title: '追溯补发年假',
+      content: `将为该员工执行 ${year} 年追溯补发，可能新增发放记录。确认执行？`,
+      okText: '确认补发',
+      cancelText: '取消',
+      onOk: () => regrantMutation.mutateAsync(),
+    })
+  }
 
   const handleSyncToDingTalk = () => {
     Modal.confirm({
@@ -240,19 +336,63 @@ const GrantTab: React.FC = () => {
         <Button type="primary" icon={<SearchOutlined />} onClick={() => setQueryKey({ user_id: userID, year })} disabled={!userID}>
           查询
         </Button>
-        {canManageAttendance && (
-          <>
-            <Button icon={<GiftOutlined />} onClick={() => setBatchModalOpen(true)}>手动发放季度年假</Button>
-            <Button icon={<SyncOutlined />} onClick={() => regrantMutation.mutate()} loading={regrantMutation.isPending} disabled={!userID}>
+        <Tooltip title={canManageAttendance ? undefined : manageAttendanceTooltip}>
+          <span>
+            <Button icon={<GiftOutlined />} disabled={!canManageAttendance} onClick={() => setBatchModalOpen(true)}>
+              手动发放季度年假
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title={canManageAttendance ? undefined : manageAttendanceTooltip}>
+          <span>
+            <Button
+              icon={<SyncOutlined />}
+              onClick={handleRegrant}
+              loading={regrantMutation.isPending}
+              disabled={!canManageAttendance || !userID}
+            >
               追溯补发
             </Button>
-            <Button icon={<SyncOutlined />} onClick={handleSyncToDingTalk} loading={syncMutation.isPending}>
+          </span>
+        </Tooltip>
+        <Tooltip title={canManageAttendance ? undefined : manageAttendanceTooltip}>
+          <span>
+            <Button
+              icon={<SyncOutlined />}
+              onClick={handleSyncToDingTalk}
+              loading={syncMutation.isPending}
+              disabled={!canManageAttendance}
+            >
               同步到钉钉
             </Button>
-          </>
-        )}
+          </span>
+        </Tooltip>
       </Space>
-      <Table columns={columns} dataSource={(data as any)?.data || []} rowKey="id" loading={isFetching} pagination={false} />
+      {isError && queryKey ? (
+        <Alert
+          type="error"
+          showIcon
+          message="年假发放记录加载失败"
+          style={{ marginBottom: 12 }}
+          action={<Button size="small" onClick={() => void refetch()}>重试</Button>}
+        />
+      ) : null}
+      <Table
+        columns={columns}
+        dataSource={isError ? [] : (data as any)?.data || []}
+        rowKey="id"
+        loading={isFetching}
+        pagination={false}
+        locale={{
+          emptyText: tableQueryEmptyText({
+            queried: !!queryKey,
+            isError,
+            idleText: '请先选择员工后查询',
+            emptyText: '暂无年假发放记录',
+            onRetry: () => void refetch(),
+          }),
+        }}
+      />
       <Modal
         title="手动发放季度年假"
         open={batchModalOpen}
@@ -297,7 +437,7 @@ const OvertimeTab: React.FC = () => {
     end_date: selectedMonth.endOf('month').format('YYYY-MM-DD'),
   })
 
-  const { data, isFetching, refetch } = useQuery({
+  const { data, isFetching, isError, refetch } = useQuery({
     queryKey: ['overtime-matches', queryKey],
     queryFn: () => overtimeAPI.getMatches(queryKey!),
     enabled: !!queryKey,
@@ -410,9 +550,22 @@ const OvertimeTab: React.FC = () => {
     onError: () => message.error('匹配失败'),
   })
 
+  const handleRunMatch = () => {
+    if (!userID) return
+    Modal.confirm({
+      title: '执行加班匹配',
+      content: `将按 ${selectedMonth.format('YYYY年MM月')} 对该员工重新匹配加班记录。确认执行？`,
+      okText: '确认匹配',
+      cancelText: '取消',
+      onOk: () => runMatchMutation.mutateAsync(),
+    })
+  }
+
   // ---- ManualLeave 同步向导 ----
   const [wizardOpen, setWizardOpen] = useState(false)
   const [wizardStep, setWizardStep] = useState(0)
+  const [wizardResetError, setWizardResetError] = useState<string | null>(null)
+  const [wizardResyncError, setWizardResyncError] = useState<string | null>(null)
   const [previewReset, setPreviewReset] = useState<{ count: number; users: { user_id: string; name: string }[] } | null>(null)
   const [resetResult, setResetResult] = useState<{ success: number; failed: number; errors: string[] } | null>(null)
   const [previewResync, setPreviewResync] = useState<{ count: number; records: any[] } | null>(null)
@@ -420,6 +573,8 @@ const OvertimeTab: React.FC = () => {
 
   const openWizard = () => {
     setWizardStep(0)
+    setWizardResetError(null)
+    setWizardResyncError(null)
     setPreviewReset(null)
     setResetResult(null)
     setPreviewResync(null)
@@ -436,11 +591,18 @@ const OvertimeTab: React.FC = () => {
   const execResetMut = useMutation({
     mutationFn: () => overtimeAPI.resetManualLeave({ dry_run: false }),
     onSuccess: (res: any) => {
+      setWizardResetError(null)
       setResetResult(res)
+      // 成功后再进入预览重放步骤，避免失败时卡在无 footer 的中间态
       setWizardStep(2)
       loadPreviewResyncMut.mutate()
     },
-    onError: (err: any) => message.error(err?.response?.data?.error || '重置失败'),
+    onError: (err: any) => {
+      const msg = err?.response?.data?.error || '重置失败'
+      setWizardResetError(msg)
+      setWizardStep(0)
+      message.error(msg)
+    },
   })
 
   const loadPreviewResyncMut = useMutation({
@@ -452,10 +614,16 @@ const OvertimeTab: React.FC = () => {
   const execResyncMut = useMutation({
     mutationFn: () => overtimeAPI.resyncOvertimeToDingTalk({ dry_run: false }),
     onSuccess: (res: any) => {
+      setWizardResyncError(null)
       setResyncResult(res)
       setWizardStep(3)
     },
-    onError: (err: any) => message.error(err?.response?.data?.error || '重放失败'),
+    onError: (err: any) => {
+      const msg = err?.response?.data?.error || '重放失败'
+      setWizardResyncError(msg)
+      setWizardStep(2)
+      message.error(msg)
+    },
   })
 
   const handleWizardOpen = () => {
@@ -466,29 +634,40 @@ const OvertimeTab: React.FC = () => {
   const wizardFooter = () => {
     if (wizardStep === 0) {
       return [
-        <Button key="cancel" onClick={() => setWizardOpen(false)}>取消</Button>,
+        <Button key="cancel" onClick={() => setWizardOpen(false)} disabled={execResetMut.isPending}>取消</Button>,
         <Button
           key="confirm"
           type="primary"
           danger
           loading={execResetMut.isPending}
           disabled={!previewReset || loadPreviewResetMut.isPending}
-          onClick={() => { setWizardStep(1); execResetMut.mutate() }}
+          onClick={() => {
+            setWizardResetError(null)
+            execResetMut.mutate()
+          }}
         >
           确认重置 {previewReset ? previewReset.count : '…'} 名员工余额
         </Button>,
       ]
     }
-    if (wizardStep === 1) return []
+    if (wizardStep === 1) {
+      // 兼容旧 step：仅展示加载中，提供取消
+      return [
+        <Button key="cancel" onClick={() => setWizardOpen(false)} disabled={execResetMut.isPending}>取消</Button>,
+      ]
+    }
     if (wizardStep === 2) {
       return [
-        <Button key="cancel" onClick={() => setWizardOpen(false)}>取消</Button>,
+        <Button key="cancel" onClick={() => setWizardOpen(false)} disabled={execResyncMut.isPending}>取消</Button>,
         <Button
           key="confirm"
           type="primary"
           loading={execResyncMut.isPending}
           disabled={!previewResync || loadPreviewResyncMut.isPending}
-          onClick={() => { setWizardStep(3); execResyncMut.mutate() }}
+          onClick={() => {
+            setWizardResyncError(null)
+            execResyncMut.mutate()
+          }}
         >
           确认重放 {previewResync ? previewResync.count : '…'} 条记录
         </Button>,
@@ -584,25 +763,54 @@ const OvertimeTab: React.FC = () => {
           style={{ width: 150 }}
         />
         <Button type="primary" icon={<SearchOutlined />} onClick={refreshOvertimeMatches} disabled={!userID}>查询</Button>
-        {canManageAttendance && (
-          <>
-            <Button icon={<SyncOutlined />} onClick={() => runMatchMutation.mutate()} loading={runMatchMutation.isPending} disabled={!userID}>执行加班匹配</Button>
-            <Button icon={<ThunderboltOutlined />} onClick={handleWizardOpen}>手动调休同步</Button>
-            <Button icon={<ReloadOutlined />} onClick={handleClearRematch} loading={clearRematchMutation.isPending} disabled={!userID} danger>清空重匹配</Button>
-            <Button icon={<DeleteOutlined />} onClick={handleDeleteMatches} loading={deleteMatchesMutation.isPending} disabled={!userID} danger>删除记录</Button>
-          </>
-        )}
+        <Tooltip title={canManageAttendance ? undefined : manageAttendanceTooltip}>
+          <span>
+            <Button icon={<SyncOutlined />} onClick={handleRunMatch} loading={runMatchMutation.isPending} disabled={!canManageAttendance || !userID}>执行加班匹配</Button>
+          </span>
+        </Tooltip>
+        <Tooltip title={canManageAttendance ? undefined : manageAttendanceTooltip}>
+          <span>
+            <Button icon={<ThunderboltOutlined />} onClick={handleWizardOpen} disabled={!canManageAttendance}>手动调休同步</Button>
+          </span>
+        </Tooltip>
+        <Tooltip title={canManageAttendance ? undefined : manageAttendanceTooltip}>
+          <span>
+            <Button icon={<ReloadOutlined />} onClick={handleClearRematch} loading={clearRematchMutation.isPending} disabled={!canManageAttendance || !userID} danger>清空重匹配</Button>
+          </span>
+        </Tooltip>
+        <Tooltip title={canManageAttendance ? undefined : manageAttendanceTooltip}>
+          <span>
+            <Button icon={<DeleteOutlined />} onClick={handleDeleteMatches} loading={deleteMatchesMutation.isPending} disabled={!canManageAttendance || !userID} danger>删除记录</Button>
+          </span>
+        </Tooltip>
       </div>
+      {isError && queryKey ? (
+        <Alert
+          type="error"
+          showIcon
+          message="加班匹配数据加载失败"
+          style={{ marginBottom: 12 }}
+          action={<Button size="small" onClick={() => void refetch()}>重试</Button>}
+        />
+      ) : null}
       <Table
         className="leave-overtime-table"
         columns={columns}
-        dataSource={(data as any)?.data || []}
+        dataSource={isError ? [] : (data as any)?.data || []}
         rowKey="id"
         loading={isFetching}
         size="middle"
         scroll={{ x: 2450 }}
         pagination={{ pageSize: 20, showSizeChanger: false }}
-        locale={{ emptyText: '暂无加班匹配数据' }}
+        locale={{
+          emptyText: tableQueryEmptyText({
+            queried: !!queryKey,
+            isError,
+            idleText: '请先选择员工后查询',
+            emptyText: '暂无加班匹配数据',
+            onRetry: () => void refetch(),
+          }),
+        }}
       />
 
       <Modal
@@ -619,7 +827,21 @@ const OvertimeTab: React.FC = () => {
           style={{ marginBottom: 24 }}
         />
         {wizardStep === 0 && (
-          <Spin spinning={loadPreviewResetMut.isPending}>
+          <Spin spinning={loadPreviewResetMut.isPending || execResetMut.isPending} tip={execResetMut.isPending ? '正在重置余额，请稍候…' : undefined}>
+            {wizardResetError ? (
+              <Alert
+                type="error"
+                showIcon
+                message="重置失败"
+                description={wizardResetError}
+                style={{ marginBottom: 12 }}
+                action={
+                  <Button size="small" danger onClick={() => { setWizardResetError(null); execResetMut.mutate() }}>
+                    重试
+                  </Button>
+                }
+              />
+            ) : null}
             {previewReset && (
               <>
                 <Alert type="warning" message={`将把以下 ${previewReset.count} 名员工的 ManualLeave 余额重置为 0`} style={{ marginBottom: 12 }} />
@@ -634,7 +856,21 @@ const OvertimeTab: React.FC = () => {
           </div>
         )}
         {wizardStep === 2 && (
-          <Spin spinning={loadPreviewResyncMut.isPending}>
+          <Spin spinning={loadPreviewResyncMut.isPending || execResyncMut.isPending} tip={execResyncMut.isPending ? '正在同步到钉钉，请稍候…' : undefined}>
+            {wizardResyncError ? (
+              <Alert
+                type="error"
+                showIcon
+                message="重放失败"
+                description={wizardResyncError}
+                style={{ marginBottom: 12 }}
+                action={
+                  <Button size="small" type="primary" onClick={() => { setWizardResyncError(null); execResyncMut.mutate() }}>
+                    重试
+                  </Button>
+                }
+              />
+            ) : null}
             {resetResult && (
               <Alert
                 type={resetResult.failed > 0 ? 'warning' : 'success'}
@@ -660,7 +896,7 @@ const OvertimeTab: React.FC = () => {
             />
           ) : (
             <div style={{ textAlign: 'center', padding: '40px 0' }}>
-              <Spin spinning tip="正在同步到钉钉，请稍候…" />
+              <Spin spinning={execResyncMut.isPending} tip="正在同步到钉钉，请稍候…" />
             </div>
           )
         )}
@@ -702,7 +938,7 @@ const CompBalanceTab: React.FC = () => {
   const [userID, setUserID] = useState('')
   const [queryUserID, setQueryUserID] = useState('')
 
-  const { data, isFetching } = useQuery({
+  const { data, isFetching, isError, refetch } = useQuery({
     queryKey: ['comp-balance', queryUserID],
     queryFn: () => overtimeAPI.getCompBalance({ user_id: queryUserID }),
     enabled: !!queryUserID,
@@ -718,7 +954,22 @@ const CompBalanceTab: React.FC = () => {
           查询
         </Button>
       </Space>
-      {balance && (
+      {!queryUserID && !isFetching && (
+        <Text type="secondary">请先选择员工后查询</Text>
+      )}
+      {isError && queryUserID ? (
+        <Alert
+          type="error"
+          showIcon
+          message="调休余额加载失败"
+          style={{ marginBottom: 16 }}
+          action={<Button size="small" onClick={() => void refetch()}>重试</Button>}
+        />
+      ) : null}
+      {!isError && queryUserID && !isFetching && !balance ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无调休余额数据" />
+      ) : null}
+      {!isError && balance && (
         <Row gutter={[32, 20]}>
           <Col>
             <div style={{ background: '#f0fdf4', borderRadius: 'var(--radius-lg)', padding: '18px 24px', border: '1px solid #bbf7d0' }}>
@@ -756,7 +1007,7 @@ const ConsumeTab: React.FC = () => {
   const [logQueryKey, setLogQueryKey] = useState('')
   const [form] = Form.useForm()
 
-  const { data: logData, isFetching: logFetching, refetch: refetchLog } = useQuery({
+  const { data: logData, isFetching: logFetching, isError: logError, refetch: refetchLog } = useQuery({
     queryKey: ['consume-log', logQueryKey],
     queryFn: () => leaveAPI.getConsumeLog({ user_id: logQueryKey }),
     enabled: !!logQueryKey,
@@ -772,6 +1023,16 @@ const ConsumeTab: React.FC = () => {
     onError: (err: any) => message.error(err?.response?.data?.error || '消费失败'),
   })
 
+  const handleConsumeFinish = (values: any) => {
+    Modal.confirm({
+      title: '确认年假消费',
+      content: `将为该员工录入 ${values.days} 天年假消费，确认提交？`,
+      okText: '确认消费',
+      cancelText: '取消',
+      onOk: () => consumeMutation.mutateAsync(values),
+    })
+  }
+
   const logColumns = [
     { title: '发放记录ID', dataIndex: 'grant_id', key: 'grant_id' },
     { title: '消费天数', dataIndex: 'days', key: 'days', render: (v: number) => formatDays(v) },
@@ -783,13 +1044,15 @@ const ConsumeTab: React.FC = () => {
   return (
     <div>
       <Row gutter={24}>
-        {canManageAttendance && (
-          <Col span={10}>
-            <PageCard
-              size="small"
-              title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>手动录入年假消费</span>}
-            >
-              <Form form={form} layout="vertical" onFinish={(values) => consumeMutation.mutate(values)}>
+        <Col span={10}>
+          <PageCard
+            size="small"
+            title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>手动录入年假消费</span>}
+          >
+            {!canManageAttendance ? (
+              <Alert type="info" showIcon message="你缺少 attendance_manage 权限，无法录入消费，需要联系管理员添加" />
+            ) : (
+              <Form form={form} layout="vertical" onFinish={handleConsumeFinish}>
                 <Form.Item name="user_id" label="员工" rules={[{ required: true, message: '请选择员工' }]}>
                   <EmployeeSelect />
                 </Form.Item>
@@ -806,10 +1069,10 @@ const ConsumeTab: React.FC = () => {
                   确认消费
                 </Button>
               </Form>
-            </PageCard>
-          </Col>
-        )}
-        <Col span={canManageAttendance ? 14 : 24}>
+            )}
+          </PageCard>
+        </Col>
+        <Col span={14}>
           <PageCard
             size="small"
             title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>消费记录查询</span>}
@@ -820,7 +1083,32 @@ const ConsumeTab: React.FC = () => {
                 查询
               </Button>
             </Space>
-            <Table columns={logColumns} dataSource={(logData as any)?.data || []} rowKey="id" loading={logFetching} pagination={{ pageSize: 10, showSizeChanger: false }} size="small" />
+            {logError && logQueryKey ? (
+              <Alert
+                type="error"
+                showIcon
+                message="消费记录加载失败"
+                style={{ marginBottom: 12 }}
+                action={<Button size="small" onClick={() => void refetchLog()}>重试</Button>}
+              />
+            ) : null}
+            <Table
+              columns={logColumns}
+              dataSource={logError ? [] : (logData as any)?.data || []}
+              rowKey="id"
+              loading={logFetching}
+              pagination={{ pageSize: 10, showSizeChanger: false }}
+              size="small"
+              locale={{
+                emptyText: tableQueryEmptyText({
+                  queried: !!logQueryKey,
+                  isError: logError,
+                  idleText: '请先选择员工后查询',
+                  emptyText: '暂无消费记录',
+                  onRetry: () => void refetchLog(),
+                }),
+              }}
+            />
           </PageCard>
         </Col>
       </Row>

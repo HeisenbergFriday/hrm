@@ -9,14 +9,18 @@ import {
   Collapse,
   DatePicker,
   Divider,
+  Empty,
   Input,
   InputNumber,
   Popover,
   Radio,
   Row,
   Space,
+  Steps,
+  Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   Upload,
   message,
@@ -45,8 +49,10 @@ import {
 import axios from 'axios'
 import dayjs from 'dayjs'
 import PageContainer from '../components/PageContainer'
-import OvertimeRulesEditor from './OvertimeRulesEditor'
-import { attendanceToolboxAPI } from '../services/api'
+import OvertimeRulesEditor, { AppliedRulesState } from './OvertimeRulesEditor'
+import { attendanceToolboxAPI, AttendanceToolboxRunResponse } from '../services/api'
+import { useAuthStore } from '../store/authStore'
+import { shouldFallbackToLegacyToolboxAPI } from '../utils/toolboxFallback'
 
 const { Text, Title, Paragraph } = Typography
 const { Dragger } = Upload
@@ -89,6 +95,94 @@ interface ModuleConfig {
   fileFields: FileField[]
   textFields?: TextField[]
 }
+
+interface MaternityLeaveOverride {
+  key: string
+  employee_no: string
+  name: string
+  start_date: string
+  end_date: string
+}
+
+export const getAttendanceToolboxDownloadableFiles = (run: AttendanceToolboxRunResponse | null | undefined) =>
+  (run?.files || []).filter((file) => file.kind !== 'meta')
+
+export interface SubsidyAuditMeta {
+  targetMonth: string
+  holidaySource: 'custom_rules' | 'schedule'
+  holidayConflictCount: number
+  missingAttendanceCount: number
+  missingAttendanceNames: string[]
+}
+
+export const getSubsidyAuditMeta = (
+  run: AttendanceToolboxRunResponse | null | undefined,
+): SubsidyAuditMeta | null => {
+  const raw = run?.meta?.subsidy_audit
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Record<string, unknown>
+  return {
+    targetMonth: String(value.target_month || ''),
+    holidaySource: value.holiday_source === 'custom_rules' ? 'custom_rules' : 'schedule',
+    holidayConflictCount: Number(value.holiday_conflict_count || 0),
+    missingAttendanceCount: Number(value.missing_attendance_count || 0),
+    missingAttendanceNames: Array.isArray(value.missing_attendance_names)
+      ? value.missing_attendance_names.map((item) => String(item)).filter(Boolean)
+      : [],
+  }
+}
+
+export const buildAttendanceToolboxWorkflowOptionFields = (
+  moduleKey: ToolboxModuleKey,
+  textValues: Record<string, string>,
+  appliedRules: AppliedRulesState,
+): Record<string, string> => {
+  const result: Record<string, string> = {}
+  if (moduleKey === 'overtime') {
+    const month = (textValues.overtime_target_month || '').trim()
+    if (month) result.overtime_target_month = month
+  }
+  if (moduleKey === 'subsidy') {
+    const month = (textValues.subsidy_target_month || '').trim()
+    if (month) result.subsidy_target_month = month
+  }
+  if (
+    (moduleKey === 'overtime' || moduleKey === 'subsidy')
+    && appliedRules.source === 'custom'
+    && appliedRules.rulesJson
+  ) {
+    result.rules_json = appliedRules.rulesJson
+  }
+  return result
+}
+
+const MATERNITY_LEAVE_STORAGE_KEY = 'attendance-toolbox-maternity-leave-overrides'
+
+const loadMaternityLeaveOverrides = (): MaternityLeaveOverride[] => {
+  if (typeof window === 'undefined') return []
+  try {
+    const value = JSON.parse(window.localStorage.getItem(MATERNITY_LEAVE_STORAGE_KEY) || '[]')
+    if (!Array.isArray(value)) return []
+    return value.filter((item) => item && typeof item === 'object').map((item, index) => ({
+      key: String(item.key || `maternity-${Date.now()}-${index}`),
+      employee_no: String(item.employee_no || ''),
+      name: String(item.name || ''),
+      start_date: String(item.start_date || ''),
+      end_date: String(item.end_date || ''),
+    }))
+  } catch {
+    return []
+  }
+}
+
+/** Recommended month-end order (UI guide only; tabs stay free to switch). */
+const MONTH_END_WIZARD_STEPS: Array<{ key: ToolboxModuleKey; title: string; hint: string }> = [
+  { key: 'dingtalk_sync', title: '钉钉同步', hint: '拉审批中间表' },
+  { key: 'leave', title: '请假明细', hint: '生成请假表' },
+  { key: 'overtime', title: '加班明细', hint: '生成加班回填' },
+  { key: 'subsidy', title: '补贴扣款', hint: '生成核对表' },
+  { key: 'final', title: '最终汇总', hint: '生成最终表' },
+]
 
 const modules: ModuleConfig[] = [
   {
@@ -220,13 +314,21 @@ function formatNameList(values: string[]) {
   return values.join('、')
 }
 
-function downloadBlob(blob: Blob, filename: string) {
+/** Exported for unit tests to mock without triggering jsdom navigation. */
+export function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
   link.download = filename
+  link.rel = 'noopener'
+  // Prefer programmatic download without relying on default navigation behavior.
+  link.style.display = 'none'
   document.body.appendChild(link)
-  link.click()
+  try {
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+  } catch {
+    // jsdom may not implement navigation; ignore.
+  }
   link.remove()
   URL.revokeObjectURL(url)
 }
@@ -239,6 +341,24 @@ function getDownloadName(config: ModuleConfig, blob: Blob) {
 }
 
 async function resolveErrorMessage(error: unknown) {
+  const status =
+    axios.isAxiosError(error)
+      ? error.response?.status
+      : (error as { response?: { status?: number } } | null)?.response?.status
+
+  if (status === 410) {
+    return '结果已过期，请重新计算'
+  }
+  if (status === 403) {
+    const data = axios.isAxiosError(error)
+      ? error.response?.data
+      : (error as { response?: { data?: unknown } })?.response?.data
+    if (typeof data === 'object' && data && 'message' in data && typeof (data as { message?: string }).message === 'string') {
+      return (data as { message: string }).message
+    }
+    return '权限不足，需要联系管理员添加'
+  }
+
   if (axios.isAxiosError(error)) {
     const data = error.response?.data
     if (data instanceof Blob) {
@@ -251,6 +371,11 @@ async function resolveErrorMessage(error: unknown) {
       }
     }
     if (typeof data?.message === 'string') return data.message
+  }
+
+  const plain = error as { response?: { data?: { message?: string } }; message?: string } | null
+  if (typeof plain?.response?.data?.message === 'string') {
+    return plain.response.data.message
   }
   return error instanceof Error ? error.message : '计算失败'
 }
@@ -372,13 +497,42 @@ const AUTO_SYNC_UPLOADS = {
 // ── Main component ──
 
 const AttendanceToolbox: React.FC = () => {
+  const [messageApi, messageContextHolder] = message.useMessage()
+  const permissions = useAuthStore((s) => s.permissions) || []
+  const hasPerm = useCallback((code: string) => {
+    if (permissions.includes(code)) return true
+    // Compat: legacy attendance_manage still enables toolbox actions.
+    if (code.startsWith('attendance_toolbox_') && permissions.includes('attendance_manage')) return true
+    return false
+  }, [permissions])
+  const canOperate = hasPerm('attendance_toolbox_operate') || hasPerm('attendance_manage')
+  const canDingtalkSync = hasPerm('attendance_toolbox_dingtalk_sync') || hasPerm('attendance_manage')
+  const canEditRules = hasPerm('attendance_toolbox_rules_edit') || hasPerm('attendance_manage')
+  const canQuick = canOperate && canDingtalkSync
+
+  const [activeModule, setActiveModule] = useState<ToolboxModuleKey>('leave')
+  const [completedModules, setCompletedModules] = useState<Partial<Record<ToolboxModuleKey | 'quick', boolean>>>({})
+  const [missingFieldName, setMissingFieldName] = useState<string | null>(null)
+  const fieldCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const [fileLists, setFileLists] = useState<Record<string, UploadFile[]>>({})
   const [textValues, setTextValues] = useState<Record<string, string>>({})
   const [defaultsLoading, setDefaultsLoading] = useState(false)
-  const [runningModule, setRunningModule] = useState<ToolboxModuleKey | null>(null)
-  const [runLog, setRunLog] = useState<string>('')
+  const [runningModule, setRunningModule] = useState<ToolboxModuleKey | 'quick' | null>(null)
+  // 按模块隔离，避免请假 audit/log 泄漏到加班/汇总 Tab
+  const [runLogByModule, setRunLogByModule] = useState<Partial<Record<ToolboxModuleKey | 'quick', string>>>({})
+  const [lastRun, setLastRun] = useState<AttendanceToolboxRunResponse | null>(null)
+  const [previewRows, setPreviewRows] = useState<Record<string, string>[]>([])
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [appliedRules, setAppliedRules] = useState<AppliedRulesState>({
+    source: 'default',
+    rules: null,
+    rulesJson: null,
+  })
+  const [quickRunLeave, setQuickRunLeave] = useState(true)
+  const [quickRunOvertime, setQuickRunOvertime] = useState(true)
+  const [maternityLeaveOverrides, setMaternityLeaveOverrides] = useState<MaternityLeaveOverride[]>(loadMaternityLeaveOverrides)
   const [uploadWarnings, setUploadWarnings] = useState<Record<string, string[]>>({})
-  const [auditWarnings, setAuditWarnings] = useState<string[]>([])
+  const [auditWarningsByModule, setAuditWarningsByModule] = useState<Partial<Record<ToolboxModuleKey, string[]>>>({})
   const [templateMeta, setTemplateMeta] = useState<TemplateMetaItem[]>([])
   const [downloadingTemplate, setDownloadingTemplate] = useState<string | null>(null)
   const [requirementView, setRequirementView] = useState<Record<string, string>>({})
@@ -394,6 +548,10 @@ const AttendanceToolbox: React.FC = () => {
   const [dingtalkPaddingDays, setDingtalkPaddingDays] = useState<number>(31)
 
   const moduleMap = useMemo(() => new Map(modules.map((item) => [item.key, item])), [])
+
+  useEffect(() => {
+    window.localStorage.setItem(MATERNITY_LEAVE_STORAGE_KEY, JSON.stringify(maternityLeaveOverrides))
+  }, [maternityLeaveOverrides])
 
   useEffect(() => {
     let mounted = true
@@ -415,7 +573,7 @@ const AttendanceToolbox: React.FC = () => {
       })
       .catch(() => {
         if (mounted) {
-          message.warning('默认名单加载失败，计算时仍会使用内置规则')
+          messageApi.warning('默认名单加载失败，计算时仍会使用内置规则')
         }
       })
       .finally(() => {
@@ -449,24 +607,25 @@ const AttendanceToolbox: React.FC = () => {
 
   const applySyncedFile = useCallback((fieldNames: string[], fileName: string, blob: Blob) => {
     const syncedAt = Date.now()
-    const file = new File([blob], fileName, {
+    // lastModifiedDate is a legacy read-only File getter in modern browsers;
+    // assigning it via Object.assign throws:
+    // "Cannot set property lastModifiedDate of #<File> which has only a getter"
+    const uploadFile = new File([blob], fileName, {
       type: blob.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    })
-    const uploadFile = Object.assign(file, {
-      uid: `auto-sync-file-${syncedAt}`,
-      lastModifiedDate: new Date(file.lastModified),
+      lastModified: syncedAt,
     }) as RcFile
+    uploadFile.uid = `auto-sync-file-${syncedAt}`
 
     setFileLists((prev) => {
       const next = { ...prev }
       fieldNames.forEach((fieldName, index) => {
         next[fieldName] = [{
           uid: `auto-sync-${fieldName}-${syncedAt}-${index}`,
-          name: file.name,
+          name: uploadFile.name,
           status: 'done',
           percent: 100,
-          size: file.size,
-          type: file.type,
+          size: uploadFile.size,
+          type: uploadFile.type,
           originFileObj: uploadFile,
         }]
       })
@@ -502,13 +661,13 @@ const AttendanceToolbox: React.FC = () => {
       applySyncedFile([...AUTO_SYNC_UPLOADS.roster], '花名册_钉钉自动同步.xlsx', blob)
       setRosterSync({ loading: false, lastSyncAt: dayjs().format('YYYY-MM-DD HH:mm') })
       if (mode === 'manual') {
-        message.success('花名册同步完成，已自动回填到上传位')
+        messageApi.success('花名册同步完成，已自动回填到上传位')
       }
     } catch (error) {
       const errorMessage = await resolveErrorMessage(error)
       setRosterSync({ loading: false, error: errorMessage })
       if (mode === 'manual') {
-        message.error(`花名册同步失败：${errorMessage}`)
+        messageApi.error(`花名册同步失败：${errorMessage}`)
       }
     }
   }, [applySyncedFile])
@@ -533,23 +692,24 @@ const AttendanceToolbox: React.FC = () => {
       applySyncedFile([...AUTO_SYNC_UPLOADS.transfer], '异动流程_钉钉自动同步.xlsx', blob)
       setTransferSync({ loading: false, lastSyncAt: dayjs().format('YYYY-MM-DD HH:mm') })
       if (mode === 'manual') {
-        message.success('异动流程同步完成，已自动回填到上传位')
+        messageApi.success('异动流程同步完成，已自动回填到上传位')
       }
     } catch (error) {
       const errorMessage = await resolveErrorMessage(error)
       setTransferSync({ loading: false, error: errorMessage })
       if (mode === 'manual') {
-        message.error(`异动流程同步失败：${errorMessage}`)
+        messageApi.error(`异动流程同步失败：${errorMessage}`)
       }
     }
   }, [applySyncedFile])
 
   useEffect(() => {
+    if (!canDingtalkSync) return
     if (autoSyncStartedRef.current) return
     autoSyncStartedRef.current = true
     void syncRosterFromDingtalk('auto')
     void syncTransferFromDingtalk('auto')
-  }, [syncRosterFromDingtalk, syncTransferFromDingtalk])
+  }, [canDingtalkSync, syncRosterFromDingtalk, syncTransferFromDingtalk])
 
   const removeFieldFile = (fieldName: string, fileUid: string) => {
     setFileLists((prev) => ({
@@ -564,12 +724,13 @@ const AttendanceToolbox: React.FC = () => {
   }
 
   const runAuditForFiles = useCallback(async (config: ModuleConfig) => {
+    const moduleKey = config.key
     const items = config.fileFields.flatMap((field) => (fileLists[field.name] || []).map((file) => ({
       file,
       field,
     })))
     if (items.length === 0) {
-      setAuditWarnings([])
+      setAuditWarningsByModule((prev) => ({ ...prev, [moduleKey]: [] }))
       return
     }
     const formData = new FormData()
@@ -581,17 +742,17 @@ const AttendanceToolbox: React.FC = () => {
         data?: { warnings?: string[] }
       }
       const warnings = response?.data?.warnings || []
-      setAuditWarnings(warnings)
+      setAuditWarningsByModule((prev) => ({ ...prev, [moduleKey]: warnings }))
       if (warnings.length > 0) {
-        warnings.forEach((warning) => message.warning(warning))
+        warnings.forEach((warning) => messageApi.warning(warning))
       } else {
-        message.success('文件检测通过')
+        messageApi.success('文件检测通过')
       }
     } catch (error) {
-      message.warning(`文件检测失败：${error instanceof Error ? error.message : '未知错误'}`)
-      setAuditWarnings([])
+      messageApi.warning(`文件检测失败：${error instanceof Error ? error.message : '未知错误'}`)
+      setAuditWarningsByModule((prev) => ({ ...prev, [moduleKey]: [] }))
     }
-  }, [fileLists])
+  }, [fileLists, messageApi])
 
   const downloadTemplate = useCallback(async (templateId: string) => {
     setDownloadingTemplate(templateId)
@@ -599,7 +760,7 @@ const AttendanceToolbox: React.FC = () => {
       const blob = await attendanceToolboxAPI.exportTemplates(templateId) as unknown as Blob
       downloadBlob(blob, getTemplateDownloadFileName(templateId))
     } catch (error) {
-      message.error(await resolveErrorMessage(error))
+      messageApi.error(await resolveErrorMessage(error))
     } finally {
       setDownloadingTemplate(null)
     }
@@ -611,7 +772,7 @@ const AttendanceToolbox: React.FC = () => {
       const blob = await attendanceToolboxAPI.exportTemplates() as unknown as Blob
       downloadBlob(blob, '考勤工具箱模板.zip')
     } catch (error) {
-      message.error(await resolveErrorMessage(error))
+      messageApi.error(await resolveErrorMessage(error))
     } finally {
       setDownloadingTemplate(null)
     }
@@ -664,37 +825,441 @@ const AttendanceToolbox: React.FC = () => {
     },
   })
 
+  const loadOvertimePreview = async (run: AttendanceToolboxRunResponse) => {
+    if (run.module !== 'overtime') {
+      setPreviewRows([])
+      return
+    }
+    const exportFile = (run.files || []).find((f) => f.kind !== 'meta' && (f.file_name || '').endsWith('.xlsx'))
+      || (run.files || []).find((f) => f.kind !== 'meta')
+    if (!exportFile) {
+      setPreviewRows([])
+      return
+    }
+    setPreviewLoading(true)
+    try {
+      const response = await attendanceToolboxAPI.previewRun(run.run_id, exportFile.file_key) as {
+        data?: { rows?: Record<string, string>[] }
+      }
+      const rows = response?.data?.rows || []
+      setPreviewRows(Array.isArray(rows) ? rows : [])
+    } catch {
+      // Preview failure must not block download.
+      setPreviewRows([])
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const formatRunStats = (stats: Record<string, unknown> | undefined | null) => {
+    if (!stats || typeof stats !== 'object') return []
+    return Object.entries(stats).flatMap(([key, value]) => {
+      if (value == null) return []
+      if (typeof value === 'object' && !Array.isArray(value)) {
+        return Object.entries(value as Record<string, unknown>).map(([subKey, subValue]) => ({
+          label: `${key}.${subKey}`,
+          text: String(subValue),
+        }))
+      }
+      return [{ label: key, text: Array.isArray(value) ? value.join('、') : String(value) }]
+    })
+  }
+
+  const focusMissingField = (fieldName: string) => {
+    setMissingFieldName(fieldName)
+    window.requestAnimationFrame(() => {
+      const el = fieldCardRefs.current[fieldName]
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+    window.setTimeout(() => {
+      setMissingFieldName((current) => (current === fieldName ? null : current))
+    }, 2600)
+  }
+
+  /** @returns true 仅当生成了可下载结果；空结果不标记完成、不假装成功下载 */
+  const applyRunResponse = async (payload: unknown, successText: string): Promise<boolean> => {
+    const data = (payload as { data?: AttendanceToolboxRunResponse })?.data
+      || (payload as AttendanceToolboxRunResponse)
+    if (!data?.run_id) {
+      throw new Error('未返回 run_id')
+    }
+    setLastRun(data)
+    if (data.module) {
+      setRunLogByModule((prev) => ({ ...prev, [data.module as ToolboxModuleKey | 'quick']: data.log || '' }))
+    }
+    // Prefer zip when multiple files; otherwise single file. Meta files are technical details, not user results.
+    const downloadables = getAttendanceToolboxDownloadableFiles(data)
+    if (downloadables.length === 0) {
+      const isSyncModule = data.module === 'dingtalk_sync' || data.module === 'quick'
+      messageApi.warning(
+        isSyncModule
+          ? '本次同步未生成可下载结果，请检查同步日志和钉钉流程码配置'
+          : '本次计算未生成可下载结果，请检查运行日志与输入文件',
+      )
+      return false
+    }
+
+    let downloadOk = true
+    try {
+      if (downloadables.length > 1) {
+        const zip = await attendanceToolboxAPI.downloadRunZip(data.run_id) as unknown as Blob
+        downloadBlob(zip, '考勤工具箱结果.zip')
+      } else if (downloadables.length === 1) {
+        const one = downloadables[0]
+        const blob = await attendanceToolboxAPI.downloadRunFile(data.run_id, one.file_key) as unknown as Blob
+        downloadBlob(blob, one.file_name || '结果.xlsx')
+      }
+    } catch (downloadError) {
+      downloadOk = false
+      const detail = await resolveErrorMessage(downloadError)
+      // 410 等过期场景沿用明确文案；其它下载失败保留「计算已完成」以免误导重跑
+      if (detail.includes('过期')) {
+        messageApi.error(detail)
+      } else {
+        messageApi.warning(`计算已完成，但自动下载失败：${detail}。可在下方结果区手动下载。`)
+      }
+    }
+
+    if (data.module) {
+      setCompletedModules((prev) => ({ ...prev, [data.module as ToolboxModuleKey]: true }))
+    }
+    // Best-effort 200-row preview for overtime only; never re-runs calculation.
+    void loadOvertimePreview(data)
+    const subsidyAudit = getSubsidyAuditMeta(data)
+    if (subsidyAudit?.missingAttendanceCount) {
+      const preview = subsidyAudit.missingAttendanceNames.slice(0, 5).join('、')
+      const suffix = subsidyAudit.missingAttendanceCount > 5 ? '等' : ''
+      messageApi.warning(
+        `计算完成，但有 ${subsidyAudit.missingAttendanceCount} 人缺少考勤记录：${preview}${suffix}；详细名单已写入“异常审计”。`,
+      )
+    } else if (downloadOk) {
+      messageApi.success(successText)
+    }
+    return true
+  }
+
+  const handleDownloadRunFile = async (fileKey: string, fileName: string) => {
+    if (!lastRun?.run_id) return
+    try {
+      const blob = await attendanceToolboxAPI.downloadRunFile(lastRun.run_id, fileKey) as unknown as Blob
+      downloadBlob(blob, fileName)
+    } catch (error) {
+      messageApi.error(await resolveErrorMessage(error))
+    }
+  }
+
+  const handleDownloadRunZip = async () => {
+    if (!lastRun?.run_id) return
+    try {
+      const blob = await attendanceToolboxAPI.downloadRunZip(lastRun.run_id) as unknown as Blob
+      downloadBlob(blob, '考勤工具箱结果.zip')
+    } catch (error) {
+      messageApi.error(await resolveErrorMessage(error))
+    }
+  }
+
+  const addMaternityLeaveOverride = () => {
+    setMaternityLeaveOverrides((prev) => [
+      ...prev,
+      {
+        key: `maternity-${Date.now()}-${prev.length}`,
+        employee_no: '',
+        name: '',
+        start_date: '',
+        end_date: '',
+      },
+    ])
+  }
+
+  const updateMaternityLeaveOverride = (
+    key: string,
+    field: keyof Omit<MaternityLeaveOverride, 'key'>,
+    value: string,
+  ) => {
+    setMaternityLeaveOverrides((prev) => prev.map((item) => (
+      item.key === key ? { ...item, [field]: value } : item
+    )))
+  }
+
+  const removeMaternityLeaveOverride = (key: string) => {
+    setMaternityLeaveOverrides((prev) => prev.filter((item) => item.key !== key))
+  }
+
+  const renderMaternityLeaveOverrides = () => (
+    <Card
+      size="small"
+      title="长期产假人员（自动抓不到时兜底）"
+      style={{ borderRadius: 'var(--radius-lg)' }}
+      extra={
+        <Button size="small" icon={<PlusOutlined />} onClick={addMaternityLeaveOverride}>
+          添加人员
+        </Button>
+      }
+    >
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert
+          type="info"
+          showIcon
+          message="这里只用于补录自动抓不到的长期产假"
+          description="普通产假仍会自动抓取；如果钉钉已有同一员工的重叠产假，系统会自动跳过手动记录，避免重复计算。配置会保存在当前浏览器。"
+        />
+        {maternityLeaveOverrides.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂未添加长期产假人员" />
+        ) : (
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            {maternityLeaveOverrides.map((item, index) => (
+              <Card
+                key={item.key}
+                size="small"
+                title={`长期产假人员 ${index + 1}`}
+                extra={
+                  <Button
+                    type="text"
+                    danger
+                    size="small"
+                    icon={<CloseOutlined />}
+                    aria-label={`删除长期产假人员${index + 1}`}
+                    onClick={() => removeMaternityLeaveOverride(item.key)}
+                  >
+                    删除
+                  </Button>
+                }
+              >
+                <Row gutter={[12, 12]}>
+                  <Col xs={24} md={6}>
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Text strong>工号（可不填）</Text>
+                      <Input
+                        value={item.employee_no}
+                        placeholder="请输入员工工号"
+                        onChange={(event) => updateMaternityLeaveOverride(item.key, 'employee_no', event.target.value)}
+                      />
+                    </Space>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Text strong>姓名 *</Text>
+                      <Input
+                        value={item.name}
+                        placeholder="请输入员工姓名"
+                        onChange={(event) => updateMaternityLeaveOverride(item.key, 'name', event.target.value)}
+                      />
+                    </Space>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Text strong>产假开始日期 *</Text>
+                      <DatePicker
+                        value={item.start_date ? dayjs(item.start_date) : null}
+                        placeholder="请选择开始日期"
+                        style={{ width: '100%' }}
+                        onChange={(value) => updateMaternityLeaveOverride(
+                          item.key,
+                          'start_date',
+                          value ? value.format('YYYY-MM-DD') : '',
+                        )}
+                      />
+                    </Space>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Text strong>产假结束日期 *</Text>
+                      <DatePicker
+                        value={item.end_date ? dayjs(item.end_date) : null}
+                        placeholder="请选择结束日期"
+                        style={{ width: '100%' }}
+                        onChange={(value) => updateMaternityLeaveOverride(
+                          item.key,
+                          'end_date',
+                          value ? value.format('YYYY-MM-DD') : '',
+                        )}
+                      />
+                    </Space>
+                  </Col>
+                </Row>
+              </Card>
+            ))}
+          </Space>
+        )}
+      </Space>
+    </Card>
+  )
+
+  const getMaternityLeaveOverridesForSubmit = () => {
+    const configured = maternityLeaveOverrides.filter((item) => (
+      item.employee_no.trim() || item.name.trim() || item.start_date || item.end_date
+    ))
+    const incomplete = configured.find((item) => !item.name.trim() || !item.start_date || !item.end_date)
+    if (incomplete) {
+      messageApi.warning('长期产假人员请填写完整的姓名、开始日期和结束日期；工号可以不填')
+      return null
+    }
+    return configured.map(({ employee_no, name, start_date, end_date }) => ({
+      employee_no: employee_no.trim(),
+      name: name.trim(),
+      start_date,
+      end_date,
+    }))
+  }
+
+  const handleQuickWorkflow = async () => {
+    if (runningModule) {
+      messageApi.warning('当前有任务正在执行，请稍候')
+      return
+    }
+    if (!canQuick) {
+      messageApi.warning('你缺少一键联动所需权限（操作 + 钉钉同步），需要联系管理员添加')
+      return
+    }
+    if (!dingtalkDateRange || !dingtalkDateRange[0] || !dingtalkDateRange[1]) {
+      messageApi.warning('请选择同步日期范围')
+      return
+    }
+    if (!quickRunLeave && !quickRunOvertime) {
+      messageApi.warning('一键联动至少选择请假或加班其中一项')
+      return
+    }
+    const maternityOverrides = quickRunLeave ? getMaternityLeaveOverridesForSubmit() : []
+    if (maternityOverrides === null) return
+
+    const scheduleFiles = fileLists.leave_schedule || fileLists.overtime_calendar || []
+    if (!scheduleFiles.length) {
+      messageApi.warning('一键联动必须上传作息表（可在请假或加班页签上传）')
+      return
+    }
+
+    const formData = new FormData()
+    formData.append('dingtalk_sync_start_date', dingtalkDateRange[0].format('YYYY-MM-DD'))
+    formData.append('dingtalk_sync_end_date', dingtalkDateRange[1].format('YYYY-MM-DD'))
+    formData.append('dingtalk_sync_flow_keys', dingtalkFlowKeys.join(','))
+    formData.append('dingtalk_sync_padding_days', String(dingtalkPaddingDays))
+    if (!dingtalkUnlimited) {
+      formData.append('dingtalk_sync_max_instances', String(dingtalkMaxInstances))
+    }
+    formData.append('run_leave', quickRunLeave ? 'true' : 'false')
+    formData.append('run_overtime', quickRunOvertime ? 'true' : 'false')
+    for (const file of scheduleFiles) {
+      if (file.originFileObj) {
+        formData.append('leave_schedule', file.originFileObj)
+        formData.append('overtime_calendar', file.originFileObj)
+      }
+    }
+    // Optional helpers from existing uploads
+    for (const key of ['leave_offsite_duration', 'overtime_attendance', 'overtime_roster', 'overtime_schedules'] as const) {
+      for (const file of fileLists[key] || []) {
+        if (file.originFileObj) formData.append(key, file.originFileObj)
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(textValues, 'leave_special_names')) {
+      formData.append('leave_special_names', (textValues.leave_special_names || '').trim())
+    }
+    if (Object.prototype.hasOwnProperty.call(textValues, 'chengdu_schedule_names')) {
+      formData.append('chengdu_schedule_names', (textValues.chengdu_schedule_names || '').trim())
+    }
+    if (quickRunLeave) {
+      formData.append('maternity_leave_overrides', JSON.stringify(maternityOverrides))
+    }
+    if (appliedRules.source === 'custom' && appliedRules.rulesJson) {
+      formData.append('rules_json', appliedRules.rulesJson)
+    }
+    const quickMonth = (textValues.overtime_target_month || '').trim()
+    if (quickRunOvertime && quickMonth) {
+      formData.append('overtime_target_month', quickMonth)
+    }
+
+    setRunningModule('quick')
+    try {
+      const response = await attendanceToolboxAPI.runQuickWorkflow(formData)
+      const ok = await applyRunResponse(response, '一键联动完成，结果已下载')
+      if (ok) {
+        setCompletedModules((prev) => ({
+          ...prev,
+          dingtalk_sync: true,
+          ...(quickRunLeave ? { leave: true } : {}),
+          ...(quickRunOvertime ? { overtime: true } : {}),
+        }))
+      }
+    } catch (error) {
+      messageApi.error(await resolveErrorMessage(error))
+    } finally {
+      setRunningModule(null)
+    }
+  }
+
   const handleRun = async (moduleKey: ToolboxModuleKey) => {
     const config = moduleMap.get(moduleKey)
     if (!config) return
 
-    if (config.fileFields.length > 0) {
-      await runAuditForFiles(config)
+    if (runningModule) {
+      messageApi.warning('当前有任务正在执行，请稍候')
+      return
+    }
+
+    if (moduleKey === 'dingtalk_sync' && !canDingtalkSync) {
+      messageApi.warning('你缺少考勤工具箱钉钉同步权限，需要联系管理员添加')
+      return
+    }
+    if (moduleKey !== 'dingtalk_sync' && !canOperate) {
+      messageApi.warning('你缺少考勤工具箱操作权限，需要联系管理员添加')
+      return
+    }
+
+    // 尽早占位，避免 audit 窗口双提交 / 跨 Tab 并发
+    setRunningModule(moduleKey)
+    try {
+      if (config.fileFields.length > 0) {
+        await runAuditForFiles(config)
+      }
+    } catch {
+      setRunningModule(null)
+      return
     }
 
     if (moduleKey === 'dingtalk_sync') {
       if (!dingtalkDateRange || !dingtalkDateRange[0] || !dingtalkDateRange[1]) {
-        message.warning('请选择同步日期范围')
+        messageApi.warning('请选择同步日期范围')
+        setRunningModule(null)
         return
       }
       if (dingtalkFlowKeys.length === 0) {
-        message.warning('请至少选择一个同步流程')
+        messageApi.warning('请至少选择一个同步流程')
+        setRunningModule(null)
         return
       }
-
-      setRunningModule(moduleKey)
       try {
-        const blob = await attendanceToolboxAPI.runDingtalkSync({
-          start_date: dingtalkDateRange[0].format('YYYY-MM-DD'),
-          end_date: dingtalkDateRange[1].format('YYYY-MM-DD'),
-          flow_keys: dingtalkFlowKeys,
-          max_instances: dingtalkUnlimited ? undefined : dingtalkMaxInstances,
-          padding_days: dingtalkPaddingDays,
-        }) as unknown as Blob
-        downloadBlob(blob, getDownloadName(config, blob))
-        message.success('同步完成，结果已下载')
+        // Prefer structured result; only fall back when server lacks the new endpoint.
+        try {
+          const formData = new FormData()
+          formData.append('dingtalk_sync_start_date', dingtalkDateRange[0].format('YYYY-MM-DD'))
+          formData.append('dingtalk_sync_end_date', dingtalkDateRange[1].format('YYYY-MM-DD'))
+          formData.append('dingtalk_sync_flow_keys', dingtalkFlowKeys.join(','))
+          formData.append('dingtalk_sync_padding_days', String(dingtalkPaddingDays))
+          if (!dingtalkUnlimited) {
+            formData.append('dingtalk_sync_max_instances', String(dingtalkMaxInstances))
+          }
+          const response = await attendanceToolboxAPI.runDingtalkSyncStructured(formData)
+          const ok = await applyRunResponse(response, '同步完成，结果已下载')
+          if (ok) {
+            setCompletedModules((prev) => ({ ...prev, dingtalk_sync: true }))
+          }
+        } catch (structuredError) {
+          if (!shouldFallbackToLegacyToolboxAPI(structuredError)) {
+            throw structuredError
+          }
+          // Version mismatch only — do not re-run after successful structured sync.
+          const blob = await attendanceToolboxAPI.runDingtalkSync({
+            start_date: dingtalkDateRange[0].format('YYYY-MM-DD'),
+            end_date: dingtalkDateRange[1].format('YYYY-MM-DD'),
+            flow_keys: dingtalkFlowKeys,
+            max_instances: dingtalkUnlimited ? undefined : dingtalkMaxInstances,
+            padding_days: dingtalkPaddingDays,
+          }) as unknown as Blob
+          downloadBlob(blob, getDownloadName(config, blob))
+          setCompletedModules((prev) => ({ ...prev, dingtalk_sync: true }))
+          messageApi.success('同步完成，结果已下载')
+        }
       } catch (error) {
-        message.error(await resolveErrorMessage(error))
+        messageApi.error(await resolveErrorMessage(error))
       } finally {
         setRunningModule(null)
       }
@@ -703,15 +1268,25 @@ const AttendanceToolbox: React.FC = () => {
 
     for (const field of config.fileFields) {
       if (field.required && !(fileLists[field.name] || []).length) {
-        message.warning(`请上传${field.label}`)
+        messageApi.warning(`请上传${field.label}`)
+        focusMissingField(field.name)
+        setRunningModule(null)
         return
       }
     }
+    const maternityOverrides = moduleKey === 'leave' ? getMaternityLeaveOverridesForSubmit() : []
+    if (maternityOverrides === null) {
+      setRunningModule(null)
+      return
+    }
+
     if (moduleKey === 'parttime') {
-      const hasSource = ['parttime_attendance_detail', 'parttime_monthly', 'parttime_schedules']
-        .some((key) => (fileLists[key] || []).length > 0)
+      const parttimeSourceFields = ['parttime_attendance_detail', 'parttime_monthly', 'parttime_schedules']
+      const hasSource = parttimeSourceFields.some((key) => (fileLists[key] || []).length > 0)
       if (!hasSource) {
-        message.warning('请至少上传考勤明细、月度汇总或排班表中的一类')
+        messageApi.warning('请至少上传考勤明细、月度汇总或排班表中的一类')
+        focusMissingField(parttimeSourceFields[0])
+        setRunningModule(null)
         return
       }
     }
@@ -729,14 +1304,36 @@ const AttendanceToolbox: React.FC = () => {
         formData.append(field.name, value)
       }
     }
+    if (moduleKey === 'leave') {
+      formData.append('maternity_leave_overrides', JSON.stringify(maternityOverrides))
+    }
+    for (const [field, value] of Object.entries(
+      buildAttendanceToolboxWorkflowOptionFields(moduleKey, textValues, appliedRules),
+    )) {
+      formData.append(field, value)
+    }
 
-    setRunningModule(moduleKey)
     try {
-      const blob = await attendanceToolboxAPI.run(moduleKey, formData) as unknown as Blob
-      downloadBlob(blob, getDownloadName(config, blob))
-      message.success('计算完成，结果已下载')
+      try {
+        const response = await attendanceToolboxAPI.runWorkflow(moduleKey, formData)
+        await applyRunResponse(
+          response,
+          moduleKey === 'overtime' && appliedRules.source === 'custom'
+            ? '计算完成（已使用自定义规则），结果已下载'
+            : '计算完成，结果已下载',
+        )
+      } catch (structuredError) {
+        // Only fall back when the server does not expose structured workflows.
+        // 403/400/410/5xx/timeout/network must not re-run via the legacy blob API.
+        if (!shouldFallbackToLegacyToolboxAPI(structuredError)) {
+          throw structuredError
+        }
+        const blob = await attendanceToolboxAPI.run(moduleKey, formData) as unknown as Blob
+        downloadBlob(blob, getDownloadName(config, blob))
+        messageApi.success('计算完成，结果已下载')
+      }
     } catch (error) {
-      message.error(await resolveErrorMessage(error))
+      messageApi.error(await resolveErrorMessage(error))
     } finally {
       setRunningModule(null)
     }
@@ -864,20 +1461,30 @@ const AttendanceToolbox: React.FC = () => {
   const renderFileUploadCard = (field: FileField) => {
     const files = fileLists[field.name] || []
     const hasFile = files.length > 0
+    const isMissingHighlight = missingFieldName === field.name
 
     return (
+      <div
+        ref={(node) => {
+          fieldCardRefs.current[field.name] = node
+        }}
+      >
       <Card
         size="small"
         style={{
           height: '100%',
           borderRadius: 'var(--radius-lg)',
-          border: hasFile
-            ? '1px solid var(--color-success)'
-            : field.required
-              ? '1px solid var(--color-error)'
-              : '1px solid var(--color-border)',
-          borderLeft: field.required ? '3px solid var(--color-error)' : undefined,
-          transition: 'border-color 0.2s ease',
+          borderWidth: field.required || isMissingHighlight ? '1px 1px 1px 3px' : 1,
+          borderStyle: 'solid',
+          borderColor: isMissingHighlight
+            ? 'var(--color-error)'
+            : hasFile
+              ? 'var(--color-success)'
+              : field.required
+                ? 'var(--color-error)'
+                : 'var(--color-border)',
+          boxShadow: isMissingHighlight ? '0 0 0 3px rgba(255, 77, 79, 0.18)' : undefined,
+          transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
         }}
         styles={{ body: { padding: '16px' } }}
       >
@@ -923,6 +1530,7 @@ const AttendanceToolbox: React.FC = () => {
           ))}
         </Space>
       </Card>
+      </div>
     )
   }
 
@@ -933,26 +1541,79 @@ const AttendanceToolbox: React.FC = () => {
 
     const requiredFields = config.fileFields.filter((f) => f.required)
     const optionalFields = config.fileFields.filter((f) => !f.required)
+    const requiredReadyCount = requiredFields.filter((f) => (fileLists[f.name] || []).length > 0).length
+    const monthField = config.key === 'overtime'
+      ? 'overtime_target_month'
+      : config.key === 'subsidy'
+        ? 'subsidy_target_month'
+        : null
+    const lockedMonth = monthField ? (textValues[monthField] || '') : ''
+    const subsidyAudit = config.key === 'subsidy' ? getSubsidyAuditMeta(lastRun) : null
+    const customHolidayCount = appliedRules.rules?.legal_holidays_override?.length || 0
 
     return (
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         {renderUploadRequirements(config.key)}
 
-        <Alert
-          type="info"
-          showIcon
-          message={config.description}
-          description="文件会上传到人事系统后端，由内置 Python 计算引擎生成结果。"
+        <Collapse
+          size="small"
+          ghost
+          items={[{
+            key: 'module-help',
+            label: <Text type="secondary" style={{ fontSize: 13 }}>{config.description}</Text>,
+            children: (
+              <Alert
+                type="info"
+                showIcon
+                message="使用说明"
+                description="文件会上传到人事系统后端，由内置 Python 计算引擎生成结果。必填文件齐备后可在底部一键计算并下载。"
+              />
+            ),
+          }]}
         />
 
-        {auditWarnings.length > 0 && (
+        {monthField && (
+          <Card size="small" title="处理月份" style={{ borderRadius: 'var(--radius-lg)' }}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <DatePicker
+                picker="month"
+                format="YYYY-MM"
+                allowClear
+                value={lockedMonth ? dayjs(`${lockedMonth}-01`) : null}
+                placeholder="自动识别月份"
+                aria-label={config.key === 'overtime' ? '加班处理月份' : '补贴考勤月份'}
+                onChange={(value) => {
+                  setTextValues((prev) => ({
+                    ...prev,
+                    [monthField]: value ? value.format('YYYY-MM') : '',
+                  }))
+                }}
+              />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                默认自动识别；文件跨月或标题不规范时可手动锁定。锁定月份与作息表不一致时会停止计算。
+              </Text>
+              {config.key === 'subsidy' && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={customHolidayCount > 0
+                    ? `法定节假日使用当前加班规则配置（${customHolidayCount}天）`
+                    : '法定节假日使用作息表识别结果'}
+                  description="如加班规则配置与作息表不一致，计算仍以加班规则配置为准，并把差异写入异常审计。"
+                />
+              )}
+            </Space>
+          </Card>
+        )}
+
+        {(auditWarningsByModule[config.key] || []).length > 0 && (
           <Alert
             type="warning"
             showIcon
-            message={`文件检测发现 ${auditWarnings.length} 条警告`}
+            message={`文件检测发现 ${(auditWarningsByModule[config.key] || []).length} 条警告`}
             description={
               <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {auditWarnings.map((warning, idx) => (
+                {(auditWarningsByModule[config.key] || []).map((warning, idx) => (
                   <li key={idx}>{warning}</li>
                 ))}
               </ul>
@@ -1036,12 +1697,29 @@ const AttendanceToolbox: React.FC = () => {
           </Card>
         )}
 
+        {config.key === 'leave' && renderMaternityLeaveOverrides()}
+
         {config.key === 'overtime' && (
           <Collapse
             items={[{
               key: 'rules',
-              label: <Space><ToolOutlined />加班规则配置</Space>,
-              children: <OvertimeRulesEditor />,
+              label: (
+                <Space>
+                  <ToolOutlined />
+                  加班规则配置
+                  <Tag color={appliedRules.source === 'custom' ? 'success' : 'default'}>
+                    {appliedRules.source === 'custom' ? '自定义规则' : '默认规则'}
+                  </Tag>
+                </Space>
+              ),
+              children: (
+                <OvertimeRulesEditor
+                  value={appliedRules}
+                  onChange={setAppliedRules}
+                  canEdit={canEditRules}
+                  disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
+                />
+              ),
             }]}
           />
         )}
@@ -1059,29 +1737,151 @@ const AttendanceToolbox: React.FC = () => {
           styles={{ body: { padding: '12px 16px' } }}
         >
           <Row justify="space-between" align="middle" gutter={[12, 12]}>
-            <Col>
-              <Space>
+            <Col flex="1 1 auto" style={{ minWidth: 0 }}>
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   <InfoCircleOutlined style={{ marginRight: 4 }} />
-                  计算结果将自动下载
+                  {config.key === 'overtime'
+                    ? `当前计算使用${appliedRules.source === 'custom' ? '自定义' : '默认'}规则；结果可单独或 ZIP 下载`
+                    : config.key === 'subsidy'
+                      ? `法定节假日使用${customHolidayCount > 0 ? '当前加班规则配置' : '作息表'}；异常人员写入审计工作表`
+                    : '计算结果将自动下载；多文件时提供 ZIP'}
                 </Text>
+                {requiredFields.length > 0 && (
+                  <Space wrap size={[6, 6]}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      必填 {requiredReadyCount}/{requiredFields.length}
+                    </Text>
+                    {requiredFields.map((field) => {
+                      const ready = (fileLists[field.name] || []).length > 0
+                      return (
+                        <Tag
+                          key={field.name}
+                          color={ready ? 'success' : missingFieldName === field.name ? 'error' : 'default'}
+                          style={{ margin: 0, cursor: ready ? 'default' : 'pointer' }}
+                          onClick={() => {
+                            if (!ready) focusMissingField(field.name)
+                          }}
+                        >
+                          {ready ? <CheckOutlined style={{ marginRight: 4 }} /> : null}
+                          {field.label}
+                        </Tag>
+                      )
+                    })}
+                  </Space>
+                )}
               </Space>
             </Col>
             <Col>
-              <Button
-                type="primary"
-                size="large"
-                icon={<CalculatorOutlined />}
-                loading={runningModule === config.key}
-                onClick={() => handleRun(config.key)}
-              >
-                开始计算
-              </Button>
+              <Tooltip title={!canOperate ? '你缺少考勤工具箱操作权限，需要联系管理员添加' : undefined}>
+                <span style={{ display: 'inline-block' }}>
+                  <Button
+                    type="primary"
+                    size="large"
+                    icon={<CalculatorOutlined />}
+                    loading={runningModule === config.key}
+                    disabled={!canOperate || !!runningModule}
+                    onClick={() => handleRun(config.key)}
+                  >
+                    开始计算
+                  </Button>
+                </span>
+              </Tooltip>
             </Col>
           </Row>
         </Card>
 
-        {runLog && (
+        {lastRun && lastRun.module === config.key && (
+          <Card size="small" title="最近结果" style={{ borderRadius: 'var(--radius-lg)' }}>
+            <Space direction="vertical" style={{ width: '100%' }} size={8}>
+              <Space wrap>
+                <Tag color="success" icon={<CheckCircleOutlined />}>计算成功</Tag>
+                {lastRun.expires_at && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>结果有效至 {lastRun.expires_at}</Text>
+                )}
+              </Space>
+              {subsidyAudit?.missingAttendanceCount ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={`有 ${subsidyAudit.missingAttendanceCount} 人缺少考勤记录`}
+                  description={`${subsidyAudit.missingAttendanceNames.join('、')}。相关补贴字段保持空值，详细说明见结果文件“异常审计”工作表。`}
+                />
+              ) : null}
+              {subsidyAudit?.holidayConflictCount ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={`法定节假日口径存在 ${subsidyAudit.holidayConflictCount} 个日期差异`}
+                  description="本次已优先使用加班规则配置，差异日期已写入结果文件“异常审计”工作表。"
+                />
+              ) : null}
+              {formatRunStats(lastRun.stats as Record<string, unknown> | undefined).length > 0 && (
+                <Space wrap size={[6, 6]}>
+                  {formatRunStats(lastRun.stats as Record<string, unknown> | undefined).map((item) => (
+                    <Tag key={`${item.label}-${item.text}`} style={{ margin: 0 }}>
+                      {item.label}: {item.text}
+                    </Tag>
+                  ))}
+                </Space>
+              )}
+              <Collapse
+                size="small"
+                items={[{
+                  key: 'tech',
+                  label: '技术信息',
+                  children: <Text type="secondary" style={{ fontSize: 12 }}>run_id: {lastRun.run_id}</Text>,
+                }]}
+              />
+              <Space wrap>
+                {(lastRun.files || []).filter((f) => f.kind !== 'meta').map((f) => (
+                  <Button
+                    key={f.file_key}
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    onClick={() => handleDownloadRunFile(f.file_key, f.file_name)}
+                  >
+                    {f.file_name}
+                    {typeof f.row_count === 'number' ? ` (${f.row_count}行)` : ''}
+                  </Button>
+                ))}
+                <Button size="small" type="primary" icon={<CloudDownloadOutlined />} onClick={handleDownloadRunZip}>
+                  全部 ZIP 下载
+                </Button>
+              </Space>
+              {config.key === 'overtime' && (
+                <Card
+                  size="small"
+                  type="inner"
+                  title="结果预览（前 200 行）"
+                  loading={previewLoading}
+                  style={{ marginTop: 8 }}
+                >
+                  {previewRows.length === 0 ? (
+                    <Empty description={previewLoading ? '加载预览中…' : '暂无预览（不影响下载）'} />
+                  ) : (
+                    <Table
+                      size="small"
+                      pagination={false}
+                      scroll={{ x: true, y: 360 }}
+                      rowKey={(row) => JSON.stringify(row)}
+                      dataSource={previewRows}
+                      columns={Object.keys(previewRows[0] || {}).map((key) => ({
+                        title: key,
+                        dataIndex: key,
+                        key,
+                        ellipsis: true,
+                        width: 140,
+                      }))}
+                    />
+                  )}
+                </Card>
+              )}
+            </Space>
+          </Card>
+        )}
+
+        {(runLogByModule[config.key] || '') && (
           <Collapse
             items={[{
               key: 'log',
@@ -1099,7 +1899,7 @@ const AttendanceToolbox: React.FC = () => {
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-all',
                 }}>
-                  {runLog}
+                  {runLogByModule[config.key]}
                 </pre>
               ),
             }]}
@@ -1117,13 +1917,16 @@ const AttendanceToolbox: React.FC = () => {
       { label: '岗位异动', value: 'position_transfer' },
     ]
 
+    const downloadableFiles = getAttendanceToolboxDownloadableFiles(lastRun)
+    const hasDownloadableResult = downloadableFiles.length > 0
+
     return (
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Alert
           type="info"
           showIcon
           message={config.description}
-          description="同步过程会按所选流程逐页拉取钉钉审批数据，流程越多耗时越久。"
+          description="同步过程会按所选流程逐页拉取钉钉审批数据，流程越多耗时越久。下方一键联动可在同一次请求内直接生成请假/加班明细。"
         />
 
         <Card size="small" title="同步参数" style={{ borderRadius: 'var(--radius-lg)' }}>
@@ -1145,7 +1948,7 @@ const AttendanceToolbox: React.FC = () => {
                 <InputNumber
                   style={{ width: '100%' }}
                   min={0}
-                  max={90}
+                  max={365}
                   value={dingtalkPaddingDays}
                   onChange={(value) => setDingtalkPaddingDays(value ?? 31)}
                 />
@@ -1193,6 +1996,125 @@ const AttendanceToolbox: React.FC = () => {
           </Row>
         </Card>
 
+        <Card size="small" title="一键同步并生成请假/加班" style={{ borderRadius: 'var(--radius-lg)' }}>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Text type="secondary">
+              钉钉同步后，在同一次请求内直接用中间表计算请假/加班（需作息表；可选排班/考勤/花名册）。
+              当前加班规则：{appliedRules.source === 'custom' ? '自定义规则' : '默认规则'}。
+            </Text>
+            <Space wrap>
+              <Checkbox checked={quickRunLeave} onChange={(e) => setQuickRunLeave(e.target.checked)}>
+                生成请假明细
+              </Checkbox>
+              <Checkbox checked={quickRunOvertime} onChange={(e) => setQuickRunOvertime(e.target.checked)}>
+                生成加班明细
+              </Checkbox>
+            </Space>
+            <Tooltip
+              title={
+                !canQuick
+                  ? '你缺少一键联动所需权限（操作 + 钉钉同步），需要联系管理员添加'
+                  : undefined
+              }
+            >
+              <span style={{ display: 'inline-block' }}>
+                <Button
+                  type="default"
+                  icon={<CalculatorOutlined />}
+                  loading={runningModule === 'quick'}
+                  disabled={!canQuick || !!runningModule || (!quickRunLeave && !quickRunOvertime)}
+                  onClick={handleQuickWorkflow}
+                >
+                  一键同步并生成请假/加班
+                </Button>
+              </span>
+            </Tooltip>
+          </Space>
+        </Card>
+
+        {lastRun && (lastRun.module === 'dingtalk_sync' || lastRun.module === 'quick') && (
+          <Card size="small" title="同步/联动结果" style={{ borderRadius: 'var(--radius-lg)' }}>
+            <Space direction="vertical" style={{ width: '100%' }} size={8}>
+              <Space wrap>
+                {hasDownloadableResult ? (
+                  <Tag color="success" icon={<CheckCircleOutlined />}>同步完成</Tag>
+                ) : (
+                  <Tag color="warning" icon={<ExclamationCircleOutlined />}>未生成结果</Tag>
+                )}
+                {lastRun.expires_at && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>结果有效至 {lastRun.expires_at}</Text>
+                )}
+              </Space>
+              {formatRunStats(lastRun.stats as Record<string, unknown> | undefined).length > 0 && (
+                <Space wrap size={[6, 6]}>
+                  {formatRunStats(lastRun.stats as Record<string, unknown> | undefined).map((item) => (
+                    <Tag key={`${item.label}-${item.text}`} style={{ margin: 0 }}>
+                      {item.label}: {item.text}
+                    </Tag>
+                  ))}
+                </Space>
+              )}
+              <Collapse
+                size="small"
+                items={[{
+                  key: 'tech',
+                  label: '技术信息',
+                  children: <Text type="secondary" style={{ fontSize: 12 }}>run_id: {lastRun.run_id}</Text>,
+                }]}
+              />
+              {!hasDownloadableResult && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="本次没有生成可下载文件"
+                  description="请查看下方同步日志；如果提示“未配置流程码”，需要补齐服务器钉钉流程码配置后重新同步。"
+                />
+              )}
+              {hasDownloadableResult && (
+                <Space wrap>
+                  {downloadableFiles.map((f) => (
+                    <Button
+                      key={f.file_key}
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      onClick={() => handleDownloadRunFile(f.file_key, f.file_name)}
+                    >
+                      {f.file_name}
+                      {typeof f.row_count === 'number' ? ` (${f.row_count}行)` : ''}
+                    </Button>
+                  ))}
+                  <Button size="small" type="primary" icon={<CloudDownloadOutlined />} onClick={handleDownloadRunZip}>
+                    全部 ZIP 下载
+                  </Button>
+                </Space>
+              )}
+              {(runLogByModule[config.key] || runLogByModule.quick || '') && (
+                <Collapse
+                  items={[{
+                    key: 'sync-log',
+                    label: '同步日志',
+                    children: (
+                      <pre style={{
+                        margin: 0,
+                        padding: 12,
+                        background: 'var(--color-bg-layout)',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        maxHeight: 240,
+                        overflow: 'auto',
+                        whiteSpace: 'pre-wrap',
+                      }}
+                      >
+                        {runLogByModule[config.key] || runLogByModule.quick}
+                      </pre>
+                    ),
+                  }]}
+                />
+              )}
+            </Space>
+          </Card>
+        )}
+
         <Card
           size="small"
           style={{
@@ -1205,15 +2127,20 @@ const AttendanceToolbox: React.FC = () => {
           styles={{ body: { padding: '12px 16px' } }}
         >
           <Row justify="end" align="middle">
-            <Button
-              type="primary"
-              size="large"
-              icon={<SyncOutlined />}
-              loading={runningModule === config.key}
-              onClick={() => handleRun(config.key)}
-            >
-              从钉钉同步并生成中间表
-            </Button>
+            <Tooltip title={!canDingtalkSync ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加' : undefined}>
+              <span style={{ display: 'inline-block' }}>
+                <Button
+                  type="primary"
+                  size="large"
+                  icon={<SyncOutlined />}
+                  loading={runningModule === config.key}
+                  disabled={!canDingtalkSync || !!runningModule}
+                  onClick={() => handleRun(config.key)}
+                >
+                  从钉钉同步并生成中间表
+                </Button>
+              </span>
+            </Tooltip>
           </Row>
         </Card>
       </Space>
@@ -1284,56 +2211,45 @@ const AttendanceToolbox: React.FC = () => {
   )
 
   const renderToolbar = () => (
-    <Card
-      size="small"
-      style={{
-        marginBottom: 16,
-        borderRadius: 'var(--radius-lg)',
-        background: 'var(--color-bg-container)',
-        border: '1px solid var(--color-border)',
-      }}
-      styles={{ body: { padding: '14px 16px' } }}
-    >
-      <Row align="middle" gutter={[12, 8]} justify="space-between">
-        <Col>
+    <Collapse
+      style={{ marginBottom: 16 }}
+      items={[{
+        key: 'templates',
+        label: (
           <Space>
-            <CloudDownloadOutlined style={{ color: 'var(--color-primary)', fontSize: 16 }} />
+            <CloudDownloadOutlined style={{ color: 'var(--color-primary)' }} />
             <Text strong>模板下载中心</Text>
-            <Text type="secondary">下载空白模板后填写上传</Text>
+            <Text type="secondary">默认折叠，需要空白模板时再展开下载</Text>
           </Space>
-        </Col>
-        <Col>
-          <Button
-            type="primary"
-            size="small"
-            icon={<CloudDownloadOutlined />}
-            loading={downloadingTemplate === '__all__'}
-            disabled={!!downloadingTemplate && downloadingTemplate !== '__all__'}
-            onClick={downloadAllTemplates}
-          >
-            下载全部模板（zip）
-          </Button>
-        </Col>
-      </Row>
-    </Card>
+        ),
+        children: (
+          <Row align="middle" gutter={[12, 8]} justify="space-between">
+            <Col>
+              <Text type="secondary">下载空白模板后填写上传</Text>
+            </Col>
+            <Col>
+              <Button
+                type="primary"
+                size="small"
+                icon={<CloudDownloadOutlined />}
+                loading={downloadingTemplate === '__all__'}
+                disabled={!!downloadingTemplate && downloadingTemplate !== '__all__'}
+                onClick={downloadAllTemplates}
+              >
+                下载全部模板（zip）
+              </Button>
+            </Col>
+          </Row>
+        ),
+      }]}
+    />
   )
 
   const renderFixedConfig = () => (
-    <Card
-      size="small"
-      style={{
-        marginBottom: 16,
-        borderRadius: 'var(--radius-lg)',
-        border: '1px solid var(--color-border)',
-      }}
-      styles={{ body: { padding: '14px 16px' } }}
-    >
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Space>
-          <FileProtectOutlined style={{ color: 'var(--color-primary)', fontSize: 16 }} />
-          <Text strong>固定配置（不随月份变化）</Text>
-          <Text type="secondary">这些值已内置默认值，仅在人员/规则发生变化时修改</Text>
-        </Space>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          这些值已内置默认值，仅在人员/规则发生变化时修改
+        </Text>
 
         <Row gutter={[16, 16]}>
           <Col xs={24} md={8}>
@@ -1387,19 +2303,26 @@ const AttendanceToolbox: React.FC = () => {
                   {rosterSync.loading
                     ? <SyncOutlined spin />
                     : (
-                      <Button
-                        type="link"
-                        size="small"
-                        icon={<SyncOutlined />}
-                        onClick={() => void syncRosterFromDingtalk()}
-                        style={{ fontSize: 11, height: 22, padding: '0 4px' }}
-                      >
-                        {rosterSync.error ? '重试同步' : '从钉钉同步'}
-                      </Button>
+                      <Tooltip title={!canDingtalkSync ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加' : undefined}>
+                        <span style={{ display: 'inline-block' }}>
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<SyncOutlined />}
+                            disabled={!canDingtalkSync}
+                            onClick={() => void syncRosterFromDingtalk()}
+                            style={{ fontSize: 11, height: 22, padding: '0 4px' }}
+                          >
+                            {rosterSync.error ? '重试同步' : '从钉钉同步'}
+                          </Button>
+                        </span>
+                      </Tooltip>
                     )}
                 </Space>
                 <Text type="secondary" style={{ fontSize: 11 }}>
-                  页面加载时会自动尝试同步；失败后可手动重试，也可以继续上传本地花名册
+                  {canDingtalkSync
+                    ? '页面加载时会自动尝试同步；失败后可手动重试，也可以继续上传本地花名册'
+                    : '当前账号无钉钉同步权限，请上传本地花名册，或联系管理员开通权限'}
                 </Text>
                 {rosterSync.lastSyncAt && (
                   <Text type="success" style={{ fontSize: 11 }}>
@@ -1428,19 +2351,26 @@ const AttendanceToolbox: React.FC = () => {
                   {transferSync.loading
                     ? <SyncOutlined spin />
                     : (
-                      <Button
-                        type="link"
-                        size="small"
-                        icon={<SyncOutlined />}
-                        onClick={() => void syncTransferFromDingtalk()}
-                        style={{ fontSize: 11, height: 22, padding: '0 4px' }}
-                      >
-                        {transferSync.error ? '重试同步' : '从钉钉同步'}
-                      </Button>
+                      <Tooltip title={!canDingtalkSync ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加' : undefined}>
+                        <span style={{ display: 'inline-block' }}>
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<SyncOutlined />}
+                            disabled={!canDingtalkSync}
+                            onClick={() => void syncTransferFromDingtalk()}
+                            style={{ fontSize: 11, height: 22, padding: '0 4px' }}
+                          >
+                            {transferSync.error ? '重试同步' : '从钉钉同步'}
+                          </Button>
+                        </span>
+                      </Tooltip>
                     )}
                 </Space>
                 <Text type="secondary" style={{ fontSize: 11 }}>
-                  页面加载时会自动尝试同步；失败后可手动重试，也可以继续上传本地异动流程表
+                  {canDingtalkSync
+                    ? '页面加载时会自动尝试同步；失败后可手动重试，也可以继续上传本地异动流程表'
+                    : '当前账号无钉钉同步权限，请上传本地异动流程表，或联系管理员开通权限'}
                 </Text>
                 {transferSync.lastSyncAt && (
                   <Text type="success" style={{ fontSize: 11 }}>
@@ -1495,14 +2425,23 @@ const AttendanceToolbox: React.FC = () => {
                 <Text strong style={{ fontSize: 12 }}>加班规则配置</Text>
                 <Text type="secondary" style={{ fontSize: 11 }}>倍数规则、部门匹配、排除名单</Text>
                 <div style={{ marginTop: 4 }}>
-                  <OvertimeRulesEditor />
+                  <OvertimeRulesEditor
+                    value={appliedRules}
+                    onChange={setAppliedRules}
+                    canEdit={canEditRules}
+                    disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
+                  />
                 </div>
               </Space>
             </Card>
           </Col>
         </Row>
       </Space>
-    </Card>
+  )
+
+  const wizardCurrent = Math.max(
+    0,
+    MONTH_END_WIZARD_STEPS.findIndex((step) => step.key === activeModule),
   )
 
   return (
@@ -1511,15 +2450,71 @@ const AttendanceToolbox: React.FC = () => {
       icon={<ToolOutlined />}
       subtitle="在系统内上传 Excel、调用内置计算引擎，并下载生成结果。"
     >
+      {messageContextHolder}
       {renderHero()}
-      {renderFixedConfig()}
+
+      <Card
+        size="small"
+        data-testid="attendance-toolbox-wizard"
+        style={{
+          marginBottom: 16,
+          borderRadius: 'var(--radius-lg)',
+          border: '1px solid var(--color-border)',
+        }}
+        styles={{ body: { padding: '14px 16px' } }}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space wrap>
+            <Text strong>月末结账向导</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              推荐顺序；点击步骤可切换模块，不强制锁步
+            </Text>
+          </Space>
+          <Steps
+            size="small"
+            current={wizardCurrent >= 0 ? wizardCurrent : 0}
+            onChange={(index) => {
+              const step = MONTH_END_WIZARD_STEPS[index]
+              if (step) setActiveModule(step.key)
+            }}
+            items={MONTH_END_WIZARD_STEPS.map((step) => ({
+              title: step.title,
+              description: step.hint,
+              status: completedModules[step.key]
+                ? 'finish'
+                : step.key === activeModule
+                  ? 'process'
+                  : 'wait',
+              icon: completedModules[step.key] ? <CheckCircleOutlined /> : undefined,
+            }))}
+          />
+        </Space>
+      </Card>
+
+      <Collapse
+        style={{ marginBottom: 16 }}
+        items={[{
+          key: 'fixed-config',
+          label: (
+            <Space>
+              <FileProtectOutlined style={{ color: 'var(--color-primary)' }} />
+              <Text strong>固定配置（名单 / 同步源）</Text>
+              <Text type="secondary">默认折叠，仅在人员或规则变化时展开</Text>
+            </Space>
+          ),
+          children: renderFixedConfig(),
+        }]}
+      />
       {renderToolbar()}
       <Tabs
         size="large"
+        activeKey={activeModule}
+        onChange={(key) => setActiveModule(key as ToolboxModuleKey)}
         items={modules.map((item) => ({
           key: item.key,
           label: (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              {completedModules[item.key] ? <CheckCircleOutlined style={{ color: 'var(--color-success)' }} /> : null}
               {item.key === 'final'
                 ? <CloudDownloadOutlined />
                 : item.key === 'dingtalk_sync'

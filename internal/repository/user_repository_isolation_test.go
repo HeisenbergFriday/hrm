@@ -3,7 +3,6 @@ package repository
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -82,22 +81,42 @@ func TestUserRepository_UpdateEnforcesTenantOrg(t *testing.T) {
 	})
 }
 
-// TestUserRepository_LegacyEmptyOrgStillPermits 验证保留旧构造（迁移期兼容）：
-// orgID 为空时读路径不加过滤，写路径不做校验。用于确认不会误伤后台任务/工具场景。
-func TestUserRepository_LegacyEmptyOrgStillPermits(t *testing.T) {
+// TestUserRepository_LegacyEmptyOrgFailClosed 验证旧构造在无租户上下文时 fail-closed：
+// 读/写均返回 ErrMissingOrgID，禁止未绑定组织的全表访问。
+func TestUserRepository_LegacyEmptyOrgFailClosed(t *testing.T) {
 	db := newDryRunGORM(t)
 	repo := NewUserRepository(db)
 
-	cap := captureFindByUserID(t, db, repo)
-	if strings.Contains(strings.ToLower(cap.SQL()), "org_id = ?") {
-		t.Fatalf("legacy constructor should not attach org filter, got %s", cap.SQL())
+	if _, err := repo.FindByUserID("alice"); !errors.Is(err, ErrMissingOrgID) {
+		t.Fatalf("legacy empty FindByUserID err=%v, want ErrMissingOrgID", err)
+	}
+	if err := repo.Create(&database.User{UserID: "alice", OrgID: "any"}); !errors.Is(err, ErrMissingOrgID) {
+		t.Fatalf("legacy empty Create err=%v, want ErrMissingOrgID", err)
+	}
+	if err := repo.Delete("alice"); !errors.Is(err, ErrMissingOrgID) {
+		t.Fatalf("legacy empty Delete err=%v, want ErrMissingOrgID", err)
+	}
+}
+
+func TestUserRepository_FindAllFilteredCarriesSearchAndOrg(t *testing.T) {
+	db := newDryRunGORM(t)
+	repo := NewUserRepositoryWithOrgID(db, "xiaotie")
+
+	cap := captureFindAllFiltered(t, db, repo, "测试员工")
+	assertStmtCarriesOrg(t, "FindAllFiltered", cap, "xiaotie", "org_id = ?")
+	if !containsIgnoreCase(cap.SQL(), "users.name LIKE ?") {
+		t.Fatalf("expected employee name search in SQL, got %s", cap.SQL())
 	}
 
-	// 写路径不校验 user.OrgID，直接透传给 GORM。
-	err := repo.Create(&database.User{UserID: "alice", OrgID: "any"})
-	// DryRun 会导致 db.Create 返回错误（无法执行）；此处只关心不会被 EnsureSameOrg 拦下。
-	if errors.Is(err, ErrOrgMismatch) || errors.Is(err, ErrMissingOrgID) {
-		t.Fatalf("legacy constructor should not enforce tenant, got %v", err)
+	foundSearch := false
+	for _, value := range cap.Vars() {
+		if value == "%测试员工%" {
+			foundSearch = true
+			break
+		}
+	}
+	if !foundSearch {
+		t.Fatalf("expected employee search value in Vars, got %#v", cap.Vars())
 	}
 }
 
@@ -110,8 +129,8 @@ type captured struct {
 	vars []interface{}
 }
 
-func (c *captured) SQL() string          { return c.sql }
-func (c *captured) Vars() []interface{}  { return c.vars }
+func (c *captured) SQL() string         { return c.sql }
+func (c *captured) Vars() []interface{} { return c.vars }
 
 var captureCallbackSeq atomic.Int64
 
@@ -161,6 +180,13 @@ func captureFindByID(t *testing.T, db *gorm.DB, repo *UserRepository) *captured 
 func captureDelete(t *testing.T, db *gorm.DB, repo *UserRepository) *captured {
 	t.Helper()
 	return captureQuery(t, db, repo, func(r *UserRepository) { _ = r.Delete("alice") })
+}
+
+func captureFindAllFiltered(t *testing.T, db *gorm.DB, repo *UserRepository, search string) *captured {
+	t.Helper()
+	return captureQuery(t, db, repo, func(r *UserRepository) {
+		_, _, _ = r.FindAllFiltered(1, 50, search)
+	})
 }
 
 func assertStmtCarriesOrg(t *testing.T, label string, cap *captured, org, sqlFragment string) {

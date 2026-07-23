@@ -292,6 +292,83 @@ func newPerformanceTestDBWithStub(t *testing.T, stub *stubPerformanceDB) (*gorm.
 	return db, stub
 }
 
+func TestPerformanceRepositoriesWithOrgID_EmptyFailClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*gorm.DB) error
+	}{
+		{name: "activity", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceActivityRepositoryWithOrgID(db, "").GetByID("activity-1")
+			return err
+		}},
+		{name: "distribution rule", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "").ListByActivity("activity-1")
+			return err
+		}},
+		{name: "template", run: func(db *gorm.DB) error {
+			_, _, _, err := NewPerformanceTemplateRepositoryWithOrgID(db, "").GetByID(1)
+			return err
+		}},
+		{name: "participant", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceParticipantRepositoryWithOrgID(db, "").GetByID("1")
+			return err
+		}},
+		{name: "review version", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceReviewVersionRepositoryWithOrgID(db, "").ListByParticipant("1")
+			return err
+		}},
+		{name: "relationship change", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db, "").ListByParticipant("1")
+			return err
+		}},
+		{name: "goal record", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceGoalRecordRepositoryWithOrgID(db, "").FindByParticipant(1)
+			return err
+		}},
+		{name: "goal approval", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceGoalApprovalRepositoryWithOrgID(db, "").FindByGoalRecord(1)
+			return err
+		}},
+		{name: "indicator library", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceIndicatorLibraryRepositoryWithOrgID(db, "").GetByID(1)
+			return err
+		}},
+		{name: "indicator item", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "").GetByID(1)
+			return err
+		}},
+		{name: "distribution rule transaction", run: func(db *gorm.DB) error {
+			return NewPerformanceDistributionRuleRepositoryWithOrgID(db, "").ReplaceForActivity("activity-1", nil)
+		}},
+		{name: "template direct db", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceTemplateRepositoryWithOrgID(db, "").IsReferencedByActivity(1)
+			return err
+		}},
+		{name: "goal record direct db", run: func(db *gorm.DB) error {
+			return NewPerformanceGoalRecordRepositoryWithOrgID(db, "").BatchUpsert([]database.PerformanceGoalRecord{{ID: 1}})
+		}},
+		{name: "indicator item direct db", run: func(db *gorm.DB) error {
+			_, err := NewPerformanceIndicatorItemRepositoryWithOrgID(db, "").Search(nil, "", "", nil)
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, stub := newPerformanceTestDBWithStub(t, &stubPerformanceDB{})
+			err := tt.run(db)
+			if !errors.Is(err, ErrMissingOrgID) {
+				t.Fatalf("error = %v, want ErrMissingOrgID", err)
+			}
+			stub.mu.Lock()
+			defer stub.mu.Unlock()
+			if len(stub.queryCalls) != 0 || len(stub.execCalls) != 0 {
+				t.Fatalf("empty org repository executed SQL: queries=%v execs=%v", stub.queryCalls, stub.execCalls)
+			}
+		})
+	}
+}
+
 // stubPerformanceTableMatcher matches queries containing a table name
 func stubPerformanceTableMatcher(table string) func(string, []driver.NamedValue) bool {
 	table = strings.ToLower(table)
@@ -569,7 +646,7 @@ func templateRow(id uint, name, status string) []driver.Value {
 
 func TestActivityRepo_Create(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activity := &database.PerformanceActivity{
 		Name:      "Q1 2026 绩效",
@@ -589,7 +666,7 @@ func TestActivityRepo_GetByID_Found(t *testing.T) {
 		columns: activityColumns(),
 		rows:    [][]driver.Value{activityRow(1, "Q1 绩效", "quarterly", "active")},
 	})
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activity, err := repo.GetByID("1")
 	if err != nil {
@@ -605,7 +682,7 @@ func TestActivityRepo_GetByID_Found(t *testing.T) {
 
 func TestActivityRepo_GetByID_NotFound(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	_, err := repo.GetByID("999")
 	if err == nil {
@@ -615,7 +692,7 @@ func TestActivityRepo_GetByID_NotFound(t *testing.T) {
 
 func TestActivityRepo_Update(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activity := &database.PerformanceActivity{
 		ID:        1,
@@ -633,7 +710,7 @@ func TestActivityRepo_Update(t *testing.T) {
 
 func TestActivityRepo_UpdateStatus(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	if err := repo.UpdateStatus("1", "active", "admin"); err != nil {
 		t.Fatalf("UpdateStatus() error = %v", err)
@@ -656,7 +733,7 @@ func TestActivityRepo_FindAll_NoFilters(t *testing.T) {
 			},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activities, total, err := repo.FindAll(1, 10, "", "", "", "", nil)
 	if err != nil {
@@ -683,7 +760,7 @@ func TestActivityRepo_FindAll_WithStatusFilter(t *testing.T) {
 			rows:    [][]driver.Value{activityRow(1, "Active Activity", "monthly", "active")},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activities, total, err := repo.FindAll(1, 10, "active", "", "", "", nil)
 	if err != nil {
@@ -710,7 +787,7 @@ func TestActivityRepo_FindAll_WithKeywordFilter(t *testing.T) {
 			rows:    [][]driver.Value{activityRow(1, "销售绩效", "monthly", "active")},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activities, total, err := repo.FindAll(1, 10, "", "销售", "", "", nil)
 	if err != nil {
@@ -737,7 +814,7 @@ func TestActivityRepo_FindAll_Pagination(t *testing.T) {
 			rows:    [][]driver.Value{activityRow(3, "Activity 3", "monthly", "draft")},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activities, total, err := repo.FindAll(2, 2, "", "", "", "", nil)
 	if err != nil {
@@ -764,7 +841,7 @@ func TestActivityRepo_FindAll_DefaultPagination(t *testing.T) {
 			rows:    [][]driver.Value{},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	// page=0, pageSize=0 should use defaults (1, 10)
 	activities, total, err := repo.FindAll(0, 0, "", "", "", "", nil)
@@ -792,7 +869,7 @@ func TestActivityRepo_FindAll_WithDepartmentIDs(t *testing.T) {
 			rows:    [][]driver.Value{activityRow(1, "Dept Activity", "monthly", "active")},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activities, total, err := repo.FindAll(1, 10, "", "", "", "", []string{"dept-1", "dept-2"})
 	if err != nil {
@@ -819,7 +896,7 @@ func TestActivityRepo_FindAllByUserID_Found(t *testing.T) {
 			rows:    [][]driver.Value{activityRow(1, "My Activity", "monthly", "active")},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activities, total, err := repo.FindAllByUserID(1, 10, "", "", "", "", []string{"user-1"})
 	if err != nil {
@@ -846,7 +923,7 @@ func TestActivityRepo_FindAllByUserID_Empty(t *testing.T) {
 			rows:    [][]driver.Value{},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activities, total, err := repo.FindAllByUserID(1, 10, "", "", "", "", []string{"user-999"})
 	if err != nil {
@@ -864,7 +941,7 @@ func TestActivityRepo_FindAllByUserID_Empty(t *testing.T) {
 
 func TestDistributionRuleRepo_ReplaceForActivity_EmptyRules(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceDistributionRuleRepository(db)
+	repo := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "test-org")
 
 	if err := repo.ReplaceForActivity("act-1", []database.PerformanceDistributionRule{}); err != nil {
 		t.Fatalf("ReplaceForActivity() empty error = %v", err)
@@ -873,7 +950,7 @@ func TestDistributionRuleRepo_ReplaceForActivity_EmptyRules(t *testing.T) {
 
 func TestDistributionRuleRepo_ReplaceForActivity_WithRules(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceDistributionRuleRepository(db)
+	repo := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "test-org")
 
 	rules := []database.PerformanceDistributionRule{
 		{Level: "S", DistributionPercent: 10},
@@ -888,7 +965,7 @@ func TestDistributionRuleRepo_ReplaceForActivity_WithRules(t *testing.T) {
 func TestDistributionRuleRepo_ReplaceForActivity_BeginFailure(t *testing.T) {
 	errBegin := errors.New("begin transaction failed")
 	db, stub := newPerformanceTestDBWithStub(t, &stubPerformanceDB{beginErr: errBegin})
-	repo := NewPerformanceDistributionRuleRepository(db)
+	repo := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "test-org")
 
 	err := repo.ReplaceForActivity("act-1", nil)
 	if !errors.Is(err, errBegin) {
@@ -903,7 +980,7 @@ func TestDistributionRuleRepo_ReplaceForActivity_BeginFailure(t *testing.T) {
 func TestDistributionRuleRepo_ReplaceForActivity_CommitFailure(t *testing.T) {
 	errCommit := errors.New("commit transaction failed")
 	db, stub := newPerformanceTestDBWithStub(t, &stubPerformanceDB{commitErr: errCommit})
-	repo := NewPerformanceDistributionRuleRepository(db)
+	repo := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "test-org")
 
 	err := repo.ReplaceForActivity("act-1", nil)
 	if !errors.Is(err, errCommit) {
@@ -925,7 +1002,7 @@ func TestDistributionRuleRepo_ReplaceForActivity_DeleteFailure(t *testing.T) {
 			},
 		},
 	})
-	repo := NewPerformanceDistributionRuleRepository(db)
+	repo := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "test-org")
 
 	err := repo.ReplaceForActivity("act-1", nil)
 	if !errors.Is(err, errDelete) {
@@ -947,7 +1024,7 @@ func TestDistributionRuleRepo_ReplaceForActivity_CreateFailure(t *testing.T) {
 			},
 		},
 	})
-	repo := NewPerformanceDistributionRuleRepository(db)
+	repo := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "test-org")
 	rules := []database.PerformanceDistributionRule{{Level: "A", DistributionPercent: 25}}
 
 	err := repo.ReplaceForActivity("act-1", rules)
@@ -973,7 +1050,7 @@ func TestDistributionRuleRepo_ListByActivity_Found(t *testing.T) {
 			distributionRuleRow(3, "act-1", "B", 40),
 		},
 	})
-	repo := NewPerformanceDistributionRuleRepository(db)
+	repo := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "test-org")
 
 	rules, err := repo.ListByActivity("act-1")
 	if err != nil {
@@ -995,7 +1072,7 @@ func TestDistributionRuleRepo_ListByActivity_Empty(t *testing.T) {
 		columns: distributionRuleColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceDistributionRuleRepository(db)
+	repo := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "test-org")
 
 	rules, err := repo.ListByActivity("nonexistent")
 	if err != nil {
@@ -1012,7 +1089,7 @@ func TestDistributionRuleRepo_ListByActivity_Error(t *testing.T) {
 		match: stubPerformanceTableMatcher("performance_distribution_rules"),
 		err:   errQuery,
 	})
-	repo := NewPerformanceDistributionRuleRepository(db)
+	repo := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "test-org")
 
 	rules, err := repo.ListByActivity("act-1")
 	if !errors.Is(err, errQuery) {
@@ -1027,7 +1104,7 @@ func TestDistributionRuleRepo_ListByActivity_Error(t *testing.T) {
 
 func TestTemplateRepo_Create(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	template := &database.PerformanceTemplate{
 		Name:   "Standard Template",
@@ -1068,7 +1145,7 @@ func TestTemplateRepo_GetByID_Found(t *testing.T) {
 			},
 		},
 	)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	template, sections, items, err := repo.GetByID(1)
 	if err != nil {
@@ -1087,7 +1164,7 @@ func TestTemplateRepo_GetByID_Found(t *testing.T) {
 
 func TestTemplateRepo_GetByID_NotFound(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	_, _, _, err := repo.GetByID(999)
 	if err == nil {
@@ -1111,7 +1188,7 @@ func TestTemplateRepo_FindAll_NoFilters(t *testing.T) {
 			},
 		},
 	)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	templates, total, err := repo.FindAll(1, 10, "")
 	if err != nil {
@@ -1138,7 +1215,7 @@ func TestTemplateRepo_FindAll_WithStatusFilter(t *testing.T) {
 			rows:    [][]driver.Value{templateRow(1, "Active Template", "active")},
 		},
 	)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	templates, total, err := repo.FindAll(1, 10, "active")
 	if err != nil {
@@ -1154,7 +1231,7 @@ func TestTemplateRepo_FindAll_WithStatusFilter(t *testing.T) {
 
 func TestTemplateRepo_Update(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	template := &database.PerformanceTemplate{
 		ID:        1,
@@ -1169,7 +1246,7 @@ func TestTemplateRepo_Update(t *testing.T) {
 
 func TestTemplateRepo_Update_StructuralChange(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	template := &database.PerformanceTemplate{
 		ID:        1,
@@ -1192,7 +1269,7 @@ func TestTemplateRepo_Update_SaveError(t *testing.T) {
 			{match: stubPerformanceExecMatcher("performance_templates"), err: errSave},
 		},
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	err := repo.Update(&database.PerformanceTemplate{ID: 1, Name: "Broken"}, nil, nil, false, nil)
 	if !errors.Is(err, errSave) {
@@ -1213,7 +1290,7 @@ func TestTemplateRepo_Update_DeleteItemsError(t *testing.T) {
 			},
 		},
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	err := repo.Update(&database.PerformanceTemplate{ID: 1, Name: "Broken"}, nil, nil, true, nil)
 	if !errors.Is(err, errDelete) {
@@ -1236,7 +1313,7 @@ func TestTemplateRepo_Update_DeleteSectionsError(t *testing.T) {
 			},
 		},
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	err := repo.Update(&database.PerformanceTemplate{ID: 1, Name: "Broken"}, nil, nil, true, nil)
 	if !errors.Is(err, errDelete) {
@@ -1254,7 +1331,7 @@ func TestTemplateRepo_Update_CreateSectionError(t *testing.T) {
 			},
 		},
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 	sections := []database.PerformanceTemplateSection{{Name: "Section", SectionType: "score"}}
 
 	err := repo.Update(&database.PerformanceTemplate{ID: 1, Name: "Broken"}, sections, nil, true, []int{0})
@@ -1280,7 +1357,7 @@ func TestTemplateRepo_Update_CreateItemError(t *testing.T) {
 			},
 		},
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 	sections := []database.PerformanceTemplateSection{{Name: "Section", SectionType: "score"}}
 	items := []database.PerformanceTemplateItem{{Name: "Item", MaxScore: 100}}
 
@@ -1302,7 +1379,7 @@ func TestTemplateRepo_IsReferencedByActivity_False(t *testing.T) {
 		columns: []string{"count(*)"},
 		rows:    [][]driver.Value{{int64(0)}},
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	referenced, err := repo.IsReferencedByActivity(999)
 	if err != nil {
@@ -1327,7 +1404,7 @@ func TestTemplateRepo_IsReferencedByActivity_TrueWhenActivityCountExists(t *test
 		},
 	)
 	db := newPerformanceTestDB(t, queries...)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	referenced, err := repo.IsReferencedByActivity(1)
 	if err != nil {
@@ -1352,7 +1429,7 @@ func TestTemplateRepo_IsReferencedByActivity_FalseWhenColumnExistsWithoutReferen
 		},
 	)
 	db := newPerformanceTestDB(t, queries...)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	referenced, err := repo.IsReferencedByActivity(1)
 	if err != nil {
@@ -1377,7 +1454,7 @@ func TestTemplateRepo_IsReferencedByActivity_CountError(t *testing.T) {
 		},
 	)
 	db := newPerformanceTestDB(t, queries...)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	referenced, err := repo.IsReferencedByActivity(1)
 	if !errors.Is(err, errCount) {
@@ -1396,7 +1473,7 @@ func TestParticipantRepo_GetByID_Found(t *testing.T) {
 		columns: participantColumns(),
 		rows:    [][]driver.Value{participantRow(1, "act-1", "emp-1", "张三", "dept-1", "pending")},
 	})
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participant, err := repo.GetByID("1")
 	if err != nil {
@@ -1412,7 +1489,7 @@ func TestParticipantRepo_GetByID_Found(t *testing.T) {
 
 func TestParticipantRepo_GetByID_NotFound(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	_, err := repo.GetByID("999")
 	if err == nil {
@@ -1436,7 +1513,7 @@ func TestParticipantRepo_FindAll_NoFilters(t *testing.T) {
 			},
 		},
 	)
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "", "", "", "", nil, nil)
 	if err != nil {
@@ -1463,7 +1540,7 @@ func TestParticipantRepo_FindAll_WithDepartmentFilter(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(1, "act-1", "emp-1", "张三", "dept-1", "pending")},
 		},
 	)
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "dept-1", "", "", "", nil, nil)
 	if err != nil {
@@ -1490,7 +1567,7 @@ func TestParticipantRepo_FindAll_WithStatusFilter(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(1, "act-1", "emp-1", "张三", "dept-1", "self_submitted")},
 		},
 	)
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "", "", "self_submitted", "", nil, nil)
 	if err != nil {
@@ -1517,7 +1594,7 @@ func TestParticipantRepo_FindAll_WithKeywordFilter(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(1, "act-1", "emp-1", "张三", "dept-1", "pending")},
 		},
 	)
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "", "", "", "张", nil, nil)
 	if err != nil {
@@ -1544,7 +1621,7 @@ func TestParticipantRepo_FindAll_WithVisibleDepartments(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(1, "act-1", "emp-1", "张三", "dept-1", "pending")},
 		},
 	)
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "", "", "", "", []string{"dept-1"}, nil)
 	if err != nil {
@@ -1571,7 +1648,7 @@ func TestParticipantRepo_FindAll_WithVisibleUsers(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(1, "act-1", "emp-1", "张三", "dept-1", "pending")},
 		},
 	)
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "", "", "", "", nil, []string{"emp-1"})
 	if err != nil {
@@ -1600,7 +1677,7 @@ func TestParticipantRepo_FindAll_FilterCombinationBuildsExpectedQuery(t *testing
 			},
 		},
 	})
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll(
 		"act-1", 1, 20,
@@ -1658,7 +1735,7 @@ func TestParticipantRepo_CountByActivityAndStatus(t *testing.T) {
 		columns: []string{"count(*)"},
 		rows:    [][]driver.Value{{int64(5)}},
 	})
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	count, err := repo.CountByActivityAndStatus("act-1", "pending")
 	if err != nil {
@@ -1678,7 +1755,7 @@ func TestParticipantRepo_CountByActivityAndStatus_Zero(t *testing.T) {
 		columns: []string{"count(*)"},
 		rows:    [][]driver.Value{{int64(0)}},
 	})
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	count, err := repo.CountByActivityAndStatus("act-999", "nonexistent")
 	if err != nil {
@@ -1700,7 +1777,7 @@ func TestReviewVersionRepo_ListByParticipant_Found(t *testing.T) {
 			reviewVersionRow(2, 10, "act-1", "manager"),
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	versions, err := repo.ListByParticipant("10")
 	if err != nil {
@@ -1722,7 +1799,7 @@ func TestReviewVersionRepo_ListByParticipant_Empty(t *testing.T) {
 		columns: reviewVersionColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	versions, err := repo.ListByParticipant("999")
 	if err != nil {
@@ -1739,7 +1816,7 @@ func TestReviewVersionRepo_ListByParticipant_Error(t *testing.T) {
 		match: stubPerformanceTableMatcher("performance_review_versions"),
 		err:   errQuery,
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	versions, err := repo.ListByParticipant("10")
 	if !errors.Is(err, errQuery) {
@@ -1758,7 +1835,7 @@ func TestReviewVersionRepo_CreateSelfEvaluationVersion(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(10, "act-1", "emp-1", "张三", "dept-1", "pending")},
 		},
 	)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.CreateSelfEvaluationVersion("10", 85.0, "B", "Self evaluation summary", []string{"att1.pdf"}, "emp-1")
 	if err != nil {
@@ -1774,7 +1851,7 @@ func TestReviewVersionRepo_CreateSelfEvaluationVersion(t *testing.T) {
 
 func TestReviewVersionRepo_CreateSelfEvaluationVersion_ParticipantNotFound(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	_, err := repo.CreateSelfEvaluationVersion("999", 85.0, "B", "", nil, "emp-1")
 	if err == nil {
@@ -1790,7 +1867,7 @@ func TestReviewVersionRepo_CreateManagerEvaluationVersion(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(10, "act-1", "emp-1", "张三", "dept-1", "self_submitted")},
 		},
 	)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	items := []struct {
 		ItemKey   string
@@ -1813,7 +1890,7 @@ func TestReviewVersionRepo_CreateManagerEvaluationVersion(t *testing.T) {
 
 func TestReviewVersionRepo_CreateManagerEvaluationVersion_ParticipantNotFound(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	_, err := repo.CreateManagerEvaluationVersion("999", 88.0, "A", "", nil, "mgr-1")
 	if err == nil {
@@ -1829,7 +1906,7 @@ func TestReviewVersionRepo_AdjustFinalLevel(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(10, "act-1", "emp-1", "张三", "dept-1", "manager_submitted")},
 		},
 	)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.AdjustFinalLevel("10", "S", "Exceptional performance", "hr-1")
 	if err != nil {
@@ -1845,7 +1922,7 @@ func TestReviewVersionRepo_AdjustFinalLevel(t *testing.T) {
 
 func TestReviewVersionRepo_AdjustFinalLevel_ParticipantNotFound(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	_, err := repo.AdjustFinalLevel("999", "S", "", "hr-1")
 	if err == nil {
@@ -1861,7 +1938,7 @@ func TestReviewVersionRepo_ConfirmResult(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(10, "act-1", "emp-1", "张三", "dept-1", "manager_submitted")},
 		},
 	)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.ConfirmResult("10", "确认结果", "emp-1")
 	if err != nil {
@@ -1880,7 +1957,7 @@ func TestReviewVersionRepo_ConfirmResult(t *testing.T) {
 
 func TestReviewVersionRepo_ConfirmResult_ParticipantNotFound(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	_, err := repo.ConfirmResult("999", "", "emp-1")
 	if err == nil {
@@ -1894,7 +1971,7 @@ func TestReviewVersionRepo_GetParticipantLocked(t *testing.T) {
 		columns: participantColumns(),
 		rows:    [][]driver.Value{participantRow(10, "act-1", "emp-1", "Alice", "dept-1", "manager_submitted")},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	participant, err := repo.getParticipantLocked("10")
 	if err != nil {
@@ -1911,7 +1988,7 @@ func TestReviewVersionRepo_GetParticipantLocked_NotFound(t *testing.T) {
 		columns: participantColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	participant, err := repo.getParticipantLocked("999")
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1928,7 +2005,7 @@ func TestReviewVersionRepo_GetParticipantLocked_DBError(t *testing.T) {
 		match: stubPerformanceTableMatcher("performance_participants"),
 		err:   errQuery,
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	participant, err := repo.getParticipantLocked("10")
 	if !errors.Is(err, errQuery) {
@@ -1950,7 +2027,7 @@ func TestRelationshipChangeLogRepo_ListByParticipant_Found(t *testing.T) {
 			relationshipChangeLogRow(2, 10, "act-1", "department_transfer"),
 		},
 	})
-	repo := NewPerformanceRelationshipChangeLogRepository(db)
+	repo := NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.ListByParticipant("10")
 	if err != nil {
@@ -1972,7 +2049,7 @@ func TestRelationshipChangeLogRepo_ListByParticipant_Empty(t *testing.T) {
 		columns: relationshipChangeLogColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceRelationshipChangeLogRepository(db)
+	repo := NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.ListByParticipant("999")
 	if err != nil {
@@ -1989,7 +2066,7 @@ func TestRelationshipChangeLogRepo_ListByParticipant_Error(t *testing.T) {
 		match: stubPerformanceTableMatcher("performance_relationship_change_logs"),
 		err:   errQuery,
 	})
-	repo := NewPerformanceRelationshipChangeLogRepository(db)
+	repo := NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.ListByParticipant("10")
 	if !errors.Is(err, errQuery) {
@@ -2009,7 +2086,7 @@ func TestRelationshipChangeLogRepo_ListByActivity_Found(t *testing.T) {
 			relationshipChangeLogRow(2, 20, "act-1", "department_transfer"),
 		},
 	})
-	repo := NewPerformanceRelationshipChangeLogRepository(db)
+	repo := NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.ListByActivity("act-1")
 	if err != nil {
@@ -2031,7 +2108,7 @@ func TestRelationshipChangeLogRepo_ListByActivity_Empty(t *testing.T) {
 		columns: relationshipChangeLogColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceRelationshipChangeLogRepository(db)
+	repo := NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.ListByActivity("nonexistent")
 	if err != nil {
@@ -2048,7 +2125,7 @@ func TestRelationshipChangeLogRepo_ListByActivity_Error(t *testing.T) {
 		match: stubPerformanceTableMatcher("performance_relationship_change_logs"),
 		err:   errQuery,
 	})
-	repo := NewPerformanceRelationshipChangeLogRepository(db)
+	repo := NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.ListByActivity("act-1")
 	if !errors.Is(err, errQuery) {
@@ -2139,7 +2216,7 @@ func TestActivityRepo_FindAll_AllFiltersCombined(t *testing.T) {
 			rows:    [][]driver.Value{activityRow(1, "Q1 销售绩效", "quarterly", "active")},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activities, total, err := repo.FindAll(1, 10, "active", "销售", "2026-01-01", "2026-03-31", []string{"dept-1"})
 	if err != nil {
@@ -2166,7 +2243,7 @@ func TestParticipantRepo_FindAll_AllFiltersCombined(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(1, "act-1", "emp-1", "张三", "dept-1", "self_submitted")},
 		},
 	)
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "dept-1", "mgr-1", "self_submitted", "张", []string{"dept-1"}, []string{"emp-1"})
 	if err != nil {
@@ -2182,7 +2259,7 @@ func TestParticipantRepo_FindAll_AllFiltersCombined(t *testing.T) {
 
 func TestTemplateRepo_Create_EmptySections(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	template := &database.PerformanceTemplate{
 		Name:   "Simple Template",
@@ -2206,7 +2283,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions(t *testing.T) {
 			rows:    [][]driver.Value{participantRow(20, "act-1", "emp-2", "李四", "dept-2", "self_submitted")},
 		},
 	)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	evaluations := []struct {
 		ParticipantID   uint
@@ -2287,7 +2364,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_DistributesScore
 			},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	evaluations := []struct {
 		ParticipantID   uint
@@ -2341,7 +2418,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_DistributesScore
 
 func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_ParticipantNotFound(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	evaluations := []struct {
 		ParticipantID   uint
@@ -2365,7 +2442,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_ParticipantNotFo
 
 func TestDistributionRuleRepo_ReplaceForActivity_NilRules(t *testing.T) {
 	db := newPerformanceTestDB(t)
-	repo := NewPerformanceDistributionRuleRepository(db)
+	repo := NewPerformanceDistributionRuleRepositoryWithOrgID(db, "test-org")
 
 	if err := repo.ReplaceForActivity("act-1", nil); err != nil {
 		t.Fatalf("ReplaceForActivity() nil error = %v", err)
@@ -2385,7 +2462,7 @@ func TestTemplateRepo_FindAll_DefaultPagination(t *testing.T) {
 			rows:    [][]driver.Value{},
 		},
 	)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	templates, total, err := repo.FindAll(0, 0, "")
 	if err != nil {
@@ -2412,7 +2489,7 @@ func TestParticipantRepo_FindAll_DefaultPagination(t *testing.T) {
 			rows:    [][]driver.Value{},
 		},
 	)
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 0, 0, "", "", "", "", nil, nil)
 	if err != nil {
@@ -2434,7 +2511,7 @@ func TestReviewVersionRepo_CreateSelfEvaluationVersion_WithAttachments(t *testin
 			rows:    [][]driver.Value{participantRow(10, "act-1", "emp-1", "张三", "dept-1", "pending")},
 		},
 	)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	attachments := []string{"doc1.pdf", "doc2.docx", "image.png"}
 	version, err := repo.CreateSelfEvaluationVersion("10", 90.0, "A", "Great year", attachments, "emp-1")
@@ -2454,7 +2531,7 @@ func TestReviewVersionRepo_CreateManagerEvaluationVersion_WithEmptyItems(t *test
 			rows:    [][]driver.Value{participantRow(10, "act-1", "emp-1", "张三", "dept-1", "self_submitted")},
 		},
 	)
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.CreateManagerEvaluationVersion("10", 85.0, "B", "Needs improvement", nil, "mgr-1")
 	if err != nil {
@@ -2483,7 +2560,7 @@ func TestActivityRepo_FindAllByUserID_Pagination(t *testing.T) {
 			},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	// Test page 2 with pageSize 2
 	activities, total, err := repo.FindAllByUserID(2, 2, "", "", "", "", []string{"user-1"})
@@ -2513,7 +2590,7 @@ func TestActivityRepo_FindAllByUserID_EmptyUserIDsSkipsParticipantFilter(t *test
 			},
 		},
 	})
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	activities, total, err := repo.FindAllByUserID(1, 10, "", "", "", "", []string{})
 	if err != nil {
@@ -2554,7 +2631,7 @@ func TestActivityRepo_FindAllByUserID_DefaultPagination(t *testing.T) {
 			},
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	// page=0, pageSize=0 should use defaults (1, 10)
 	activities, total, err := repo.FindAllByUserID(0, 0, "", "", "", "", []string{"user-1"})

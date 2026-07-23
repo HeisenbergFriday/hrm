@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { queryClient } from '../queryClient'
 import { clearRememberedOrgId } from '../utils/org'
 
 interface AuthState {
@@ -32,6 +33,8 @@ export const useAuthStore = create<AuthState>()((set) => ({
   setPermissions: (perms) => set({ permissions: perms }),
   logout: () => {
     clearRememberedOrgId()
+    // 清掉租户数据缓存，避免同 tab 换账号/换组织时短暂展示上一会话数据
+    queryClient.clear()
     set({ user: null, isLoggedIn: false, menuKeys: [], permissions: [], orgId: '' })
   },
 }))

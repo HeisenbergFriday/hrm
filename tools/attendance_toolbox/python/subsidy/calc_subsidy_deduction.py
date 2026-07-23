@@ -26,6 +26,7 @@ import re
 from datetime import date, datetime, timedelta
 
 import openpyxl
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils.cell import range_boundaries
 
 # ── 默认路径 ──────────────────────────────────────────────────────────────────
@@ -69,15 +70,20 @@ _SCHEDULE_COLOR_NORMALIZE_DISTANCE = 32
 
 # 22点补贴排除规则：
 # 1. 客服/售后部门（部门包含"客服"或"售后"）
-# 2. 不坐班业务人员：AI智慧文创事业部-销售组
+# 2. 不坐班业务/销售人员：部门路径含「销售」、或岗位含「销售」
 # 3. 排班到22点部门：运营管理中心-运营支撑部
 LATE22_EXCLUDED_DEPT_KEYWORDS = (
     "客服",
     "售后",
+    "销售",  # 覆盖「销售组/销售部/销售中心」等，不坐班业务不享受晚走补贴
 )
 LATE22_EXCLUDED_DEPT_FULL = (
-    "AI智慧文创事业部-销售组",        # 不坐班业务
+    "AI智慧文创事业部-销售组",        # 不坐班业务（保留精确前缀，兼容历史）
     "运营管理中心-运营支撑部",        # 排班到22点
+)
+# 岗位关键字：销售类岗位不享受晚走补贴（即使部门名不含销售）
+LATE22_EXCLUDED_POSITION_KEYWORDS = (
+    "销售",
 )
 # 晚走补贴强制纳入人员（即使在排除部门中也允许按22点后打卡计算）
 LATE22_INCLUDED_NAMES = (
@@ -773,9 +779,42 @@ def _normalize_keywords(keywords) -> list[str]:
     return normalized
 
 
-def _is_rd_dept(dept1_value, keywords: list[str]) -> bool:
-    dept1 = str(dept1_value or '')
-    return any(kw in dept1 for kw in keywords)
+def _dept_path_text(*parts) -> str:
+    """Join multi-level department fields for keyword matching.
+
+    Subsidy source/attendance tables may put the leaf group in dept2/dept3
+    while dept1 only holds a top-level name. Matching only dept1 would miss
+    values such as ``智慧行政事业部-研发小组`` when it is split across columns.
+    """
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        text = str(part or "").strip()
+        if not text or text in seen:
+            continue
+        tokens.append(text)
+        seen.add(text)
+    return "-".join(tokens)
+
+
+def _is_rd_dept(*dept_parts, keywords: list[str] | None = None) -> bool:
+    """True when any RD keyword appears in the joined department path.
+
+    Accepts either positional dept fields or the legacy single-string form:
+      _is_rd_dept(dept1, keywords=kws)
+      _is_rd_dept(dept1, dept2, dept3, keywords=kws)
+    """
+    kws = keywords if keywords is not None else []
+    # Backward-compat: _is_rd_dept(dept1, keywords_list) used to pass keywords
+    # as the second positional argument.
+    if not kws and len(dept_parts) >= 2 and isinstance(dept_parts[-1], (list, tuple)):
+        kws = list(dept_parts[-1])
+        dept_parts = dept_parts[:-1]
+    path = _dept_path_text(*dept_parts)
+    if not path or not kws:
+        return False
+    path_lower = path.lower()
+    return any(str(kw).lower() in path_lower for kw in kws if kw)
 
 
 def _clean_name(name: str) -> str:
@@ -862,10 +901,11 @@ def _should_exclude_late22_count(record: dict, included_names=None) -> bool:
     判断员工是否应排除22点补贴。
     排除条件：
     1. 客服/售后部门（部门包含"客服"或"售后"）
-    2. 不坐班业务人员：AI智慧文创事业部-销售组
+    2. 销售类部门或岗位（不坐班业务，含「销售组」及岗位名含销售）
     3. 排班到22点部门：运营管理中心-运营支撑部
 
     强制纳入名单优先于排除规则。
+    部门匹配使用一/二/三级部门拼接路径，避免只看一级部门漏匹配。
     """
     # 强制纳入名单优先
     name = str(record.get("name") or "").strip()
@@ -873,18 +913,35 @@ def _should_exclude_late22_count(record: dict, included_names=None) -> bool:
     if name in set(_normalize_names(default_names)):
         return False
 
-    dept = str(record.get("dept1") or "").strip()
-    if not dept:
+    dept_path = _dept_path_text(
+        record.get("dept1"),
+        record.get("dept2"),
+        record.get("dept3"),
+    )
+    position = str(record.get("pos") or record.get("position") or "").strip()
+
+    if not dept_path and not position:
         return False
 
-    # 检查是否包含排除关键字
+    # 岗位关键字（销售等）
+    for keyword in LATE22_EXCLUDED_POSITION_KEYWORDS:
+        if keyword and keyword in position:
+            return True
+
+    if not dept_path:
+        return False
+
+    # 检查是否包含排除关键字（路径任意层级）
     for keyword in LATE22_EXCLUDED_DEPT_KEYWORDS:
-        if keyword in dept:
+        if keyword and keyword in dept_path:
             return True
 
     # 检查是否以排除部门开头（处理子部门）
     for excluded_dept in LATE22_EXCLUDED_DEPT_FULL:
-        if dept.startswith(excluded_dept):
+        if excluded_dept and (
+            dept_path.startswith(excluded_dept)
+            or excluded_dept in dept_path
+        ):
             return True
 
     return False
@@ -1014,17 +1071,19 @@ def parse_source_table(
             emp_no = _normalize_emp_no(ws.cell(r, col_emp_no).value) if col_emp_no else None
             if not emp_no or not emp_no.startswith(VALID_EMP_NO_PREFIXES):
                 continue
-            dept1 = str(ws.cell(r, col_dept1).value or '')
+            dept1_val = ws.cell(r, col_dept1).value
+            dept2_val = ws.cell(r, col_dept2).value
+            dept3_val = ws.cell(r, col_dept3).value
             position = ws.cell(r, col_pos).value
-            is_rd = _is_rd_dept(dept1, rd_keywords)
+            is_rd = _is_rd_dept(dept1_val, dept2_val, dept3_val, keywords=rd_keywords)
             row = {
                 'row_idx':       r,
                 'emp_no':        emp_no,
                 'name':          name,
                 'group':         ws.cell(r, col_group).value,
-                'dept1':         ws.cell(r, col_dept1).value,
-                'dept2':         ws.cell(r, col_dept2).value,
-                'dept3':         ws.cell(r, col_dept3).value,
+                'dept1':         dept1_val,
+                'dept2':         dept2_val,
+                'dept3':         dept3_val,
                 'pos':           position,
                 'is_intern':     _is_intern_position(position),
                 'is_rd':         is_rd,
@@ -1701,18 +1760,19 @@ def parse_attendance(
             continue
 
         # 从源表获取部门信息（考勤表可能没有部门列）
-        # 先尝试从列3读取
+        # 先尝试从列3/4/5读取，再拼接路径做产研关键字匹配
         dept_raw = ws.cell(row_idx, 3).value
-        dept1 = str(dept_raw or '')
-        is_rd = _is_rd_dept(dept1, rd_keywords)
+        dept2_raw = ws.cell(row_idx, 4).value if ws.max_column > 3 else None
+        dept3_raw = ws.cell(row_idx, 5).value if ws.max_column > 4 else None
+        is_rd = _is_rd_dept(dept_raw, dept2_raw, dept3_raw, keywords=rd_keywords)
 
         info = {
             'emp_no': emp_no,
             'name':  emp_name,
             'group': ws.cell(row_idx, 2).value,
             'dept1': dept_raw,
-            'dept2': ws.cell(row_idx, 4).value if ws.max_column > 3 else None,
-            'dept3': ws.cell(row_idx, 5).value if ws.max_column > 4 else None,
+            'dept2': dept2_raw,
+            'dept3': dept3_raw,
             'pos':   ws.cell(row_idx, 6).value if ws.max_column > 5 else None,
         }
 
@@ -1743,6 +1803,7 @@ def write_output(
     approved_dates_by_name: dict[str, set[date]] | None = None,
     legal_holidays: set[date] | None = None,
     late22_included_names: list[str] | tuple[str, ...] | None = None,
+    audit_context: dict | None = None,
 ):
     wb = openpyxl.load_workbook(source_path)
     ws = wb.active
@@ -1852,8 +1913,98 @@ def write_output(
     for row_idx in sorted({src['row_idx'] for src in intern_records}, reverse=True):
         ws.delete_rows(row_idx, 1)
 
+    append_exception_audit_sheet(
+        wb,
+        missing_attendance=missing_attendance,
+        intern_names=[str(item.get('name') or '').strip() for item in intern_records],
+        audit_context=audit_context,
+    )
     wb.save(filepath)
     return mismatches, missing_attendance
+
+
+def append_exception_audit_sheet(
+    wb,
+    *,
+    missing_attendance: list[str] | tuple[str, ...] | None = None,
+    intern_names: list[str] | tuple[str, ...] | None = None,
+    audit_context: dict | None = None,
+):
+    """Append a human-readable audit sheet without changing calculation values."""
+    sheet_name = "异常审计"
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]
+    ws = wb.create_sheet(sheet_name)
+    context = dict(audit_context or {})
+    missing_names = sorted({str(name).strip() for name in (missing_attendance or []) if str(name).strip()})
+    excluded_interns = sorted({str(name).strip() for name in (intern_names or []) if str(name).strip()})
+
+    ws.append(["补贴扣款异常审计"])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
+    ws["A1"].font = Font(bold=True, size=14, color="FFFFFF")
+    ws["A1"].fill = PatternFill("solid", fgColor="2563EB")
+    ws["A1"].alignment = Alignment(horizontal="center")
+
+    holiday_source = context.get("holiday_source") or "schedule"
+    holiday_source_label = "加班规则配置" if holiday_source == "custom_rules" else "作息表"
+    summary_rows = [
+        ("目标月份", context.get("target_month") or "自动识别"),
+        ("法定节假日来源", holiday_source_label),
+        ("法定节假日数量", int(context.get("holiday_count", 0) or 0)),
+        ("节假日口径差异", int(context.get("holiday_conflict_count", 0) or 0)),
+        ("考勤缺失人数", len(missing_names)),
+        ("实习生剔除人数", len(excluded_interns)),
+    ]
+    for label, value in summary_rows:
+        ws.append([label, value])
+
+    ws.append([])
+    header_row = ws.max_row + 1
+    ws.append(["异常类型", "姓名/日期", "说明", "处理建议"])
+    for cell in ws[header_row]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="64748B")
+        cell.alignment = Alignment(horizontal="center")
+
+    for name in missing_names:
+        ws.append([
+            "考勤记录缺失",
+            name,
+            "在考勤表中未找到对应员工，补贴相关字段保持空值，不按0计算。",
+            "核对工号、姓名及考勤源表后重新计算。",
+        ])
+    for name in excluded_interns:
+        ws.append([
+            "实习生剔除",
+            name,
+            "岗位或人员属性识别为实习生，不进入补贴核对表。",
+            "如人员属性有误，请修正花名册或源表岗位。",
+        ])
+    for value in context.get("holiday_only_in_rules") or []:
+        ws.append([
+            "节假日口径差异",
+            str(value),
+            "该日期仅存在于加班规则配置，补贴计算已按规则配置认定为法定节假日。",
+            "核对作息表红色法定节假日标记。",
+        ])
+    for value in context.get("holiday_only_in_schedule") or []:
+        ws.append([
+            "节假日口径差异",
+            str(value),
+            "该日期仅存在于作息表；因加班规则配置优先，本次未按法定节假日处理。",
+            "核对并统一加班规则配置与作息表。",
+        ])
+
+    if ws.max_row == header_row:
+        ws.append(["无异常", "", "本次未发现需要人工处理的异常。", ""])
+
+    widths = {"A": 20, "B": 20, "C": 64, "D": 44}
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+    ws.freeze_panes = f"A{header_row + 1}"
+    for row in ws.iter_rows(min_row=header_row + 1, max_col=4):
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
 
 
 def _display_value(value) -> str:

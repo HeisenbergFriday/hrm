@@ -10,6 +10,7 @@ import (
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
 	"peopleops/internal/repository"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -57,18 +58,49 @@ type saturdayScheduleSignal struct {
 type WeekScheduleService struct {
 	scheduleRepo *repository.WeekScheduleRepository
 	db           *gorm.DB
+	orgID        string
+	orgErr       error
 }
 
 func NewWeekScheduleService(db *gorm.DB) *WeekScheduleService {
+	orgID, err := database.RequireOrganizationIDFromDB(db)
 	return &WeekScheduleService{
 		scheduleRepo: repository.NewWeekScheduleRepository(db),
 		db:           db,
+		orgID:        orgID,
+		orgErr:       err,
 	}
+}
+
+func NewWeekScheduleServiceWithOrgID(db *gorm.DB, orgID string) *WeekScheduleService {
+	normalized, err := repository.RequireOrgID(orgID)
+	return &WeekScheduleService{
+		scheduleRepo: repository.NewWeekScheduleRepositoryWithOrgID(db, normalized),
+		db:           db,
+		orgID:        normalized,
+		orgErr:       err,
+	}
+}
+
+func (s *WeekScheduleService) requireOrgID() (string, error) {
+	if s == nil || s.db == nil {
+		return "", repository.ErrMissingOrgID
+	}
+	if s.orgErr != nil {
+		return "", s.orgErr
+	}
+	return repository.RequireOrgID(s.orgID)
 }
 
 // ===================== 规则管理 =====================
 
 func (s *WeekScheduleService) CreateRule(rule *database.WeekScheduleRule) error {
+	if _, err := s.requireOrgID(); err != nil {
+		return err
+	}
+	if rule == nil {
+		return gorm.ErrInvalidData
+	}
 	if rule.Status == "" {
 		rule.Status = "active"
 	}
@@ -88,10 +120,16 @@ func (s *WeekScheduleService) CreateRule(rule *database.WeekScheduleRule) error 
 }
 
 func (s *WeekScheduleService) UpdateRule(rule *database.WeekScheduleRule) error {
+	if _, err := s.requireOrgID(); err != nil {
+		return err
+	}
 	return s.scheduleRepo.UpdateRule(rule)
 }
 
 func (s *WeekScheduleService) DeleteRule(id uint) error {
+	if _, err := s.requireOrgID(); err != nil {
+		return err
+	}
 	return s.scheduleRepo.DeleteRule(id)
 }
 
@@ -203,12 +241,15 @@ func (s *WeekScheduleService) SetOverride(override *database.WeekScheduleOverrid
 	if err == nil && existing != nil {
 		existing.WeekType = override.WeekType
 		existing.Reason = override.Reason
-		return s.db.Save(existing).Error
+		return s.scheduleRepo.UpdateOverride(existing)
 	}
 	return s.scheduleRepo.CreateOverride(override)
 }
 
 func (s *WeekScheduleService) DeleteOverride(id uint) error {
+	if _, err := s.requireOrgID(); err != nil {
+		return err
+	}
 	return s.scheduleRepo.DeleteOverride(id)
 }
 
@@ -419,9 +460,13 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 		weeks = 4
 	}
 
-	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
-	if opUserID == "" {
-		return nil, fmt.Errorf("未配置 DINGTALK_ADMIN_USER_ID 环境变量")
+	orgID, err := requireOrgIDFromDB(s.db)
+	if err != nil {
+		return nil, err
+	}
+	opUserID, err := dingtalk.ResolveAdminUserID(orgID)
+	if err != nil {
+		return nil, err
 	}
 
 	// 1. 获取所有活跃用户
@@ -431,7 +476,6 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 	}
 
 	// 2. 获取班次列表，找到第一个正常工作班次
-	orgID := orgIDFromDB(s.db)
 	shifts, err := dingtalk.GetShiftListForOrg(orgID)
 	if err != nil {
 		return nil, fmt.Errorf("获取班次列表失败: %w", err)
@@ -587,6 +631,15 @@ func (s *WeekScheduleService) SyncToDingTalk(weeks int) (*WeekSyncResult, error)
 
 // SyncFromDingTalk 从钉钉读取排班数据，推断大小周配置
 func (s *WeekScheduleService) SyncFromDingTalk() (*WeekSyncResult, error) {
+	orgID, err := requireOrgIDFromDB(s.db)
+	if err != nil {
+		return nil, err
+	}
+	// Fail closed before any local write when the enterprise admin/token is missing.
+	if _, err := dingtalk.ResolveAdminUserID(orgID); err != nil {
+		return nil, err
+	}
+
 	// 1. 获取活跃用户（取第一个作为样本）
 	var users []database.User
 	if err := s.db.Where("status = ? AND user_id != ?", "active", "admin").Limit(5).Find(&users).Error; err != nil {
@@ -616,7 +669,7 @@ func (s *WeekScheduleService) SyncFromDingTalk() (*WeekSyncResult, error) {
 			continue
 		}
 		dateStr := d.Format("2006-01-02")
-		schedules, err := dingtalk.GetScheduleListBatchByDay(userIDs, dateStr)
+		schedules, err := dingtalk.GetScheduleListBatchByDayForOrg(orgID, userIDs, dateStr)
 		if err != nil {
 			logrus.Warnf("批量获取 %s 排班失败: %v", dateStr, err)
 			continue
@@ -690,6 +743,14 @@ func (s *WeekScheduleService) SyncFromDingTalk() (*WeekSyncResult, error) {
 
 // GetSyncLogs 获取同步日志
 func (s *WeekScheduleService) SyncFromDingTalkConservative() (*WeekSyncResult, error) {
+	orgID, err := requireOrgIDFromDB(s.db)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := dingtalk.ResolveAdminUserID(orgID); err != nil {
+		return nil, err
+	}
+
 	var users []database.User
 	if err := s.db.Where("status = ? AND user_id != ?", "active", "admin").Find(&users).Error; err != nil {
 		return nil, fmt.Errorf("query active users failed: %w", err)
@@ -725,7 +786,7 @@ func (s *WeekScheduleService) SyncFromDingTalkConservative() (*WeekSyncResult, e
 		}
 
 		dateStr := d.Format("2006-01-02")
-		schedules, err := fetchScheduleListBatchByDayChunked(userIDs, dateStr)
+		schedules, err := fetchScheduleListBatchByDayChunked(orgID, userIDs, dateStr)
 		if err != nil {
 			logrus.Warnf("fetch saturday schedules failed for %s: %v", dateStr, err)
 			continue
@@ -786,7 +847,7 @@ func (s *WeekScheduleService) SyncFromDingTalkConservative() (*WeekSyncResult, e
 	}, nil
 }
 
-func fetchScheduleListBatchByDayChunked(userIDs []string, workDate string) ([]map[string]interface{}, error) {
+func fetchScheduleListBatchByDayChunked(orgID string, userIDs []string, workDate string) ([]map[string]interface{}, error) {
 	if len(userIDs) == 0 {
 		return nil, nil
 	}
@@ -799,7 +860,7 @@ func fetchScheduleListBatchByDayChunked(userIDs []string, workDate string) ([]ma
 			end = len(userIDs)
 		}
 
-		items, err := dingtalk.GetScheduleListBatchByDay(userIDs[start:end], workDate)
+		items, err := dingtalk.GetScheduleListBatchByDayForOrg(orgID, userIDs[start:end], workDate)
 		if err != nil {
 			return nil, err
 		}
@@ -947,6 +1008,297 @@ func (s *WeekScheduleService) GetSyncLogs(page, pageSize int) ([]database.WeekSc
 	return s.scheduleRepo.FindSyncLogs(page, pageSize)
 }
 
+// ===================== 作息表个人推送（图片+文字，不改考勤排班） =====================
+
+// SchedulePersonalPushRecipientResult is the per-user outcome of a personal schedule image push.
+type SchedulePersonalPushRecipientResult struct {
+	UserID         string `json:"user_id"`
+	Name           string `json:"name"`
+	DingTalkUserID string `json:"dingtalk_user_id,omitempty"`
+	Status         string `json:"status"` // success / failed / skipped
+	Message        string `json:"message"`
+}
+
+// SchedulePersonalPushResult is the aggregate outcome of a personal schedule image push.
+type SchedulePersonalPushResult struct {
+	Status       string                                `json:"status"` // success / partial / failed
+	MediaID      string                                `json:"media_id,omitempty"`
+	Total        int                                   `json:"total"`
+	SuccessCount int                                   `json:"success_count"`
+	FailedCount  int                                   `json:"failed_count"`
+	SkippedCount int                                   `json:"skipped_count"`
+	Message      string                                `json:"message"`
+	Recipients   []SchedulePersonalPushRecipientResult `json:"recipients"`
+}
+
+// PushPersonalScheduleImage uploads the PNG once, then sends text + image to each recipient.
+// It never calls attendance schedule write APIs.
+func (s *WeekScheduleService) PushPersonalScheduleImage(userIDs []string, title, content string, imageBytes []byte, filename string) (*SchedulePersonalPushResult, error) {
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
+	if len(imageBytes) == 0 {
+		return nil, fmt.Errorf("image is empty")
+	}
+
+	normalizedIDs := make([]string, 0, len(userIDs))
+	seen := make(map[string]struct{}, len(userIDs))
+	for _, raw := range userIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalizedIDs = append(normalizedIDs, id)
+	}
+	if len(normalizedIDs) == 0 {
+		return nil, fmt.Errorf("user_ids is empty")
+	}
+
+	title = strings.TrimSpace(title)
+	content = strings.TrimSpace(content)
+	if title == "" {
+		title = "作息时间表"
+	}
+	if content == "" {
+		content = title + "，请查收。"
+	}
+	if strings.TrimSpace(filename) == "" {
+		filename = "week-schedule.png"
+	}
+
+	// Query users strictly by org_id + user_id (scoped via org-bound service DB).
+	var users []database.User
+	if err := s.db.Where("org_id = ? AND user_id IN ? AND deleted_at IS NULL", orgID, normalizedIDs).Find(&users).Error; err != nil {
+		return nil, fmt.Errorf("query recipients failed: %w", err)
+	}
+	userByID := make(map[string]database.User, len(users))
+	for _, u := range users {
+		userByID[u.UserID] = u
+	}
+
+	mediaID, err := dingtalk.UploadImageMediaForOrg(orgID, filename, imageBytes)
+	if err != nil {
+		return nil, fmt.Errorf("upload schedule image failed: %w", err)
+	}
+
+	results := make([]SchedulePersonalPushRecipientResult, 0, len(normalizedIDs))
+	successCount, failedCount, skippedCount := 0, 0, 0
+
+	for _, userID := range normalizedIDs {
+		item := SchedulePersonalPushRecipientResult{
+			UserID: userID,
+		}
+		user, ok := userByID[userID]
+		if !ok {
+			item.Status = "failed"
+			item.Message = "用户不存在或不属于当前组织"
+			failedCount++
+			results = append(results, item)
+			continue
+		}
+		item.Name = user.Name
+
+		// Prefer DingTalkUserID; fall back to UserID.
+		dingID := strings.TrimSpace(user.DingTalkUserID)
+		if dingID == "" {
+			dingID = strings.TrimSpace(user.UserID)
+		}
+		item.DingTalkUserID = dingID
+		if dingID == "" {
+			item.Status = "failed"
+			item.Message = "用户未绑定钉钉账号"
+			failedCount++
+			results = append(results, item)
+			continue
+		}
+
+		if !dingtalk.IsNotifiableUserIDForOrg(orgID, user.UserID) {
+			item.Status = "skipped"
+			item.Message = "账号不可通知（离职/禁用/系统账号）"
+			skippedCount++
+			results = append(results, item)
+			continue
+		}
+
+		if err := dingtalk.SendCorpMessageToUserForOrg(orgID, dingID, title, content); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				item.Status = "skipped"
+				item.Message = err.Error()
+				skippedCount++
+			} else {
+				item.Status = "failed"
+				item.Message = "文字消息发送失败: " + err.Error()
+				failedCount++
+			}
+			results = append(results, item)
+			continue
+		}
+
+		if err := dingtalk.SendCorpImageToUserForOrg(orgID, dingID, mediaID); err != nil {
+			item.Status = "failed"
+			if dingtalk.IsUserNotNotifiableError(err) {
+				item.Message = "文字已发送，图片跳过: " + err.Error()
+			} else {
+				item.Message = "文字已发送，图片发送失败: " + err.Error()
+			}
+			failedCount++
+			results = append(results, item)
+			continue
+		}
+
+		item.Status = "success"
+		item.Message = "文字与图片已发送"
+		successCount++
+		results = append(results, item)
+	}
+
+	status := "failed"
+	switch {
+	case successCount == len(normalizedIDs):
+		status = "success"
+	case successCount > 0:
+		status = "partial"
+	case skippedCount > 0 && failedCount == 0:
+		status = "failed"
+	}
+
+	msg := fmt.Sprintf("作息表推送完成：成功 %d，失败 %d，跳过 %d", successCount, failedCount, skippedCount)
+	return &SchedulePersonalPushResult{
+		Status:       status,
+		MediaID:      mediaID,
+		Total:        len(normalizedIDs),
+		SuccessCount: successCount,
+		FailedCount:  failedCount,
+		SkippedCount: skippedCount,
+		Message:      msg,
+		Recipients:   results,
+	}, nil
+}
+
+// SendPersonalTextNotice sends text-only corp messages to recipients in the current org.
+// Used by Friday auto reminder (no image / no attendance schedule writes).
+func (s *WeekScheduleService) SendPersonalTextNotice(userIDs []string, title, content string) (*SchedulePersonalPushResult, error) {
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
+
+	normalizedIDs := make([]string, 0, len(userIDs))
+	seen := make(map[string]struct{}, len(userIDs))
+	for _, raw := range userIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalizedIDs = append(normalizedIDs, id)
+	}
+	if len(normalizedIDs) == 0 {
+		return nil, fmt.Errorf("user_ids is empty")
+	}
+
+	title = strings.TrimSpace(title)
+	content = strings.TrimSpace(content)
+	if title == "" {
+		title = "作息提醒"
+	}
+	if content == "" {
+		content = title
+	}
+
+	var users []database.User
+	if err := s.db.Where("org_id = ? AND user_id IN ? AND deleted_at IS NULL", orgID, normalizedIDs).Find(&users).Error; err != nil {
+		return nil, fmt.Errorf("query recipients failed: %w", err)
+	}
+	userByID := make(map[string]database.User, len(users))
+	for _, u := range users {
+		userByID[u.UserID] = u
+	}
+
+	results := make([]SchedulePersonalPushRecipientResult, 0, len(normalizedIDs))
+	successCount, failedCount, skippedCount := 0, 0, 0
+
+	for _, userID := range normalizedIDs {
+		item := SchedulePersonalPushRecipientResult{UserID: userID}
+		user, ok := userByID[userID]
+		if !ok {
+			item.Status = "failed"
+			item.Message = "用户不存在或不属于当前组织"
+			failedCount++
+			results = append(results, item)
+			continue
+		}
+		item.Name = user.Name
+
+		dingID := strings.TrimSpace(user.DingTalkUserID)
+		if dingID == "" {
+			dingID = strings.TrimSpace(user.UserID)
+		}
+		item.DingTalkUserID = dingID
+		if dingID == "" {
+			item.Status = "failed"
+			item.Message = "用户未绑定钉钉账号"
+			failedCount++
+			results = append(results, item)
+			continue
+		}
+
+		if !dingtalk.IsNotifiableUserIDForOrg(orgID, user.UserID) {
+			item.Status = "skipped"
+			item.Message = "账号不可通知（离职/禁用/系统账号）"
+			skippedCount++
+			results = append(results, item)
+			continue
+		}
+
+		if err := dingtalk.SendCorpMessageToUserForOrg(orgID, dingID, title, content); err != nil {
+			if dingtalk.IsUserNotNotifiableError(err) {
+				item.Status = "skipped"
+				item.Message = err.Error()
+				skippedCount++
+			} else {
+				item.Status = "failed"
+				item.Message = "文字消息发送失败: " + err.Error()
+				failedCount++
+			}
+			results = append(results, item)
+			continue
+		}
+
+		item.Status = "success"
+		item.Message = "文字已发送"
+		successCount++
+		results = append(results, item)
+	}
+
+	status := "failed"
+	switch {
+	case successCount == len(normalizedIDs):
+		status = "success"
+	case successCount > 0:
+		status = "partial"
+	}
+
+	msg := fmt.Sprintf("文字提醒完成：成功 %d，失败 %d，跳过 %d", successCount, failedCount, skippedCount)
+	return &SchedulePersonalPushResult{
+		Status:       status,
+		Total:        len(normalizedIDs),
+		SuccessCount: successCount,
+		FailedCount:  failedCount,
+		SkippedCount: skippedCount,
+		Message:      msg,
+		Recipients:   results,
+	}, nil
+}
+
 // ===================== 法定节假日管理 =====================
 
 func (s *WeekScheduleService) CreateHoliday(holiday *database.StatutoryHoliday) error {
@@ -974,23 +1326,41 @@ func (s *WeekScheduleService) GetHolidaysByYear(year int) ([]database.StatutoryH
 
 // BatchCreateHolidays 批量创建节假日（方便一次性导入全年节假日）
 func (s *WeekScheduleService) BatchCreateHolidays(holidays []database.StatutoryHoliday) (int, error) {
+	orgID, err := s.requireOrgID()
+	if err != nil {
+		return 0, err
+	}
 	created := 0
-	for i := range holidays {
-		if holidays[i].Year == 0 {
-			t, err := time.Parse("2006-01-02", holidays[i].Date)
-			if err == nil {
-				holidays[i].Year = t.Year()
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		repo := repository.NewWeekScheduleRepositoryWithOrgID(tx, orgID)
+		for i := range holidays {
+			merged, err := repository.EnsureSameOrg(orgID, holidays[i].OrgID)
+			if err != nil {
+				return fmt.Errorf("holiday %s organization mismatch: %w", holidays[i].Date, err)
 			}
+			holidays[i].OrgID = merged
+			if holidays[i].Year == 0 {
+				t, parseErr := time.Parse("2006-01-02", holidays[i].Date)
+				if parseErr == nil {
+					holidays[i].Year = t.Year()
+				}
+			}
+			existing, findErr := repo.FindHolidayByDate(holidays[i].Date)
+			if findErr == nil && existing != nil {
+				continue
+			}
+			if findErr != nil && findErr != gorm.ErrRecordNotFound {
+				return fmt.Errorf("?? %s ??: %w", holidays[i].Date, findErr)
+			}
+			if err := repo.CreateHoliday(&holidays[i]); err != nil {
+				return fmt.Errorf("?? %s ??: %w", holidays[i].Date, err)
+			}
+			created++
 		}
-		// 跳过已存在的日期
-		existing, _ := s.scheduleRepo.FindHolidayByDate(holidays[i].Date)
-		if existing != nil {
-			continue
-		}
-		if err := s.scheduleRepo.CreateHoliday(&holidays[i]); err != nil {
-			return created, fmt.Errorf("创建 %s 失败: %w", holidays[i].Date, err)
-		}
-		created++
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 	return created, nil
 }
@@ -1095,11 +1465,16 @@ func (s *WeekScheduleService) syncHolidaysFromJuheAPI(year int) (int, error) {
 			continue
 		}
 
+		orgID, orgErr := s.requireOrgID()
+		if orgErr != nil {
+			return 0, orgErr
+		}
 		holiday := &database.StatutoryHoliday{
-			Date: item.Date,
-			Name: item.Name,
-			Type: holidayType,
-			Year: t.Year(),
+			OrgID: orgID,
+			Date:  item.Date,
+			Name:  item.Name,
+			Type:  holidayType,
+			Year:  t.Year(),
 		}
 
 		if err := s.scheduleRepo.CreateHoliday(holiday); err != nil {
@@ -1159,11 +1534,16 @@ func (s *WeekScheduleService) syncHolidaysFromConfig(year int) (int, error) {
 			continue
 		}
 
+		orgID, orgErr := s.requireOrgID()
+		if orgErr != nil {
+			return 0, orgErr
+		}
 		holiday := &database.StatutoryHoliday{
-			Date: item.Date,
-			Name: item.Name,
-			Type: item.Type,
-			Year: t.Year(),
+			OrgID: orgID,
+			Date:  item.Date,
+			Name:  item.Name,
+			Type:  item.Type,
+			Year:  t.Year(),
 		}
 
 		if err := s.scheduleRepo.UpsertHoliday(holiday); err != nil {

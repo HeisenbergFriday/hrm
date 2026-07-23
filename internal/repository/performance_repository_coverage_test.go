@@ -198,7 +198,7 @@ func TestActivityRepo_FindAll_DateFiltersBuildExpectedQuery(t *testing.T) {
 			},
 		},
 	})
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	items, total, err := repo.FindAll(1, 10, "", "", "2026-01-01", "2026-03-31", nil)
 	if err != nil {
@@ -219,7 +219,7 @@ func TestActivityRepo_FindAll_CountError(t *testing.T) {
 		match: stubPerformanceCountMatcher("performance_activities"),
 		err:   errCount,
 	})
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	items, total, err := repo.FindAll(1, 10, "", "", "", "", nil)
 	if !errors.Is(err, errCount) {
@@ -243,7 +243,7 @@ func TestActivityRepo_FindAll_FindError(t *testing.T) {
 			err:   errFind,
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	items, total, err := repo.FindAll(1, 10, "", "", "", "", nil)
 	if !errors.Is(err, errFind) {
@@ -269,7 +269,7 @@ func TestActivityRepo_FindAllByUserID_AllFiltersBuildExpectedQuery(t *testing.T)
 			},
 		},
 	})
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	items, total, err := repo.FindAllByUserID(1, 10, "active", " Q1 ", "2026-01-01", "2026-03-31", []string{"emp-1", "emp-2"})
 	if err != nil {
@@ -298,7 +298,7 @@ func TestActivityRepo_FindAllByUserID_CountError(t *testing.T) {
 		match: stubPerformanceCountMatcher("performance_activities"),
 		err:   errCount,
 	})
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	items, total, err := repo.FindAllByUserID(1, 10, "", "", "", "", []string{"emp-1"})
 	if !errors.Is(err, errCount) {
@@ -322,7 +322,7 @@ func TestActivityRepo_FindAllByUserID_FindError(t *testing.T) {
 			err:   errFind,
 		},
 	)
-	repo := NewPerformanceActivityRepository(db)
+	repo := NewPerformanceActivityRepositoryWithOrgID(db, "test-org")
 
 	items, total, err := repo.FindAllByUserID(1, 10, "", "", "", "", []string{"emp-1"})
 	if !errors.Is(err, errFind) {
@@ -348,7 +348,7 @@ func TestParticipantRepo_FindAll_DefaultStatusExcludesInactiveAndRemoved(t *test
 			},
 		},
 	})
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "", "", "", "", nil, nil)
 	if err != nil {
@@ -378,7 +378,7 @@ func TestParticipantRepo_FindAll_ExplicitStatusDoesNotAddDefaultExclusion(t *tes
 			},
 		},
 	})
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "", "", "inactive", "", nil, nil)
 	if err != nil {
@@ -400,7 +400,7 @@ func TestParticipantRepo_FindAll_CountError(t *testing.T) {
 		match: stubPerformanceCountMatcher("performance_participants"),
 		err:   errCount,
 	})
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "", "", "", "", nil, nil)
 	if !errors.Is(err, errCount) {
@@ -424,7 +424,7 @@ func TestParticipantRepo_FindAll_FindError(t *testing.T) {
 			err:   errFind,
 		},
 	)
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	participants, total, err := repo.FindAll("act-1", 1, 10, "", "", "", "", nil, nil)
 	if !errors.Is(err, errFind) {
@@ -441,7 +441,7 @@ func TestParticipantRepo_CountByActivityAndStatus_Error(t *testing.T) {
 		match: stubPerformanceCountMatcher("performance_participants"),
 		err:   errCount,
 	})
-	repo := NewPerformanceParticipantRepository(db)
+	repo := NewPerformanceParticipantRepositoryWithOrgID(db, "test-org")
 
 	count, err := repo.CountByActivityAndStatus("act-1", "pending")
 	if !errors.Is(err, errCount) {
@@ -459,7 +459,7 @@ func TestTemplateRepo_Create_TemplateCreateError(t *testing.T) {
 			{match: stubPerformanceExecMatcher("performance_templates", "insert"), err: errCreate},
 		},
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	err := repo.Create(&database.PerformanceTemplate{Name: "模板"}, nil, nil, nil)
 	if !errors.Is(err, errCreate) {
@@ -475,7 +475,7 @@ func TestTemplateRepo_Create_SectionCreateError(t *testing.T) {
 			{match: stubPerformanceExecMatcher("performance_template_sections", "insert"), err: errCreate},
 		},
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	err := repo.Create(&database.PerformanceTemplate{Name: "模板"}, []database.PerformanceTemplateSection{{Name: "维度"}}, nil, []int{0})
 	if !errors.Is(err, errCreate) {
@@ -491,7 +491,7 @@ func TestTemplateRepo_Create_ItemCreateError(t *testing.T) {
 			{match: stubPerformanceExecMatcher("performance_template_items", "insert"), err: errCreate},
 		},
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	err := repo.Create(
 		&database.PerformanceTemplate{Name: "模板"},
@@ -518,7 +518,7 @@ func TestTemplateRepo_GetByID_SectionsError(t *testing.T) {
 			err:   errQuery,
 		},
 	)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	template, sections, items, err := repo.GetByID(1)
 	if !errors.Is(err, errQuery) {
@@ -549,7 +549,7 @@ func TestTemplateRepo_GetByID_ItemsError(t *testing.T) {
 			err:   errQuery,
 		},
 	)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	template, sections, items, err := repo.GetByID(1)
 	if !errors.Is(err, errQuery) {
@@ -575,7 +575,7 @@ func TestTemplateRepo_GetByID_NoSectionsSkipsItemsQuery(t *testing.T) {
 			},
 		},
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	template, sections, items, err := repo.GetByID(1)
 	if err != nil {
@@ -596,7 +596,7 @@ func TestTemplateRepo_FindAll_CountError(t *testing.T) {
 		match: stubPerformanceCountMatcher("performance_templates"),
 		err:   errCount,
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	items, total, err := repo.FindAll(1, 10, "")
 	if !errors.Is(err, errCount) {
@@ -620,7 +620,7 @@ func TestTemplateRepo_FindAll_FindError(t *testing.T) {
 			err:   errFind,
 		},
 	)
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	items, total, err := repo.FindAll(1, 10, "")
 	if !errors.Is(err, errFind) {
@@ -635,7 +635,7 @@ func TestTemplateRepo_IsReferencedByActivity_FalseWhenColumnMissing(t *testing.T
 	db, stub := newPerformanceTestDBWithStub(t, &stubPerformanceDB{
 		queries: stubPerformanceHasColumnResponses("performance_activities", "template_id", 0),
 	})
-	repo := NewPerformanceTemplateRepository(db)
+	repo := NewPerformanceTemplateRepositoryWithOrgID(db, "test-org")
 
 	referenced, err := repo.IsReferencedByActivity(1)
 	if err != nil {
@@ -666,7 +666,7 @@ func TestReviewVersionRepo_CreateSelfEvaluationVersion_CreateVersionError(t *tes
 			{match: stubPerformanceExecMatcher("performance_review_versions", "insert"), err: errCreate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.CreateSelfEvaluationVersion("10", 85, "B", "总结", nil, "emp-1")
 	if !errors.Is(err, errCreate) {
@@ -692,7 +692,7 @@ func TestReviewVersionRepo_CreateSelfEvaluationVersion_UpdateParticipantError(t 
 			{match: stubPerformanceExecMatcher("performance_participants", "update"), err: errUpdate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.CreateSelfEvaluationVersion("10", 85, "B", "总结", nil, "emp-1")
 	if !errors.Is(err, errUpdate) {
@@ -716,7 +716,7 @@ func TestReviewVersionRepo_CreateSelfEvaluationVersion_PreservesManagerSubmitted
 			},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.CreateSelfEvaluationVersion("10", 85, "B", "总结", nil, "emp-1")
 	if err != nil {
@@ -754,7 +754,7 @@ func TestReviewVersionRepo_CreateManagerEvaluationVersion_CreateVersionError(t *
 			{match: stubPerformanceExecMatcher("performance_review_versions", "insert"), err: errCreate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.CreateManagerEvaluationVersion("10", 88, "A", "评价", nil, "mgr-1")
 	if !errors.Is(err, errCreate) {
@@ -780,7 +780,7 @@ func TestReviewVersionRepo_CreateManagerEvaluationVersion_UpdateParticipantError
 			{match: stubPerformanceExecMatcher("performance_participants", "update"), err: errUpdate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.CreateManagerEvaluationVersion("10", 88, "A", "评价", nil, "mgr-1")
 	if !errors.Is(err, errUpdate) {
@@ -804,7 +804,7 @@ func TestReviewVersionRepo_CreateManagerEvaluationVersion_PreservesResultConfirm
 			},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.CreateManagerEvaluationVersion("10", 88, " ", "评价", nil, "mgr-1")
 	if err != nil {
@@ -842,7 +842,7 @@ func TestReviewVersionRepo_AdjustFinalLevel_CreateVersionError(t *testing.T) {
 			{match: stubPerformanceExecMatcher("performance_review_versions", "insert"), err: errCreate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.AdjustFinalLevel("10", "S", "调级原因", "hr-1")
 	if !errors.Is(err, errCreate) {
@@ -868,7 +868,7 @@ func TestReviewVersionRepo_AdjustFinalLevel_UpdateParticipantError(t *testing.T)
 			{match: stubPerformanceExecMatcher("performance_participants", "update"), err: errUpdate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.AdjustFinalLevel("10", "S", "调级原因", "hr-1")
 	if !errors.Is(err, errUpdate) {
@@ -896,7 +896,7 @@ func TestReviewVersionRepo_ConfirmResult_CreateVersionError(t *testing.T) {
 			{match: stubPerformanceExecMatcher("performance_review_versions", "insert"), err: errCreate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.ConfirmResult("10", "确认意见", "emp-1")
 	if !errors.Is(err, errCreate) {
@@ -922,7 +922,7 @@ func TestReviewVersionRepo_ConfirmResult_UpdateParticipantError(t *testing.T) {
 			{match: stubPerformanceExecMatcher("performance_participants", "update"), err: errUpdate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	version, err := repo.ConfirmResult("10", "确认意见", "emp-1")
 	if !errors.Is(err, errUpdate) {
@@ -938,7 +938,7 @@ func TestReviewVersionRepo_ConfirmResult_UpdateParticipantError(t *testing.T) {
 
 func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_EmptyEvaluations(t *testing.T) {
 	db, stub := newPerformanceTestDBWithStub(t, &stubPerformanceDB{})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	versions, err := repo.BatchCreateManagerEvaluationVersions("act-1", nil, "mgr-1")
 	if err != nil {
@@ -967,7 +967,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_CreateVersionErr
 			{match: stubPerformanceExecMatcher("performance_review_versions", "insert"), err: errCreate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	versions, err := repo.BatchCreateManagerEvaluationVersions("act-1", managerEvaluationsForCoverage(10, 88, "A", managerEvaluationItemsForCoverage()), "mgr-1")
 	if !errors.Is(err, errCreate) {
@@ -992,7 +992,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_WithItemsSkipsGo
 			{match: stubPerformanceExecMatcher("performance_participants", "update"), result: stubPerformanceRowsAffected(1)},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	versions, err := repo.BatchCreateManagerEvaluationVersions("act-1", managerEvaluationsForCoverage(10, 88, "A", managerEvaluationItemsForCoverage()), "mgr-1")
 	if err != nil {
@@ -1020,7 +1020,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_GoalRecordQueryE
 			},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	versions, err := repo.BatchCreateManagerEvaluationVersions("act-1", managerEvaluationsForCoverage(10, 88, "A", nil), "mgr-1")
 	if err != nil {
@@ -1051,7 +1051,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_ZeroTotalWeightS
 			},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	versions, err := repo.BatchCreateManagerEvaluationVersions("act-1", managerEvaluationsForCoverage(10, 88, "A", nil), "mgr-1")
 	if err != nil {
@@ -1083,7 +1083,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_GoalRecordUpdate
 			{match: stubPerformanceExecMatcher("performance_goal_records", "update", "manager_score"), err: errUpdate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	versions, err := repo.BatchCreateManagerEvaluationVersions("act-1", managerEvaluationsForCoverage(10, 88, "A", nil), "mgr-1")
 	if !errors.Is(err, errUpdate) {
@@ -1109,7 +1109,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_UpdateParticipan
 			{match: stubPerformanceExecMatcher("performance_participants", "update"), err: errUpdate},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	versions, err := repo.BatchCreateManagerEvaluationVersions("act-1", managerEvaluationsForCoverage(10, 88, "A", managerEvaluationItemsForCoverage()), "mgr-1")
 	if !errors.Is(err, errUpdate) {
@@ -1138,7 +1138,7 @@ func TestReviewVersionRepo_BatchCreateManagerEvaluationVersions_SecondParticipan
 			},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	evaluations := []struct {
 		ParticipantID   uint
@@ -1175,7 +1175,7 @@ func TestReviewVersionRepo_GetParticipantLocked_UsesForUpdate(t *testing.T) {
 			},
 		},
 	})
-	repo := NewPerformanceReviewVersionRepository(db)
+	repo := NewPerformanceReviewVersionRepositoryWithOrgID(db, "test-org")
 
 	participant, err := repo.getParticipantLocked("10")
 	if err != nil {
@@ -1198,7 +1198,7 @@ func TestRelationshipChangeLogRepo_ListByParticipant_BuildsDeletedAtAndOrder(t *
 			},
 		},
 	})
-	repo := NewPerformanceRelationshipChangeLogRepository(db)
+	repo := NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.ListByParticipant("10")
 	if err != nil {
@@ -1221,7 +1221,7 @@ func TestRelationshipChangeLogRepo_ListByActivity_BuildsDeletedAtAndOrder(t *tes
 			},
 		},
 	})
-	repo := NewPerformanceRelationshipChangeLogRepository(db)
+	repo := NewPerformanceRelationshipChangeLogRepositoryWithOrgID(db, "test-org")
 
 	logs, err := repo.ListByActivity("act-1")
 	if err != nil {

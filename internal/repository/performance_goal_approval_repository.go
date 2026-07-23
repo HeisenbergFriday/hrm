@@ -17,24 +17,25 @@ func NewPerformanceGoalApprovalRepository(db *gorm.DB) *PerformanceGoalApprovalR
 }
 
 func NewPerformanceGoalApprovalRepositoryWithOrgID(db *gorm.DB, orgID string) *PerformanceGoalApprovalRepository {
-	return &PerformanceGoalApprovalRepository{db: db, orgID: strings.TrimSpace(orgID)}
+	orgID = strings.TrimSpace(orgID)
+	return &PerformanceGoalApprovalRepository{db: performanceRepositoryDB(db, orgID), orgID: orgID}
 }
 
 func (r *PerformanceGoalApprovalRepository) scoped() *gorm.DB {
-	tx := r.db
-	if strings.TrimSpace(r.orgID) != "" {
-		tx = tx.Where("org_id = ?", strings.TrimSpace(r.orgID))
-	}
-	return tx
+	// Fail-closed: empty org never returns unfiltered db.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *PerformanceGoalApprovalRepository) Create(log *database.PerformanceGoalApprovalLog) error {
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(log.OrgID) == "" {
-		log.OrgID = strings.TrimSpace(r.orgID)
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
 	}
-	if strings.TrimSpace(r.orgID) != "" && strings.TrimSpace(log.OrgID) != strings.TrimSpace(r.orgID) {
-		return ErrOrgMismatch
+	merged, err := EnsureSameOrg(orgID, log.OrgID)
+	if err != nil {
+		return err
 	}
+	log.OrgID = merged
 	return r.scoped().Create(log).Error
 }
 

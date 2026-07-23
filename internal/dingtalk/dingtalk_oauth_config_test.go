@@ -47,6 +47,27 @@ func TestGetQRCodeWithRedirectForConfigUsesProvidedClientID(t *testing.T) {
 	}
 }
 
+func TestConfigFromOrganizationReadsDingTalkProcessCodes(t *testing.T) {
+	cfg := ConfigFromOrganization(database.Organization{
+		OrgID:          "muteng",
+		DingTalkAppKey: "muteng-key",
+		DingTalkSecret: "muteng-secret",
+		Extension: map[string]interface{}{
+			"dingtalk_process_codes": map[string]interface{}{
+				"leave":    "muteng-leave",
+				"overtime": "muteng-overtime",
+			},
+		},
+	})
+
+	if cfg.ProcessCodes["leave"] != "muteng-leave" {
+		t.Fatalf("leave process code = %q", cfg.ProcessCodes["leave"])
+	}
+	if cfg.ProcessCodes["overtime"] != "muteng-overtime" {
+		t.Fatalf("overtime process code = %q", cfg.ProcessCodes["overtime"])
+	}
+}
+
 func TestSharedOAuthLoginConfigFromConfigsUsesExplicitSharedOrg(t *testing.T) {
 	t.Setenv("DINGTALK_SHARED_OAUTH_ORG_ID", "xiaotie")
 	t.Setenv("DINGTALK_APP_KEY", "")

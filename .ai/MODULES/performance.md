@@ -1,6 +1,6 @@
 ---
 purpose: 绩效管理模块业务规则说明
-last_updated: 2026-07-15
+last_updated: 2026-07-20
 source_of_truth:
   - internal/api/performance_handlers.go（绩效相关 handler）
   - internal/service/performance_service.go（绩效服务）
@@ -166,7 +166,7 @@ type PerformanceActivity struct {
     Status      string `gorm:"type:varchar(32);not null;index" json:"status"`
     Description string `gorm:"type:text" json:"description"`
 
-    // 参与人范围筛选
+    // 参与人范围筛选（并集规则，见下文“参与范围规则”）
     TargetDepartmentIDs []string `gorm:"type:json;serializer:json" json:"target_department_ids"`
     TargetEmployeeIDs   []string `gorm:"type:json;serializer:json" json:"target_employee_ids"`
 
@@ -517,6 +517,23 @@ Body：
 #### POST /activities/:activity_id/force-lock-overdue-hr
 逾期强制锁定 HR 确认
 
+### 参与范围规则（长期业务规则）
+
+最终参与人 = 所选部门内有效在职员工 ∪ 指定的有效在职员工（`User.UserID`）：
+
+- 只选部门：纳入所选部门员工
+- 只选员工：纳入指定员工
+- 同时选择：并集去重；指定员工可以不属于所选部门
+- 都不选：保持“当前企业全部有效在职员工”的既有默认
+- ID 统一 `TrimSpace` + 去重；离职/删除/其他企业不加入
+- 使用组织快照日期时，部门匹配按快照部门判断
+- 参与人 `org_id` 必须等于活动 `org_id`；刷新时会按 `activity_id → activity.org_id` 修正历史脏数据
+- 部分指定员工无效：仍有有效参与人时可开启并返回 `warnings`；有效人数为 0 时硬失败且活动保持 draft
+- `OpenTargetSetting` / `RefreshParticipants` 在同一事务内完成刷新、必要承接写入、计数与状态更新，失败全部回滚
+
+#### GET /performance/scope-options
+绩效活动编辑器部门/员工选项（`performanceRead` + 数据范围）。仅返回 `user_id/name/department_id/department_name/status` 与部门 `department_id/name`，不暴露手机号等敏感字段。前端不要用通用 `GET /users` 拉参与范围选项。
+
 ### 参与人管理
 
 #### POST /activities/:activity_id/refresh-participants
@@ -704,6 +721,8 @@ HR审核/确认结果。沐腾新模型 `review_scoring` 在 `hr_review` 阶段�
 系统启动后会注册绩效后台任务，每天按 `PERFORMANCE_SELF_EVAL_REMINDER_HOUR`（默认 9 点）扫描 `self_evaluation` 状态活动，默认在自评截止前 3 天、1 天、截止当天自动提醒未提交自评的参与人。
 
 说明：
+- **多租户**：`PerformanceJobScheduler.RunSelfEvalReminderOnce` 必须先枚举活跃组织，再对每个 `org_id` 使用 `NewPerformanceServiceWithOrgID` 独立执行；禁止无 org 的全库 `performance_activities` 扫描。
+- 请求内异步通知（如开启自评后的参与人通知）必须经 `performanceBackgroundDB` 同时注入 `requestmeta.WithTenant` 与 `RequestInfo.OrgID`；缺 org 时 fail-closed（返回 nil DB）。
 - 提醒通过钉钉 ActionCard 发送，按钮跳转到对应参与人的自评页面。
 - 已提交自评、已进入主管评分/确认/锁定等后续状态的参与人不会再收到自动提醒。
 - 使用 `performance_reminder_logs` 记录活动、参与人、阶段、提醒轮次和发送日期，避免同一天同一轮重复发送。
@@ -719,8 +738,12 @@ HR审核/确认结果。沐腾新模型 `review_scoring` 在 `hr_review` 阶段�
 
 ### 钉钉通知链接规则
 
-- 绩效相关钉钉通知统一使用企业内部 `action_card` 消息，按钮链接由 `PerformanceSelfEvalURL`、`PerformanceManagerEvalURL`、`PerformanceResultURL`、`PerformanceOverviewURL` 生成。
+- 绩效相关钉钉通知统一使用企业内部 `action_card` 消息；Handler、Service、后台提醒共用 `service.SendPerformanceActionCard(orgID, ...)`，底层必须走 `dingtalk.SendCorpActionCardToUserForOrg`（禁止主链路直接调用无 org 的 `SendCorpActionCardToUser`）。
+- 按钮链接由 org 感知 helper 生成：`PerformanceSelfEvalURL(orgID, ...)`、`PerformanceManagerEvalURL`、`PerformanceGoalSettingURL`、`PerformanceResultURL`、`PerformanceOverviewURL`；底层使用 `dingtalk.BuildAppURLForOrg(orgID, path)` → `GetConfiguredAppHomeURLForOrg`。
+- **组织选择**：发送前从已校验的 `activity.OrgID` / `participant.OrgID` / 面谈·申诉记录 `OrgID` 取值；`performanceNoticeOrgID` 缺 org 时 fail-closed（`ErrPerformanceNoticeMissingOrg`），禁止 `NormalizeOrganizationID("") → default` 静默兜底。
+- **非 default 企业**不得回退全局 `BuildAppURL` / 进程级 `DINGTALK_APP_HOME_URL`；两企业相同 `user_id` 时分别使用各自 AppKey/AgentID/AppHomeURL。
 - 员工自评通知跳转员工自评页，主管评分通知跳转上级评分页，绩效结果确认/锁定/面谈通知跳转个人绩效结果页，HR 确认提醒跳转绩效总览页。
+- 申诉收件人查询：`user_roles.org_id = users.org_id`，并 `JOIN roles` 限制 `roles.org_id = users.org_id`；`permissions` / `role_permissions` 保持全局目录语义。数据范围校验使用 `NewPermissionServiceWithOrgID` + `ResolveUserScopeInOrg`，禁止借用另一企业 `user_roles`。
 - 若链接参数缺失导致 URL 为空，底层发送能力可退回纯文本消息，但业务发送点应优先传入明确的操作链接。
 - 真实钉钉联调优先使用 `go run ./tools/ops/send_dingtalk_message -user <钉钉user_id> -url <可访问系统地址>` 单独发送给测试人，确认企业应用权限、消息按钮链接和接收人可通知性后，再触发活动级提醒。
 - 联调命令必须显式传入 `-user`，不会扫描参与人或绩效活动；未配置 `-url` 时会使用 `DINGTALK_APP_HOME_URL` / `APP_BASE_URL` / `FRONTEND_BASE_URL`，都为空则退回纯文本消息。
@@ -1079,3 +1102,33 @@ HR审核/确认结果。沐腾新模型 `review_scoring` 在 `hr_review` 阶段�
 - 上述角色默认都拥有 `performance:indicator:manage` 与 `org:read`，菜单包含 `menu:home`、`menu:performance-indicator-library`。
 - `绩效管理者-人事`、`人力负责人` 默认数据权限为 `all`，用于维护整体公司的绩效指标库、核查各部门设置情况、给各部门设置绩效指标。
 - `部门负责人`、`HRBP`、`部门助理`、`部门主管`、`经理` 默认数据权限为 `department` 且部门列表为空，实际范围由角色数据权限配置或部门扩展字段中的负责人/经理/HRBP/助理字段自动补充；同一人管理多个组织时合并多个组织及其下级范围。
+
+## 绩效活动 Excel 模板导入（2026-07-17）
+
+### 支持范围
+- 支持自动识别小铁文娱、沐腾科技两类 `.xlsx` 绩效模板，上传文件最大 10MB。
+- 小铁文娱模板生成普通员工、部门负责人、季度价值观等候选草稿；案例/示例 Sheet 跳过，权重口径不一致时换算并提示人工确认。
+- 沐腾科技模板按新流程生成目标设定活动草稿，只导入下季度目标计划；普通指标权重按 100% 处理，加分项单独启用附加分，不导入完成情况、自评分或主管评分。
+
+### API 与权限
+- `POST /api/v1/performance/imports/analyze`：上传并分析 Excel，返回来源识别、草稿和问题清单。
+- `GET /api/v1/performance/imports/:batch_id`：读取当前组织的导入批次、预览或提交结果。
+- `POST /api/v1/performance/imports/:batch_id/commit`：确认草稿并创建模板、草稿活动、参与人和目标。
+- 新权限为 `performance:activity:import`；兼容已有 `performance:activity:manage`，两者任一满足即可使用导入接口和页面入口。
+
+### 数据写入与事务
+- 分析阶段不创建绩效模板、活动、参与人或目标，只保存 `performance_import_batches` 批次和预览 JSON。
+- 提交阶段使用整批数据库事务；任意模板、活动、参与人或目标创建失败时整批回滚。
+- 已提交批次重复提交时直接返回原提交结果，不重复创建业务数据。
+- 模板按来源、流程、名称和维度内容生成指纹 code；当前组织存在相同指纹模板时复用。
+- 活动按当前组织、模板、周期类型、起止日期和流程类型检查重复。
+
+### 员工匹配与组织隔离
+- Excel 姓名只精确匹配当前组织内 `active` 员工；同名、未找到或已离职时要求 HR 人工确认。
+- 匹配到员工后，活动范围只写入该员工并刷新参与人，再为该参与人创建导入目标。
+- 未匹配员工时创建“无参与人”的草稿活动并返回 warning，不执行参与人刷新，避免空范围被误解释为全员。
+- 小铁文娱/沐腾科技名称只用于判断模板格式；批次、模板、活动、参与人和目标始终归属当前登录人的 `org_id`，不能由 Excel 内容切换企业数据归属。
+
+### 提交白名单
+- 页面提交只允许修改：是否选中、模板名称、活动名称、周期类型、开始日期、结束日期、员工 ID。
+- 维度、指标、目标、流程类型、活动类型和附加分开关必须使用服务端分析预览中的原始内容，不能由前端提交覆盖。

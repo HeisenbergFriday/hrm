@@ -99,14 +99,15 @@ func TestScopeOrgAttachesWhere(t *testing.T) {
 		}
 	}
 
-	// 空 org 时不附加过滤（供旧构造迁移期使用）。
+	// 空 org 时 fail-closed，附加 1=0，禁止未绑定租户的全表扫描。
 	stmt := db.Session(&gorm.Session{DryRun: true}).
 		Scopes(ScopeOrg("", "org_id")).
 		Table("users").
 		Where("user_id = ?", "alice").
 		Find(&struct{}{}).Statement
-	if containsIgnoreCase(stmt.SQL.String(), "org_id = ?") {
-		t.Fatalf("empty orgID should not attach org filter, got %s", stmt.SQL.String())
+	sql := stmt.SQL.String()
+	if !containsIgnoreCase(sql, "1 = 0") && !containsIgnoreCase(sql, "1=0") {
+		t.Fatalf("empty orgID must fail-closed with 1=0, got %s", sql)
 	}
 }
 

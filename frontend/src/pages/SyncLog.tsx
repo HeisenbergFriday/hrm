@@ -1,11 +1,16 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Button, message, Spin, DatePicker } from 'antd'
+import { Table, Button, message, Spin, DatePicker, Tooltip } from 'antd'
 import { SyncOutlined, ReloadOutlined } from '@ant-design/icons'
-import { orgAPI, syncAPI } from '../services/api'
+import { syncAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { formatDateTime } from '../utils/format'
+import {
+  canSyncOrgData,
+  confirmOrgSync,
+  missingOrgSyncPermissionTip,
+} from '../utils/orgSyncAction'
 
 const { RangePicker } = DatePicker
 
@@ -68,18 +73,23 @@ const SyncLog: React.FC = () => {
     }
   }
 
-  const handleSync = async () => {
-    setLoading(true)
-    try {
-      await orgAPI.syncOrg()
-      message.success('同步成功')
-      fetchSyncStatus()
-      fetchSyncLogs()
-    } catch (error) {
-      message.error('同步失败')
-    } finally {
-      setLoading(false)
-    }
+  const canSync = canSyncOrgData()
+
+  const handleSync = () => {
+    if (!canSync) return
+    confirmOrgSync({
+      successMessage: '同步成功',
+      errorMessage: '同步失败',
+      onSuccess: async () => {
+        setLoading(true)
+        try {
+          await fetchSyncStatus()
+          await fetchSyncLogs()
+        } finally {
+          setLoading(false)
+        }
+      },
+    })
   }
 
   const columns = [
@@ -126,14 +136,17 @@ const SyncLog: React.FC = () => {
       title="同步日志"
       icon={<SyncOutlined />}
       extra={
-        <Button
-          type="primary"
-          icon={<SyncOutlined />}
-          onClick={handleSync}
-          loading={loading}
-        >
-          手动同步
-        </Button>
+        <Tooltip title={canSync ? undefined : missingOrgSyncPermissionTip}>
+          <Button
+            type="primary"
+            icon={<SyncOutlined />}
+            onClick={handleSync}
+            loading={loading}
+            disabled={!canSync}
+          >
+            手动同步
+          </Button>
+        </Tooltip>
       }
     >
       <PageCard>

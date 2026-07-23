@@ -12,6 +12,7 @@ type ApprovalService struct {
 	templateRepo *repository.ApprovalTemplateRepository
 }
 
+// NewApprovalService binds org from the DB request/tenant context (fail-closed when missing).
 func NewApprovalService(db *gorm.DB) *ApprovalService {
 	return &ApprovalService{
 		approvalRepo: repository.NewApprovalRepository(db),

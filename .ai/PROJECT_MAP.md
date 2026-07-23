@@ -1,6 +1,6 @@
 ---
 purpose: 项目目录结构、模块职责、代码入口索引
-last_updated: 2026-06-08
+last_updated: 2026-07-20
 source_of_truth:
   - 项目实际目录结构
   - internal/api/router.go（后端路由）
@@ -324,6 +324,16 @@ D:\ai项目
 - `PerformanceLevelRuleItem`：绩效等级规则明细
 - `PerformanceRelationshipChangeLog`：关系变更日志
 - `PerformanceCompanyFinance`：公司收支状态
+
+---
+
+## 项目文档（docs/）
+
+| 文档 | 说明 |
+|---|---|
+| `docs/DEVELOPMENT_ISSUES.md` | 开发问题复盘日志：开发前必读防复发索引，开发后新增/更新可复用根因记录 |
+| `docs/org_composite_unique_index_migration.md` | 多租户复合唯一索引迁移说明 |
+| `docs/钉钉登录问题诊断指南.md` / `docs/钉钉登录问题修复总结.md` | 历史钉钉登录排查与修复纪要（细节约束以 `.ai/MODULES/auth.md` 与问题日志为准） |
 
 ---
 

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"peopleops/internal/database"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -21,21 +22,20 @@ func NewSupplementaryRequestRepositoryWithOrgID(db *gorm.DB, orgID string) *Supp
 }
 
 func (r *SupplementaryRequestRepository) scoped() *gorm.DB {
-	tx := r.db
-	if r.orgID != "" {
-		tx = tx.Where("org_id = ?", r.orgID)
-	}
-	return tx
+	// Fail-closed: empty org must never return an unfiltered db session.
+	return r.db.Scopes(ScopeOrg(strings.TrimSpace(r.orgID), "org_id"))
 }
 
 func (r *SupplementaryRequestRepository) Create(req *database.OvertimeSupplementaryRequest) error {
-	if r.orgID != "" {
-		merged, err := EnsureSameOrg(r.orgID, req.OrgID)
-		if err != nil {
-			return err
-		}
-		req.OrgID = merged
+	orgID := strings.TrimSpace(r.orgID)
+	if orgID == "" {
+		return ErrMissingOrgID
 	}
+	merged, err := EnsureSameOrg(orgID, req.OrgID)
+	if err != nil {
+		return err
+	}
+	req.OrgID = merged
 	return r.db.Create(req).Error
 }
 

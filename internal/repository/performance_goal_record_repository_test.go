@@ -210,7 +210,7 @@ func TestGoalRecordRepo_GetByID_Found(t *testing.T) {
 		columns: goalRecordColumns(),
 		rows:    [][]driver.Value{goalRecordRow(1, "act-1", 10, "quantitative", "KPI", 0.6, 1)},
 	})
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	record, err := repo.GetByID(1)
 	if err != nil {
@@ -229,7 +229,7 @@ func TestGoalRecordRepo_GetByID_Found(t *testing.T) {
 
 func TestGoalRecordRepo_GetByID_NotFound(t *testing.T) {
 	db := newGoalRecordTestDB(t) // no stub → query fails
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	_, err := repo.GetByID(999)
 	if err == nil {
@@ -249,7 +249,7 @@ func TestGoalRecordRepo_FindByParticipant_Found(t *testing.T) {
 			goalRecordRow(3, "act-2", 10, "key_action", "Action1", 0.3, 1),
 		},
 	})
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records, err := repo.FindByParticipant(10)
 	if err != nil {
@@ -271,7 +271,7 @@ func TestGoalRecordRepo_FindByParticipant_Empty(t *testing.T) {
 		columns: goalRecordColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records, err := repo.FindByParticipant(999)
 	if err != nil {
@@ -294,7 +294,7 @@ func TestGoalRecordRepo_FindByActivity_Found(t *testing.T) {
 			goalRecordRow(3, "act-1", 10, "key_action", "Action1", 0.5, 2),
 		},
 	})
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records, err := repo.FindByActivity("act-1")
 	if err != nil {
@@ -316,7 +316,7 @@ func TestGoalRecordRepo_FindByActivity_Empty(t *testing.T) {
 		columns: goalRecordColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records, err := repo.FindByActivity("nonexistent")
 	if err != nil {
@@ -338,7 +338,7 @@ func TestGoalRecordRepo_FindByActivityAndParticipant_Found(t *testing.T) {
 			goalRecordRow(2, "act-1", 10, "key_action", "Action1", 0.4, 2),
 		},
 	})
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records, err := repo.FindByActivityAndParticipant("act-1", 10)
 	if err != nil {
@@ -360,7 +360,7 @@ func TestGoalRecordRepo_FindByActivityAndParticipant_Empty(t *testing.T) {
 		columns: goalRecordColumns(),
 		rows:    [][]driver.Value{},
 	})
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records, err := repo.FindByActivityAndParticipant("act-1", 999)
 	if err != nil {
@@ -375,7 +375,7 @@ func TestGoalRecordRepo_FindByActivityAndParticipant_Empty(t *testing.T) {
 
 func TestGoalRecordRepo_BatchUpsert_Success(t *testing.T) {
 	db := newGoalRecordTestDB(t)
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records := []database.PerformanceGoalRecord{
 		{ActivityID: "act-1", ParticipantID: 10, SectionType: "quantitative", ItemName: "KPI1", Weight: 0.5, SortOrder: 1},
@@ -389,7 +389,7 @@ func TestGoalRecordRepo_BatchUpsert_Success(t *testing.T) {
 
 func TestGoalRecordRepo_BatchUpsert_Empty(t *testing.T) {
 	db := newGoalRecordTestDB(t)
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	// Empty slice should be a no-op (early return)
 	if err := repo.BatchUpsert([]database.PerformanceGoalRecord{}); err != nil {
@@ -399,7 +399,7 @@ func TestGoalRecordRepo_BatchUpsert_Empty(t *testing.T) {
 
 func TestGoalRecordRepo_BatchUpsert_SingleRecord(t *testing.T) {
 	db := newGoalRecordTestDB(t)
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records := []database.PerformanceGoalRecord{
 		{ActivityID: "act-1", ParticipantID: 10, SectionType: "bonus_penalty", ItemName: "Bonus", Weight: 0.1, SortOrder: 3},
@@ -413,7 +413,7 @@ func TestGoalRecordRepo_BatchUpsert_SingleRecord(t *testing.T) {
 
 func TestGoalRecordRepo_UpdateSingle_Success(t *testing.T) {
 	db := newGoalRecordTestDB(t)
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	record := &database.PerformanceGoalRecord{
 		ID:             1,
@@ -433,7 +433,7 @@ func TestGoalRecordRepo_UpdateSingle_Success(t *testing.T) {
 
 func TestGoalRecordRepo_UpdateSingle_WithScores(t *testing.T) {
 	db := newGoalRecordTestDB(t)
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	record := &database.PerformanceGoalRecord{
 		ID:             2,
@@ -456,7 +456,7 @@ func TestGoalRecordRepo_UpdateSingle_WithScores(t *testing.T) {
 
 func TestGoalRecordRepo_DeleteByParticipantAndActivity_Success(t *testing.T) {
 	db := newGoalRecordTestDB(t)
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	if err := repo.DeleteByParticipantAndActivity(10, "act-1"); err != nil {
 		t.Fatalf("DeleteByParticipantAndActivity() error = %v", err)
@@ -465,7 +465,7 @@ func TestGoalRecordRepo_DeleteByParticipantAndActivity_Success(t *testing.T) {
 
 func TestGoalRecordRepo_DeleteByParticipantAndActivity_NonExistent(t *testing.T) {
 	db := newGoalRecordTestDB(t)
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	// Soft delete on non-existent records should not error (0 rows affected)
 	if err := repo.DeleteByParticipantAndActivity(999, "nonexistent"); err != nil {
@@ -477,7 +477,7 @@ func TestGoalRecordRepo_DeleteByParticipantAndActivity_NonExistent(t *testing.T)
 
 func TestGoalRecordRepo_SoftDelete_Success(t *testing.T) {
 	db := newGoalRecordTestDB(t)
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	if err := repo.SoftDelete(1); err != nil {
 		t.Fatalf("SoftDelete() error = %v", err)
@@ -486,7 +486,7 @@ func TestGoalRecordRepo_SoftDelete_Success(t *testing.T) {
 
 func TestGoalRecordRepo_SoftDelete_NonExistent(t *testing.T) {
 	db := newGoalRecordTestDB(t)
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	// Soft delete on non-existent record should not error (0 rows affected)
 	if err := repo.SoftDelete(999); err != nil {
@@ -498,7 +498,7 @@ func TestGoalRecordRepo_SoftDelete_NonExistent(t *testing.T) {
 
 func TestGoalRecordRepo_BatchUpsert_VerifiesFields(t *testing.T) {
 	db := newGoalRecordTestDB(t)
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records := []database.PerformanceGoalRecord{
 		{
@@ -533,7 +533,7 @@ func TestGoalRecordRepo_FindByParticipant_Ordering(t *testing.T) {
 			goalRecordRow(3, "act-1", 10, "quantitative", "KPI2", 0.2, 2),
 		},
 	})
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records, err := repo.FindByParticipant(10)
 	if err != nil {
@@ -556,7 +556,7 @@ func TestGoalRecordRepo_FindByActivityAndParticipant_MultipleSections(t *testing
 			goalRecordRow(4, "act-1", 10, "bonus_penalty", "Patent Bonus", 0.15, 1),
 		},
 	})
-	repo := NewPerformanceGoalRecordRepository(db)
+	repo := NewPerformanceGoalRecordRepositoryWithOrgID(db, "test-org")
 
 	records, err := repo.FindByActivityAndParticipant("act-1", 10)
 	if err != nil {

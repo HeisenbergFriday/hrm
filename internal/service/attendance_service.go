@@ -48,6 +48,7 @@ type departmentAccumulator struct {
 
 type AttendanceService struct {
 	db                   *gorm.DB
+	orgID                string
 	attendanceRepo       attendanceRepository
 	exportRepo           *repository.AttendanceExportRepository
 	syncRepo             *repository.SyncRepository
@@ -57,12 +58,22 @@ type AttendanceService struct {
 }
 
 func NewAttendanceService(db *gorm.DB) *AttendanceService {
-	weekScheduleService := NewWeekScheduleService(db)
+	// Prefer request/tenant org from DB session; empty context keeps repos fail-closed.
+	orgID, _ := database.RequireOrganizationIDFromDB(db)
+	return NewAttendanceServiceWithOrgID(db, orgID)
+}
+
+// NewAttendanceServiceWithOrgID binds attendance repositories to an explicit tenant.
+// Prefer this for jobs/handlers that have orgID outside the DB session context.
+func NewAttendanceServiceWithOrgID(db *gorm.DB, orgID string) *AttendanceService {
+	orgID = strings.TrimSpace(orgID)
+	weekScheduleService := NewWeekScheduleServiceWithOrgID(db, orgID)
 	svc := &AttendanceService{
 		db:             db,
-		attendanceRepo: repository.NewAttendanceRepository(db),
-		exportRepo:     repository.NewAttendanceExportRepository(db),
-		syncRepo:       repository.NewSyncRepository(db),
+		orgID:          orgID,
+		attendanceRepo: repository.NewAttendanceRepositoryWithOrgID(db, orgID),
+		exportRepo:     repository.NewAttendanceExportRepositoryWithOrgID(db, orgID),
+		syncRepo:       repository.NewSyncRepositoryWithOrgID(db, orgID),
 		ruleEngine:     NewAttendanceRuleEngine(weekScheduleService),
 	}
 	svc.userLoader = svc.loadUsers
@@ -229,8 +240,13 @@ func (s *AttendanceService) SaveRecord(record *database.Attendance) error {
 func (s *AttendanceService) SyncRecords(orgID string, records []dingtalk.AttendanceRecord, userNameMap map[string]string) (int, error) {
 	orgID = strings.TrimSpace(orgID)
 	if orgID == "" {
-		orgID = "default"
+		// Fail-closed: never invent "default" for tenant attendance writes.
+		return 0, repository.ErrMissingOrgID
 	}
+	orgID = database.NormalizeOrganizationID(orgID)
+	// Always write through an org-bound repository so empty session context cannot
+	// block legitimate SyncRecords(orgID, ...) nor fall open across tenants.
+	repo := repository.NewAttendanceRepositoryWithOrgID(s.db, orgID)
 	count := 0
 	for _, r := range records {
 		if r.UserCheckTime == "" {
@@ -276,7 +292,7 @@ func (s *AttendanceService) SyncRecords(orgID string, records []dingtalk.Attenda
 			record.Extension["abnormal_type"] = abnormalType
 		}
 
-		if err := s.attendanceRepo.Upsert(record); err != nil {
+		if err := repo.Upsert(record); err != nil {
 			return count, fmt.Errorf("save attendance record for user %s at %s failed: %w", r.UserID, r.UserCheckTime, err)
 		}
 		count++
@@ -316,7 +332,18 @@ func (s *AttendanceService) loadUsers(filters map[string]string) ([]database.Use
 		return nil, nil
 	}
 
-	query := s.db.Model(&database.User{}).Where("user_id <> ?", "admin")
+	orgID := strings.TrimSpace(s.orgID)
+	if orgID == "" {
+		if resolved, err := database.RequireOrganizationIDFromDB(s.db); err == nil {
+			orgID = strings.TrimSpace(resolved)
+		}
+	}
+	if orgID == "" {
+		// Fail-closed: never Find users across all tenants.
+		return nil, repository.ErrMissingOrgID
+	}
+
+	query := s.db.Model(&database.User{}).Where("org_id = ? AND user_id <> ?", orgID, "admin")
 	if v := filters["department_id"]; v != "" {
 		query = query.Where("department_id = ?", v)
 	}
@@ -339,8 +366,18 @@ func (s *AttendanceService) loadDepartmentNames() (map[string]string, error) {
 		return map[string]string{}, nil
 	}
 
+	orgID := strings.TrimSpace(s.orgID)
+	if orgID == "" {
+		if resolved, err := database.RequireOrganizationIDFromDB(s.db); err == nil {
+			orgID = strings.TrimSpace(resolved)
+		}
+	}
+	if orgID == "" {
+		return nil, repository.ErrMissingOrgID
+	}
+
 	var departments []database.Department
-	if err := s.db.Find(&departments).Error; err != nil {
+	if err := s.db.Where("org_id = ?", orgID).Find(&departments).Error; err != nil {
 		return nil, err
 	}
 

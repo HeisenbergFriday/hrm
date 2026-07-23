@@ -484,7 +484,7 @@ func newImportStubPerformanceService(t *testing.T, queries ...importStubQueryRes
 	if err != nil {
 		t.Fatalf("open import stub gorm db: %v", err)
 	}
-	return NewPerformanceService(db)
+	return NewPerformanceServiceWithOrgID(db, "test-org")
 }
 
 func importStubTableResponse(table string, columns []string, rows [][]driver.Value) importStubQueryResponse {

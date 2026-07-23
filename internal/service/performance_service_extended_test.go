@@ -465,21 +465,21 @@ func TestOpenTargetSettingFromDraft(t *testing.T) {
 			rows:    nil,
 		},
 	)
-	if err := svc.OpenTargetSetting("1", "operator-1"); err != nil {
+	if _, err := svc.OpenTargetSetting("1", "operator-1"); err != nil {
 		t.Fatalf("OpenTargetSetting() error = %v", err)
 	}
 }
 
 func TestOpenTargetSettingAlreadyOpen(t *testing.T) {
 	svc := newStubPerformanceService(t, performanceActivityResponse("target_setting", ""))
-	if err := svc.OpenTargetSetting("1", "operator-1"); err != nil {
+	if _, err := svc.OpenTargetSetting("1", "operator-1"); err != nil {
 		t.Fatalf("OpenTargetSetting() idempotent error = %v", err)
 	}
 }
 
 func TestOpenTargetSettingConflictFromSelfEvaluation(t *testing.T) {
 	svc := newStubPerformanceService(t, performanceActivityResponse("self_evaluation", ""))
-	if err := svc.OpenTargetSetting("1", "operator-1"); err == nil {
+	if _, err := svc.OpenTargetSetting("1", "operator-1"); err == nil {
 		t.Fatalf("OpenTargetSetting() from self_evaluation expected conflict error")
 	}
 }
@@ -4387,13 +4387,13 @@ func legacyReviewParticipantResponse(status, finalLevel string) stubQueryRespons
 
 func TestPerformanceSelfEvalURLEdgeCases(t *testing.T) {
 	t.Setenv("DINGTALK_APP_HOME_URL", "https://app.example")
-	if got := PerformanceSelfEvalURL("", 0); got != "" {
+	if got := PerformanceSelfEvalURL("default", "", 0); got != "" {
 		t.Fatalf("empty inputs should return empty, got %q", got)
 	}
-	if got := PerformanceSelfEvalURL("act", 0); got != "" {
+	if got := PerformanceSelfEvalURL("default", "act", 0); got != "" {
 		t.Fatalf("zero participant should return empty, got %q", got)
 	}
-	if got := PerformanceSelfEvalURL("", 1); got != "" {
+	if got := PerformanceSelfEvalURL("default", "", 1); got != "" {
 		t.Fatalf("empty activity should return empty, got %q", got)
 	}
 }

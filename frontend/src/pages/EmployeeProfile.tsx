@@ -13,6 +13,7 @@ import {
   Select,
   Spin,
   Table,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -22,9 +23,13 @@ import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { departmentAPI, employeeAPI, orgAPI } from '../services/api'
+import { hasPermission } from '../utils/permission'
+import { maskBankAccount, maskIdNumber } from '../utils/maskPii'
 
 const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
+
+const missingUserManageTip = '你缺少 user_manage 权限，需要联系管理员添加'
 
 interface EmployeeProfileRecord {
   id: number | string
@@ -163,6 +168,7 @@ const EmployeeProfilePage: React.FC = () => {
   const [editingProfile, setEditingProfile] = useState<EmployeeProfileRecord | null>(null)
   const [form] = Form.useForm<ProfileFormValues>()
   const selectedUserID = Form.useWatch('user_id', form)
+  const canManage = hasPermission('user_manage')
 
   const profilesQuery = useQuery({
     queryKey: ['employee-profiles-page'],
@@ -243,12 +249,14 @@ const EmployeeProfilePage: React.FC = () => {
   })
 
   const openCreateModal = () => {
+    if (!canManage) return
     setEditingProfile(null)
     form.resetFields()
     setModalOpen(true)
   }
 
   const openEditModal = (profile: EmployeeProfileRecord) => {
+    if (!canManage) return
     setEditingProfile(profile)
     form.setFieldsValue(toFormValues(profile))
     setModalOpen(true)
@@ -321,9 +329,11 @@ const EmployeeProfilePage: React.FC = () => {
       title: '操作',
       key: 'action',
       render: (_: unknown, record: EmployeeProfileRecord) => (
-        <Button type="link" icon={<EditOutlined />} onClick={() => openEditModal(record)}>
-          编辑
-        </Button>
+        <Tooltip title={canManage ? undefined : missingUserManageTip}>
+          <Button type="link" icon={<EditOutlined />} onClick={() => openEditModal(record)} disabled={!canManage}>
+            编辑
+          </Button>
+        </Tooltip>
       ),
     },
   ]
@@ -337,9 +347,11 @@ const EmployeeProfilePage: React.FC = () => {
           <Button icon={<ReloadOutlined />} onClick={() => void profilesQuery.refetch()} loading={profilesQuery.isFetching}>
             刷新
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
-            新建档案
-          </Button>
+          <Tooltip title={canManage ? undefined : missingUserManageTip}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal} disabled={!canManage}>
+              新建档案
+            </Button>
+          </Tooltip>
         </div>
       }
     >
@@ -448,8 +460,12 @@ const EmployeeProfilePage: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="id_card_number" label="身份证号">
-                <Input placeholder="请输入身份证号" />
+              <Form.Item
+                name="id_card_number"
+                label="身份证号"
+                extra={editingProfile?.id_card_number ? `当前：${maskIdNumber(editingProfile.id_card_number)}` : undefined}
+              >
+                <Input placeholder="请输入身份证号" autoComplete="off" />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
@@ -538,8 +554,12 @@ const EmployeeProfilePage: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="bank_account" label="银行卡号">
-                <Input placeholder="请输入银行卡号" />
+              <Form.Item
+                name="bank_account"
+                label="银行卡号"
+                extra={editingProfile?.bank_account ? `当前：${maskBankAccount(editingProfile.bank_account)}` : undefined}
+              >
+                <Input placeholder="请输入银行卡号" autoComplete="off" />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>

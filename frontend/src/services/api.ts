@@ -66,7 +66,7 @@ export const authAPI = {
 }
 
 export const userAPI = {
-  getUsers: (params: { page: number; page_size: number }) => api.get('/users', { params }),
+  getUsers: (params: { page: number; page_size: number; search?: string; department_id?: string; status?: string }) => api.get('/users', { params }),
   getUser: (id: string) => api.get(`/users/${id}`),
   updateUser: (id: string, data: { extension?: any; manager_user_id?: string; manager_name?: string }) => api.put(`/users/${id}`, data),
 }
@@ -123,6 +123,29 @@ export const attendanceAPI = {
   getExports: (params: { page?: number; page_size?: number }) => api.get('/attendance/exports', { params }),
   getLastSyncTime: () => api.get('/attendance/last-sync'),
 
+  // 外部 Doris 考勤同步中心
+  externalSync: {
+    getStatus: () => api.get('/attendance/external-sync/status'),
+    getDailyResults: (params?: {
+      page?: number
+      page_size?: number
+      user_id?: string
+      department_id?: string
+      start_date?: string
+      end_date?: string
+      status?: string
+    }) => api.get('/attendance/external-sync/daily-results', { params }),
+    // 同步可能运行数分钟；覆盖全局 10s timeout，与后端 Handler 上限对齐
+    run: (data?: {
+      source?: 'all' | 'attendance' | 'department'
+      lookback_minutes?: number
+      full_department_snapshot?: boolean
+    }) => api.post('/attendance/external-sync/run', data || {}, { timeout: 10 * 60 * 1000 }),
+    getJobs: (params?: { page?: number; page_size?: number }) =>
+      api.get('/attendance/external-sync/jobs', { params }),
+    getJob: (id: number | string) => api.get(`/attendance/external-sync/jobs/${id}`),
+  },
+
   // 考勤数据处理
   processing: {
     leave: (formData: FormData) =>
@@ -158,6 +181,26 @@ export const attendanceAPI = {
   },
 }
 
+export type AttendanceToolboxRunFile = {
+  file_key: string
+  file_name: string
+  content_type: string
+  size: number
+  kind?: string
+  flow_key?: string
+  row_count?: number
+}
+
+export type AttendanceToolboxRunResponse = {
+  run_id: string
+  module: string
+  log?: string
+  stats?: Record<string, unknown>
+  meta?: Record<string, unknown>
+  files: AttendanceToolboxRunFile[]
+  expires_at: string
+}
+
 export const attendanceToolboxAPI = {
   getDefaults: () => api.get('/attendance/toolbox/defaults'),
   run: (module: string, data: FormData) => api.post(`/attendance/toolbox/${module}/run`, data, {
@@ -166,6 +209,28 @@ export const attendanceToolboxAPI = {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+  }),
+  /** Structured workflow: returns run_id + file metadata instead of raw blob. */
+  runWorkflow: (module: string, data: FormData) => api.post(`/attendance/toolbox/workflows/${module}`, data, {
+    timeout: 10 * 60 * 1000,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  }),
+  runQuickWorkflow: (data: FormData) => api.post('/attendance/toolbox/workflows/quick', data, {
+    timeout: 10 * 60 * 1000,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  }),
+  getRun: (runId: string) => api.get(`/attendance/toolbox/runs/${runId}`),
+  downloadRunFile: (runId: string, fileKey: string) => api.get(`/attendance/toolbox/runs/${runId}/files/${encodeURIComponent(fileKey)}`, {
+    responseType: 'blob',
+    timeout: 10 * 60 * 1000,
+  }),
+  downloadRunZip: (runId: string) => api.get(`/attendance/toolbox/runs/${runId}/zip`, {
+    responseType: 'blob',
+    timeout: 10 * 60 * 1000,
   }),
   runDingtalkSync: (data: {
     start_date: string
@@ -181,8 +246,50 @@ export const attendanceToolboxAPI = {
     responseType: 'blob',
     timeout: 10 * 60 * 1000,
   }),
-  exportRules: () => api.post('/attendance/toolbox/rules/export', {}, {
-    responseType: 'blob',
+  /** Structured dingtalk sync via workflow API. */
+  runDingtalkSyncStructured: (data: FormData | {
+    start_date: string
+    end_date: string
+    flow_keys?: string[]
+    max_instances?: number
+    padding_days?: number
+  }) => {
+    if (data instanceof FormData) {
+      return api.post('/attendance/toolbox/workflows/dingtalk_sync', data, {
+        timeout: 10 * 60 * 1000,
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    }
+    const form = new FormData()
+    form.append('dingtalk_sync_start_date', data.start_date)
+    form.append('dingtalk_sync_end_date', data.end_date)
+    if (data.flow_keys?.length) form.append('dingtalk_sync_flow_keys', data.flow_keys.join(','))
+    if (data.max_instances != null) form.append('dingtalk_sync_max_instances', String(data.max_instances))
+    if (data.padding_days != null) form.append('dingtalk_sync_padding_days', String(data.padding_days))
+    return api.post('/attendance/toolbox/workflows/dingtalk_sync', form, {
+      timeout: 10 * 60 * 1000,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+  /** Export default rules, or current session rules when rulesJson is provided. */
+  exportRules: (rulesJson?: string) => {
+    if (rulesJson && rulesJson.trim()) {
+      const form = new FormData()
+      form.append('rules_json', rulesJson)
+      return api.post('/attendance/toolbox/rules/export', form, {
+        responseType: 'blob',
+        timeout: 60 * 1000,
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    }
+    return api.post('/attendance/toolbox/rules/export', {}, {
+      responseType: 'blob',
+      timeout: 60 * 1000,
+    })
+  },
+  /** Preview first 200 rows of a stored run result (does not re-run calculation). */
+  previewRun: (runId: string, fileKey?: string) => api.get(`/attendance/toolbox/runs/${runId}/preview`, {
+    params: fileKey ? { file_key: fileKey } : undefined,
     timeout: 60 * 1000,
   }),
   importRulesPreview: (data: FormData) => api.post('/attendance/toolbox/rules/import-preview', data, {
@@ -319,6 +426,12 @@ export const weekScheduleAPI = {
   syncFromDingtalk: () => api.post('/week-schedule/sync/from-dingtalk'),
   syncHolidaysFromJuhe: () => api.post('/week-schedule/holidays/sync/from-juhe'),
   getSyncLogs: (params: { page?: number; page_size?: number }) => api.get('/week-schedule/sync/logs', { params }),
+  /** 作息表个人推送：multipart(image, user_ids, title, content)，不写考勤排班 */
+  pushPersonalSchedule: (formData: FormData) =>
+    api.post('/week-schedule/push/personal', formData, {
+      timeout: 120000,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
 }
 
 export const shiftConfigAPI = {
@@ -924,6 +1037,114 @@ export interface RefreshParticipantsResult {
   inactive_count: number
 }
 
+export interface PerformanceActivityImportIssue {
+  level: 'info' | 'warning' | 'error' | string
+  code: string
+  message: string
+  draft_key?: string
+  sheet?: string
+  row?: number
+}
+
+export interface PerformanceActivityImportItemDraft {
+  name: string
+  description?: string
+  weight: number
+  max_score: number
+}
+
+export interface PerformanceActivityImportSectionDraft {
+  name: string
+  section_type: string
+  weight: number
+  is_score_required: boolean
+  is_comment_required: boolean
+  items: PerformanceActivityImportItemDraft[]
+}
+
+export interface PerformanceActivityImportGoalDraft {
+  section_type: string
+  goal_type: string
+  fixed_key?: string
+  is_fixed: boolean
+  item_name: string
+  item_definition?: string
+  weight: number
+  red_line_value?: string
+  target_value?: string
+  challenge_value?: string
+  scoring_rule?: string
+  sort_order: number
+}
+
+export interface PerformanceActivityImportDraft {
+  draft_key: string
+  selected: boolean
+  source_sheet: string
+  template_name: string
+  activity_name: string
+  flow_type: 'old' | 'new' | string
+  activity_kind?: 'goal_setting' | 'review_scoring' | string
+  cycle_type: 'monthly' | 'quarterly' | 'annual' | string
+  start_date: string
+  end_date: string
+  enable_bonus_score: boolean
+  employee_name?: string
+  employee_user_id?: string
+  employee_match: 'matched' | 'unmatched' | 'ambiguous' | string
+  sections: PerformanceActivityImportSectionDraft[]
+  goals: PerformanceActivityImportGoalDraft[]
+  source_weight_total: number
+}
+
+export interface PerformanceActivityImportPreview {
+  source_type: 'xiaotie' | 'muteng' | string
+  source_label: string
+  file_name: string
+  file_sha256: string
+  drafts: PerformanceActivityImportDraft[]
+  issues: PerformanceActivityImportIssue[]
+  requires_review: boolean
+}
+
+export interface PerformanceActivityImportCreatedResult {
+  draft_key: string
+  template_id: number
+  template_reused: boolean
+  activity_id: number
+  activity_name: string
+  participant_id?: number
+  employee_user_id?: string
+  goal_count: number
+}
+
+export interface PerformanceActivityImportCommitResult {
+  batch_id: string
+  created: PerformanceActivityImportCreatedResult[]
+  warnings?: string[]
+}
+
+export interface PerformanceActivityImportBatch {
+  batch_id: string
+  status: string
+  preview?: PerformanceActivityImportPreview
+  result?: PerformanceActivityImportCommitResult
+  failure_message?: string
+  expires_at?: string
+  created_at: string
+  committed_at?: string
+}
+
+export interface PerformanceActivityImportCommitDraft {
+  draft_key: string
+  selected: boolean
+  template_name: string
+  activity_name: string
+  cycle_type: string
+  start_date: string
+  end_date: string
+  employee_user_id?: string
+}
 export interface PerformanceParticipantImportResult {
   activity_name: string
   employee_ids: string[]
@@ -1339,6 +1560,10 @@ export const performanceAPI = {
   archiveActivity: (activityId: number) =>
     api.post(`/performance/activities/${activityId}/archive`),
 
+  // 绩效活动参与范围选项（精简字段，不走通用 /users）
+  getScopeOptions: (params?: { page?: number; page_size?: number; keyword?: string }) =>
+    api.get('/performance/scope-options', { params }),
+
   // 新增状态流转（9状态流）
   openTargetSetting: (activityId: number) =>
     api.post(`/performance/activities/${activityId}/open-target-setting`),
@@ -1409,6 +1634,20 @@ export const performanceAPI = {
     })
   },
 
+  analyzeActivityImport: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post('/performance/imports/analyze', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    })
+  },
+
+  getActivityImport: (batchId: string) =>
+    api.get(`/performance/imports/${batchId}`),
+
+  commitActivityImport: (batchId: string, drafts: PerformanceActivityImportCommitDraft[]) =>
+    api.post(`/performance/imports/${batchId}/commit`, { drafts }),
   getParticipant: (participantId: number) =>
     api.get(`/performance/participants/${participantId}`),
 

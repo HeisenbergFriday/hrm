@@ -15,7 +15,23 @@ import (
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+
+	"peopleops/internal/dingtalk"
 )
+
+func withPerformanceAppHomeForTests(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("DINGTALK_APP_HOME_URL", home)
+	original := buildPerformanceAppURL
+	buildPerformanceAppURL = func(orgID, appPath string) string {
+		// tests may use non-default stub orgs; keep path generation while production stays fail-closed via real BuildAppURLForOrg.
+		if strings.TrimSpace(orgID) == "" {
+			return ""
+		}
+		return dingtalk.BuildAppURL(appPath)
+	}
+	t.Cleanup(func() { buildPerformanceAppURL = original })
+}
 
 func TestPerformanceLevelByScoreBoundaries(t *testing.T) {
 	tests := []struct {
@@ -381,17 +397,17 @@ func TestGetDistributionCheckPrefersSuggestedLevelDuringManagerEvaluation(t *tes
 }
 
 func TestPerformanceSelfEvalURL(t *testing.T) {
-	t.Setenv("DINGTALK_APP_HOME_URL", "https://peopleops.example/app")
+	withPerformanceAppHomeForTests(t, "https://peopleops.example/app")
 
-	if got := PerformanceSelfEvalURL("", 1); got != "" {
+	if got := PerformanceSelfEvalURL("default", "", 1); got != "" {
 		t.Fatalf("empty activity URL = %q, want empty", got)
 	}
-	if got := PerformanceSelfEvalURL("activity /x", 0); got != "" {
+	if got := PerformanceSelfEvalURL("default", "activity /x", 0); got != "" {
 		t.Fatalf("zero participant URL = %q, want empty", got)
 	}
 
 	want := "https://peopleops.example/app/performance-self-eval/activity%20%2Fx/7"
-	if got := PerformanceSelfEvalURL("activity /x", 7); got != want {
+	if got := PerformanceSelfEvalURL("default", "activity /x", 7); got != want {
 		t.Fatalf("PerformanceSelfEvalURL() = %q, want %q", got, want)
 	}
 }
@@ -425,10 +441,11 @@ func TestDueSelfEvalReminderRound(t *testing.T) {
 }
 
 func TestSendDueSelfEvalAutoRemindersSendsPendingOnly(t *testing.T) {
+	withPerformanceAppHomeForTests(t, "https://peopleops.example/app")
 	originalSender := sendPerformanceActionCardToUser
 	t.Cleanup(func() { sendPerformanceActionCardToUser = originalSender })
 	sentTo := make([]string, 0)
-	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+	sendPerformanceActionCardToUser = func(orgID, userID, title, content, actionTitle, actionURL string) error {
 		sentTo = append(sentTo, userID)
 		if !strings.Contains(content, "距离截止还有 3 天") {
 			t.Fatalf("content = %q, want deadline reminder text", content)
@@ -480,7 +497,7 @@ func TestSendDueSelfEvalAutoRemindersSendsPendingOnly(t *testing.T) {
 func TestSendDueSelfEvalAutoRemindersSkipsAlreadySentRound(t *testing.T) {
 	originalSender := sendPerformanceActionCardToUser
 	t.Cleanup(func() { sendPerformanceActionCardToUser = originalSender })
-	sendPerformanceActionCardToUser = func(userID, title, content, actionTitle, actionURL string) error {
+	sendPerformanceActionCardToUser = func(orgID, userID, title, content, actionTitle, actionURL string) error {
 		t.Fatalf("sender should not be called for already sent reminder")
 		return nil
 	}
@@ -520,7 +537,7 @@ func TestSendDueSelfEvalAutoRemindersSkipsAlreadySentRound(t *testing.T) {
 }
 
 func TestPerformanceNoticeURLs(t *testing.T) {
-	t.Setenv("DINGTALK_APP_HOME_URL", "https://peopleops.example/app")
+	withPerformanceAppHomeForTests(t, "https://peopleops.example/app")
 
 	tests := []struct {
 		name string
@@ -529,22 +546,22 @@ func TestPerformanceNoticeURLs(t *testing.T) {
 	}{
 		{
 			name: "manager eval",
-			got:  PerformanceManagerEvalURL("activity /x", 7),
+			got:  PerformanceManagerEvalURL("default", "activity /x", 7),
 			want: "https://peopleops.example/app/performance-manager-eval/activity%20%2Fx/7",
 		},
 		{
 			name: "result",
-			got:  PerformanceResultURL("activity /x", 7),
+			got:  PerformanceResultURL("default", "activity /x", 7),
 			want: "https://peopleops.example/app/performance-result/activity%20%2Fx/7",
 		},
 		{
 			name: "overview with activity",
-			got:  PerformanceOverviewURL("activity /x"),
+			got:  PerformanceOverviewURL("default", "activity /x"),
 			want: "https://peopleops.example/app/performance-overview?activity_id=activity+%2Fx",
 		},
 		{
 			name: "overview without activity",
-			got:  PerformanceOverviewURL(""),
+			got:  PerformanceOverviewURL("default", ""),
 			want: "https://peopleops.example/app/performance-overview",
 		},
 	}
@@ -557,10 +574,10 @@ func TestPerformanceNoticeURLs(t *testing.T) {
 		})
 	}
 
-	if got := PerformanceManagerEvalURL("", 7); got != "" {
+	if got := PerformanceManagerEvalURL("default", "", 7); got != "" {
 		t.Fatalf("empty manager activity URL = %q, want empty", got)
 	}
-	if got := PerformanceResultURL("activity", 0); got != "" {
+	if got := PerformanceResultURL("default", "activity", 0); got != "" {
 		t.Fatalf("zero result participant URL = %q, want empty", got)
 	}
 }
@@ -802,10 +819,75 @@ func TestActivityIncludesUser(t *testing.T) {
 		t.Fatalf("different department scope should exclude user")
 	}
 	if !activityIncludesUser(&database.PerformanceActivity{TargetEmployeeIDs: []string{" user-1 "}, TargetDepartmentIDs: []string{"dept-2"}}, user) {
-		t.Fatalf("matching employee scope should include user")
+		t.Fatalf("matching employee scope should include user even when department differs")
 	}
-	if activityIncludesUser(&database.PerformanceActivity{TargetEmployeeIDs: []string{"user-2"}, TargetDepartmentIDs: []string{"dept-1"}}, user) {
-		t.Fatalf("employee scope should override department scope")
+	// 部门 ∪ 指定员工：命中部门也应纳入，不能被其他指定员工覆盖。
+	if !activityIncludesUser(&database.PerformanceActivity{TargetEmployeeIDs: []string{"user-2"}, TargetDepartmentIDs: []string{"dept-1"}}, user) {
+		t.Fatalf("department and employee scopes should union, department match must include user")
+	}
+	// 仅指定员工
+	if !activityIncludesUser(&database.PerformanceActivity{TargetEmployeeIDs: []string{"user-1"}}, user) {
+		t.Fatalf("employee-only scope should include matching user")
+	}
+	if activityIncludesUser(&database.PerformanceActivity{TargetEmployeeIDs: []string{"user-2"}}, user) {
+		t.Fatalf("employee-only scope should exclude non-matching user")
+	}
+}
+
+func TestActivityIncludesUserUnionOutsideDepartment(t *testing.T) {
+	// 指定员工可以不属于所选部门，仍应参与
+	user := database.User{UserID: "user-x", DepartmentID: "dept-other"}
+	activity := &database.PerformanceActivity{
+		TargetDepartmentIDs: []string{"dept-1"},
+		TargetEmployeeIDs:   []string{" user-x "},
+	}
+	if !activityIncludesUser(activity, user) {
+		t.Fatalf("explicit employee outside selected departments should still be included")
+	}
+}
+
+func TestEnsureParticipantOrgID(t *testing.T) {
+	p := &database.PerformanceParticipant{OrgID: "default"}
+	if !ensureParticipantOrgID(p, "muteng") {
+		t.Fatalf("expected org_id fix")
+	}
+	if p.OrgID != "muteng" {
+		t.Fatalf("OrgID=%q, want muteng", p.OrgID)
+	}
+	if ensureParticipantOrgID(p, "muteng") {
+		t.Fatalf("same org_id should not report change")
+	}
+}
+
+func TestResolveActivityOrgID(t *testing.T) {
+	svc := &PerformanceService{orgID: "muteng"}
+	orgID, err := svc.resolveActivityOrgID(&database.PerformanceActivity{OrgID: "muteng"})
+	if err != nil || orgID != "muteng" {
+		t.Fatalf("resolveActivityOrgID() = %q, %v", orgID, err)
+	}
+	if _, err := svc.resolveActivityOrgID(&database.PerformanceActivity{OrgID: "other"}); err == nil {
+		t.Fatalf("expected conflict error")
+	}
+	orgID, err = svc.resolveActivityOrgID(&database.PerformanceActivity{})
+	if err != nil || orgID != "muteng" {
+		t.Fatalf("empty activity org should fallback to tenant, got %q err=%v", orgID, err)
+	}
+	empty := &PerformanceService{}
+	if _, err := empty.resolveActivityOrgID(&database.PerformanceActivity{}); err == nil {
+		t.Fatalf("expected error when both activity and tenant org missing")
+	}
+}
+
+func TestUnavailableTargetEmployeeWarning(t *testing.T) {
+	activity := &database.PerformanceActivity{TargetEmployeeIDs: []string{" a ", "b", "a", ""}}
+	active := map[string]database.User{"b": {UserID: "b"}}
+	ids := collectUnavailableTargetEmployeeIDs(activity, active)
+	if len(ids) != 1 || ids[0] != "a" {
+		t.Fatalf("unavailable ids = %#v, want [a]", ids)
+	}
+	warning := unavailableTargetEmployeeWarning(ids)
+	if !strings.Contains(warning, "员工不可用、已离职或不属于当前企业") || !strings.Contains(warning, "a") {
+		t.Fatalf("unexpected warning: %s", warning)
 	}
 }
 
@@ -1659,10 +1741,32 @@ type stubQueryResponse struct {
 	match   func(query string, args []driver.NamedValue) bool
 	columns []string
 	rows    [][]driver.Value
+	err     error
+}
+
+type stubExecResponse struct {
+	match  func(query string, args []driver.NamedValue) bool
+	result driver.Result
+	err    error
+}
+
+type stubPerformanceCall struct {
+	query string
+	args  []driver.NamedValue
 }
 
 type stubPerformanceDB struct {
-	queries []stubQueryResponse
+	mu            sync.Mutex
+	queries       []stubQueryResponse
+	execs         []stubExecResponse
+	queryCalls    []stubPerformanceCall
+	execCalls     []stubPerformanceCall
+	beginCalls    int
+	commitCalls   int
+	rollbackCalls int
+	beginErr      error
+	commitErr     error
+	rollbackErr   error
 }
 
 type stubPerformanceDriver struct{}
@@ -1682,18 +1786,28 @@ type stubPerformanceRows struct {
 	index   int
 }
 
-type stubPerformanceTx struct{}
+type stubPerformanceTx struct {
+	db *stubPerformanceDB
+}
 
-type stubPerformanceResult struct{}
+type stubPerformanceResult struct {
+	lastID int64
+	rows   int64
+}
 
 func newStubPerformanceService(t *testing.T, queries ...stubQueryResponse) *PerformanceService {
+	t.Helper()
+	return newStubPerformanceServiceWithDB(t, &stubPerformanceDB{queries: queries})
+}
+
+func newStubPerformanceServiceWithDB(t *testing.T, stub *stubPerformanceDB) *PerformanceService {
 	t.Helper()
 	stubPerformanceDriverOnce.Do(func() {
 		stdsql.Register(stubPerformanceDriverName, stubPerformanceDriver{})
 	})
 
 	dsn := fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano())
-	stubPerformanceDBs.Store(dsn, &stubPerformanceDB{queries: queries})
+	stubPerformanceDBs.Store(dsn, stub)
 	t.Cleanup(func() {
 		stubPerformanceDBs.Delete(dsn)
 	})
@@ -1713,7 +1827,7 @@ func newStubPerformanceService(t *testing.T, queries ...stubQueryResponse) *Perf
 	if err != nil {
 		t.Fatalf("open stub gorm db: %v", err)
 	}
-	return NewPerformanceService(db)
+	return NewPerformanceServiceWithOrgID(db, "test-org")
 }
 
 func stubTableMatcher(table string) func(string, []driver.NamedValue) bool {
@@ -1744,6 +1858,7 @@ func hrConfirmReminderRecipientsResponse(userIDs ...string) stubQueryResponse {
 func performanceParticipantStubColumns() []string {
 	return []string{
 		"id",
+		"org_id",
 		"activity_id",
 		"employee_id",
 		"employee_name",
@@ -1764,6 +1879,7 @@ func performanceParticipantStubColumns() []string {
 func performanceParticipantStubRow(id int64, status string, selfSummary string, selfScore float64, managerScore float64, finalLevel string, locked bool, employeeConfirmedAt interface{}, managerConfirmedAt interface{}, hrConfirmedAt interface{}) []driver.Value {
 	return []driver.Value{
 		id,
+		"test-org",
 		"activity-1",
 		fmt.Sprintf("user-%d", id),
 		fmt.Sprintf("User %d", id),
@@ -1798,24 +1914,36 @@ func (c *stubPerformanceConn) Close() error {
 }
 
 func (c *stubPerformanceConn) Begin() (driver.Tx, error) {
-	return stubPerformanceTx{}, nil
+	return c.BeginTx(context.Background(), driver.TxOptions{})
 }
 
 func (c *stubPerformanceConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	return stubPerformanceTx{}, nil
+	c.db.mu.Lock()
+	defer c.db.mu.Unlock()
+	c.db.beginCalls++
+	if c.db.beginErr != nil {
+		return nil, c.db.beginErr
+	}
+	return &stubPerformanceTx{db: c.db}, nil
 }
 
 func (c *stubPerformanceConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	return c.query(query, args)
 }
 
-func (c *stubPerformanceConn) ExecContext(_ context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
-	return stubPerformanceResult{}, nil
+func (c *stubPerformanceConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	return c.exec(query, args)
 }
 
 func (c *stubPerformanceConn) query(query string, args []driver.NamedValue) (driver.Rows, error) {
+	c.db.mu.Lock()
+	defer c.db.mu.Unlock()
+	c.db.queryCalls = append(c.db.queryCalls, stubPerformanceCall{query: query, args: append([]driver.NamedValue(nil), args...)})
 	for _, response := range c.db.queries {
 		if response.match != nil && response.match(query, args) {
+			if response.err != nil {
+				return nil, response.err
+			}
 			rows := make([][]driver.Value, len(response.rows))
 			for i := range response.rows {
 				rows[i] = append([]driver.Value(nil), response.rows[i]...)
@@ -1829,6 +1957,24 @@ func (c *stubPerformanceConn) query(query string, args []driver.NamedValue) (dri
 	return nil, fmt.Errorf("unexpected query: %s", query)
 }
 
+func (c *stubPerformanceConn) exec(query string, args []driver.NamedValue) (driver.Result, error) {
+	c.db.mu.Lock()
+	defer c.db.mu.Unlock()
+	c.db.execCalls = append(c.db.execCalls, stubPerformanceCall{query: query, args: append([]driver.NamedValue(nil), args...)})
+	for _, response := range c.db.execs {
+		if response.match != nil && response.match(query, args) {
+			if response.err != nil {
+				return nil, response.err
+			}
+			if response.result != nil {
+				return response.result, nil
+			}
+			return stubPerformanceResult{lastID: 1, rows: 1}, nil
+		}
+	}
+	return stubPerformanceResult{lastID: 1, rows: 1}, nil
+}
+
 func (s *stubPerformanceStmt) Close() error {
 	return nil
 }
@@ -1837,8 +1983,12 @@ func (s *stubPerformanceStmt) NumInput() int {
 	return -1
 }
 
-func (s *stubPerformanceStmt) Exec(_ []driver.Value) (driver.Result, error) {
-	return stubPerformanceResult{}, nil
+func (s *stubPerformanceStmt) Exec(args []driver.Value) (driver.Result, error) {
+	named := make([]driver.NamedValue, len(args))
+	for i, arg := range args {
+		named[i] = driver.NamedValue{Ordinal: i + 1, Value: arg}
+	}
+	return s.conn.exec(s.query, named)
 }
 
 func (s *stubPerformanceStmt) Query(args []driver.Value) (driver.Rows, error) {
@@ -1872,18 +2022,40 @@ func (r *stubPerformanceRows) Next(dest []driver.Value) error {
 	return nil
 }
 
-func (stubPerformanceTx) Commit() error {
+func (tx *stubPerformanceTx) Commit() error {
+	if tx.db != nil {
+		tx.db.mu.Lock()
+		defer tx.db.mu.Unlock()
+		tx.db.commitCalls++
+		if tx.db.commitErr != nil {
+			return tx.db.commitErr
+		}
+	}
 	return nil
 }
 
-func (stubPerformanceTx) Rollback() error {
+func (tx *stubPerformanceTx) Rollback() error {
+	if tx.db != nil {
+		tx.db.mu.Lock()
+		defer tx.db.mu.Unlock()
+		tx.db.rollbackCalls++
+		if tx.db.rollbackErr != nil {
+			return tx.db.rollbackErr
+		}
+	}
 	return nil
 }
 
-func (stubPerformanceResult) LastInsertId() (int64, error) {
-	return 1, nil
+func (r stubPerformanceResult) LastInsertId() (int64, error) {
+	if r.lastID == 0 {
+		return 1, nil
+	}
+	return r.lastID, nil
 }
 
-func (stubPerformanceResult) RowsAffected() (int64, error) {
-	return 1, nil
+func (r stubPerformanceResult) RowsAffected() (int64, error) {
+	if r.rows == 0 {
+		return 1, nil
+	}
+	return r.rows, nil
 }

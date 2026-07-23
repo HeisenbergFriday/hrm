@@ -21,8 +21,9 @@ import (
 )
 
 type PerformanceService struct {
-	db    *gorm.DB
-	orgID string
+	db     *gorm.DB
+	orgID  string
+	orgErr error
 
 	actRepo      *repository.PerformanceActivityRepository
 	ruleRepo     *repository.PerformanceDistributionRuleRepository
@@ -44,7 +45,43 @@ const (
 	managerRecheckNotificationWindow       = time.Hour
 )
 
-var sendPerformanceActionCardToUser = dingtalk.SendCorpActionCardToUser
+// sendPerformanceActionCardToUser is the injectable org-aware DingTalk sender.
+// Signature must include orgID so tests and production never silently default the tenant.
+var sendPerformanceActionCardToUser = dingtalk.SendCorpActionCardToUserForOrg
+
+// buildPerformanceAppURL is injectable for tests; production uses org-aware DingTalk helper.
+var buildPerformanceAppURL = dingtalk.BuildAppURLForOrg
+
+var (
+	ErrMissingOrgContext           = errors.New("performance service: missing org context")
+	ErrOrgContextMismatch          = errors.New("performance service: tenant org context conflicts with request info org")
+	ErrPerformanceNoticeMissingOrg = errors.New("performance notice missing org_id")
+)
+
+// performanceNoticeOrgID returns the first non-empty org candidate; fail-closed when none.
+func performanceNoticeOrgID(candidates ...string) (string, error) {
+	for _, candidate := range candidates {
+		if orgID := strings.TrimSpace(candidate); orgID != "" {
+			return orgID, nil
+		}
+	}
+	return "", ErrPerformanceNoticeMissingOrg
+}
+
+// sendPerformanceActionCard sends an action card after fail-closed org validation.
+func sendPerformanceActionCard(orgID, userID, title, content, actionTitle, actionURL string) error {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return ErrPerformanceNoticeMissingOrg
+	}
+	return sendPerformanceActionCardToUser(orgID, userID, title, content, actionTitle, actionURL)
+}
+
+// SendPerformanceActionCard is the shared org-aware notice entry for handlers, services and background jobs.
+// Callers must pass a validated activity/participant orgID; missing org fails closed and never defaults.
+func SendPerformanceActionCard(orgID, userID, title, content, actionTitle, actionURL string) error {
+	return sendPerformanceActionCard(orgID, userID, title, content, actionTitle, actionURL)
+}
 
 type SelfEvalReminderSendResult struct {
 	Pending                 int                 `json:"pending"`
@@ -109,16 +146,60 @@ type selfEvalReminderSendOptions struct {
 	Now          time.Time
 }
 
-func NewPerformanceService(db *gorm.DB) *PerformanceService {
-	orgID := ""
-	if db != nil {
-		if tenantOrgID, err := requestmeta.TenantID(db.Statement.Context); err == nil {
-			orgID = tenantOrgID
-		}
+// resolvePerformanceServiceOrgID resolves the tenant org from both supported DB context paths.
+// Missing context and conflicting context are rejected; neither path may silently win.
+func resolvePerformanceServiceOrgID(db *gorm.DB) (string, error) {
+	if db == nil || db.Statement == nil || db.Statement.Context == nil {
+		return "", ErrMissingOrgContext
 	}
+	ctx := db.Statement.Context
+	tenantOrgID, tenantErr := requestmeta.TenantID(ctx)
+	if tenantErr != nil {
+		tenantOrgID = ""
+	}
+	tenantOrgID = strings.TrimSpace(tenantOrgID)
+
+	requestInfoOrgID := ""
+	if info := requestmeta.FromContext(ctx); info != nil {
+		requestInfoOrgID = strings.TrimSpace(info.OrgID)
+	}
+
+	if tenantOrgID != "" && requestInfoOrgID != "" && tenantOrgID != requestInfoOrgID {
+		return "", fmt.Errorf("%w: tenant_id=%q request_info_org_id=%q", ErrOrgContextMismatch, tenantOrgID, requestInfoOrgID)
+	}
+	if tenantOrgID != "" {
+		return tenantOrgID, nil
+	}
+	if requestInfoOrgID != "" {
+		return requestInfoOrgID, nil
+	}
+	return "", ErrMissingOrgContext
+}
+
+func NewPerformanceService(db *gorm.DB) *PerformanceService {
+	orgID, err := resolvePerformanceServiceOrgID(db)
+	return newPerformanceService(db, orgID, err)
+}
+
+// NewPerformanceServiceWithOrgID binds an explicit tenant org for per-org background work.
+func NewPerformanceServiceWithOrgID(db *gorm.DB, orgID string) *PerformanceService {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return newPerformanceService(db, "", ErrMissingOrgContext)
+	}
+	return newPerformanceService(db, orgID, nil)
+}
+
+func newPerformanceService(db *gorm.DB, orgID string, orgErr error) *PerformanceService {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" && orgErr == nil {
+		orgErr = ErrMissingOrgContext
+	}
+	db = performanceFailClosedDB(db, orgErr)
 	return &PerformanceService{
 		db:           db,
 		orgID:        orgID,
+		orgErr:       orgErr,
 		actRepo:      repository.NewPerformanceActivityRepositoryWithOrgID(db, orgID),
 		ruleRepo:     repository.NewPerformanceDistributionRuleRepositoryWithOrgID(db, orgID),
 		participantR: repository.NewPerformanceParticipantRepositoryWithOrgID(db, orgID),
@@ -130,11 +211,26 @@ func NewPerformanceService(db *gorm.DB) *PerformanceService {
 	}
 }
 
+func performanceFailClosedDB(db *gorm.DB, err error) *gorm.DB {
+	if db == nil || err == nil || db.Error != nil {
+		return db
+	}
+	tx := db.Session(&gorm.Session{NewDB: true})
+	_ = tx.AddError(err)
+	return tx
+}
+
 func (s *PerformanceService) tenantOrgID() string {
+	if s == nil {
+		return ""
+	}
 	return strings.TrimSpace(s.orgID)
 }
 
 func (s *PerformanceService) scopedDB() *gorm.DB {
+	if s == nil {
+		return nil
+	}
 	return s.scopeOrg(s.db, "org_id")
 }
 
@@ -142,9 +238,15 @@ func (s *PerformanceService) scopeOrg(tx *gorm.DB, column string) *gorm.DB {
 	if tx == nil {
 		return tx
 	}
+	if s == nil {
+		return performanceFailClosedDB(tx, ErrMissingOrgContext)
+	}
+	if s.orgErr != nil {
+		return performanceFailClosedDB(tx, s.orgErr)
+	}
 	orgID := s.tenantOrgID()
 	if orgID == "" {
-		return tx
+		return performanceFailClosedDB(tx, ErrMissingOrgContext)
 	}
 	column = strings.TrimSpace(column)
 	if column == "" {
@@ -169,44 +271,44 @@ func (s *PerformanceService) displayNameForUser(value string) string {
 	return value
 }
 
-func PerformanceSelfEvalURL(activityID string, participantID uint) string {
+func PerformanceSelfEvalURL(orgID, activityID string, participantID uint) string {
 	activityID = strings.TrimSpace(activityID)
 	if activityID == "" || participantID == 0 {
 		return ""
 	}
-	return dingtalk.BuildAppURL(fmt.Sprintf("/performance-self-eval/%s/%d", url.PathEscape(activityID), participantID))
+	return buildPerformanceAppURL(orgID, fmt.Sprintf("/performance-self-eval/%s/%d", url.PathEscape(activityID), participantID))
 }
 
-func PerformanceManagerEvalURL(activityID string, participantID uint) string {
+func PerformanceManagerEvalURL(orgID, activityID string, participantID uint) string {
 	activityID = strings.TrimSpace(activityID)
 	if activityID == "" || participantID == 0 {
 		return ""
 	}
-	return dingtalk.BuildAppURL(fmt.Sprintf("/performance-manager-eval/%s/%d", url.PathEscape(activityID), participantID))
+	return buildPerformanceAppURL(orgID, fmt.Sprintf("/performance-manager-eval/%s/%d", url.PathEscape(activityID), participantID))
 }
 
-func PerformanceGoalSettingURL(activityID string, participantID uint) string {
+func PerformanceGoalSettingURL(orgID, activityID string, participantID uint) string {
 	activityID = strings.TrimSpace(activityID)
 	if activityID == "" || participantID == 0 {
 		return ""
 	}
-	return dingtalk.BuildAppURL(fmt.Sprintf("/performance-goal-setting/%s/%d", url.PathEscape(activityID), participantID))
+	return buildPerformanceAppURL(orgID, fmt.Sprintf("/performance-goal-setting/%s/%d", url.PathEscape(activityID), participantID))
 }
 
-func PerformanceResultURL(activityID string, participantID uint) string {
+func PerformanceResultURL(orgID, activityID string, participantID uint) string {
 	activityID = strings.TrimSpace(activityID)
 	if activityID == "" || participantID == 0 {
 		return ""
 	}
-	return dingtalk.BuildAppURL(fmt.Sprintf("/performance-result/%s/%d", url.PathEscape(activityID), participantID))
+	return buildPerformanceAppURL(orgID, fmt.Sprintf("/performance-result/%s/%d", url.PathEscape(activityID), participantID))
 }
 
-func PerformanceOverviewURL(activityID string) string {
+func PerformanceOverviewURL(orgID, activityID string) string {
 	activityID = strings.TrimSpace(activityID)
 	if activityID == "" {
-		return dingtalk.BuildAppURL("/performance-overview")
+		return buildPerformanceAppURL(orgID, "/performance-overview")
 	}
-	return dingtalk.BuildAppURL(fmt.Sprintf("/performance-overview?activity_id=%s", url.QueryEscape(activityID)))
+	return buildPerformanceAppURL(orgID, fmt.Sprintf("/performance-overview?activity_id=%s", url.QueryEscape(activityID)))
 }
 
 type CreateActivityRequest struct {
@@ -2144,40 +2246,84 @@ type RefreshResult struct {
 	AddedCount                       int      `json:"added_count"`
 	UpdatedCount                     int      `json:"updated_count"`
 	InactiveCount                    int      `json:"inactive_count"`
+	OrgIDFixedCount                  int      `json:"org_id_fixed_count,omitempty"`
 	MissingPreviousPlanEmployeeIDs   []string `json:"missing_previous_plan_employee_ids,omitempty"`
 	MissingPreviousPlanEmployeeNames []string `json:"missing_previous_plan_employee_names,omitempty"`
 	Warnings                         []string `json:"warnings,omitempty"`
 }
 
+func (s *PerformanceService) resolveActivityOrgID(activity *database.PerformanceActivity) (string, error) {
+	if activity == nil {
+		return "", errors.New("活动不存在")
+	}
+	activityOrg := strings.TrimSpace(activity.OrgID)
+	tenantOrg := s.tenantOrgID()
+	if activityOrg != "" && tenantOrg != "" && activityOrg != tenantOrg {
+		return "", errors.New("活动所属企业与当前登录企业不一致")
+	}
+	if activityOrg != "" {
+		return activityOrg, nil
+	}
+	if tenantOrg != "" {
+		return tenantOrg, nil
+	}
+	return "", errors.New("无法确定活动所属企业，禁止写入默认企业")
+}
+
+// RefreshParticipants 刷新活动参与人；内部单事务，避免半完成写入。
 func (s *PerformanceService) RefreshParticipants(activityID, userID string) (*RefreshResult, error) {
-	// 1. 获取活动信息
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
+		return nil, errors.New("活动不存在")
+	}
+
+	var result *RefreshResult
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var locked database.PerformanceActivity
+		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").
+			Where("id = ? AND deleted_at IS NULL", activity.ID).
+			First(&locked).Error; err != nil {
+			return errors.New("活动不存在")
+		}
+		res, err := s.refreshParticipantsTx(tx, &locked, userID)
+		if err != nil {
+			return err
+		}
+		if isNewPerformanceFlow(&locked) {
+			if err := s.syncPreviousPlanRecordsForNewFlowActivityTx(tx, &locked, userID); err != nil {
+				return err
+			}
+			if err := s.appendMissingPreviousPlanWarningsTx(tx, &locked, res); err != nil {
+				return err
+			}
+		}
+		result = res
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// refreshParticipantsTx 在调用方事务内刷新参与人，不开启新事务。
+func (s *PerformanceService) refreshParticipantsTx(tx *gorm.DB, activity *database.PerformanceActivity, userID string) (*RefreshResult, error) {
+	if activity == nil {
 		return nil, errors.New("活动不存在")
 	}
 	if strings.TrimSpace(activity.Status) != "draft" && !isNewPerformanceFlow(activity) {
 		return nil, errors.New("目标设定开启后不能增减参与人")
 	}
-
-	ctx, err := s.buildParticipantRefreshContext(s.db, activity, userID)
+	if tx == nil {
+		tx = s.db
+	}
+	ctx, err := s.buildParticipantRefreshContext(tx, activity, userID)
 	if err != nil {
 		return nil, err
 	}
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		return s.applyParticipantRefresh(tx, ctx)
-	})
-	if err != nil {
+	if err := s.applyParticipantRefresh(tx, ctx); err != nil {
 		return nil, err
 	}
-	if isNewPerformanceFlow(activity) {
-		if err := s.syncPreviousPlanRecordsForNewFlowActivity(activity, userID); err != nil {
-			return nil, err
-		}
-		if err := s.appendMissingPreviousPlanWarnings(activity, ctx.result); err != nil {
-			return nil, err
-		}
-	}
-
 	return ctx.result, nil
 }
 
@@ -2185,6 +2331,7 @@ type participantRefreshContext struct {
 	result                    *RefreshResult
 	activity                  *database.PerformanceActivity
 	activityID                string
+	activityOrgID             string
 	userID                    string
 	allUsers                  []database.User
 	activeUserByID            map[string]database.User
@@ -2204,21 +2351,37 @@ func (s *PerformanceService) buildParticipantRefreshContext(db *gorm.DB, activit
 	if activity == nil || activity.ID == 0 {
 		return nil, errors.New("活动不存在")
 	}
+	if db == nil {
+		db = s.db
+	}
+
+	activityOrgID, err := s.resolveActivityOrgID(activity)
+	if err != nil {
+		return nil, err
+	}
 
 	snapshotAsOf, useSnapshotDate, err := parsePerformanceSnapshotDate(activity.SnapshotAsOfDate)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. 获取所有在职员工（从 User 表）
+	// 当前企业作用域内的有效在职员工；禁止跨企业参与人。
 	var allUsers []database.User
-	if err := db.Where("status = ? AND deleted_at IS NULL", "active").Find(&allUsers).Error; err != nil {
+	userQuery := db.Where("status = ? AND deleted_at IS NULL", "active")
+	if activityOrgID != "" {
+		userQuery = userQuery.Where("org_id = ?", activityOrgID)
+	}
+	if err := userQuery.Find(&allUsers).Error; err != nil {
 		return nil, err
 	}
 
-	// 3. 获取部门信息映射，历史快照回放时也用于补全部门名称
+	// 部门信息映射，历史快照回放时也用于补全部门名称
 	var departments []database.Department
-	if err := db.Where("deleted_at IS NULL").Find(&departments).Error; err != nil {
+	deptQuery := db.Where("deleted_at IS NULL")
+	if activityOrgID != "" {
+		deptQuery = deptQuery.Where("org_id = ?", activityOrgID)
+	}
+	if err := deptQuery.Find(&departments).Error; err != nil {
 		return nil, err
 	}
 	deptMap := make(map[string]database.Department)
@@ -2230,12 +2393,13 @@ func (s *PerformanceService) buildParticipantRefreshContext(db *gorm.DB, activit
 	if useSnapshotDate {
 		userIDs := make([]string, 0, len(allUsers))
 		for _, user := range allUsers {
-			userID := strings.TrimSpace(user.UserID)
-			if userID != "" {
-				userIDs = append(userIDs, userID)
+			uid := strings.TrimSpace(user.UserID)
+			if uid != "" {
+				userIDs = append(userIDs, uid)
 			}
 		}
-		transferHistoryByUserID, err = s.loadPerformanceTransferHistoryByUser(db, userIDs)
+		// 显式按 activity.org_id 过滤调岗记录，避免同一 user_id 跨企业串数据。
+		transferHistoryByUserID, err = s.loadPerformanceTransferHistoryByUser(db, activityOrgID, userIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -2245,19 +2409,29 @@ func (s *PerformanceService) buildParticipantRefreshContext(db *gorm.DB, activit
 	users := make([]database.User, 0, len(allUsers))
 	orgSnapshotByUserID := make(map[string]performanceOrgSnapshot, len(allUsers))
 	for _, user := range allUsers {
-		activeUserByID[user.UserID] = user
-		orgSnapshot := performanceOrgSnapshotForUser(user, transferHistoryByUserID[user.UserID], snapshotAsOf, useSnapshotDate, deptMap)
-		orgSnapshotByUserID[user.UserID] = orgSnapshot
+		uid := strings.TrimSpace(user.UserID)
+		if uid == "" {
+			continue
+		}
+		activeUserByID[uid] = user
+		orgSnapshot := performanceOrgSnapshotForUser(user, transferHistoryByUserID[uid], snapshotAsOf, useSnapshotDate, deptMap)
+		orgSnapshotByUserID[uid] = orgSnapshot
 		if activityIncludesUserInDepartment(activity, user, orgSnapshot.DepartmentID) {
 			users = append(users, user)
 		}
 	}
 	managerAssignmentByUserID := activityManagerAssignmentsByUser(activity.ManagerAssignments)
 
+	result := &RefreshResult{}
+	if warning := unavailableTargetEmployeeWarning(collectUnavailableTargetEmployeeIDs(activity, activeUserByID)); warning != "" {
+		result.Warnings = append(result.Warnings, warning)
+	}
+
 	return &participantRefreshContext{
-		result:                    &RefreshResult{},
+		result:                    result,
 		activity:                  activity,
 		activityID:                strconv.FormatUint(uint64(activity.ID), 10),
+		activityOrgID:             activityOrgID,
 		userID:                    userID,
 		allUsers:                  allUsers,
 		activeUserByID:            activeUserByID,
@@ -2272,28 +2446,46 @@ func (s *PerformanceService) applyParticipantRefresh(tx *gorm.DB, ctx *participa
 	if ctx == nil {
 		return errors.New("活动不存在")
 	}
+	activityOrgID := strings.TrimSpace(ctx.activityOrgID)
+	if activityOrgID == "" {
+		return errors.New("无法确定活动所属企业，禁止写入默认企业")
+	}
 
 	var txParticipants []database.PerformanceParticipant
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("activity_id = ? AND deleted_at IS NULL", ctx.activityID).Find(&txParticipants).Error; err != nil {
+	participantQuery := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("activity_id = ? AND deleted_at IS NULL", ctx.activityID)
+	// 仅处理当前活动下、归属该企业或历史脏 org_id 的参与人；修复时一律以 activity.org_id 为准。
+	if err := participantQuery.Find(&txParticipants).Error; err != nil {
 		return err
 	}
 	existingMap := make(map[string]*database.PerformanceParticipant)
 	for i := range txParticipants {
-		existingMap[txParticipants[i].EmployeeID] = &txParticipants[i]
+		employeeID := strings.TrimSpace(txParticipants[i].EmployeeID)
+		if employeeID == "" {
+			continue
+		}
+		existingMap[employeeID] = &txParticipants[i]
 	}
 
 	now := time.Now()
 	for _, user := range ctx.users {
-		orgSnapshot := ctx.orgSnapshotByUserID[user.UserID]
+		uid := strings.TrimSpace(user.UserID)
+		if uid == "" {
+			continue
+		}
+		orgSnapshot := ctx.orgSnapshotByUserID[uid]
 		if strings.TrimSpace(orgSnapshot.DepartmentID) == "" {
 			orgSnapshot = performanceOrgSnapshotForUser(user, nil, time.Time{}, false, ctx.deptMap)
 		}
 		profileUser := userWithPerformanceOrgSnapshot(user, orgSnapshot)
 
-		existing, exists := existingMap[user.UserID]
+		existing, exists := existingMap[uid]
 		if exists {
 			changed, changeLogs := refreshPerformanceParticipantProfile(existing, profileUser, orgSnapshot.DepartmentName, ctx.activityID, ctx.userID, now)
-			if assignment, ok := ctx.managerAssignmentByUserID[user.UserID]; ok && shouldApplyActivityManagerAssignment(existing) {
+			if fixed := ensureParticipantOrgID(existing, activityOrgID); fixed {
+				changed = true
+				ctx.result.OrgIDFixedCount++
+			}
+			if assignment, ok := ctx.managerAssignmentByUserID[uid]; ok && shouldApplyActivityManagerAssignment(existing) {
 				managerChanged, managerLog := applyActivityManagerAssignment(existing, assignment, ctx.activeUserByID, ctx.userID, now)
 				if managerChanged {
 					changed = true
@@ -2306,8 +2498,9 @@ func (s *PerformanceService) applyParticipantRefresh(tx *gorm.DB, ctx *participa
 				if err := tx.Save(existing).Error; err != nil {
 					return err
 				}
-				for _, log := range changeLogs {
-					if err := tx.Create(&log).Error; err != nil {
+				for i := range changeLogs {
+					changeLogs[i].OrgID = activityOrgID
+					if err := tx.Create(&changeLogs[i]).Error; err != nil {
 						return err
 					}
 				}
@@ -2315,14 +2508,16 @@ func (s *PerformanceService) applyParticipantRefresh(tx *gorm.DB, ctx *participa
 			}
 		} else {
 			participant := s.newPerformanceParticipantForActivity(ctx.activity, ctx.userID, profileUser, orgSnapshot.DepartmentName)
+			participant.OrgID = activityOrgID
 			managerChanged, managerLog := false, (*database.PerformanceRelationshipChangeLog)(nil)
-			if assignment, ok := ctx.managerAssignmentByUserID[user.UserID]; ok {
+			if assignment, ok := ctx.managerAssignmentByUserID[uid]; ok {
 				managerChanged, managerLog = applyActivityManagerAssignment(&participant, assignment, ctx.activeUserByID, ctx.userID, now)
 			}
 			if err := tx.Create(&participant).Error; err != nil {
 				return err
 			}
 			if managerChanged && managerLog != nil {
+				managerLog.OrgID = activityOrgID
 				managerLog.ParticipantID = participant.ID
 				if err := tx.Create(managerLog).Error; err != nil {
 					return err
@@ -2335,81 +2530,111 @@ func (s *PerformanceService) applyParticipantRefresh(tx *gorm.DB, ctx *participa
 	// 标记离职或不再属于活动范围的员工
 	scopedUserIDs := make(map[string]bool)
 	for _, u := range ctx.users {
-		scopedUserIDs[u.UserID] = true
+		scopedUserIDs[strings.TrimSpace(u.UserID)] = true
 	}
 	allActiveUserIDs := make(map[string]bool)
 	for _, u := range ctx.allUsers {
-		allActiveUserIDs[u.UserID] = true
+		allActiveUserIDs[strings.TrimSpace(u.UserID)] = true
 	}
 	for i := range txParticipants {
 		p := &txParticipants[i]
-		if !scopedUserIDs[p.EmployeeID] {
-			newEmployeeStatus := p.EmployeeStatus
-			changeType := "removed_from_scope"
-			if !allActiveUserIDs[p.EmployeeID] {
-				newEmployeeStatus = "inactive"
-				changeType = "employee_inactive"
+		employeeID := strings.TrimSpace(p.EmployeeID)
+		if scopedUserIDs[employeeID] {
+			if ensureParticipantOrgID(p, activityOrgID) {
+				if err := tx.Save(p).Error; err != nil {
+					return err
+				}
+				ctx.result.OrgIDFixedCount++
+				ctx.result.UpdatedCount++
 			}
-			if p.Status == "removed_from_scope" && p.EmployeeStatus == newEmployeeStatus {
-				continue
-			}
-			oldStatus := p.Status
-			oldEmployeeStatus := p.EmployeeStatus
-			p.EmployeeStatus = newEmployeeStatus
-			p.Status = "removed_from_scope"
-			p.UpdatedBy = ctx.userID
-			if isNewPerformanceFlow(ctx.activity) && strings.TrimSpace(ctx.activity.Status) != "draft" {
-				p.RemovedReason = "活动开启后刷新参与范围自动移除"
-				p.RemovedAt = &now
-				p.RemovedBy = ctx.userID
-				p.DeletedAt = &now
-			}
-			if err := tx.Save(p).Error; err != nil {
-				return err
-			}
+			continue
+		}
+		newEmployeeStatus := p.EmployeeStatus
+		changeType := "removed_from_scope"
+		if !allActiveUserIDs[employeeID] {
+			newEmployeeStatus = "inactive"
+			changeType = "employee_inactive"
+		}
+		orgFixed := ensureParticipantOrgID(p, activityOrgID)
+		if p.Status == "removed_from_scope" && p.EmployeeStatus == newEmployeeStatus && !orgFixed {
+			continue
+		}
+		oldStatus := p.Status
+		oldEmployeeStatus := p.EmployeeStatus
+		p.EmployeeStatus = newEmployeeStatus
+		p.Status = "removed_from_scope"
+		p.UpdatedBy = ctx.userID
+		if isNewPerformanceFlow(ctx.activity) && strings.TrimSpace(ctx.activity.Status) != "draft" {
+			p.RemovedReason = "活动开启后刷新参与范围自动移除"
+			p.RemovedAt = &now
+			p.RemovedBy = ctx.userID
+			p.DeletedAt = &now
+		}
+		if err := tx.Save(p).Error; err != nil {
+			return err
+		}
+		if orgFixed {
+			ctx.result.OrgIDFixedCount++
+		}
 
-			if err := tx.Create(&database.PerformanceRelationshipChangeLog{
-				ActivityID:    ctx.activityID,
+		if err := tx.Create(&database.PerformanceRelationshipChangeLog{
+			OrgID:         activityOrgID,
+			ActivityID:    ctx.activityID,
+			ParticipantID: p.ID,
+			ChangeType:    changeType,
+			FieldName:     "status",
+			OldValue:      fmt.Sprintf("%s/%s", oldStatus, oldEmployeeStatus),
+			NewValue:      fmt.Sprintf("%s/%s", p.Status, p.EmployeeStatus),
+			ChangedAt:     now,
+			Source:        "refresh_participants",
+			CreatedBy:     ctx.userID,
+		}).Error; err != nil {
+			return err
+		}
+		if isNewPerformanceFlow(ctx.activity) && strings.TrimSpace(ctx.activity.Status) != "draft" {
+			if err := tx.Create(&database.PerformanceReviewVersion{
+				OrgID:         activityOrgID,
 				ParticipantID: p.ID,
-				ChangeType:    changeType,
-				FieldName:     "status",
-				OldValue:      fmt.Sprintf("%s/%s", oldStatus, oldEmployeeStatus),
-				NewValue:      fmt.Sprintf("%s/%s", p.Status, p.EmployeeStatus),
-				ChangedAt:     now,
-				Source:        "refresh_participants",
+				ActivityID:    ctx.activityID,
+				ReviewType:    "participant_removed",
+				AdjustReason:  p.RemovedReason,
 				CreatedBy:     ctx.userID,
+				OperationMeta: map[string]interface{}{
+					"old_status":          oldStatus,
+					"new_status":          p.Status,
+					"old_employee_status": oldEmployeeStatus,
+					"new_employee_status": p.EmployeeStatus,
+					"source":              "refresh_participants",
+				},
 			}).Error; err != nil {
 				return err
 			}
-			if isNewPerformanceFlow(ctx.activity) && strings.TrimSpace(ctx.activity.Status) != "draft" {
-				if err := tx.Create(&database.PerformanceReviewVersion{
-					ParticipantID: p.ID,
-					ActivityID:    ctx.activityID,
-					ReviewType:    "participant_removed",
-					AdjustReason:  p.RemovedReason,
-					CreatedBy:     ctx.userID,
-					OperationMeta: map[string]interface{}{
-						"old_status":          oldStatus,
-						"new_status":          p.Status,
-						"old_employee_status": oldEmployeeStatus,
-						"new_employee_status": p.EmployeeStatus,
-						"source":              "refresh_participants",
-					},
-				}).Error; err != nil {
-					return err
-				}
-			}
-			ctx.result.InactiveCount++
 		}
+		ctx.result.InactiveCount++
 	}
 
 	return nil
 }
 
+func ensureParticipantOrgID(participant *database.PerformanceParticipant, activityOrgID string) bool {
+	if participant == nil {
+		return false
+	}
+	activityOrgID = strings.TrimSpace(activityOrgID)
+	if activityOrgID == "" {
+		return false
+	}
+	if strings.TrimSpace(participant.OrgID) == activityOrgID {
+		return false
+	}
+	participant.OrgID = activityOrgID
+	return true
+}
+
 func newPerformanceParticipantFromUser(activityID, operatorID string, user database.User, deptName string) database.PerformanceParticipant {
 	participant := database.PerformanceParticipant{
 		ActivityID:          activityID,
-		EmployeeID:          user.UserID,
+		EmployeeID:          strings.TrimSpace(user.UserID),
 		EmployeeName:        user.Name,
 		DepartmentID:        user.DepartmentID,
 		DepartmentName:      deptName,
@@ -2445,6 +2670,9 @@ func (s *PerformanceService) newPerformanceParticipantForActivity(activity *data
 	}
 	participant := newPerformanceParticipantFromUser(activityID, operatorID, user, deptName)
 	if activity != nil {
+		if orgID, err := s.resolveActivityOrgID(activity); err == nil {
+			participant.OrgID = orgID
+		}
 		participant.SnapshotSource = strings.TrimSpace(activity.SnapshotSource)
 		participant.SnapshotAsOfDate = strings.TrimSpace(activity.SnapshotAsOfDate)
 		if isNewPerformanceFlow(activity) {
@@ -2655,6 +2883,15 @@ func activityIncludesUser(activity *database.PerformanceActivity, user database.
 }
 
 func activityIncludesUserInDepartment(activity *database.PerformanceActivity, user database.User, scopedDepartmentID string) bool {
+	if activity == nil {
+		return false
+	}
+
+	userID := strings.TrimSpace(user.UserID)
+	scopedDepartmentID = strings.TrimSpace(scopedDepartmentID)
+
+	// 指定员工 ∪ 指定部门：任一命中即纳入；两者都未配置时表示当前企业全部有效在职员工。
+	matchedEmployee := false
 	hasEmployeeScope := false
 	for _, employeeID := range activity.TargetEmployeeIDs {
 		employeeID = strings.TrimSpace(employeeID)
@@ -2662,16 +2899,14 @@ func activityIncludesUserInDepartment(activity *database.PerformanceActivity, us
 			continue
 		}
 		hasEmployeeScope = true
-		if employeeID == user.UserID {
-			return true
+		if employeeID == userID {
+			matchedEmployee = true
+			break
 		}
 	}
-	if hasEmployeeScope {
-		return false
-	}
 
+	matchedDepartment := false
 	hasDepartmentScope := false
-	scopedDepartmentID = strings.TrimSpace(scopedDepartmentID)
 	for _, targetDepartmentID := range activity.TargetDepartmentIDs {
 		targetDepartmentID = strings.TrimSpace(targetDepartmentID)
 		if targetDepartmentID == "" {
@@ -2679,10 +2914,46 @@ func activityIncludesUserInDepartment(activity *database.PerformanceActivity, us
 		}
 		hasDepartmentScope = true
 		if targetDepartmentID == scopedDepartmentID {
-			return true
+			matchedDepartment = true
+			break
 		}
 	}
-	return !hasDepartmentScope
+
+	if !hasEmployeeScope && !hasDepartmentScope {
+		return true
+	}
+	return matchedEmployee || matchedDepartment
+}
+
+func collectUnavailableTargetEmployeeIDs(activity *database.PerformanceActivity, activeUserByID map[string]database.User) []string {
+	if activity == nil || len(activity.TargetEmployeeIDs) == 0 {
+		return nil
+	}
+	unavailable := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, employeeID := range activity.TargetEmployeeIDs {
+		employeeID = strings.TrimSpace(employeeID)
+		if employeeID == "" {
+			continue
+		}
+		if _, ok := seen[employeeID]; ok {
+			continue
+		}
+		seen[employeeID] = struct{}{}
+		if _, ok := activeUserByID[employeeID]; !ok {
+			// 当前企业作用域内查不到有效在职用户：不可用/已离职/不属于当前企业，统一口径，避免泄露跨企业信息。
+			unavailable = append(unavailable, employeeID)
+		}
+	}
+	return unavailable
+}
+
+func unavailableTargetEmployeeWarning(employeeIDs []string) string {
+	ids := uniqueStrings(employeeIDs)
+	if len(ids) == 0 {
+		return ""
+	}
+	return "以下员工不可用、已离职或不属于当前企业：" + strings.Join(ids, "、")
 }
 
 func parsePerformanceSnapshotDate(value string) (time.Time, bool, error) {
@@ -2697,24 +2968,40 @@ func parsePerformanceSnapshotDate(value string) (time.Time, bool, error) {
 	return parsed, true, nil
 }
 
-func (s *PerformanceService) loadPerformanceTransferHistoryByUser(db *gorm.DB, userIDs []string) (map[string][]database.EmployeeTransfer, error) {
+// loadPerformanceTransferHistoryByUser 按 user_id 加载调岗历史，并强制按 activityOrgID 过滤。
+// 不依赖全局 GORM org callback：同一 user_id 可能存在于多个企业，必须显式隔离。
+func (s *PerformanceService) loadPerformanceTransferHistoryByUser(db *gorm.DB, activityOrgID string, userIDs []string) (map[string][]database.EmployeeTransfer, error) {
 	result := make(map[string][]database.EmployeeTransfer)
 	normalizedUserIDs := uniqueStrings(userIDs)
 	if len(normalizedUserIDs) == 0 {
 		return result, nil
 	}
+	if db == nil {
+		db = s.db
+	}
+
+	query := db.Where("deleted_at IS NULL").
+		Where("user_id IN ?", normalizedUserIDs).
+		Where("LOWER(status) IN ?", []string{"approved", "completed"})
+	activityOrgID = strings.TrimSpace(activityOrgID)
+	if activityOrgID != "" {
+		query = query.Where("org_id = ?", activityOrgID)
+	} else if tenant := s.tenantOrgID(); tenant != "" {
+		// 防御：调用方未传 activity org 时退回到租户上下文，仍禁止无 org 全表扫。
+		query = query.Where("org_id = ?", tenant)
+	}
 
 	var transfers []database.EmployeeTransfer
-	if err := db.Where("deleted_at IS NULL").
-		Where("user_id IN ?", normalizedUserIDs).
-		Where("LOWER(status) IN ?", []string{"approved", "completed"}).
-		Order("transfer_date ASC, id ASC").
-		Find(&transfers).Error; err != nil {
+	if err := query.Order("transfer_date ASC, id ASC").Find(&transfers).Error; err != nil {
 		return nil, err
 	}
 	for _, transfer := range transfers {
 		userID := strings.TrimSpace(transfer.UserID)
 		if userID == "" {
+			continue
+		}
+		// 二次防御：即使 query 层漏过滤，也丢弃跨企业记录。
+		if activityOrgID != "" && strings.TrimSpace(transfer.OrgID) != "" && strings.TrimSpace(transfer.OrgID) != activityOrgID {
 			continue
 		}
 		result[userID] = append(result[userID], transfer)
@@ -4753,8 +5040,17 @@ func clonePlanRecordAsReview(source database.PerformanceGoalRecord, currentActiv
 }
 
 func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity *database.PerformanceActivity, userID string) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		return s.syncPreviousPlanRecordsForNewFlowActivityTx(tx, activity, userID)
+	})
+}
+
+func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivityTx(tx *gorm.DB, activity *database.PerformanceActivity, userID string) error {
 	if activity == nil || !isNewPerformanceFlow(activity) || activity.ID == 0 {
 		return nil
+	}
+	if tx == nil {
+		tx = s.db
 	}
 	previous, err := s.findPreviousPlanActivity(activity)
 	if err != nil || previous == nil || previous.ID == 0 || previous.ID == activity.ID {
@@ -4763,124 +5059,107 @@ func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity 
 
 	currentActivityID := strconv.FormatUint(uint64(activity.ID), 10)
 	previousActivityID := strconv.FormatUint(uint64(previous.ID), 10)
-	orgID := strings.TrimSpace(activity.OrgID)
+	orgID, err := s.resolveActivityOrgID(activity)
+	if err != nil {
+		return err
+	}
 	now := time.Now()
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		var participants []database.PerformanceParticipant
-		participantQuery := tx.Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", currentActivityID, ignoredParticipantStatusList())
-		if orgID != "" {
-			participantQuery = participantQuery.Where("org_id = ?", orgID)
+	var participants []database.PerformanceParticipant
+	participantQuery := tx.Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", currentActivityID, ignoredParticipantStatusList())
+	if orgID != "" {
+		participantQuery = participantQuery.Where("org_id = ?", orgID)
+	}
+	if err := participantQuery.Find(&participants).Error; err != nil {
+		return err
+	}
+	if len(participants) == 0 {
+		return nil
+	}
+
+	employeeIDs := make([]string, 0, len(participants))
+	for _, participant := range participants {
+		if employeeID := strings.TrimSpace(participant.EmployeeID); employeeID != "" {
+			employeeIDs = append(employeeIDs, employeeID)
 		}
-		if err := participantQuery.Find(&participants).Error; err != nil {
+	}
+	if len(employeeIDs) == 0 {
+		return nil
+	}
+
+	var previousParticipants []database.PerformanceParticipant
+	previousParticipantQuery := tx.Where("activity_id = ? AND employee_id IN ? AND deleted_at IS NULL", previousActivityID, employeeIDs)
+	if orgID != "" {
+		previousParticipantQuery = previousParticipantQuery.Where("org_id = ?", orgID)
+	}
+	if err := previousParticipantQuery.Find(&previousParticipants).Error; err != nil {
+		return err
+	}
+	if len(previousParticipants) == 0 {
+		return nil
+	}
+
+	previousByEmployeeID := make(map[string]database.PerformanceParticipant, len(previousParticipants))
+	previousParticipantIDs := make([]uint, 0, len(previousParticipants))
+	for _, participant := range previousParticipants {
+		previousByEmployeeID[strings.TrimSpace(participant.EmployeeID)] = participant
+		previousParticipantIDs = append(previousParticipantIDs, participant.ID)
+	}
+
+	var sourceRecords []database.PerformanceGoalRecord
+	sourceRecordQuery := tx.Where(
+		"activity_id = ? AND participant_id IN ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
+		previousActivityID,
+		previousParticipantIDs,
+		PerformanceGoalPhasePlan,
+		[]string{"quantitative", "key_action"},
+	)
+	if orgID != "" {
+		sourceRecordQuery = sourceRecordQuery.Where("org_id = ?", orgID)
+	}
+	if err := sourceRecordQuery.Order("participant_id ASC, sort_order ASC, id ASC").Find(&sourceRecords).Error; err != nil {
+		return err
+	}
+	if len(sourceRecords) == 0 {
+		return nil
+	}
+
+	sourceRecordsByParticipantID := make(map[uint][]database.PerformanceGoalRecord)
+	for _, record := range sourceRecords {
+		sourceRecordsByParticipantID[record.ParticipantID] = append(sourceRecordsByParticipantID[record.ParticipantID], record)
+	}
+
+	if activity.PreviousReviewActivityID == nil || *activity.PreviousReviewActivityID == 0 {
+		previousID := previous.ID
+		if err := s.scopeOrg(tx.Model(&database.PerformanceActivity{}), "org_id").
+			Where("id = ?", activity.ID).
+			Updates(map[string]interface{}{"previous_review_activity_id": previousID, "updated_by": userID}).Error; err != nil {
 			return err
 		}
-		if len(participants) == 0 {
-			return nil
+		activity.PreviousReviewActivityID = &previousID
+	}
+
+	for _, participant := range participants {
+		previousParticipant, ok := previousByEmployeeID[strings.TrimSpace(participant.EmployeeID)]
+		if !ok {
+			continue
+		}
+		records := sourceRecordsByParticipantID[previousParticipant.ID]
+		if len(records) == 0 {
+			continue
 		}
 
-		employeeIDs := make([]string, 0, len(participants))
-		for _, participant := range participants {
-			if employeeID := strings.TrimSpace(participant.EmployeeID); employeeID != "" {
-				employeeIDs = append(employeeIDs, employeeID)
-			}
-		}
-		if len(employeeIDs) == 0 {
-			return nil
-		}
-
-		var previousParticipants []database.PerformanceParticipant
-		previousParticipantQuery := tx.Where("activity_id = ? AND employee_id IN ? AND deleted_at IS NULL", previousActivityID, employeeIDs)
-		if orgID != "" {
-			previousParticipantQuery = previousParticipantQuery.Where("org_id = ?", orgID)
-		}
-		if err := previousParticipantQuery.Find(&previousParticipants).Error; err != nil {
+		var existingCount int64
+		if err := s.scopeOrg(tx.Model(&database.PerformanceGoalRecord{}), "org_id").
+			Where("activity_id = ? AND participant_id = ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
+				currentActivityID,
+				participant.ID,
+				PerformanceGoalPhaseReview,
+				[]string{"quantitative", "key_action"},
+			).Count(&existingCount).Error; err != nil {
 			return err
 		}
-		if len(previousParticipants) == 0 {
-			return nil
-		}
-
-		previousByEmployeeID := make(map[string]database.PerformanceParticipant, len(previousParticipants))
-		previousParticipantIDs := make([]uint, 0, len(previousParticipants))
-		for _, participant := range previousParticipants {
-			previousByEmployeeID[strings.TrimSpace(participant.EmployeeID)] = participant
-			previousParticipantIDs = append(previousParticipantIDs, participant.ID)
-		}
-
-		var sourceRecords []database.PerformanceGoalRecord
-		sourceRecordQuery := tx.Where(
-			"activity_id = ? AND participant_id IN ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
-			previousActivityID,
-			previousParticipantIDs,
-			PerformanceGoalPhasePlan,
-			[]string{"quantitative", "key_action"},
-		)
-		if orgID != "" {
-			sourceRecordQuery = sourceRecordQuery.Where("org_id = ?", orgID)
-		}
-		if err := sourceRecordQuery.Order("participant_id ASC, sort_order ASC, id ASC").Find(&sourceRecords).Error; err != nil {
-			return err
-		}
-		if len(sourceRecords) == 0 {
-			return nil
-		}
-
-		sourceRecordsByParticipantID := make(map[uint][]database.PerformanceGoalRecord)
-		for _, record := range sourceRecords {
-			sourceRecordsByParticipantID[record.ParticipantID] = append(sourceRecordsByParticipantID[record.ParticipantID], record)
-		}
-
-		if activity.PreviousReviewActivityID == nil || *activity.PreviousReviewActivityID == 0 {
-			previousID := previous.ID
-			if err := s.scopeOrg(tx.Model(&database.PerformanceActivity{}), "org_id").
-				Where("id = ?", activity.ID).
-				Updates(map[string]interface{}{"previous_review_activity_id": previousID, "updated_by": userID}).Error; err != nil {
-				return err
-			}
-			activity.PreviousReviewActivityID = &previousID
-		}
-
-		for _, participant := range participants {
-			previousParticipant, ok := previousByEmployeeID[strings.TrimSpace(participant.EmployeeID)]
-			if !ok {
-				continue
-			}
-			records := sourceRecordsByParticipantID[previousParticipant.ID]
-			if len(records) == 0 {
-				continue
-			}
-
-			var existingCount int64
-			if err := s.scopeOrg(tx.Model(&database.PerformanceGoalRecord{}), "org_id").
-				Where("activity_id = ? AND participant_id = ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
-					currentActivityID,
-					participant.ID,
-					PerformanceGoalPhaseReview,
-					[]string{"quantitative", "key_action"},
-				).Count(&existingCount).Error; err != nil {
-				return err
-			}
-			if existingCount > 0 {
-				if canMarkReviewGoalsReady(participant.Status) {
-					if err := tx.Model(&database.PerformanceParticipant{}).
-						Where("id = ? AND deleted_at IS NULL", participant.ID).
-						Updates(map[string]interface{}{"status": "target_set", "updated_by": userID}).Error; err != nil {
-						return err
-					}
-				}
-				continue
-			}
-
-			newRecords := make([]database.PerformanceGoalRecord, 0, len(records))
-			for _, source := range records {
-				record := clonePlanRecordAsReview(source, currentActivityID, participant.ID, now)
-				record.OrgID = orgID
-				newRecords = append(newRecords, record)
-			}
-			if err := tx.Create(&newRecords).Error; err != nil {
-				return err
-			}
+		if existingCount > 0 {
 			if canMarkReviewGoalsReady(participant.Status) {
 				if err := tx.Model(&database.PerformanceParticipant{}).
 					Where("id = ? AND deleted_at IS NULL", participant.ID).
@@ -4888,9 +5167,94 @@ func (s *PerformanceService) syncPreviousPlanRecordsForNewFlowActivity(activity 
 					return err
 				}
 			}
+			continue
 		}
+
+		newRecords := make([]database.PerformanceGoalRecord, 0, len(records))
+		for _, source := range records {
+			record := clonePlanRecordAsReview(source, currentActivityID, participant.ID, now)
+			record.OrgID = orgID
+			newRecords = append(newRecords, record)
+		}
+		if err := tx.Create(&newRecords).Error; err != nil {
+			return err
+		}
+		if canMarkReviewGoalsReady(participant.Status) {
+			if err := tx.Model(&database.PerformanceParticipant{}).
+				Where("id = ? AND deleted_at IS NULL", participant.ID).
+				Updates(map[string]interface{}{"status": "target_set", "updated_by": userID}).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *PerformanceService) appendMissingPreviousPlanWarningsTx(tx *gorm.DB, activity *database.PerformanceActivity, result *RefreshResult) error {
+	if activity == nil || result == nil || !isNewPerformanceFlow(activity) || isMutengGoalSettingActivity(activity) || activity.ID == 0 {
 		return nil
-	})
+	}
+	if tx == nil {
+		tx = s.db
+	}
+	activityID := strconv.FormatUint(uint64(activity.ID), 10)
+	orgID, _ := s.resolveActivityOrgID(activity)
+	var participants []database.PerformanceParticipant
+	participantQuery := tx.Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList())
+	if strings.TrimSpace(orgID) != "" {
+		participantQuery = participantQuery.Where("org_id = ?", orgID)
+	}
+	if err := participantQuery.Order("id ASC").Find(&participants).Error; err != nil {
+		return err
+	}
+	if len(participants) == 0 {
+		return nil
+	}
+	participantIDs := make([]uint, 0, len(participants))
+	for _, participant := range participants {
+		participantIDs = append(participantIDs, participant.ID)
+	}
+	var rows []struct {
+		ParticipantID uint `gorm:"column:participant_id"`
+	}
+	recordQuery := tx.Model(&database.PerformanceGoalRecord{}).
+		Select("participant_id").
+		Where("activity_id = ? AND participant_id IN ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
+			activityID,
+			participantIDs,
+			PerformanceGoalPhaseReview,
+			[]string{"quantitative", "key_action"},
+		)
+	if strings.TrimSpace(orgID) != "" {
+		recordQuery = recordQuery.Where("org_id = ?", orgID)
+	}
+	if err := recordQuery.Group("participant_id").Find(&rows).Error; err != nil {
+		return err
+	}
+	readyParticipantIDs := make(map[uint]struct{}, len(rows))
+	for _, row := range rows {
+		readyParticipantIDs[row.ParticipantID] = struct{}{}
+	}
+	for _, participant := range participants {
+		if _, ok := readyParticipantIDs[participant.ID]; ok {
+			continue
+		}
+		result.MissingPreviousPlanEmployeeIDs = append(result.MissingPreviousPlanEmployeeIDs, participant.EmployeeID)
+		result.MissingPreviousPlanEmployeeNames = append(result.MissingPreviousPlanEmployeeNames, participant.EmployeeName)
+	}
+	if len(result.MissingPreviousPlanEmployeeIDs) == 0 {
+		return nil
+	}
+	preview := result.MissingPreviousPlanEmployeeNames
+	if len(preview) > 5 {
+		preview = preview[:5]
+	}
+	result.Warnings = append(result.Warnings, fmt.Sprintf(
+		"有 %d 名参与人未承接到上一季度目标：%s。请补录上一季度考核指标后再推进自评。",
+		len(result.MissingPreviousPlanEmployeeIDs),
+		strings.Join(preview, "、"),
+	))
+	return nil
 }
 
 func (s *PerformanceService) ensureNewFlowReviewRecordsReady(activity *database.PerformanceActivity) error {
@@ -4942,91 +5306,16 @@ func (s *PerformanceService) ensureNewFlowReviewRecordsReady(activity *database.
 	return nil
 }
 
-func (s *PerformanceService) appendMissingPreviousPlanWarnings(activity *database.PerformanceActivity, result *RefreshResult) error {
-	if activity == nil || result == nil || !isNewPerformanceFlow(activity) || isMutengGoalSettingActivity(activity) || activity.ID == 0 {
-		return nil
-	}
-	activityID := strconv.FormatUint(uint64(activity.ID), 10)
-	var participants []database.PerformanceParticipant
-	if err := s.db.Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList()).
-		Order("id ASC").
-		Find(&participants).Error; err != nil {
-		return err
-	}
-	if len(participants) == 0 {
-		return nil
-	}
-	participantIDs := make([]uint, 0, len(participants))
-	for _, participant := range participants {
-		participantIDs = append(participantIDs, participant.ID)
-	}
-	var rows []struct {
-		ParticipantID uint `gorm:"column:participant_id"`
-	}
-	if err := s.db.Model(&database.PerformanceGoalRecord{}).
-		Select("participant_id").
-		Where("activity_id = ? AND participant_id IN ? AND goal_phase = ? AND section_type IN ? AND deleted_at IS NULL",
-			activityID,
-			participantIDs,
-			PerformanceGoalPhaseReview,
-			[]string{"quantitative", "key_action"},
-		).
-		Group("participant_id").
-		Find(&rows).Error; err != nil {
-		return err
-	}
-	readyParticipantIDs := make(map[uint]struct{}, len(rows))
-	for _, row := range rows {
-		readyParticipantIDs[row.ParticipantID] = struct{}{}
-	}
-	for _, participant := range participants {
-		if _, ok := readyParticipantIDs[participant.ID]; ok {
-			continue
-		}
-		result.MissingPreviousPlanEmployeeIDs = append(result.MissingPreviousPlanEmployeeIDs, participant.EmployeeID)
-		result.MissingPreviousPlanEmployeeNames = append(result.MissingPreviousPlanEmployeeNames, participant.EmployeeName)
-	}
-	if len(result.MissingPreviousPlanEmployeeIDs) == 0 {
-		return nil
-	}
-	preview := result.MissingPreviousPlanEmployeeNames
-	if len(preview) > 5 {
-		preview = preview[:5]
-	}
-	result.Warnings = append(result.Warnings, fmt.Sprintf(
-		"有 %d 名参与人未承接到上一季度目标：%s。请补录上一季度考核指标后再推进自评。",
-		len(result.MissingPreviousPlanEmployeeIDs),
-		strings.Join(preview, "、"),
-	))
-	return nil
-}
-
 // StartActivity 启动绩效活动（draft -> target_setting）
 func (s *PerformanceService) StartActivity(activityID, userID string) error {
-	activity, err := s.actRepo.GetByID(activityID)
+	_, err := s.OpenTargetSetting(activityID, userID)
 	if err != nil {
-		return errors.New("活动不存在")
-	}
-	if activity.Status == "target_setting" {
-		return nil
-	}
-	if activity.Status != "draft" {
-		return errors.New("状态冲突：只有 draft 活动可以启动目标设定")
-	}
-	if _, err := s.RefreshParticipants(activityID, userID); err != nil {
+		if strings.Contains(err.Error(), "无法开启目标设定") {
+			return errors.New("活动范围内没有可参与员工，无法启动")
+		}
 		return err
 	}
-	if err := s.syncPreviousPlanRecordsForNewFlowActivity(activity, userID); err != nil {
-		return err
-	}
-	total, err := s.countActiveParticipants(activityID)
-	if err != nil {
-		return err
-	}
-	if total == 0 {
-		return errors.New("活动范围内没有可参与员工，无法启动")
-	}
-	return s.actRepo.UpdateStatus(activityID, "target_setting", userID)
+	return nil
 }
 
 // OpenSelfEvaluation 开启自评阶段（target_setting -> self_evaluation）
@@ -5148,32 +5437,78 @@ func (s *PerformanceService) ArchiveActivity(activityID, userID string) error {
 	return s.actRepo.UpdateStatus(activityID, "archived", userID)
 }
 
-// OpenTargetSetting 开启目标设定阶段（draft -> target_setting）
-func (s *PerformanceService) OpenTargetSetting(activityID, userID string) error {
+// OpenTargetSetting 开启目标设定阶段（draft -> target_setting）。
+// 同一事务内完成：刷新参与人、上周期目标承接、统计有效参与人、更新状态。
+// 成功时返回 warnings（如无效指定员工）；有效参与人为 0 时硬失败且回滚。
+func (s *PerformanceService) OpenTargetSetting(activityID, userID string) ([]string, error) {
 	activity, err := s.actRepo.GetByID(activityID)
 	if err != nil {
-		return errors.New("活动不存在")
+		return nil, errors.New("活动不存在")
 	}
 	if activity.Status == "target_setting" {
-		return nil
+		return nil, nil
 	}
 	if activity.Status != "draft" {
-		return errors.New("状态冲突：只有 draft 活动可以开启目标设定")
+		return nil, errors.New("状态冲突：只有 draft 活动可以开启目标设定")
 	}
-	if _, err := s.RefreshParticipants(activityID, userID); err != nil {
-		return err
-	}
-	if err := s.syncPreviousPlanRecordsForNewFlowActivity(activity, userID); err != nil {
-		return err
-	}
-	total, err := s.countActiveParticipants(activityID)
+
+	var warnings []string
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var locked database.PerformanceActivity
+		if err := s.scopeOrg(tx.Clauses(clause.Locking{Strength: "UPDATE"}), "org_id").
+			Where("id = ? AND deleted_at IS NULL", activity.ID).
+			First(&locked).Error; err != nil {
+			return errors.New("活动不存在")
+		}
+		if locked.Status == "target_setting" {
+			return nil
+		}
+		if locked.Status != "draft" {
+			return errors.New("状态冲突：只有 draft 活动可以开启目标设定")
+		}
+
+		result, err := s.refreshParticipantsTx(tx, &locked, userID)
+		if err != nil {
+			return err
+		}
+		if isNewPerformanceFlow(&locked) {
+			if err := s.syncPreviousPlanRecordsForNewFlowActivityTx(tx, &locked, userID); err != nil {
+				return err
+			}
+			if err := s.appendMissingPreviousPlanWarningsTx(tx, &locked, result); err != nil {
+				return err
+			}
+		}
+		if result != nil {
+			warnings = append([]string(nil), result.Warnings...)
+		}
+
+		orgID, err := s.resolveActivityOrgID(&locked)
+		if err != nil {
+			return err
+		}
+		total, err := s.countActiveParticipantsTx(tx, activityID, orgID)
+		if err != nil {
+			return err
+		}
+		if total == 0 {
+			if result != nil {
+				for _, w := range result.Warnings {
+					if strings.Contains(w, "不可用、已离职或不属于当前企业") {
+						return errors.New(w + "；活动范围内没有可参与员工，无法开启目标设定")
+					}
+				}
+			}
+			return errors.New("活动范围内没有可参与员工，无法开启目标设定")
+		}
+		return s.scopeOrg(tx.Model(&database.PerformanceActivity{}), "org_id").
+			Where("id = ?", locked.ID).
+			Updates(map[string]interface{}{"status": "target_setting", "updated_by": userID}).Error
+	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if total == 0 {
-		return errors.New("活动范围内没有可参与员工，无法开启目标设定")
-	}
-	return s.actRepo.UpdateStatus(activityID, "target_setting", userID)
+	return warnings, nil
 }
 
 // OpenEmployeeConfirmation 开启员工确认阶段
@@ -5402,10 +5737,23 @@ func (s *PerformanceService) LockActivity(activityID, userID string) error {
 }
 
 func (s *PerformanceService) countActiveParticipants(activityID string) (int64, error) {
+	return s.countActiveParticipantsTx(s.db, activityID, s.tenantOrgID())
+}
+
+func (s *PerformanceService) countActiveParticipantsTx(tx *gorm.DB, activityID, orgID string) (int64, error) {
+	if tx == nil {
+		tx = s.db
+	}
 	var count int64
-	if err := s.scopedDB().Model(&database.PerformanceParticipant{}).
-		Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList()).
-		Count(&count).Error; err != nil {
+	query := tx.Model(&database.PerformanceParticipant{}).
+		Where("activity_id = ? AND deleted_at IS NULL AND status NOT IN ?", activityID, ignoredParticipantStatusList())
+	orgID = strings.TrimSpace(orgID)
+	if orgID != "" {
+		query = query.Where("org_id = ?", orgID)
+	} else if tenant := s.tenantOrgID(); tenant != "" {
+		query = query.Where("org_id = ?", tenant)
+	}
+	if err := query.Count(&count).Error; err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -6495,8 +6843,10 @@ func (s *PerformanceService) SendDueSelfEvalAutoReminders(now time.Time) (*AutoS
 		now = time.Now()
 	}
 	result := &AutoSelfEvalReminderResult{}
+	// 必须走 scopedDB：绑定 org 时只扫描本组织活动；未绑定 org 时保持全库扫描
+	// （仅后台调度器在逐 org 创建 service 后调用，或测试 stub）。
 	var activities []database.PerformanceActivity
-	if err := s.db.
+	if err := s.scopedDB().
 		Where("status = ? AND deleted_at IS NULL", performanceReminderStageSelfEval).
 		Find(&activities).Error; err != nil {
 		return result, err
@@ -6678,7 +7028,17 @@ func (s *PerformanceService) sendSelfEvalRemindersForActivity(activity *database
 			activity.Name,
 			deadlineText,
 		)
-		if err := sendPerformanceActionCardToUser(employeeID, title, content, "去完成自评", PerformanceSelfEvalURL(activityID, p.ID)); err != nil {
+		orgID, orgErr := performanceNoticeOrgID(p.OrgID, activity.OrgID, activityOrgID, s.tenantOrgID())
+		if orgErr != nil {
+			logrus.Warnf("skip self eval reminder for %s: %v", employeeID, orgErr)
+			result.Failed++
+			result.FailedRecipients = append(result.FailedRecipients, recipient)
+			if opts.Automatic {
+				_ = s.createPerformanceReminderLog(activityID, p, opts, "failed", orgErr.Error())
+			}
+			continue
+		}
+		if err := sendPerformanceActionCard(orgID, employeeID, title, content, "去完成自评", PerformanceSelfEvalURL(orgID, activityID, p.ID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logrus.Infof("skip self eval reminder to non-notifiable user %s: %v", employeeID, err)
 				handledUsers[employeeID] = struct{}{}
@@ -6837,7 +7197,12 @@ func (s *PerformanceService) notifyManagerSelfEvaluationSubmitted(activity datab
 	content := fmt.Sprintf("员工 %s 已提交绩效自评，请进行上级评分。\n绩效活动：%s", participant.EmployeeName, activity.Name)
 	status := "sent"
 	errorMessage := ""
-	if err := sendPerformanceActionCardToUser(managerID, title, content, "去评分", PerformanceManagerEvalURL(activityID, participant.ID)); err != nil {
+	orgID, orgErr := performanceNoticeOrgID(participant.OrgID, activity.OrgID, s.tenantOrgID())
+	if orgErr != nil {
+		status = "failed"
+		errorMessage = orgErr.Error()
+		logrus.Warnf("skip manager evaluation notice for %s: %v", managerID, orgErr)
+	} else if err := sendPerformanceActionCard(orgID, managerID, title, content, "去评分", PerformanceManagerEvalURL(orgID, activityID, participant.ID)); err != nil {
 		errorMessage = err.Error()
 		if dingtalk.IsUserNotNotifiableError(err) {
 			status = "skipped"
@@ -6865,7 +7230,12 @@ func (s *PerformanceService) notifyManagerGoalApprovalReady(activity database.Pe
 		return nil
 	}
 	content := fmt.Sprintf("员工 %s 已提交绩效目标，请进行目标审核。\n绩效活动：%s", participant.EmployeeName, activity.Name)
-	if err := sendPerformanceActionCardToUser(managerID, "绩效目标待审核", content, "去审核", PerformanceGoalSettingURL(participant.ActivityID, participant.ID)); err != nil {
+	orgID, err := performanceNoticeOrgID(participant.OrgID, activity.OrgID, s.tenantOrgID())
+	if err != nil {
+		logrus.Warnf("skip target approval notice for %s: %v", managerID, err)
+		return err
+	}
+	if err := sendPerformanceActionCard(orgID, managerID, "绩效目标待审核", content, "去审核", PerformanceGoalSettingURL(orgID, participant.ActivityID, participant.ID)); err != nil {
 		if dingtalk.IsUserNotNotifiableError(err) {
 			logrus.Infof("skip target approval notice to non-notifiable user %s: %v", managerID, err)
 			return nil
@@ -6876,6 +7246,11 @@ func (s *PerformanceService) notifyManagerGoalApprovalReady(activity database.Pe
 }
 
 func (s *PerformanceService) notifyDepartmentEvaluationReady(activity database.PerformanceActivity, participant database.PerformanceParticipant) error {
+	orgID, err := performanceNoticeOrgID(participant.OrgID, activity.OrgID, s.tenantOrgID())
+	if err != nil {
+		logrus.Warnf("skip department evaluation notice: %v", err)
+		return err
+	}
 	recipients := make(map[string]struct{})
 	for _, candidate := range s.departmentManagerCandidateIDs(participant.DepartmentID) {
 		userID := strings.TrimSpace(candidate.userID)
@@ -6886,7 +7261,7 @@ func (s *PerformanceService) notifyDepartmentEvaluationReady(activity database.P
 	var firstErr error
 	for userID := range recipients {
 		content := fmt.Sprintf("员工 %s 的上级评分已完成，请进行部门/中心评估。\n绩效活动：%s", participant.EmployeeName, activity.Name)
-		if err := sendPerformanceActionCardToUser(userID, "绩效部门评分待办", content, "去处理", PerformanceOverviewURL(participant.ActivityID)); err != nil {
+		if err := sendPerformanceActionCard(orgID, userID, "绩效部门评分待办", content, "去处理", PerformanceOverviewURL(orgID, participant.ActivityID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logrus.Infof("skip department evaluation notice to non-notifiable user %s: %v", userID, err)
 				continue
@@ -6901,7 +7276,12 @@ func (s *PerformanceService) notifyDepartmentEvaluationReady(activity database.P
 }
 
 func (s *PerformanceService) notifyHRReviewReady(activity database.PerformanceActivity, participant database.PerformanceParticipant) error {
-	recipients, err := s.findHRConfirmReminderRecipients(activity.OrgID)
+	orgID, err := performanceNoticeOrgID(participant.OrgID, activity.OrgID, s.tenantOrgID())
+	if err != nil {
+		logrus.Warnf("skip HR review notice: %v", err)
+		return err
+	}
+	recipients, err := s.findHRConfirmReminderRecipients(orgID)
 	if err != nil {
 		return err
 	}
@@ -6912,7 +7292,7 @@ func (s *PerformanceService) notifyHRReviewReady(activity database.PerformanceAc
 			continue
 		}
 		content := fmt.Sprintf("员工 %s 的部门/中心评分已完成，请进行HR审核。\n绩效活动：%s", participant.EmployeeName, activity.Name)
-		if err := sendPerformanceActionCardToUser(userID, "绩效HR审核待办", content, "去处理", PerformanceOverviewURL(participant.ActivityID)); err != nil {
+		if err := sendPerformanceActionCard(orgID, userID, "绩效HR审核待办", content, "去处理", PerformanceOverviewURL(orgID, participant.ActivityID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logrus.Infof("skip HR review notice to non-notifiable user %s: %v", userID, err)
 				continue
@@ -6932,7 +7312,12 @@ func (s *PerformanceService) notifyParticipantResultPublished(activity database.
 		return nil
 	}
 	content := fmt.Sprintf("您的绩效结果已完成HR审核并公布。\n绩效活动：%s\n绩效面谈和绩效申诉已同时开放。", activity.Name)
-	if err := sendPerformanceActionCardToUser(employeeID, "绩效结果已公布", content, "查看结果", PerformanceResultURL(participant.ActivityID, participant.ID)); err != nil {
+	orgID, err := performanceNoticeOrgID(participant.OrgID, activity.OrgID, s.tenantOrgID())
+	if err != nil {
+		logrus.Warnf("skip result publication notice for %s: %v", employeeID, err)
+		return err
+	}
+	if err := sendPerformanceActionCard(orgID, employeeID, "绩效结果已公布", content, "查看结果", PerformanceResultURL(orgID, participant.ActivityID, participant.ID)); err != nil {
 		if dingtalk.IsUserNotNotifiableError(err) {
 			logrus.Infof("skip result publication notice to non-notifiable user %s: %v", employeeID, err)
 			return nil
@@ -6971,7 +7356,12 @@ func (s *PerformanceService) notifyManagerSelfEvaluationRecheck(activity databas
 	)
 	status := "sent"
 	errorMessage := ""
-	if err := sendPerformanceActionCardToUser(managerID, title, content, "去复核", PerformanceManagerEvalURL(activityID, participant.ID)); err != nil {
+	orgID, orgErr := performanceNoticeOrgID(participant.OrgID, activity.OrgID, s.tenantOrgID())
+	if orgErr != nil {
+		status = "failed"
+		errorMessage = orgErr.Error()
+		logrus.Warnf("skip manager recheck notice for %s: %v", managerID, orgErr)
+	} else if err := sendPerformanceActionCard(orgID, managerID, title, content, "去复核", PerformanceManagerEvalURL(orgID, activityID, participant.ID)); err != nil {
 		errorMessage = err.Error()
 		if dingtalk.IsUserNotNotifiableError(err) {
 			status = "skipped"
@@ -7035,7 +7425,14 @@ func (s *PerformanceService) SendManagerEvalReminders(activityID string) (*Manag
 		if strings.TrimSpace(recipient.UserID) == "" {
 			recipient = ReminderRecipient{UserID: managerID}
 		}
-		if err := dingtalk.SendCorpActionCardToUser(managerID, title, content, "去完成评分", PerformanceManagerEvalURL(activityID, firstParticipant.ID)); err != nil {
+		orgID, orgErr := performanceNoticeOrgID(firstParticipant.OrgID, s.tenantOrgID())
+		if orgErr != nil {
+			logrus.Warnf("skip manager eval reminder for %s: %v", managerID, orgErr)
+			result.Failed++
+			result.FailedRecipients = append(result.FailedRecipients, recipient)
+			continue
+		}
+		if err := sendPerformanceActionCard(orgID, managerID, title, content, "去完成评分", PerformanceManagerEvalURL(orgID, activityID, firstParticipant.ID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logrus.Infof("skip manager eval reminder to non-notifiable user %s: %v", managerID, err)
 				result.Skipped++
@@ -7086,12 +7483,17 @@ func (s *PerformanceService) TriggerPerformanceInterview(participantID string, i
 	logrus.Infof("trigger performance interview for participant %s, type=%s, final_level=%s",
 		participantID, interviewType, p.FinalLevel)
 
+	orgID, orgErr := performanceNoticeOrgID(p.OrgID, s.tenantOrgID())
+	if orgErr != nil {
+		logrus.Warnf("skip interview notification for participant %s: %v", participantID, orgErr)
+		return nil
+	}
 	if !p.ResultHidden {
 		employeeContent := fmt.Sprintf("您的绩效等级为 %s，绩效面谈已发起，请关注面谈安排。", p.FinalLevel)
 		if interviewType == "required" {
 			employeeContent = fmt.Sprintf("您的绩效等级为 %s，需要进行绩效面谈，请关注面谈安排。", p.FinalLevel)
 		}
-		if err := sendPerformanceActionCardToUser(p.EmployeeID, "绩效面谈通知", employeeContent, "查看绩效结果", PerformanceResultURL(p.ActivityID, p.ID)); err != nil {
+		if err := sendPerformanceActionCard(orgID, p.EmployeeID, "绩效面谈通知", employeeContent, "查看绩效结果", PerformanceResultURL(orgID, p.ActivityID, p.ID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logrus.Infof("skip interview notification to non-notifiable user %s: %v", p.EmployeeID, err)
 			} else {
@@ -7103,7 +7505,7 @@ func (s *PerformanceService) TriggerPerformanceInterview(participantID string, i
 	managerID := ptrStringValue(p.ManagerID)
 	if managerID != "" {
 		managerContent := fmt.Sprintf("员工：%s\n绩效等级：%s\n面谈类型：%s\n请及时安排并完成绩效面谈。", p.EmployeeName, p.FinalLevel, interviewType)
-		if err := sendPerformanceActionCardToUser(managerID, "绩效面谈安排提醒", managerContent, "查看绩效结果", PerformanceResultURL(p.ActivityID, p.ID)); err != nil {
+		if err := sendPerformanceActionCard(orgID, managerID, "绩效面谈安排提醒", managerContent, "查看绩效结果", PerformanceResultURL(orgID, p.ActivityID, p.ID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logrus.Infof("skip interview manager notification to non-notifiable user %s: %v", managerID, err)
 			} else {
@@ -8473,7 +8875,12 @@ func (s *PerformanceService) SendHRConfirmReminders(activityID string) (*HRConfi
 	if err != nil {
 		return result, err
 	}
-	recipients, err := s.findHRConfirmReminderRecipients(activity.OrgID)
+	orgID, orgErr := performanceNoticeOrgID(activity.OrgID, s.tenantOrgID())
+	if orgErr != nil {
+		logrus.Warnf("skip HR confirm reminder for activity %s: %v", activityID, orgErr)
+		return result, orgErr
+	}
+	recipients, err := s.findHRConfirmReminderRecipients(orgID)
 	if err != nil {
 		return result, err
 	}
@@ -8482,11 +8889,10 @@ func (s *PerformanceService) SendHRConfirmReminders(activityID string) (*HRConfi
 		logrus.Warnf("skip HR confirm reminder for activity %s: no users with performance:hr_confirm:submit permission", activityID)
 		return result, nil
 	}
-
 	title := "绩效 HR 确认提醒"
 	content := fmt.Sprintf("活动：%s\n当前仍有 %d 名员工待 HR 确认，请及时处理。", activity.Name, len(pending))
 	for _, recipient := range recipients {
-		if err := sendPerformanceActionCardToUser(recipient.UserID, title, content, "去处理确认", PerformanceOverviewURL(activityID)); err != nil {
+		if err := sendPerformanceActionCard(orgID, recipient.UserID, title, content, "去处理确认", PerformanceOverviewURL(orgID, activityID)); err != nil {
 			if dingtalk.IsUserNotNotifiableError(err) {
 				logrus.Infof("skip HR confirm reminder to non-notifiable user %s: %v", recipient.UserID, err)
 				result.Skipped++
@@ -8515,14 +8921,18 @@ func (s *PerformanceService) SendHRConfirmReminders(activityID string) (*HRConfi
 
 func (s *PerformanceService) findHRConfirmReminderRecipients(activityOrgID string) ([]ReminderRecipient, error) {
 	var recipients []ReminderRecipient
-	orgID := database.NormalizeOrganizationID(activityOrgID)
+	orgID := strings.TrimSpace(activityOrgID)
+	if orgID == "" {
+		return nil, ErrPerformanceNoticeMissingOrg
+	}
+	// permissions / role_permissions remain global catalogs; tenant isolation is on users/user_roles/roles.
 	if err := s.db.Table("users").
 		Select("DISTINCT users.user_id AS user_id, users.name AS name").
-		Joins("JOIN user_roles ON user_roles.user_id = users.user_id AND user_roles.deleted_at IS NULL").
+		Joins("JOIN user_roles ON user_roles.user_id = users.user_id AND user_roles.org_id = users.org_id AND user_roles.deleted_at IS NULL").
+		Joins("JOIN roles ON roles.id = user_roles.role_id AND roles.org_id = users.org_id AND roles.deleted_at IS NULL").
 		Joins("JOIN role_permissions ON role_permissions.role_id = user_roles.role_id AND role_permissions.deleted_at IS NULL").
 		Joins("JOIN permissions ON permissions.id = role_permissions.permission_id AND permissions.deleted_at IS NULL").
 		Where("permissions.code IN ?", []string{"performance:hr_confirm:submit", "performance:hr_review:submit", "performance:activity:manage"}).
-		Where("user_roles.org_id = ?", orgID).
 		Where("users.org_id = ?", orgID).
 		Where("users.deleted_at IS NULL").
 		Where("users.status = ?", "active").
@@ -8563,7 +8973,7 @@ func (s *PerformanceService) hrConfirmReminderRecipients(activity *database.Perf
 	seen := make(map[string]struct{})
 	add := func(userID string) {
 		userID = strings.TrimSpace(userID)
-		if userID == "" || userID == "system" || !dingtalk.IsNotifiableUserID(userID) {
+		if userID == "" || userID == "system" || !dingtalk.IsNotifiableUserIDForOrg(orgID, userID) {
 			return
 		}
 		if _, ok := seen[userID]; ok {

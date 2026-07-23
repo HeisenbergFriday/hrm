@@ -86,3 +86,71 @@ func TestHashRequestIncludesBody(t *testing.T) {
 		t.Fatalf("hashRequest should differ when body differs")
 	}
 }
+
+func TestHashDigestIncludesOrgID(t *testing.T) {
+	// 同一 user + key 在不同 org 下 digest 必须不同，允许跨组织复用 Idempotency-Key。
+	left := hashDigest("muteng", "user-1", http.MethodPost, "/api/v1/x", "key-1")
+	right := hashDigest("xiaotie", "user-1", http.MethodPost, "/api/v1/x", "key-1")
+	if left == right {
+		t.Fatalf("digest must differ across orgs for same user/key")
+	}
+	// 同一组织相同输入必须稳定。
+	again := hashDigest("muteng", "user-1", http.MethodPost, "/api/v1/x", "key-1")
+	if left != again {
+		t.Fatalf("digest unstable for same inputs")
+	}
+}
+
+func TestIdempotencyOrgIDFromContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/x", nil)
+
+	// Anonymous/unauthenticated: use non-tenant sentinel, never "default".
+	if got := idempotencyOrgID(c); got != unauthenticatedIdempotencyOrg {
+		t.Fatalf("empty context org = %q, want %q", got, unauthenticatedIdempotencyOrg)
+	}
+
+	c.Set("orgID", "muteng")
+	if got := idempotencyOrgID(c); got != "muteng" {
+		t.Fatalf("org = %q, want muteng", got)
+	}
+}
+
+func TestResolveIdempotencyOrgID_AuthenticatedMissingOrgFailsClosed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/x", nil)
+	c.Set("userID", "alice")
+
+	orgID, err := resolveIdempotencyOrgID(c)
+	if err == nil {
+		t.Fatalf("expected missing-org error, got orgID=%q", orgID)
+	}
+	if orgID != "" {
+		t.Fatalf("orgID = %q, want empty on error", orgID)
+	}
+	// Must not silently land on default tenant.
+	if got := idempotencyOrgID(c); got != "" {
+		t.Fatalf("idempotencyOrgID on auth-missing-org = %q, want empty", got)
+	}
+}
+
+func TestHashDigestCrossOrgIsolationAndUnauthenticatedNamespace(t *testing.T) {
+	user, method, route, key := "user-1", http.MethodPost, "/api/v1/x", "key-1"
+	a := hashDigest("muteng", user, method, route, key)
+	b := hashDigest("xiaotie", user, method, route, key)
+	anon := hashDigest(unauthenticatedIdempotencyOrg, user, method, route, key)
+	def := hashDigest("default", user, method, route, key)
+	if a == b {
+		t.Fatal("A/B org digests must not collide")
+	}
+	if anon == def {
+		t.Fatal("anonymous namespace must not collide with default tenant")
+	}
+	if anon == a || anon == b {
+		t.Fatal("anonymous namespace must not collide with real orgs")
+	}
+}

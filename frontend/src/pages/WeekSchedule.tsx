@@ -10,7 +10,6 @@ import {
   Empty,
   Form,
   Input,
-  InputNumber,
   Modal,
   Popconfirm,
   Row,
@@ -33,6 +32,9 @@ import { formatDateTime } from '../utils/format'
 
 const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
+
+const USERS_PAGE_SIZE = 200
+const USERS_MAX_PAGES = 50 // 最多拉取 200*50=10000 人，覆盖全员选人
 
 type ScopeType = 'company' | 'department' | 'user'
 type WeekType = 'big' | 'small'
@@ -156,6 +158,39 @@ function getItems<T>(response: any): T[] {
   return Array.isArray(response?.data?.items) ? (response.data.items as T[]) : []
 }
 
+function getPagedTotal(response: any): number {
+  const total = Number(response?.data?.total)
+  return Number.isFinite(total) && total >= 0 ? total : 0
+}
+
+/** 分页拉全量用户，避免 page_size 被后端截断后只能看到前 100 人 */
+async function fetchAllUsersForPicker(): Promise<UserOption[]> {
+  const first = await userAPI.getUsers({ page: 1, page_size: USERS_PAGE_SIZE, status: 'active' })
+  const items = getItems<UserOption>(first)
+  const total = getPagedTotal(first)
+  const pageSize = Math.max(1, Math.min(USERS_PAGE_SIZE, items.length || USERS_PAGE_SIZE))
+  const totalPages = Math.min(USERS_MAX_PAGES, Math.max(1, Math.ceil((total || items.length) / pageSize)))
+
+  const byID = new Map<string, UserOption>()
+  const add = (list: UserOption[]) => {
+    list.forEach((u) => {
+      if (u?.user_id) byID.set(u.user_id, u)
+    })
+  }
+  add(items)
+
+  if (totalPages > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: totalPages - 1 }, (_, i) =>
+        userAPI.getUsers({ page: i + 2, page_size: USERS_PAGE_SIZE, status: 'active' }),
+      ),
+    )
+    rest.forEach((res) => add(getItems<UserOption>(res)))
+  }
+
+  return Array.from(byID.values()).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh-CN'))
+}
+
 function getScopeLabel(scopeType: ScopeType) {
   if (scopeType === 'company') return '全公司'
   if (scopeType === 'department') return '部门'
@@ -171,20 +206,25 @@ function getWeekTypeMeta(weekType: WeekType) {
     return {
       label: '小周',
       restLabel: '单休',
-      color: '#fa8c16',
-      tagColor: 'orange',
+      color: 'var(--color-warning-dark)',
+      tagColor: 'orange' as const,
       background: '#fff7e6',
       borderColor: '#ffd591',
+      // canvas 不能用 CSS 变量，保留实色
+      solidColor: '#b45309',
+      solidBackground: '#fff7e6',
     }
   }
 
   return {
     label: '大周',
     restLabel: '双休',
-    color: '#1677ff',
-    tagColor: 'blue',
-    background: '#e6f4ff',
-    borderColor: '#91caff',
+    color: 'var(--color-primary)',
+    tagColor: 'blue' as const,
+    background: 'var(--color-primary-bg)',
+    borderColor: '#bfdbfe',
+    solidColor: '#2563eb',
+    solidBackground: '#eaf2ff',
   }
 }
 
@@ -235,11 +275,25 @@ function getDayState(week: WeekCalendarItem, date: Dayjs): { state: CalendarCell
   return { state: 'work' }
 }
 
-function getCellStyle(state: CalendarCellState) {
-  if (state === 'outside') return { background: '#fafafa', color: '#bfbfbf' }
-  if (state === 'holiday') return { background: '#ff4d4f', color: '#fff' }
-  if (state === 'rest') return { background: '#fff', color: '#1f1f1f' }
-  return { background: '#fff566', color: '#1f1f1f' }
+function getCellStyle(state: CalendarCellState): React.CSSProperties {
+  if (state === 'outside') {
+    return { background: '#f3f5f8', color: '#b0b8c4' }
+  }
+  if (state === 'holiday') {
+    return { background: '#ff4d4f', color: '#ffffff' }
+  }
+  if (state === 'rest') {
+    return { background: '#ffffff', color: '#1f2937' }
+  }
+  // work / workday / saturday-work — warmer yellow for clearer contrast
+  return { background: '#fff566', color: '#1f2937' }
+}
+
+function getCellCanvasColors(state: CalendarCellState): { background: string; color: string } {
+  if (state === 'outside') return { background: '#f3f4f6', color: '#9ca3af' }
+  if (state === 'holiday') return { background: '#ff4d4f', color: '#ffffff' }
+  if (state === 'rest') return { background: '#ffffff', color: '#1f2937' }
+  return { background: '#fff566', color: '#1f2937' }
 }
 
 function buildMonthCalendarSections(calendarItems: WeekCalendarItem[]): MonthCalendarSection[] {
@@ -284,6 +338,153 @@ function getMobileCalendarNote(cell: MonthCalendarCell, selectedUserEndTime: str
   return selectedUserEndTime || '工作'
 }
 
+/** 根据当前月份日历数据生成 PNG（与网页同风格：标题条 + 第N周 + 单休/双休） */
+async function renderMonthSchedulePng(section: MonthCalendarSection, title: string): Promise<Blob> {
+  const colCount = 9
+  const colWidth = 96
+  const headerH = 44
+  const titleH = 64
+  const rowH = 72
+  const pad = 24
+  const width = pad * 2 + colCount * colWidth
+  const height = pad * 2 + titleH + headerH + section.rows.length * rowH + 12
+
+  const canvas = document.createElement('canvas')
+  const scale = 2
+  canvas.width = width * scale
+  canvas.height = height * scale
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    throw new Error('当前浏览器不支持 Canvas，无法生成作息表图片')
+  }
+  ctx.scale(scale, scale)
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, width, height)
+
+  ctx.fillStyle = '#172033'
+  ctx.font = 'bold 26px "Microsoft YaHei", "PingFang SC", sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(title, width / 2, pad + titleH / 2)
+
+  const tableTop = pad + titleH
+  const tableLeft = pad
+  const headers = ['周数', '周一', '周二', '周三', '周四', '周五', '周六', '周日', '大小周']
+
+  headers.forEach((label, i) => {
+    const x = tableLeft + i * colWidth
+    ctx.fillStyle = '#f8fafc'
+    ctx.fillRect(x, tableTop, colWidth, headerH)
+    ctx.strokeStyle = '#e5e7eb'
+    ctx.strokeRect(x, tableTop, colWidth, headerH)
+    ctx.fillStyle = '#374151'
+    ctx.font = 'bold 13px "Microsoft YaHei", "PingFang SC", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, x + colWidth / 2, tableTop + headerH / 2)
+  })
+
+  section.rows.forEach((row, rowIndex) => {
+    const y = tableTop + headerH + rowIndex * rowH
+    const weekMeta = getWeekTypeMeta(row.week.week_type)
+    const weekIndexLabel = `第${rowIndex + 1}周`
+    const rangeLabel = `${dayjs(row.week.week_start).format('MM/DD')}-${dayjs(row.week.week_end).format('MM/DD')}`
+
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(tableLeft, y, colWidth, rowH)
+    ctx.strokeStyle = '#e5e7eb'
+    ctx.strokeRect(tableLeft, y, colWidth, rowH)
+    ctx.fillStyle = '#111827'
+    ctx.font = 'bold 14px "Microsoft YaHei", "PingFang SC", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(weekIndexLabel, tableLeft + colWidth / 2, y + rowH / 2 - 10)
+    ctx.fillStyle = '#9ca3af'
+    ctx.font = '12px "Microsoft YaHei", "PingFang SC", sans-serif'
+    ctx.fillText(rangeLabel, tableLeft + colWidth / 2, y + rowH / 2 + 12)
+
+    row.cells.forEach((cell, cellIndex) => {
+      const x = tableLeft + (cellIndex + 1) * colWidth
+      const colors = getCellCanvasColors(cell.state)
+      ctx.fillStyle = colors.background
+      ctx.fillRect(x, y, colWidth, rowH)
+      ctx.strokeStyle = '#e5e7eb'
+      ctx.strokeRect(x, y, colWidth, rowH)
+      ctx.fillStyle = colors.color
+      ctx.font = 'bold 18px "Microsoft YaHei", "PingFang SC", sans-serif'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.globalAlpha = cell.inCurrentMonth ? 1 : 0.4
+      ctx.fillText(String(cell.dayNumber), x + colWidth / 2, y + rowH / 2)
+      ctx.globalAlpha = 1
+    })
+
+    const summaryX = tableLeft + 8 * colWidth
+    ctx.fillStyle = weekMeta.solidBackground
+    ctx.fillRect(summaryX, y, colWidth, rowH)
+    ctx.strokeStyle = '#e5e7eb'
+    ctx.strokeRect(summaryX, y, colWidth, rowH)
+    ctx.fillStyle = weekMeta.solidColor
+    ctx.font = 'bold 18px "Microsoft YaHei", "PingFang SC", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(weekMeta.restLabel, summaryX + colWidth / 2, y + rowH / 2)
+  })
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('生成 PNG 失败'))
+        return
+      }
+      resolve(blob)
+    }, 'image/png')
+  })
+}
+
+function buildSchedulePushContent(
+  month: Dayjs,
+  section: MonthCalendarSection | null,
+): { title: string; content: string } {
+  const title = `${month.format('YYYY年M月')}作息时间表`
+  const lines: string[] = [`${title}，请查收。`]
+
+  const today = dayjs().startOf('day')
+  if (section && today.isSame(month, 'month')) {
+    const tomorrow = today.add(1, 'day')
+    const todayRow = section.rows.find((row) =>
+      row.cells.some((cell) => cell.date === today.format('YYYY-MM-DD') && cell.inCurrentMonth),
+    )
+    let weekLabel = ''
+    if (todayRow) {
+      weekLabel = todayRow.week.week_type === 'small' ? '小周' : '大周'
+    }
+
+    const tomorrowCell = section.rows
+      .flatMap((row) => row.cells)
+      .find((cell) => cell.date === tomorrow.format('YYYY-MM-DD') && cell.inCurrentMonth)
+
+    if (tomorrowCell) {
+      const isWork =
+        tomorrowCell.state === 'work' ||
+        tomorrowCell.state === 'workday' ||
+        tomorrowCell.state === 'saturday-work'
+      const dateLabel = tomorrow.format('YYYY年M月D日')
+      // 贴近目标文案：「本周小周，明天（…）上班，请大家注意。」
+      if (weekLabel) {
+        lines.push(`本周${weekLabel}，明天（${dateLabel}）${isWork ? '上班' : '休息'}，请大家注意。`)
+      } else {
+        lines.push(`明天（${dateLabel}）${isWork ? '上班' : '休息'}，请大家注意。`)
+      }
+    } else if (weekLabel) {
+      lines.push(`本周${weekLabel}。`)
+    }
+  }
+
+  return { title, content: lines.join('\n') }
+}
+
 export default function WeekSchedule() {
   const queryClient = useQueryClient()
   const permissions = useAuthStore((state) => state.permissions)
@@ -291,7 +492,6 @@ export default function WeekSchedule() {
   const [calendarScopeType, setCalendarScopeType] = useState<ScopeType>(canManageAttendance ? 'company' : 'user')
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('')
   const [selectedUserId, setSelectedUserId] = useState('')
-  const [syncWeeks, setSyncWeeks] = useState(4)
   const [holidayYear, setHolidayYear] = useState(dayjs().year())
   const [selectedMonth, setSelectedMonth] = useState<Dayjs | null>(dayjs())
 
@@ -300,6 +500,11 @@ export default function WeekSchedule() {
   const [holidayModalOpen, setHolidayModalOpen] = useState(false)
   const [holidayImportModalOpen, setHolidayImportModalOpen] = useState(false)
   const [shiftModalOpen, setShiftModalOpen] = useState(false)
+  const [pushModalOpen, setPushModalOpen] = useState(false)
+  const [pushRecipientIds, setPushRecipientIds] = useState<string[]>([])
+  const [pushUserSearch, setPushUserSearch] = useState('')
+  const [pushUserOptions, setPushUserOptions] = useState<UserOption[]>([])
+  const [pushUserSearching, setPushUserSearching] = useState(false)
 
   const [editingRule, setEditingRule] = useState<WeekScheduleRule | null>(null)
   const [selectedWeek, setSelectedWeek] = useState<WeekCalendarItem | null>(null)
@@ -311,9 +516,10 @@ export default function WeekSchedule() {
   const [shiftForm] = Form.useForm<ShiftFormValues>()
 
   const usersQuery = useQuery({
-    queryKey: ['week-schedule', 'users'],
-    queryFn: () => userAPI.getUsers({ page: 1, page_size: 500 }),
+    queryKey: ['week-schedule', 'users', 'all-active'],
+    queryFn: fetchAllUsersForPicker,
     retry: false,
+    staleTime: 5 * 60 * 1000,
   })
 
   const departmentsQuery = useQuery({
@@ -343,11 +549,62 @@ export default function WeekSchedule() {
     retry: false,
   })
 
-  const users = getItems<UserOption>(usersQuery.data)
+  const users = usersQuery.data ?? []
   const departments = unwrapData<{ departments: DepartmentOption[] }>(departmentsQuery.data, { departments: [] }).departments ?? []
   const shifts = getItems<ShiftOption>(shiftsQuery.data)
   const rules = getItems<WeekScheduleRule>(rulesQuery.data)
   const syncLogs = getItems<SyncLogRecord>(logsQuery.data)
+
+  const pushSelectOptions = useMemo(() => {
+    const byID = new Map<string, UserOption>()
+    users.forEach((u) => byID.set(u.user_id, u))
+    pushUserOptions.forEach((u) => byID.set(u.user_id, u))
+    // 已选但还不在列表里的，保留占位，避免 Select 只显示 id
+    pushRecipientIds.forEach((id) => {
+      if (!byID.has(id)) {
+        byID.set(id, { id: 0, user_id: id, name: id, department_id: '' })
+      }
+    })
+    return Array.from(byID.values())
+      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh-CN'))
+      .map((item) => ({ label: item.name || item.user_id, value: item.user_id }))
+  }, [users, pushUserOptions, pushRecipientIds])
+
+  useEffect(() => {
+    if (!pushModalOpen) {
+      setPushUserSearch('')
+      setPushUserOptions([])
+      return
+    }
+    const keyword = pushUserSearch.trim()
+    if (!keyword) {
+      setPushUserOptions([])
+      return
+    }
+    // 本地全量列表已覆盖大多数场景；远端搜索补漏（如未在 active 首批、或后续新增）
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      setPushUserSearching(true)
+      try {
+        const res = await userAPI.getUsers({ page: 1, page_size: 100, search: keyword, status: 'active' })
+        if (!cancelled) {
+          setPushUserOptions(getItems<UserOption>(res))
+        }
+      } catch {
+        if (!cancelled) {
+          setPushUserOptions([])
+        }
+      } finally {
+        if (!cancelled) {
+          setPushUserSearching(false)
+        }
+      }
+    }, 300)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [pushModalOpen, pushUserSearch])
 
   useEffect(() => {
     if (!canManageAttendance && calendarScopeType === 'company') {
@@ -527,14 +784,37 @@ export default function WeekSchedule() {
     onError: (error) => message.error(getErrorMessage(error, '设置覆盖失败')),
   })
 
-  const syncToMutation = useMutation({
-    mutationFn: () => weekScheduleAPI.syncToDingtalk({ weeks: syncWeeks }),
+  const pushPersonalMutation = useMutation({
+    mutationFn: (formData: FormData) => weekScheduleAPI.pushPersonalSchedule(formData),
     onSuccess: async (response) => {
-      const result = unwrapData<{ message?: string }>(response, {})
-      message.success(result.message || '已推送到钉钉')
-      await invalidateAll()
+      const result = unwrapData<{
+        status?: string
+        message?: string
+        success_count?: number
+        failed_count?: number
+        skipped_count?: number
+        recipients?: Array<{ name?: string; user_id?: string; status?: string; message?: string }>
+      }>(response, {})
+      const status = result.status || 'success'
+      const summary =
+        result.message ||
+        `作息表推送完成：成功 ${result.success_count ?? 0}，失败 ${result.failed_count ?? 0}，跳过 ${result.skipped_count ?? 0}`
+      if (status === 'success') {
+        message.success(summary)
+      } else if (status === 'partial') {
+        message.warning(summary)
+      } else {
+        message.error(summary)
+      }
+      if (Array.isArray(result.recipients) && result.recipients.length > 0) {
+        const detail = result.recipients
+          .map((item) => `${item.name || item.user_id || '-'}: ${item.status || '-'} ${item.message || ''}`.trim())
+          .join('；')
+        message.info(detail, 8)
+      }
+      setPushModalOpen(false)
     },
-    onError: (error) => message.error(getErrorMessage(error, '推送到钉钉失败')),
+    onError: (error) => message.error(getErrorMessage(error, '作息表推送失败')),
   })
 
   const syncFromMutation = useMutation({
@@ -633,6 +913,50 @@ export default function WeekSchedule() {
       reason: '',
     })
     setOverrideModalOpen(true)
+  }
+
+  const openPushModal = () => {
+    if (!canManageAttendance) return
+    if (!selectedMonth) {
+      message.warning('请先选择月份')
+      return
+    }
+    if (filteredMonthSections.length === 0) {
+      message.warning('当前月份暂无作息表数据，请先加载日历')
+      return
+    }
+    // 默认空选，禁止写死真实人名，避免误推钉钉消息
+    setPushRecipientIds([])
+    setPushModalOpen(true)
+  }
+
+  const handleConfirmPush = async () => {
+    if (!selectedMonth) {
+      message.warning('请先选择月份')
+      return
+    }
+    if (pushRecipientIds.length === 0) {
+      message.warning('请至少选择一位收件人')
+      return
+    }
+    const section = filteredMonthSections[0]
+    if (!section) {
+      message.warning('当前月份暂无作息表数据')
+      return
+    }
+
+    try {
+      const { title, content } = buildSchedulePushContent(selectedMonth, section)
+      const blob = await renderMonthSchedulePng(section, title)
+      const formData = new FormData()
+      formData.append('image', blob, `${selectedMonth.format('YYYY-MM')}-schedule.png`)
+      formData.append('user_ids', JSON.stringify(pushRecipientIds))
+      formData.append('title', title)
+      formData.append('content', content)
+      pushPersonalMutation.mutate(formData)
+    } catch (error) {
+      message.error(getErrorMessage(error, '生成作息表图片失败'))
+    }
   }
 
   const handleSubmitRule = async () => {
@@ -756,11 +1080,11 @@ export default function WeekSchedule() {
       width: 140,
       render: (_, record) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEditRuleModal(record)} style={{ borderRadius: 8, fontWeight: 600 }}>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEditRuleModal(record)}>
             编辑
           </Button>
           <Popconfirm title="确定删除这条规则？" onConfirm={() => deleteRuleMutation.mutate(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} style={{ borderRadius: 8, fontWeight: 600 }}>
+            <Button size="small" danger icon={<DeleteOutlined />}>
               删除
             </Button>
           </Popconfirm>
@@ -794,7 +1118,7 @@ export default function WeekSchedule() {
           const ids = (record as any).ids || [record.id]
           ids.forEach((id: number) => deleteHolidayMutation.mutate(id))
         }}>
-          <Button size="small" danger icon={<DeleteOutlined />} style={{ borderRadius: 8, fontWeight: 600 }}>
+          <Button size="small" danger icon={<DeleteOutlined />}>
             删除
           </Button>
         </Popconfirm>
@@ -839,13 +1163,12 @@ export default function WeekSchedule() {
     <PageContainer
       className="week-schedule-page"
       title="大小周与节假日管理"
-      subtitle="日历已改成按月表格展示。工作日、休息日、节假日和大小周状态都会在同一张月度表里展示，点击任意周行可以手动覆盖该周为大周或小周。"
+      subtitle="按月查看大小周作息；黄/白/红分别表示工作、休息与法定节假日。支持手动覆盖周类型，并一键推送到个人钉钉。"
       icon={<CalendarOutlined />}
     >
       <Card
+        className="ws-panel-card"
         title="查询范围"
-        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
       >
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={8}>
@@ -894,35 +1217,38 @@ export default function WeekSchedule() {
       </Card>
 
       <Card
+        className="ws-panel-card ws-calendar-card"
         title="大小周日历"
-        style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-        styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
         extra={
-          <Space wrap>
-            <Button icon={<ReloadOutlined />} onClick={() => invalidateAll()} style={{ borderRadius: 8, fontWeight: 600 }}>
+          <Space wrap className="ws-calendar-toolbar">
+            <Button icon={<ReloadOutlined />} onClick={() => invalidateAll()}>
               刷新
             </Button>
             {canManageAttendance && (
               <>
-                <Button loading={syncHolidayMutation.isPending} onClick={() => syncHolidayMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
+                <Button loading={syncHolidayMutation.isPending} onClick={() => syncHolidayMutation.mutate()}>
                   同步节假日
                 </Button>
-                <Button loading={syncFromMutation.isPending} onClick={() => syncFromMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
+                <Button loading={syncFromMutation.isPending} onClick={() => syncFromMutation.mutate()}>
                   从钉钉拉取
                 </Button>
-                <InputNumber min={1} max={12} value={syncWeeks} onChange={(value) => setSyncWeeks(Number(value) || 4)} style={{ width: 60 }} />
-                <Button type="primary" icon={<SyncOutlined />} loading={syncToMutation.isPending} onClick={() => syncToMutation.mutate()} style={{ borderRadius: 8, fontWeight: 600 }}>
-                  推送到钉钉
+                <Button
+                  type="primary"
+                  icon={<SyncOutlined />}
+                  loading={pushPersonalMutation.isPending}
+                  onClick={openPushModal}
+                >
+                  作息表推送
                 </Button>
               </>
             )}
-            <Text type="secondary">当前：{currentScopeName || '未选择'}</Text>
+            <Text type="secondary" className="ws-scope-hint">当前：{currentScopeName || '未选择'}</Text>
             <DatePicker
               picker="month"
               value={selectedMonth}
               onChange={(date) => setSelectedMonth(date || dayjs())}
               allowClear={false}
-              style={{ width: 140 }}
+              className="ws-month-picker"
             />
           </Space>
         }
@@ -941,20 +1267,20 @@ export default function WeekSchedule() {
           <Empty description={`${selectedMonth?.format('YYYY年M月') || '该月份'}暂无周次安排`} imageStyle={{ height: 80 }} />
         ) : (
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Alert
-              className="week-calendar-legend"
-              type="info"
-              showIcon
-              message="颜色说明"
-              description="黄色表示工作日，白色表示休息日，红色表示法定节假日或特殊休假，灰色表示非当前月份日期。右侧“大小周”列会同时展示单双休、周六状态和本周节假日摘要。"
-            />
+            <div className="ws-legend" aria-label="颜色说明">
+              <span className="ws-legend-item"><i className="ws-swatch ws-swatch-work" />工作日</span>
+              <span className="ws-legend-item"><i className="ws-swatch ws-swatch-rest" />休息日</span>
+              <span className="ws-legend-item"><i className="ws-swatch ws-swatch-holiday" />法定节假日</span>
+              <span className="ws-legend-item"><i className="ws-swatch ws-swatch-outside" />非本月</span>
+              <span className="ws-legend-note">点击周行可手动覆盖大小周</span>
+            </div>
 
             {filteredMonthSections.map((section) => (
               <Card
                 className="week-calendar-month-card"
                 key={section.month}
                 title={`${dayjs(`${section.month}-01`).format('YYYY年M月')}作息时间表`}
-                bodyStyle={{ padding: 0, overflowX: 'auto' }}
+                styles={{ body: { padding: 0, overflowX: 'auto' } }}
               >
                 <div className="week-calendar-mobile-panel">
                   <div className="week-calendar-mobile-month-title">
@@ -990,31 +1316,11 @@ export default function WeekSchedule() {
                     )}
                   </div>
                 </div>
-                <table
-                  className="week-calendar-table"
-                  style={{
-                    width: '100%',
-                    minWidth: 980,
-                    tableLayout: 'fixed',
-                    borderCollapse: 'collapse',
-                  }}
-                >
+                <table className="week-calendar-table">
                   <thead>
                     <tr>
                       {['周数', '周一', '周二', '周三', '周四', '周五', '周六', '周日', '大小周'].map((label) => (
-                        <th
-                          key={label}
-                          style={{
-                            border: '1px solid #d9d9d9',
-                            padding: '12px 8px',
-                            background: '#fafafa',
-                            textAlign: 'center',
-                            fontWeight: 700,
-                            fontSize: 18,
-                          }}
-                        >
-                          {label}
-                        </th>
+                        <th key={label}>{label}</th>
                       ))}
                     </tr>
                   </thead>
@@ -1026,82 +1332,70 @@ export default function WeekSchedule() {
                           ? row.week.holidays.map((holiday) => `${dayjs(holiday.date).format('M/D')} ${holiday.name}`).join('、')
                           : '无特殊日期'
 
+                      const isTodayRow = row.cells.some((c) => dayjs(c.date).isSame(dayjs(), 'day') && c.inCurrentMonth)
                       return (
-                        <tr key={row.week.week_start} onClick={() => openOverrideModal(row.week)} style={{ cursor: canManageAttendance ? 'pointer' : 'default' }}>
-                          <td
-                            style={{
-                              border: '1px solid #d9d9d9',
-                              padding: 12,
-                              background: '#fff',
-                              textAlign: 'center',
-                              verticalAlign: 'middle',
-                              fontWeight: 700,
-                            }}
-                          >
-                            <div>第{index + 1}周</div>
-                            <div style={{ marginTop: 6, fontSize: 12, color: '#8c8c8c', fontWeight: 400 }}>
-                              {dayjs(row.week.week_start).format('MM/DD')} - {dayjs(row.week.week_end).format('MM/DD')}
+                        <tr
+                          key={row.week.week_start}
+                          className={`ws-week-row${isTodayRow ? ' is-current-week' : ''}`}
+                          onClick={() => openOverrideModal(row.week)}
+                          style={{ cursor: canManageAttendance ? 'pointer' : 'default' }}
+                          title={canManageAttendance ? `点击覆盖本周（当前${weekMeta.label}）` : undefined}
+                        >
+                          <td className="ws-week-index">
+                            <div className="ws-week-index-title">第{index + 1}周</div>
+                            <div className="ws-week-index-range">
+                              {dayjs(row.week.week_start).format('MM/DD')}-{dayjs(row.week.week_end).format('MM/DD')}
                             </div>
                           </td>
 
                           {row.cells.map((cell) => {
-                            const cellStyle = getCellStyle(cell.state)
+                            const isToday = dayjs(cell.date).isSame(dayjs(), 'day')
+                            const showRestLabel = cell.inCurrentMonth && cell.state === 'rest' && !cell.holidayLabel
+                            const showWorkExtra =
+                              cell.inCurrentMonth &&
+                              (cell.state === 'saturday-work' ||
+                                cell.state === 'workday' ||
+                                (cell.state === 'work' && selectedUserEndTime))
                             return (
                               <td
                                 key={cell.date}
-                                style={{
-                                  border: '1px solid #d9d9d9',
-                                  padding: 8,
-                                  textAlign: 'center',
-                                  verticalAlign: 'top',
-                                  ...cellStyle,
-                                }}
+                                className={`ws-day-cell ws-day-${cell.state}${!cell.inCurrentMonth ? ' is-outside' : ''}${isToday ? ' is-today' : ''}`}
+                                style={getCellStyle(cell.state)}
                               >
-                                <div
-                                  style={{
-                                    fontSize: 18,
-                                    fontWeight: 700,
-                                    lineHeight: 1.2,
-                                    opacity: cell.inCurrentMonth ? 1 : 0.35,
-                                  }}
-                                >
-                                  {cell.dayNumber}
-                                </div>
-                                <div style={{ marginTop: 8, minHeight: 36, fontSize: 12, lineHeight: 1.5 }}>
-                                  {cell.holidayLabel ? (
-                                    cell.holidayLabel
-                                  ) : cell.state === 'rest' ? (
-                                    '休息'
-                                  ) : cell.state === 'saturday-work' ? (
-                                    <>
-                                      <div>周六上班</div>
-                                      {selectedUserEndTime && (
-                                        <div style={{ color: '#1677ff', marginTop: 2 }}>下班 {selectedUserEndTime}</div>
-                                      )}
-                                    </>
-                                  ) : cell.state === 'work' && selectedUserEndTime ? (
-                                    <div style={{ color: '#1677ff' }}>下班 {selectedUserEndTime}</div>
-                                  ) : null}
-                                </div>
+                                <div className="ws-day-number">{cell.dayNumber}</div>
+                                {(cell.holidayLabel || showRestLabel || showWorkExtra) && (
+                                  <div className="ws-day-note">
+                                    {cell.holidayLabel ? (
+                                      cell.holidayLabel
+                                    ) : cell.state === 'rest' ? (
+                                      '休息'
+                                    ) : cell.state === 'saturday-work' ? (
+                                      <>
+                                        <div>周六上班</div>
+                                        {selectedUserEndTime && <div className="ws-day-shift">下班 {selectedUserEndTime}</div>}
+                                      </>
+                                    ) : cell.state === 'workday' ? (
+                                      '调休上班'
+                                    ) : cell.state === 'work' && selectedUserEndTime ? (
+                                      <div className="ws-day-shift">下班 {selectedUserEndTime}</div>
+                                    ) : null}
+                                  </div>
+                                )}
                               </td>
                             )
                           })}
 
-                          <td
-                            style={{
-                              border: '1px solid #d9d9d9',
-                              padding: 12,
-                              background: weekMeta.background,
-                              verticalAlign: 'middle',
-                            }}
-                          >
-                            <div style={{ fontSize: 16, fontWeight: 700, color: weekMeta.color }}>{weekMeta.restLabel}</div>
-                            <div style={{ marginTop: 8, fontSize: 12, color: '#595959', lineHeight: 1.6 }}>
-                              {row.week.is_override ? '已手动覆盖' : '按规则生成'}
+                          <td className="ws-size-cell" style={{ background: weekMeta.background }}>
+                            <div className="ws-size-label" style={{ color: weekMeta.color }}>{weekMeta.restLabel}</div>
+                            <div className="ws-size-meta">
+                              {weekMeta.label}
+                              {row.week.is_override ? ' · 已覆盖' : ''}
                               <br />
                               {row.week.saturday_work ? '周六上班' : '周六休息'}
                             </div>
-                            <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c', lineHeight: 1.6 }}>{holidaySummary}</div>
+                            {holidaySummary !== '无特殊日期' && (
+                              <div className="ws-size-holidays">{holidaySummary}</div>
+                            )}
                           </td>
                         </tr>
                       )
@@ -1120,13 +1414,12 @@ export default function WeekSchedule() {
             <Col xs={24} xxl={12}>
               <Card
                 title="规则管理"
-                style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-                styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+                className="ws-panel-card"
                 extra={
                   <Space>
-                    <Button onClick={() => shiftsQuery.refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>刷新班次</Button>
-                    <Button onClick={() => setShiftModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>新增班次</Button>
-                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreateRuleModal} style={{ borderRadius: 8, fontWeight: 600 }}>
+                    <Button onClick={() => shiftsQuery.refetch()}>刷新班次</Button>
+                    <Button onClick={() => setShiftModalOpen(true)}>新增班次</Button>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreateRuleModal}>
                       新增规则
                     </Button>
                   </Space>
@@ -1145,11 +1438,10 @@ export default function WeekSchedule() {
             <Col xs={24} xxl={12}>
               <Card
                 title="钉钉同步"
-                style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-                styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+                className="ws-panel-card"
                 extra={
                   <Space>
-                    <Button icon={<ReloadOutlined />} onClick={() => logsQuery.refetch()} style={{ borderRadius: 8, fontWeight: 600 }}>
+                    <Button icon={<ReloadOutlined />} onClick={() => logsQuery.refetch()}>
                       刷新
                     </Button>
                   </Space>
@@ -1169,13 +1461,12 @@ export default function WeekSchedule() {
 
           <Card
             title="节假日管理"
-            style={{ borderRadius: 14, border: '1px solid #e5e7eb', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' }}
-            styles={{ header: { background: '#fafbfc', borderBottom: '1px solid #f0f0f0' } }}
+            className="ws-panel-card"
             extra={
               <Space>
                 <DatePicker picker="year" value={dayjs(`${holidayYear}-01-01`)} onChange={(value) => setHolidayYear(value?.year() || dayjs().year())} />
-                <Button onClick={() => setHolidayImportModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>批量导入</Button>
-                <Button type="primary" onClick={() => setHolidayModalOpen(true)} style={{ borderRadius: 8, fontWeight: 600 }}>
+                <Button onClick={() => setHolidayImportModalOpen(true)}>批量导入</Button>
+                <Button type="primary" onClick={() => setHolidayModalOpen(true)}>
                   新增节假日
                 </Button>
               </Space>
@@ -1191,6 +1482,82 @@ export default function WeekSchedule() {
           </Card>
         </>
       )}
+
+      <Modal
+        open={pushModalOpen}
+        title="作息表推送"
+        okText="确认推送"
+        cancelText="取消"
+        onCancel={() => {
+          if (pushPersonalMutation.isPending) return
+          setPushModalOpen(false)
+        }}
+        onOk={handleConfirmPush}
+        confirmLoading={pushPersonalMutation.isPending}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message={`将推送 ${selectedMonth?.format('YYYY年M月') || ''} 作息时间表图片与文字提醒到所选员工钉钉（不写入考勤排班）`}
+          />
+          <div>
+            <Text type="secondary">推送月份</Text>
+            <div style={{ marginTop: 4, fontWeight: 600 }}>{selectedMonth?.format('YYYY年M月') || '-'}</div>
+          </div>
+          <div>
+            <Text type="secondary">
+              收件人
+              {usersQuery.isFetching || pushUserSearching ? '（加载中…）' : `（${users.length} 人可选）`}
+            </Text>
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              placeholder={usersQuery.isLoading ? '正在加载员工列表…' : '搜索姓名 / 选择收件人'}
+              style={{ width: '100%', marginTop: 8 }}
+              value={pushRecipientIds}
+              onChange={(values) => setPushRecipientIds(values)}
+              onSearch={(value) => setPushUserSearch(value)}
+              filterOption={(input, option) => {
+                const label = String(option?.label ?? '')
+                const value = String(option?.value ?? '')
+                const q = input.trim().toLowerCase()
+                return label.toLowerCase().includes(q) || value.toLowerCase().includes(q)
+              }}
+              optionFilterProp="label"
+              options={pushSelectOptions}
+              maxTagCount="responsive"
+              listHeight={320}
+              virtual
+              notFoundContent={usersQuery.isLoading || pushUserSearching ? <Spin size="small" /> : '未找到匹配员工'}
+            />
+            <div style={{ marginTop: 8 }}>
+              <Space wrap size={8}>
+                <Button
+                  size="small"
+                  onClick={() => setPushRecipientIds(users.map((u) => u.user_id))}
+                  disabled={users.length === 0}
+                >
+                  全选当前列表
+                </Button>
+                <Button size="small" onClick={() => setPushRecipientIds([])}>
+                  清空
+                </Button>
+              </Space>
+            </div>
+          </div>
+          {selectedMonth && filteredMonthSections[0] && (
+            <div>
+              <Text type="secondary">文字预览</Text>
+              <div className="ws-push-preview" style={{ marginTop: 8 }}>
+                {buildSchedulePushContent(selectedMonth, filteredMonthSections[0]).content}
+              </div>
+            </div>
+          )}
+        </Space>
+      </Modal>
 
       <Modal
         open={ruleModalOpen}

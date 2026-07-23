@@ -32,7 +32,8 @@ func SetupRouter() *gin.Engine {
 	router.Use(middleware.RequestMetrics())
 
 	router.GET("/health", HealthCheck)
-	router.GET("/api/v1/files/:filename", middleware.JWTAuth(), ServeFile)
+	// 文件下载：JWT + TenantContext，按 org 元数据鉴权（与 authRequired 一致）
+	router.GET("/api/v1/files/:filename", middleware.JWTAuth(), middleware.TenantContext(), ServeFile)
 
 	v1 := router.Group("/api/v1")
 	{
@@ -95,8 +96,15 @@ func SetupRouter() *gin.Engine {
 
 			departments := authRequired.Group("/departments")
 			{
-				departments.GET("", GetScopedDepartments)
-				departments.GET("/:id", GetDepartment)
+				// 部门枚举需 org 读能力或业务菜单，禁止任意登录用户无门闩枚举
+				departments.GET("", middleware.RequirePermissionOrMenu(
+					[]string{"org:read", "user_manage", "permission_manage", "attendance_manage"},
+					orgReadMenus,
+				), GetScopedDepartments)
+				departments.GET("/:id", middleware.RequirePermissionOrMenu(
+					[]string{"org:read", "user_manage", "permission_manage", "attendance_manage"},
+					orgReadMenus,
+				), GetDepartment)
 			}
 
 			sync := authRequired.Group("/sync")
@@ -140,14 +148,16 @@ func SetupRouter() *gin.Engine {
 					processing.POST("/final", ProcessFinalTable)
 					processing.POST("/parttime", ProcessParttimeSummary)
 				}
-				attendance.GET("/toolbox/defaults", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxDefaults)
-				attendance.POST("/toolbox/:module/run", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), RunAttendanceToolbox)
-				attendance.POST("/toolbox/dingtalk-sync", middleware.RequirePermission("attendance_manage"), RunDingtalkSync)
-				attendance.POST("/toolbox/rules/export", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), ExportOvertimeRules)
-				attendance.POST("/toolbox/rules/import-preview", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), ImportOvertimeRulesPreview)
-				attendance.POST("/toolbox/:module/validate", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), ValidateAttendanceToolbox)
-				attendance.POST("/toolbox/templates", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), ExportAttendanceToolboxTemplates)
-				attendance.POST("/toolbox/audit", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), AuditAttendanceToolbox)
+				// 工具箱写操作与前端细权限对齐：attendance_manage 或 attendance_toolbox_operate；
+				// 禁止仅凭 menu:attendance-toolbox 绕过 feature 权限。只读 defaults 仍允许菜单或管理权限。
+				attendance.GET("/toolbox/defaults", middleware.RequirePermissionOrMenu([]string{"attendance_manage", "attendance_toolbox_operate"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxDefaults)
+				attendance.POST("/toolbox/:module/run", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), RunAttendanceToolbox)
+				attendance.POST("/toolbox/dingtalk-sync", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunDingtalkSync)
+				attendance.POST("/toolbox/rules/export", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ExportOvertimeRules)
+				attendance.POST("/toolbox/rules/import-preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ImportOvertimeRulesPreview)
+				attendance.POST("/toolbox/:module/validate", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ValidateAttendanceToolbox)
+				attendance.POST("/toolbox/templates", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ExportAttendanceToolboxTemplates)
+				attendance.POST("/toolbox/audit", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), AuditAttendanceToolbox)
 			}
 
 			// 閻庡厜鍓濇竟鎺懳熼垾铏仴
@@ -314,7 +324,25 @@ func SetupRouter() *gin.Engine {
 				shiftConfig.POST("/get-or-create-shift", middleware.RequirePermission("attendance_manage"), GetOrCreateCustomShift)
 			}
 
-			authRequired.POST("/upload", UploadFile)
+			// 通用上传：需具备业务写相关权限之一，禁止任意登录用户无门闩上传
+			authRequired.POST("/upload", middleware.RequirePermissionOrMenu(
+				[]string{
+					"user_manage",
+					"attendance_manage",
+					"attendance_toolbox_operate",
+					"performance:self_eval:submit",
+					"performance:manager_eval:submit",
+					"performance:goal:manage",
+					"performance:activity:manage",
+					"performance:result:view",
+				},
+				[]string{
+					"menu:performance-overview",
+					"menu:attendance-toolbox",
+					"menu:employee-profile",
+					"menu:employee-flow",
+				},
+			), UploadFile)
 
 			performanceReadPermissions := []string{
 				"performance:result:view",
@@ -343,6 +371,12 @@ func SetupRouter() *gin.Engine {
 			)
 			performance := authRequired.Group("/performance")
 			{
+				// 活动编辑器范围选项 / Excel 导入批次（JWT + TenantContext + 绩效权限）
+				performance.GET("/scope-options", performanceRead, GetPerformanceScopeOptions)
+				performance.POST("/imports/analyze", middleware.RequirePermission("performance:activity:manage"), AnalyzePerformanceActivityImport)
+				performance.GET("/imports/:batch_id", middleware.RequirePermission("performance:activity:manage"), GetPerformanceActivityImportBatch)
+				performance.POST("/imports/:batch_id/commit", middleware.RequirePermission("performance:activity:manage"), CommitPerformanceActivityImport)
+
 				performance.GET("/activities", performanceRead, GetPerformanceActivities)
 				performance.POST("/activities", middleware.RequirePermission("performance:activity:manage"), CreatePerformanceActivity)
 				performance.GET("/activities/:activity_id", performanceRead, GetPerformanceActivity)

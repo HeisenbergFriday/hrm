@@ -65,14 +65,17 @@ export function getDepartmentOption(department: any) {
 }
 
 export function getUserOption(user: any) {
-  const value = String(user.user_id || user.employee_id || user.id || '')
+  // 参与范围 Select value 必须是 User.UserID，禁止 fallback 到 employee_id / 数据库自增 id。
+  const value = String(user?.user_id || '').trim()
+  if (!value) return null
   const name = user.name || user.user_name || user.employee_name || value
   const departmentName = user.department_name ? ` - ${user.department_name}` : ''
-  return value ? { value, label: `${name}（${value}）${departmentName}` } : null
+  return { value, label: `${name}（${value}）${departmentName}` }
 }
 
 export function getImportedUserOption(user: any) {
-  const value = String(user?.user_id || user?.employee_id || user?.id || '').trim()
+  // 导入结果若已转换为 UserID，则只认 user_id；不再 fallback employee_id / id。
+  const value = String(user?.user_id || '').trim()
   if (!value) return null
   const employeeID = String(user?.employee_id || '').trim()
   const name = String(user?.name || user?.user_name || user?.employee_name || value).trim()

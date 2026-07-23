@@ -205,14 +205,19 @@ func buildGrantMessage(prefix string, result *service.GrantOperationResult) stri
 // ========== 工具接口 ==========
 
 func ListVacationTypes(c *gin.Context) {
-	opUserID := c.Query("op_user_id")
-	if opUserID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "op_user_id 必填（管理员钉钉 userid）"})
-		return
-	}
 	orgID, ok := currentOrgIDOrAbort(c)
 	if !ok {
 		return
+	}
+	opUserID := strings.TrimSpace(c.Query("op_user_id"))
+	if opUserID == "" {
+		// Prefer enterprise-scoped admin from org config; no global env fallback for non-default.
+		resolved, err := dingtalk.ResolveAdminUserID(orgID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "op_user_id 必填或配置 organizations.ding_talk_admin_user_id: " + err.Error()})
+			return
+		}
+		opUserID = resolved
 	}
 	types, err := dingtalk.ListVacationTypesForOrg(orgID, opUserID)
 	if err != nil {
@@ -477,7 +482,7 @@ func SyncAndMatch(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"step": "sync_attendance", "error": "拉取打卡记录失败: " + err.Error()})
 			return
 		}
-		attendanceSvc := service.NewAttendanceService(db)
+		attendanceSvc := service.NewAttendanceServiceWithOrgID(db, orgID)
 		attendanceCount, err = attendanceSvc.SyncRecords(orgID, records, userNameMap)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"step": "sync_attendance", "error": "写入打卡记录失败: " + err.Error()})
