@@ -50,39 +50,39 @@ type Organization struct {
 
 // User 用户模型
 type User struct {
-	ID            uint                   `gorm:"primaryKey" json:"id"`
-	OrgID         string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_org_user_id;uniqueIndex:idx_org_email" json:"org_id"` // 组织ID（多租户隔离）
-	UserID        string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_org_user_id" json:"user_id"`                                            // 钉钉用户ID
-	DingTalkUserID string                `gorm:"column:ding_talk_user_id;type:varchar(64);index" json:"dingtalk_user_id"`                                         // 钉钉 UserID（合并自综合分支，业务冗余字段）
-	Name          string                 `gorm:"type:varchar(128);not null" json:"name"`
-	Email         string                 `gorm:"type:varchar(128);uniqueIndex:idx_org_email" json:"email"`
-	Mobile        string                 `gorm:"type:varchar(32)" json:"mobile"`
-	Password      string                 `gorm:"type:varchar(256)" json:"-"` // 密码哈希，JSON 不输出
-	DepartmentID string                 `gorm:"type:varchar(64);not null" json:"department_id"`
-	Position      string                 `gorm:"type:varchar(128)" json:"position"`
-	Avatar        string                 `gorm:"type:varchar(256)" json:"avatar"`
-	Status        string                 `gorm:"type:varchar(32);not null" json:"status"`
-	ManagerUserID string                 `gorm:"type:varchar(64);index" json:"manager_user_id"` // 直属主管钉钉 UserID
-	ManagerName   string                 `gorm:"type:varchar(128)" json:"manager_name"`         // 直属主管姓名快照
-	Extension     map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
-	CreatedAt     time.Time              `json:"created_at"`
-	UpdatedAt     time.Time              `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt         `gorm:"index" json:"-"`
+	ID             uint                   `gorm:"primaryKey" json:"id"`
+	OrgID          string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_org_user_id;uniqueIndex:idx_org_email" json:"org_id"` // 组织ID（多租户隔离）
+	UserID         string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_org_user_id" json:"user_id"`                                            // 钉钉用户ID
+	DingTalkUserID string                 `gorm:"column:ding_talk_user_id;type:varchar(64);index" json:"dingtalk_user_id"`                                         // 钉钉 UserID（合并自综合分支，业务冗余字段）
+	Name           string                 `gorm:"type:varchar(128);not null" json:"name"`
+	Email          string                 `gorm:"type:varchar(128);uniqueIndex:idx_org_email" json:"email"`
+	Mobile         string                 `gorm:"type:varchar(32)" json:"mobile"`
+	Password       string                 `gorm:"type:varchar(256)" json:"-"` // 密码哈希，JSON 不输出
+	DepartmentID   string                 `gorm:"type:varchar(64);not null" json:"department_id"`
+	Position       string                 `gorm:"type:varchar(128)" json:"position"`
+	Avatar         string                 `gorm:"type:varchar(256)" json:"avatar"`
+	Status         string                 `gorm:"type:varchar(32);not null" json:"status"`
+	ManagerUserID  string                 `gorm:"type:varchar(64);index" json:"manager_user_id"` // 直属主管钉钉 UserID
+	ManagerName    string                 `gorm:"type:varchar(128)" json:"manager_name"`         // 直属主管姓名快照
+	Extension      map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
 // Department 部门模型
 type Department struct {
-	ID           uint                   `gorm:"primaryKey" json:"id"`
-	OrgID        string                 `gorm:"type:varchar(64);not null;default:'default';index:idx_org_dept_id,unique" json:"org_id"` // 组织ID（多租户隔离）
-	DepartmentID string                 `gorm:"type:varchar(64);not null;index:idx_org_dept_id,unique" json:"department_id"`            // 钉钉部门ID
-	DingTalkDepartmentID string          `gorm:"type:varchar(64);index" json:"dingtalk_department_id"`                                   // 钉钉部门ID（合并自综合分支）
-	Name         string                 `gorm:"type:varchar(128);not null" json:"name"`
-	ParentID     string                 `gorm:"type:varchar(64)" json:"parent_id"`
-	Order        int                    `gorm:"default:0" json:"order"`
-	Extension    map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
-	CreatedAt    time.Time              `json:"created_at"`
-	UpdatedAt    time.Time              `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt         `gorm:"index" json:"-"`
+	ID                   uint                   `gorm:"primaryKey" json:"id"`
+	OrgID                string                 `gorm:"type:varchar(64);not null;default:'default';index:idx_org_dept_id,unique" json:"org_id"` // 组织ID（多租户隔离）
+	DepartmentID         string                 `gorm:"type:varchar(64);not null;index:idx_org_dept_id,unique" json:"department_id"`            // 钉钉部门ID
+	DingTalkDepartmentID string                 `gorm:"type:varchar(64);index" json:"dingtalk_department_id"`                                   // 钉钉部门ID（合并自综合分支）
+	Name                 string                 `gorm:"type:varchar(128);not null" json:"name"`
+	ParentID             string                 `gorm:"type:varchar(64)" json:"parent_id"`
+	Order                int                    `gorm:"default:0" json:"order"`
+	Extension            map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
+	CreatedAt            time.Time              `json:"created_at"`
+	UpdatedAt            time.Time              `json:"updated_at"`
+	DeletedAt            gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
 // DepartmentChangeLog 部门变更日志
@@ -245,8 +245,8 @@ type SyncStatus struct {
 // IdempotencyRecord stores completed write responses for safe client retries.
 type IdempotencyRecord struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
-	OrgID          string    `gorm:"type:varchar(64);not null;default:'default';index" json:"org_id"`
-	Digest         string    `gorm:"type:char(64);uniqueIndex;not null" json:"-"`
+	OrgID          string    `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_idempotency_records_org_digest;index" json:"org_id"`
+	Digest         string    `gorm:"type:char(64);not null;uniqueIndex:idx_idempotency_records_org_digest" json:"-"`
 	IdempotencyKey string    `gorm:"type:varchar(128);not null;index" json:"idempotency_key"`
 	UserID         string    `gorm:"type:varchar(128);not null;index" json:"user_id"`
 	Method         string    `gorm:"type:varchar(16);not null" json:"method"`

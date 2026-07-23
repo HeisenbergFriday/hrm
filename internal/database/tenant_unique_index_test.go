@@ -25,6 +25,16 @@ func TestPerformanceReminderUniqueIndexIsOrganizationScoped(t *testing.T) {
 	assertModelHasNoIndex(t, &PerformanceReminderLog{}, performanceReminderLegacyIndexName)
 }
 
+func TestIdempotencyRecordUniqueIndexIsOrganizationScoped(t *testing.T) {
+	assertUniqueIndexFields(t, &IdempotencyRecord{}, "idx_idempotency_records_org_digest", []string{"org_id", "digest"})
+	assertModelHasNoIndex(t, &IdempotencyRecord{}, "idx_idempotency_records_digest")
+}
+
+func TestSyncStatusUniqueIndexIsOrganizationScoped(t *testing.T) {
+	assertUniqueIndexFields(t, &SyncStatus{}, "idx_org_sync_type", []string{"org_id", "type"})
+	assertModelHasNoIndex(t, &SyncStatus{}, "idx_sync_statuses_org_type")
+}
+
 func assertUniqueIndexFields(t *testing.T, model interface{}, indexName string, want []string) {
 	t.Helper()
 	parsed, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})

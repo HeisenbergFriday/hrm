@@ -319,10 +319,20 @@ func migrateSyncStatusOrganizationScope() error {
 	if !DB.Migrator().HasTable(&SyncStatus{}) {
 		return nil
 	}
-	if err := dropUniqueIndexesForColumn("sync_statuses", "type", "idx_sync_statuses_org_type"); err != nil {
+	if err := dropUniqueIndexesForColumn("sync_statuses", "type", "idx_org_sync_type"); err != nil {
 		return err
 	}
-	return ensureCompositeUniqueIndex("sync_statuses", "idx_sync_statuses_org_type", "org_id", "type")
+	return ensureCompositeUniqueIndex("sync_statuses", "idx_org_sync_type", "org_id", "type")
+}
+
+func migrateIdempotencyRecordOrganizationScope() error {
+	if !DB.Migrator().HasTable(&IdempotencyRecord{}) {
+		return nil
+	}
+	if err := dropIndexIfExists("idempotency_records", "idx_idempotency_records_digest"); err != nil {
+		return err
+	}
+	return ensureCompositeUniqueIndex("idempotency_records", "idx_idempotency_records_org_digest", "org_id", "digest")
 }
 
 const (
@@ -1276,6 +1286,9 @@ func migrate() error {
 		return err
 	}
 	if err := migrateRolePermissionOrganizationScope(); err != nil {
+		return err
+	}
+	if err := migrateIdempotencyRecordOrganizationScope(); err != nil {
 		return err
 	}
 	if err := migrateSyncStatusOrganizationScope(); err != nil {
