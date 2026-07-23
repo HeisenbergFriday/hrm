@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"os"
 	"peopleops/internal/config"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
@@ -207,11 +206,14 @@ func (s *ShiftConfigService) DeleteConfig(userID string) error {
 // GetOrCreateShift 查找已有同名班次或创建新班次，返回钉钉班次 ID。
 // 调用钉钉 API 次数：最多 2 次（GetShiftList + CreateShift）。
 func (s *ShiftConfigService) GetOrCreateShift(name, checkIn, checkOut string) (int64, error) {
-	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
-	if opUserID == "" {
-		return 0, fmt.Errorf("missing DINGTALK_ADMIN_USER_ID")
+	orgID, err := requireOrgIDFromDB(s.db)
+	if err != nil {
+		return 0, err
 	}
-	orgID := orgIDFromDB(s.db)
+	opUserID, err := dingtalk.ResolveAdminUserID(orgID)
+	if err != nil {
+		return 0, err
+	}
 
 	shiftKey := normalize(name, checkIn, checkOut)
 
@@ -296,6 +298,10 @@ func normalize(name, checkIn, checkOut string) string {
 }
 
 func (s *ShiftConfigService) ApplyAndSync(input *ApplyShiftConfigInput) (*ApplyShiftConfigResult, error) {
+	orgID, err := requireOrgIDFromDB(s.db)
+	if err != nil {
+		return nil, err
+	}
 	shiftID := input.ShiftID
 	endTime := input.EndTime
 
@@ -334,13 +340,12 @@ func (s *ShiftConfigService) ApplyAndSync(input *ApplyShiftConfigInput) (*ApplyS
 		Message:      "saved locally",
 	}
 
-	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
-	if opUserID == "" {
+	opUserID, err := dingtalk.ResolveAdminUserID(orgID)
+	if err != nil {
 		result.Status = "partial"
-		result.Message = "saved locally, but missing DINGTALK_ADMIN_USER_ID for sync"
+		result.Message = "saved locally, but DingTalk admin is unavailable for sync: " + err.Error()
 		return result, nil
 	}
-	orgID := orgIDFromDB(s.db)
 
 	groups, err := dingtalk.GetAttendanceGroupsForOrg(orgID)
 	if err != nil {
@@ -418,19 +423,22 @@ func (s *ShiftConfigService) ApplyAndSync(input *ApplyShiftConfigInput) (*ApplyS
 }
 
 func (s *ShiftConfigService) Preview(input *PreviewShiftConfigInput) (*PreviewShiftConfigResult, error) {
+	orgID, err := requireOrgIDFromDB(s.db)
+	if err != nil {
+		return nil, err
+	}
 	shiftName, err := s.resolvePreviewShiftName(input)
 	if err != nil {
 		return nil, err
 	}
 
 	canSyncRest := false
-	opUserID := os.Getenv("DINGTALK_ADMIN_USER_ID")
-	if opUserID != "" {
-		orgID := orgIDFromDB(s.db)
+	opUserID, adminErr := dingtalk.ResolveAdminUserID(orgID)
+	if adminErr == nil {
 		if groups, groupErr := dingtalk.GetAttendanceGroupsForOrg(orgID); groupErr == nil {
 			if groupID, findErr := dingtalk.FindScheduleGroupID(groups); findErr == nil {
 				if groupDetail, detailErr := dingtalk.GetAttendanceGroupForOrg(orgID, opUserID, groupID); detailErr == nil {
-					canSyncRest = dingtalk.GetAttendanceGroupRestClassID(groupDetail) > 0
+					canSyncRest = dingtalk.GetAttendanceGroupRestClassIDForOrg(orgID, groupDetail) > 0
 				}
 			}
 		}

@@ -124,7 +124,7 @@ func TestIndicatorLibraryAccessRespectsDepartmentScope(t *testing.T) {
 			})
 
 			c, recorder := newPerformanceAccessContext("manager-1")
-			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/performance/indicator-libraries/1", nil)
+			c.Request = performanceTestRequest(http.MethodGet, "/api/v1/performance/indicator-libraries/1", nil)
 			c.Params = gin.Params{{Key: "id", Value: "1"}}
 
 			GetIndicatorLibrary(c)
@@ -218,5 +218,7 @@ func newPerformanceAccessContext(userID string) (*gin.Context, *httptest.Respons
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Set("userID", userID)
+	c.Set("orgID", database.DefaultOrganizationID)
+	c.Request = performanceTestRequest(http.MethodGet, "/", nil)
 	return c, recorder
 }

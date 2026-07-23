@@ -40,7 +40,7 @@ func newStubPermissionService(t *testing.T, queries ...stubQueryResponse) *Permi
 	if err != nil {
 		t.Fatalf("open stub gorm db: %v", err)
 	}
-	return NewPermissionService(db)
+	return NewPermissionServiceWithOrgID(db, "default")
 }
 
 func TestResolveUserScopeExpandsRoleAndManagedDepartments(t *testing.T) {

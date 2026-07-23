@@ -13,6 +13,30 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func orgReadMenuKeys() []string {
+	return []string{
+		"menu:organization-dashboard",
+		"menu:department-tree",
+		"menu:employees",
+		"menu:employee-profile",
+		"menu:employee-flow",
+		"menu:talent-analysis",
+		"menu:attendance",
+		"menu:attendance-stats",
+		"menu:attendance-export",
+		"menu:leave-overtime",
+		"menu:performance-overview",
+	}
+}
+
+func userListReadMenuKeys() []string {
+	return append(orgReadMenuKeys(), "menu:permission", "menu:week-schedule")
+}
+
+func userDetailReadMenuKeys() []string {
+	return append(orgReadMenuKeys(), "menu:permission")
+}
+
 func SetupRouter() *gin.Engine {
 	router := gin.New()
 	router.Use(querySafeGinLogger(), gin.Recovery())
@@ -32,6 +56,9 @@ func SetupRouter() *gin.Engine {
 	router.Use(middleware.RequestMetrics())
 
 	router.GET("/health", HealthCheck)
+	// Performance attachments and other shared uploads are read by several modules.
+	// Authentication is required here; feature permissions remain on the business
+	// records that expose the opaque file URL.
 	router.GET("/api/v1/files/:filename", middleware.JWTAuth(), ServeFile)
 
 	v1 := router.Group("/api/v1")
@@ -55,19 +82,7 @@ func SetupRouter() *gin.Engine {
 		authRequired := v1.Group("/")
 		authRequired.Use(middleware.JWTAuth(), middleware.TenantContext())
 		{
-			orgReadMenus := []string{
-				"menu:organization-dashboard",
-				"menu:department-tree",
-				"menu:employees",
-				"menu:employee-profile",
-				"menu:employee-flow",
-				"menu:talent-analysis",
-				"menu:attendance",
-				"menu:attendance-stats",
-				"menu:attendance-export",
-				"menu:leave-overtime",
-				"menu:performance-overview",
-			}
+			orgReadMenus := orgReadMenuKeys()
 			attendanceReadMenus := []string{
 				"menu:attendance",
 				"menu:attendance-stats",
@@ -84,15 +99,18 @@ func SetupRouter() *gin.Engine {
 			{
 				users.GET("", middleware.RequirePermissionOrMenu(
 					[]string{"user_manage", "permission_manage", "attendance_manage", "org:read"},
-					append(append([]string{}, orgReadMenus...), "menu:permission"),
+					userListReadMenuKeys(),
 				), GetUsers)
 				users.GET("/:id", middleware.RequirePermissionOrMenu(
 					[]string{"user_manage", "permission_manage", "org:read"},
-					append(append([]string{}, orgReadMenus...), "menu:permission"),
+					userDetailReadMenuKeys(),
 				), GetUser)
 				users.PUT("/:id", middleware.RequirePermission("user_manage"), UpdateUser)
 			}
 
+			// Department selectors are shared by attendance, performance indicators,
+			// performance reports, and week scheduling. Keep the route authenticated
+			// and let GetScopedDepartments enforce the caller's organization/data scope.
 			departments := authRequired.Group("/departments")
 			{
 				departments.GET("", GetScopedDepartments)
@@ -140,14 +158,16 @@ func SetupRouter() *gin.Engine {
 					processing.POST("/final", ProcessFinalTable)
 					processing.POST("/parttime", ProcessParttimeSummary)
 				}
-				attendance.GET("/toolbox/defaults", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxDefaults)
-				attendance.POST("/toolbox/:module/run", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), RunAttendanceToolbox)
-				attendance.POST("/toolbox/dingtalk-sync", middleware.RequirePermission("attendance_manage"), RunDingtalkSync)
-				attendance.POST("/toolbox/rules/export", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), ExportOvertimeRules)
-				attendance.POST("/toolbox/rules/import-preview", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), ImportOvertimeRulesPreview)
-				attendance.POST("/toolbox/:module/validate", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), ValidateAttendanceToolbox)
-				attendance.POST("/toolbox/templates", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), ExportAttendanceToolboxTemplates)
-				attendance.POST("/toolbox/audit", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-toolbox"}), AuditAttendanceToolbox)
+				// 工具箱写操作与前端细权限对齐：attendance_manage 或 attendance_toolbox_operate；
+				// 禁止仅凭 menu:attendance-toolbox 绕过 feature 权限。只读 defaults 仍允许菜单或管理权限。
+				attendance.GET("/toolbox/defaults", middleware.RequirePermissionOrMenu([]string{"attendance_manage", "attendance_toolbox_operate"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxDefaults)
+				attendance.POST("/toolbox/:module/run", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), RunAttendanceToolbox)
+				attendance.POST("/toolbox/dingtalk-sync", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunDingtalkSync)
+				attendance.POST("/toolbox/rules/export", middleware.RequirePermission("attendance_manage", "attendance_toolbox_rules_edit"), ExportOvertimeRules)
+				attendance.POST("/toolbox/rules/import-preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_rules_edit"), ImportOvertimeRulesPreview)
+				attendance.POST("/toolbox/:module/validate", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ValidateAttendanceToolbox)
+				attendance.POST("/toolbox/templates", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ExportAttendanceToolboxTemplates)
+				attendance.POST("/toolbox/audit", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), AuditAttendanceToolbox)
 			}
 
 			// 閻庡厜鍓濇竟鎺懳熼垾铏仴
@@ -314,6 +334,8 @@ func SetupRouter() *gin.Engine {
 				shiftConfig.POST("/get-or-create-shift", middleware.RequirePermission("attendance_manage"), GetOrCreateCustomShift)
 			}
 
+			// Shared attachment upload. Business write permissions are enforced by the
+			// endpoint that persists the returned opaque URL.
 			authRequired.POST("/upload", UploadFile)
 
 			performanceReadPermissions := []string{
