@@ -68,7 +68,6 @@ const MenuPermission: React.FC = () => {
       key: 'attendance',
       children: [
         { title: '考勤查询', key: 'attendance' },
-        { title: '异常统计', key: 'attendance-stats' },
         { title: '导出记录', key: 'attendance-export' },
         { title: '年假与调休', key: 'leave-overtime' },
         { title: '大小周与节假日', key: 'week-schedule' },
@@ -79,6 +78,7 @@ const MenuPermission: React.FC = () => {
       title: '审批管理',
       key: 'approval',
       children: [
+        { title: 'OA审批数据', key: 'oa-approval-data' },
         { title: '审批模板', key: 'approval-templates' },
         { title: '审批实例', key: 'approval-instances' },
         { title: '审批统计', key: 'approval-stats' },

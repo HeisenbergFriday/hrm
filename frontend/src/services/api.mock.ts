@@ -356,10 +356,6 @@ export const attendanceAPIMock = {
     }
     return mockData.attendance.records.success;
   },
-  getStats: async (params: any) => {
-    await delay(MOCK_DELAY);
-    return mockData.attendance.stats.success;
-  },
   sync: async (data?: { start_date?: string; end_date?: string }) => {
     await delay(MOCK_DELAY);
     if (data?.start_date === 'fail') {

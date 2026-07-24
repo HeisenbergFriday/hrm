@@ -19,6 +19,7 @@ import {
   DatabaseOutlined,
   ToolOutlined,
   CloudSyncOutlined,
+  FileSearchOutlined,
 } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 
@@ -28,6 +29,7 @@ export interface MenuItem {
   label: React.ReactNode
   icon?: React.ReactNode
   children?: MenuItem[]
+  orgIds?: string[]
 }
 
 export const menuPermissionKey = (key: string) => {
@@ -65,7 +67,6 @@ export const menuConfig: MenuItem[] = [
     icon: <ClockCircleOutlined />,
     children: [
       { key: menuPermissionKey('attendance'), title: '考勤查询', label: <Link to="/attendance">考勤查询</Link>, icon: <ClockCircleOutlined /> },
-      { key: menuPermissionKey('attendance-stats'), title: '异常统计', label: <Link to="/attendance-stats">异常统计</Link>, icon: <WarningOutlined /> },
       { key: menuPermissionKey('attendance-export'), title: '导出记录', label: <Link to="/attendance-export">导出记录</Link>, icon: <FileExcelOutlined /> },
       { key: menuPermissionKey('attendance-processing'), title: '数据处理', label: <Link to="/attendance-processing">数据处理</Link>, icon: <ToolOutlined /> },
       { key: menuPermissionKey('attendance-external-sync'), title: '外部考勤同步', label: <Link to="/attendance/external-sync">外部同步</Link>, icon: <CloudSyncOutlined /> },
@@ -84,6 +85,7 @@ export const menuConfig: MenuItem[] = [
       { key: menuPermissionKey('approval-templates'), title: '审批模板', label: <Link to="/approval-templates">审批模板</Link>, icon: <FileTextOutlined /> },
       { key: menuPermissionKey('approval-instances'), title: '审批实例', label: <Link to="/approval-instances">审批实例</Link>, icon: <FileOutlined /> },
       { key: menuPermissionKey('approval-stats'), title: '审批统计', label: <Link to="/approval-stats">审批统计</Link>, icon: <BarChartOutlined /> },
+      { key: menuPermissionKey('oa-approval-data'), title: 'OA审批数据', label: <Link to="/oa-approval-data">OA审批数据</Link>, icon: <FileSearchOutlined />, orgIds: ['muteng'] },
     ],
   },
   {
@@ -138,7 +140,7 @@ export const logoutMenuItem: MenuItem = {
   icon: <LogoutOutlined />,
 }
 
-export function filterMenuByKeys(items: MenuItem[], allowedKeys: string[]): MenuItem[] {
+export function filterMenuByKeys(items: MenuItem[], allowedKeys: string[], orgID?: string): MenuItem[] {
   if (!allowedKeys || allowedKeys.length === 0) return []
 
   const keySet = new Set(allowedKeys.map(menuPermissionKey))
@@ -146,12 +148,16 @@ export function filterMenuByKeys(items: MenuItem[], allowedKeys: string[]): Menu
   return items
     .map((item) => {
       if (item.key === 'logout') return item
+      if (item.orgIds?.length && (!orgID || !item.orgIds.includes(orgID.trim().toLowerCase()))) return null
 
       if (!item.children) {
         return keySet.has(menuPermissionKey(item.key)) ? item : null
       }
 
-      const filteredChildren = item.children.filter((child) => keySet.has(menuPermissionKey(child.key)))
+      const filteredChildren = item.children.filter((child) =>
+        keySet.has(menuPermissionKey(child.key)) &&
+        (!child.orgIds?.length || (orgID && child.orgIds.includes(orgID.trim().toLowerCase()))),
+      )
       if (filteredChildren.length === 0) return null
 
       return { ...item, children: filteredChildren }

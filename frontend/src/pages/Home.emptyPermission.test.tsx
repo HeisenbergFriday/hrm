@@ -2,7 +2,7 @@ import React from 'react'
 import { render, screen } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import Home from './Home'
+import Home, { calculateExternalAttendanceRate } from './Home'
 import { useAuthStore } from '../store/authStore'
 
 vi.mock('react-router-dom', () => ({
@@ -12,7 +12,7 @@ vi.mock('react-router-dom', () => ({
 
 vi.mock('../services/api', () => ({
   orgAPI: { getOverview: vi.fn() },
-  attendanceAPI: { getStats: vi.fn() },
+  attendanceAPI: { externalSync: { getDailyResults: vi.fn() } },
   approvalAPI: { getInstances: vi.fn() },
 }))
 
@@ -42,5 +42,19 @@ describe('Home empty permission', () => {
       screen.getByText('您尚未被分配任何角色，请联系管理员配置权限后再使用系统功能。'),
     ).toBeInTheDocument()
     expect(screen.getByText('系统概览')).toBeInTheDocument()
+  })
+})
+
+describe('calculateExternalAttendanceRate', () => {
+  it('uses all daily results as the denominator, including approval days', () => {
+    expect(calculateExternalAttendanceRate({ total: 10, normal: 7 })).toBe(70)
+  })
+
+  it('returns zero when no daily results exist', () => {
+    expect(calculateExternalAttendanceRate({ total: 0, normal: 0 })).toBe(0)
+  })
+
+  it('rounds the rate to two decimal places', () => {
+    expect(calculateExternalAttendanceRate({ total: 3, normal: 2 })).toBe(66.67)
   })
 })

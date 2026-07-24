@@ -1,5 +1,5 @@
 import React from 'react'
-import { Typography, Descriptions, Timeline, Button, Spin, Alert, Divider, Empty, message } from 'antd'
+import { Typography, Descriptions, Timeline, Button, Spin, Alert, Divider, Empty, Image, message } from 'antd'
 import { ArrowLeftOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, FileSearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -40,16 +40,95 @@ const ApprovalDetail: React.FC = () => {
   const getStatusTag = (status: string) => {
     switch (status.toLowerCase()) {
       case 'completed':
+      case 'agree':
+      case 'approved':
         return <StatusTag color="green">已完成</StatusTag>
       case 'in_progress':
-        return <StatusTag color="blue">处理中</StatusTag>
+      case 'running':
+        return <StatusTag color="blue">审批中</StatusTag>
       case 'rejected':
+      case 'refuse':
         return <StatusTag color="red">已拒绝</StatusTag>
+      case 'terminated':
+        return <StatusTag color="red">已终止</StatusTag>
+      case 'canceled':
+      case 'cancelled':
+        return <StatusTag color="red">已取消</StatusTag>
       case 'pending':
         return <StatusTag color="orange">待处理</StatusTag>
       default:
         return <StatusTag>{status}</StatusTag>
     }
+  }
+
+  const unitMap: Record<string, string> = {
+    hour: '小时', hours: '小时', day: '天', days: '天',
+    half_day: '半天', minute: '分钟', minutes: '分钟',
+  }
+
+  const tryParseJSON = (value: unknown): unknown => {
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return value
+    try { return JSON.parse(trimmed) } catch { return value }
+  }
+
+  const stringifyCell = (v: unknown): string => {
+    if (v === null || v === undefined || v === '') return '—'
+    if (typeof v === 'string') return unitMap[v] || v
+    if (typeof v === 'object') return JSON.stringify(v)
+    return String(v)
+  }
+
+  const isImageUrl = (v: unknown): v is string => {
+    if (typeof v !== 'string') return false
+    const s = v.trim()
+    if (!/^https?:\/\//i.test(s)) return false
+    return /\.(jpe?g|png|gif|webp|bmp|svg)(\?.*)?$/i.test(s) || /static\.dingtalk\.com\/media\//i.test(s)
+  }
+
+  const isHttpUrl = (v: unknown): v is string => typeof v === 'string' && /^https?:\/\//i.test(v.trim())
+
+  const renderCell = (v: unknown): React.ReactNode => {
+    if (isImageUrl(v)) {
+      return <Image src={v} alt="附件图片" width={120} style={{ borderRadius: 4 }} />
+    }
+    if (isHttpUrl(v)) {
+      return <a href={v} target="_blank" rel="noreferrer noopener">{v}</a>
+    }
+    return <Text>{stringifyCell(v)}</Text>
+  }
+
+  const renderContentValue = (rawKey: string, rawValue: unknown): React.ReactNode => {
+    const parsedKey = tryParseJSON(rawKey)
+    const parsedValue = tryParseJSON(rawValue)
+
+    if (Array.isArray(parsedKey) && Array.isArray(parsedValue)) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {parsedKey.map((k: unknown, i: number) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Text strong>{stringifyCell(k)}：</Text>
+              {renderCell(parsedValue[i])}
+            </div>
+          ))}
+        </div>
+      )
+    }
+    if (Array.isArray(parsedValue)) {
+      const hasImage = parsedValue.some(isImageUrl)
+      if (hasImage) {
+        return (
+          <Image.PreviewGroup>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {parsedValue.map((item, i) => <React.Fragment key={i}>{renderCell(item)}</React.Fragment>)}
+            </div>
+          </Image.PreviewGroup>
+        )
+      }
+      return <Text>{parsedValue.map(stringifyCell).join('、')}</Text>
+    }
+    return renderCell(parsedValue)
   }
 
   const getActionIcon = (action: string) => {
@@ -136,12 +215,16 @@ const ApprovalDetail: React.FC = () => {
 
             <Title level={5}>审批内容</Title>
             <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 'var(--radius-xs)', padding: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
-              {Object.entries(approvalData.data.approval.content || {}).map(([key, value]) => (
-                <div key={key} style={{ marginBottom: 'var(--space-3)' }}>
-                  <Text strong>{key}：</Text>
-                  <Text>{String(value ?? '-')}</Text>
-                </div>
-              ))}
+              {Object.entries(approvalData.data.approval.content || {}).map(([key, value]) => {
+                const parsedKey = tryParseJSON(key)
+                const labelText = Array.isArray(parsedKey) ? parsedKey.map(stringifyCell).join(' / ') : String(key)
+                return (
+                  <div key={key} style={{ marginBottom: 'var(--space-3)' }}>
+                    <Text strong>{labelText}：</Text>
+                    {renderContentValue(key, value)}
+                  </div>
+                )
+              })}
             </div>
 
             <Title level={5}>审批流程</Title>

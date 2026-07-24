@@ -1,6 +1,6 @@
 ---
 purpose: 考勤模块业务规则说明
-last_updated: 2026-07-20
+last_updated: 2026-07-23
 source_of_truth:
   - internal/api/handlers.go（考勤相关 handler）
   - internal/api/attendance_toolbox_handlers.go（考勤工具箱上传计算 handler）
@@ -8,7 +8,6 @@ source_of_truth:
   - internal/service/attendance_toolbox_service.go（考勤工具箱服务）
   - internal/database/models.go（Attendance 模型）
   - frontend/src/pages/Attendance.tsx（考勤查询）
-  - frontend/src/pages/AttendanceStats.tsx（考勤统计）
   - frontend/src/pages/AttendanceToolbox.tsx（考勤工具箱）
   - frontend/src/pages/OvertimeRulesEditor.tsx（加班规则配置编辑器）
   - tools/attendance_toolbox/python/runner.py（Excel 计算入口，支持 --action 扩展）
@@ -16,7 +15,6 @@ source_of_truth:
 update_when:
   - 修改考勤同步逻辑时
   - 修改考勤查询逻辑时
-  - 修改考勤统计逻辑时
   - 修改考勤工具箱上传计算逻辑时
   - 修改加班规则配置逻辑时
 ---
@@ -25,7 +23,7 @@ update_when:
 
 ## 模块定位
 
-从钉钉同步打卡记录，查询考勤记录，统计考勤异常，导出考勤报表；考勤工具箱提供系统内 Excel 上传、计算和结果下载能力。
+从外部数据源同步打卡与审批结果，按员工和日期查询每日考勤，导出考勤报表；考勤工具箱提供系统内 Excel 上传、计算和结果下载能力。
 
 ---
 
@@ -101,6 +99,7 @@ type AttendanceExport struct {
 | 方法 | 路径 | 权限 |
 |---|---|---|
 | GET | `/attendance/external-sync/status` | menu 可读 / attendance_manage |
+| GET | `/attendance/external-sync/daily-results` | menu 可读 / attendance_manage |
 | POST | `/attendance/external-sync/run` | attendance_manage；未启用/未配置 503；锁冲突 409 |
 | GET | `/attendance/external-sync/jobs` | 同上可读 |
 | GET | `/attendance/external-sync/jobs/:id` | 同上可读 |
@@ -137,38 +136,6 @@ Response：
                 "check_time": "2024-01-15T09:00:00Z",
                 "check_type": "OnDuty",
                 "location": "公司"
-            }
-        ]
-    }
-}
-```
-
-### GET /api/v1/attendance/stats
-考勤异常统计
-
-Query 参数：
-- `start_date`：开始日期（YYYY-MM-DD）
-- `end_date`：结束日期（YYYY-MM-DD）
-- `department_id`：部门 ID（可选）
-
-Response：
-```json
-{
-    "code": 200,
-    "message": "success",
-    "data": {
-        "total_days": 20,
-        "total_users": 100,
-        "late_count": 10,
-        "early_leave_count": 5,
-        "absent_count": 2,
-        "details": [
-            {
-                "user_id": "xxx",
-                "user_name": "张三",
-                "late_count": 2,
-                "early_leave_count": 1,
-                "absent_count": 0
             }
         ]
     }
@@ -303,7 +270,6 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - 多组织环境中，考勤工具箱必须按 JWT `org_id` 读取该组织的 AppKey/AppSecret 与 `organizations.extension.dingtalk_process_codes`；`DINGTALK_ORGANIZATIONS[].process_codes` 负责初始化/更新该扩展字段。
 - 非默认组织禁止静默回退全局 `DINGTALK_APP_*` 或全局流程码，否则会出现用 A 企业凭证查询 B 企业流程并返回 0 条的假空结果。
 - AppKey/AppSecret 与审批流程码只能由服务端按 JWT `org_id` 注入；blob/structured 请求不允许通过 body 或 multipart 字段覆盖组织钉钉配置。
-- `AttendanceService.loadUsers` / `loadDepartmentNames` 必须绑定构造时 org（`NewAttendanceServiceWithOrgID`）或 RequestDB 解析的 org；缺 org 返回 `repository.ErrMissingOrgID`，禁止 `Find` 全表用户/部门。
 - If none of the selected flows has a configured process code, the API must fail with an actionable configuration error instead of storing a meta-only run.
 - Meta-only runs are not downloadable results; the frontend must not show success or ZIP download for them.
 - `build-and-deploy.ps1 -SkipConfigUpload` keeps the existing server env file, so new/changed process-code values require a deployment without this switch (or an explicit config upload/restart).
@@ -375,17 +341,6 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
    - Upsert 到 `attendances` 表
    - 唯一键：`user_id + check_time + check_type`
 
-### 考勤异常统计流程
-
-1. **查询打卡记录**
-   - 按日期范围和部门查询
-   - 按用户分组
-
-2. **计算异常**
-   - 迟到：上班打卡时间 > 规定上班时间
-   - 早退：下班打卡时间 < 规定下班时间
-   - 缺卡：应打卡未打卡
-
 ### 导出考勤流程
 
 1. **创建导出任务**
@@ -405,7 +360,6 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 | Service | 文件 | 说明 |
 |---|---|---|
 | `AttendanceService` | `attendance_service.go` | 考勤管理 |
-| `AttendanceRuleEngine` | `attendance_rule_engine.go` | 考勤规则引擎（计算异常） |
 | `AttendanceToolboxService` | `attendance_toolbox_service.go` | 保存上传 Excel、调用内置 Python 计算引擎、返回结果文件；支持 rules export/import/validate/preview 动作 |
 
 ---
@@ -418,13 +372,6 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 功能：
 - 考勤记录查询（支持分页、筛选）
 - 同步考勤记录
-
-### 考勤异常统计页面
-`frontend/src/pages/AttendanceStats.tsx`
-
-功能：
-- 考勤异常统计
-- 按部门/用户查看
 
 ### 考勤导出页面
 `frontend/src/pages/AttendanceExport.tsx`
@@ -507,11 +454,6 @@ Body：
 - 检查唯一索引是否生效（`user_id + check_time + check_type`）
 - 重新同步会自动去重
 
-### 考勤异常统计不准确
-- 检查考勤规则配置（上下班时间）
-- 检查打卡记录是否完整
-- 检查 `AttendanceRuleEngine` 逻辑
-
 ### 导出任务一直 pending
 - 检查异步任务是否正常运行
 - 检查日志：`logrus` 会输出详细错误信息
@@ -531,3 +473,4 @@ Body：
 - 前端 `Attendance.tsx` 使用每日结果接口，每人每天一行；详情抽屉展示全部打卡时间、地点、原始结果与审批时间段。
 - 查询页交互：顶部统计卡可切换全部/正常/异常/有审批，日期支持今天/昨天/近7天/近30天，员工与部门位于“更多筛选”；桌面端使用精简表格与整行详情，移动端使用卡片列表。
 - 每日结果接口返回 `summary`（total/normal/exception/with_approval），并支持 `status` 筛选；汇总基于完整筛选范围计算，不按当前页截断。
+- 首页考勤率统一使用每日结果汇总，公式为 `summary.normal / summary.total`；有请假、出差等审批的员工日保留在 `total` 分母中。

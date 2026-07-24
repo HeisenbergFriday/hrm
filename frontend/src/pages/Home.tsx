@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import dayjs from 'dayjs'
 import { attendanceAPI, approvalAPI, orgAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import { useAuthStore } from '../store/authStore'
@@ -20,6 +21,11 @@ const { Text } = Typography
 const isForbiddenError = (error: unknown) => {
   const status = (error as { response?: { status?: number } })?.response?.status
   return status === 403
+}
+
+export const calculateExternalAttendanceRate = (summary?: { total: number; normal: number }) => {
+  if (!summary || summary.total <= 0) return 0
+  return Math.round((summary.normal / summary.total) * 10_000) / 100
 }
 
 const statCards = [
@@ -88,8 +94,13 @@ const Home: React.FC = () => {
   })
 
   const { data: attendanceData, isLoading: attendanceLoading, isError: attendanceError, error: attendanceQueryError, refetch: refetchAttendance } = useQuery({
-    queryKey: ['attendanceStats'],
-    queryFn: () => attendanceAPI.getStats({}),
+    queryKey: ['externalAttendanceSummary', 'home'],
+    queryFn: () => attendanceAPI.externalSync.getDailyResults({
+      page: 1,
+      page_size: 1,
+      start_date: dayjs().subtract(30, 'day').format('YYYY-MM-DD'),
+      end_date: dayjs().format('YYYY-MM-DD'),
+    }),
     enabled: canLoadAttendance,
   })
 
@@ -157,12 +168,13 @@ const Home: React.FC = () => {
         : overviewError
           ? '—'
           : overviewSummary?.department_count ?? 0
+  const attendanceSummary = attendanceData?.data?.summary
   const attendanceRate: number | string = !canLoadAttendance
     ? '—'
     : attendanceLoading
       ? '…'
-      : attendanceData?.data?.summary?.normal_rate
-        ? parseFloat(attendanceData.data.summary.normal_rate)
+      : attendanceSummary && attendanceSummary.total > 0
+        ? calculateExternalAttendanceRate(attendanceSummary)
         : attendanceError && isForbiddenError(attendanceQueryError)
           ? '--'
           : attendanceError

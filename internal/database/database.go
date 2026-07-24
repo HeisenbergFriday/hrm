@@ -2863,8 +2863,8 @@ func normalizeMenuPermissionKeys(keys []string) []string {
 var legacyMenuKeysByPermission = map[string][]string{
 	"org:read":                             {"menu:organization-dashboard", "menu:department-tree", "menu:employees"},
 	"user_manage":                          {"menu:employee-profile", "menu:employee-flow", "menu:talent-analysis", "menu:sync-log"},
-	"attendance_manage":                    {"menu:attendance", "menu:attendance-stats", "menu:attendance-export", "menu:attendance-toolbox", "menu:week-schedule", "menu:employee-shift-config", "menu:sync-jobs", "menu:leave-overtime"},
-	"approval_manage":                      {"menu:approval-templates", "menu:approval-instances", "menu:approval-stats"},
+	"attendance_manage":                    {"menu:attendance", "menu:attendance-export", "menu:attendance-toolbox", "menu:week-schedule", "menu:employee-shift-config", "menu:sync-jobs", "menu:leave-overtime"},
+	"approval_manage":                      {"menu:approval-templates", "menu:approval-instances", "menu:approval-stats", "menu:oa-approval-data"},
 	"permission_manage":                    {"menu:permission", "menu:setting"},
 	"audit_log:read":                       {"menu:audit-logs"},
 	"performance:activity:manage":          {"menu:performance-overview", "menu:performance-reports", "menu:performance-interviews", "menu:performance-appeals"},
@@ -2981,9 +2981,9 @@ func migrateAttendanceToolboxMenuPermissions() {
 			continue
 		}
 		// 为有任何考勤相关菜单的角色添加工具箱权限
-		// 包括：考勤、考勤统计、导出、排班、下班时间、年假调休等
+		// 包括：考勤、导出、排班、下班时间、年假调休等
 		attendanceRelatedMenus := []string{
-			"menu:attendance", "menu:attendance-stats", "menu:attendance-export",
+			"menu:attendance", "menu:attendance-export",
 			"menu:week-schedule", "menu:employee-shift-config", "menu:leave-overtime",
 		}
 		hasAttendanceMenu := false

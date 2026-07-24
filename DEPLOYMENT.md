@@ -108,7 +108,7 @@ http://localhost:8080/
 | 用户/部门 | `GET /api/v1/users`、`GET /api/v1/departments` |
 | 同步 | `POST /api/v1/sync/departments`、`POST /api/v1/sync/users`、`GET /api/v1/sync/status` |
 | 组织 | `GET /api/v1/org/overview`、`GET /api/v1/org/departments/tree`、`GET /api/v1/org/employees` |
-| 考勤 | `GET /api/v1/attendance/records`、`GET /api/v1/attendance/stats`、`POST /api/v1/attendance/sync` |
+| 考勤 | `GET /api/v1/attendance/records`、`POST /api/v1/attendance/sync` |
 | 审批 | `GET /api/v1/approvals/templates`、`GET /api/v1/approvals/instances`、`POST /api/v1/approvals/sync` |
 | 权限与审计 | `GET /api/v1/permission/roles`、`GET /api/v1/permission/permissions`、`GET /api/v1/audit/logs` |
 | 业务扩展 | `/api/v1/employee/*`、`/api/v1/talent/*`、`/api/v1/leave/*`、`/api/v1/overtime/*`、`/api/v1/week-schedule/*`、`/api/v1/performance/*` |

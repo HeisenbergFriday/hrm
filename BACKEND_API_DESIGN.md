@@ -157,7 +157,6 @@ type Response struct {
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/api/v1/attendance/records` | 考勤记录 |
-| `GET` | `/api/v1/attendance/stats` | 考勤统计 |
 | `POST` | `/api/v1/attendance/sync` | 同步考勤 |
 | `POST` | `/api/v1/attendance/export` | 创建考勤导出任务 |
 | `GET` | `/api/v1/attendance/exports` | 查询导出任务 |

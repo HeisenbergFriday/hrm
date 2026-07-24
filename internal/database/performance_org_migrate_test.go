@@ -191,13 +191,21 @@ func TestMigratePerformanceParticipantOrgIDsIncludesSoftDeleted(t *testing.T) {
 	logUpdateSeen := false
 	versionUpdateSeen := false
 	participantSQLHasNoDeletedFilter := false
+	participantCountUsesBinaryActivityIDComparison := false
+	participantUpdateUsesBinaryActivityIDComparison := false
 
 	stub := &migrateStubDB{
 		queries: []migrateStubQuery{
 			{
 				match: func(q string) bool {
-					return strings.Contains(strings.ToLower(q), "count(*)") &&
-						strings.Contains(strings.ToLower(q), "performance_participants")
+					lower := strings.ToLower(q)
+					if strings.Contains(lower, "count(*)") && strings.Contains(lower, "from performance_participants p") {
+						participantCountUsesBinaryActivityIDComparison =
+							strings.Contains(lower, "cast(a.id as binary) = cast(p.activity_id as binary)") &&
+								!strings.Contains(lower, "cast(a.id as char)")
+						return true
+					}
+					return false
 				},
 				columns: []string{"cnt"},
 				rows:    [][]driver.Value{{int64(2)}},
@@ -234,6 +242,9 @@ func TestMigratePerformanceParticipantOrgIDsIncludesSoftDeleted(t *testing.T) {
 				lower := strings.ToLower(q)
 				if strings.Contains(lower, "update performance_participants") {
 					participantUpdateSeen = true
+					participantUpdateUsesBinaryActivityIDComparison =
+						strings.Contains(lower, "cast(a.id as binary) = cast(p.activity_id as binary)") &&
+							!strings.Contains(lower, "cast(a.id as char)")
 					// 关键：不得再过滤 p.deleted_at IS NULL
 					if !strings.Contains(lower, "p.deleted_at is null") {
 						participantSQLHasNoDeletedFilter = true
@@ -276,6 +287,12 @@ func TestMigratePerformanceParticipantOrgIDsIncludesSoftDeleted(t *testing.T) {
 	}
 	if !participantSQLHasNoDeletedFilter {
 		t.Fatalf("participant repair SQL must NOT contain deleted_at IS NULL; execCalls=%v", stub.execCalls)
+	}
+	if !participantCountUsesBinaryActivityIDComparison {
+		t.Fatalf("participant count SQL must compare activity IDs without string collation")
+	}
+	if !participantUpdateUsesBinaryActivityIDComparison {
+		t.Fatalf("participant update SQL must compare activity IDs without string collation; execCalls=%v", stub.execCalls)
 	}
 	if !logUpdateSeen {
 		t.Fatalf("expected performance_relationship_change_logs UPDATE; execCalls=%v", stub.execCalls)

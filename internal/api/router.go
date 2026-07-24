@@ -22,7 +22,6 @@ func orgReadMenuKeys() []string {
 		"menu:employee-flow",
 		"menu:talent-analysis",
 		"menu:attendance",
-		"menu:attendance-stats",
 		"menu:attendance-export",
 		"menu:leave-overtime",
 		"menu:performance-overview",
@@ -83,7 +82,6 @@ func SetupRouter() *gin.Engine {
 			orgReadMenus := orgReadMenuKeys()
 			attendanceReadMenus := []string{
 				"menu:attendance",
-				"menu:attendance-stats",
 				"menu:attendance-export",
 				"menu:attendance-processing",
 			}
@@ -145,11 +143,22 @@ func SetupRouter() *gin.Engine {
 			attendance := authRequired.Group("/attendance")
 			{
 				attendance.GET("/records", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, attendanceReadMenus), GetAttendanceRecords)
-				attendance.GET("/stats", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, attendanceReadMenus), GetAttendanceStats)
 				attendance.POST("/sync", middleware.RequirePermission("attendance_manage"), SyncAttendance)
 				attendance.POST("/export", middleware.RequirePermission("attendance_manage"), ExportAttendance)
 				attendance.GET("/exports", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, []string{"menu:attendance-export"}), GetAttendanceExports)
 				attendance.GET("/last-sync", middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, attendanceReadMenus), GetLastSyncTime)
+
+				// 外部考勤同步中心：查询沿用考勤菜单读权限，同步执行需要管理权限。
+				externalSync := attendance.Group("/external-sync")
+				{
+					externalSyncRead := middleware.RequirePermissionOrMenu([]string{"attendance_manage"}, attendanceReadMenus)
+					externalSync.GET("/status", externalSyncRead, ExternalAttendanceSyncStatus)
+					externalSync.GET("/daily-results", externalSyncRead, ExternalAttendanceDailyResults)
+					externalSync.POST("/run", middleware.RequirePermission("attendance_manage"), ExternalAttendanceSyncRun)
+					externalSync.GET("/jobs", externalSyncRead, ExternalAttendanceSyncJobs)
+					externalSync.GET("/jobs/:id", externalSyncRead, ExternalAttendanceSyncJobDetail)
+				}
+
 				// 考勤数据处理
 				processing := attendance.Group("/processing")
 				processing.Use(middleware.RequirePermission("attendance_manage"))
@@ -177,6 +186,10 @@ func SetupRouter() *gin.Engine {
 			approvals := authRequired.Group("/approvals")
 			{
 				approvals.POST("/sync", middleware.RequirePermission("approval:sync"), SyncApproval)
+				approvals.GET("/oa-data", middleware.RequirePermissionOrMenu(
+					[]string{"approval_manage"},
+					[]string{"menu:oa-approval-data"},
+				), ExternalApprovalDetails)
 				approvals.GET("/templates", middleware.RequireMenuPermission("menu:approval-templates", "menu:approval-stats"), GetApprovalTemplates)
 				approvals.GET("/instances", middleware.RequireMenuPermission("menu:approval-instances"), GetApprovalInstances)
 				approvals.GET("/:id", middleware.RequireMenuPermission("menu:approval-instances"), GetApproval)

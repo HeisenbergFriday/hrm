@@ -105,12 +105,6 @@ export const attendanceAPI = {
     end_date?: string
   }) => api.get('/attendance/records', { params }),
 
-  getStats: (params: {
-    start_date?: string
-    end_date?: string
-    department_id?: string
-  }) => api.get('/attendance/stats', { params }),
-
   sync: (data?: { start_date?: string; end_date?: string }) => api.post('/attendance/sync', data),
 
   export: (data: {
@@ -332,6 +326,8 @@ export const approvalAPI = {
   }) => api.get('/approvals/instances', { params }),
   getApproval: (id: string) => api.get(`/approvals/${id}`),
   sync: (data: { process_code: string; start_date?: string; end_date?: string }) => api.post('/approvals/sync', data),
+  getOAData: (params?: { page?: number; page_size?: number; keyword?: string }) =>
+    api.get('/approvals/oa-data', { params }),
 }
 
 export const permissionAPI = {
