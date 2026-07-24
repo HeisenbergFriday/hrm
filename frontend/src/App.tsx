@@ -53,6 +53,7 @@ const ApprovalTemplate = lazy(() => import('./pages/ApprovalTemplate'))
 const ApprovalInstance = lazy(() => import('./pages/ApprovalInstance'))
 const ApprovalDetail = lazy(() => import('./pages/ApprovalDetail'))
 const ApprovalStats = lazy(() => import('./pages/ApprovalStats'))
+const OAApprovalData = lazy(() => import('./pages/OAApprovalData'))
 const RoleManagement = lazy(() => import('./pages/RoleManagement'))
 const SyncJobs = lazy(() => import('./pages/SyncJobs'))
 const AuditLogs = lazy(() => import('./pages/AuditLogs'))
@@ -150,6 +151,7 @@ const routeMenuKeys: Record<string, string> = {
   '/approval-templates': menuPermissionKey('approval-templates'),
   '/approval-instances': menuPermissionKey('approval-instances'),
   '/approval-stats': menuPermissionKey('approval-stats'),
+  '/oa-approval-data': menuPermissionKey('oa-approval-data'),
   '/role-management': menuPermissionKey('permission'),
   '/sync-jobs': menuPermissionKey('sync-jobs'),
   '/audit-logs': menuPermissionKey('audit-logs'),
@@ -181,7 +183,7 @@ function defaultOpenKeysForPath(pathname: string) {
   if (pathname.startsWith('/attendance') || pathname.startsWith('/week-schedule') || pathname.startsWith('/employee-shift-config') || pathname.startsWith('/leave-overtime')) {
     return [menuPermissionKey('attendance-group')]
   }
-  if (pathname.startsWith('/approval')) return [menuPermissionKey('approval-group')]
+  if (pathname.startsWith('/approval') || pathname.startsWith('/oa-approval-data')) return [menuPermissionKey('approval-group')]
   if (pathname.startsWith('/sync-jobs')) return [menuPermissionKey('jobs-group')]
   if (pathname.startsWith('/audit')) return [menuPermissionKey('audit-group')]
   return [menuPermissionKey('organization-group')]
@@ -273,7 +275,7 @@ function App() {
   const mobileRuntime = useMobileRuntime()
   const location = useLocation()
   const navigate = useNavigate()
-  const { isLoggedIn, user, login, logout, menuKeys } = useAuthStore()
+  const { isLoggedIn, user, login, logout, menuKeys, orgId } = useAuthStore()
   const selectedMenuKey = selectedMenuKeyForPath(location.pathname)
   const isMobile = resolveMobileLayout(screens.md, mobileRuntime)
 
@@ -292,7 +294,7 @@ function App() {
       navigate(orgID ? `/login?mode=scan&org_id=${encodeURIComponent(orgID)}` : '/login?mode=scan', { replace: true })
     }
   }
-  const filteredMenuItems = filterMenuByKeys(menuConfig, menuKeys)
+  const filteredMenuItems = filterMenuByKeys(menuConfig, menuKeys, orgId)
   const siderMenuItems = buildSiderMenuItems(filteredMenuItems)
   const pathOpenKeys = defaultOpenKeysForPath(location.pathname)
   const [openKeys, setOpenKeys] = useState<string[]>(() => pathOpenKeys)
@@ -598,6 +600,7 @@ function App() {
                 <Route path="/approval-instances" element={<RouteGuard menuKey="menu:approval-instances"><ApprovalInstance /></RouteGuard>} />
                 <Route path="/approval-detail/:id" element={<RouteGuard menuKey="menu:approval-instances"><ApprovalDetail /></RouteGuard>} />
                 <Route path="/approval-stats" element={<RouteGuard menuKey="menu:approval-stats"><ApprovalStats /></RouteGuard>} />
+                <Route path="/oa-approval-data" element={<RouteGuard menuKey="menu:oa-approval-data"><OAApprovalData /></RouteGuard>} />
                 <Route path="/role-management" element={<RouteGuard menuKey="menu:permission"><RoleManagement /></RouteGuard>} />
                 <Route path="/sync-jobs" element={<RouteGuard menuKey="menu:sync-jobs"><SyncJobs /></RouteGuard>} />
                 <Route path="/audit-logs" element={<RouteGuard menuKey="menu:audit-logs" permissionCode="audit_log:read"><AuditLogs /></RouteGuard>} />

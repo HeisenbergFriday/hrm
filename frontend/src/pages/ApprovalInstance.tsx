@@ -9,7 +9,10 @@ import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
 import { formatDateTime } from '../utils/format'
+
+dayjs.locale('zh-cn')
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -81,17 +84,26 @@ const ApprovalInstance: React.FC = () => {
   }
 
   const getStatusTag = (status: string) => {
-    switch (status.toLowerCase()) {
+    switch ((status || '').toLowerCase()) {
       case 'completed':
+      case 'approved':
+      case 'agree':
         return <StatusTag color="green">已完成</StatusTag>
       case 'in_progress':
-        return <StatusTag color="blue">处理中</StatusTag>
+      case 'running':
+        return <StatusTag color="blue">审批中</StatusTag>
       case 'rejected':
+      case 'refuse':
         return <StatusTag color="red">已拒绝</StatusTag>
+      case 'terminated':
+        return <StatusTag color="red">已终止</StatusTag>
+      case 'canceled':
+      case 'cancelled':
+        return <StatusTag color="red">已取消</StatusTag>
       case 'pending':
         return <StatusTag color="orange">待处理</StatusTag>
       default:
-        return <StatusTag>{status}</StatusTag>
+        return <StatusTag>{status || '—'}</StatusTag>
     }
   }
 
@@ -178,7 +190,11 @@ const ApprovalInstance: React.FC = () => {
               </Option>
             ))}
           </Select>
-          <RangePicker onChange={setDateRange} />
+          <RangePicker
+            onChange={setDateRange}
+            placeholder={['开始日期', '结束日期']}
+            format="YYYY-MM-DD"
+          />
           <Input
             placeholder="搜索标题"
             style={{ width: 200 }}

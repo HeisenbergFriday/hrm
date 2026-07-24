@@ -1,6 +1,6 @@
 ---
 purpose: 项目目录结构、模块职责、代码入口索引
-last_updated: 2026-07-20
+last_updated: 2026-07-23
 source_of_truth:
   - 项目实际目录结构
   - internal/api/router.go（后端路由）
@@ -37,6 +37,7 @@ D:\ai项目
 │  │  ├─ attendance_toolbox_handlers.go # 考勤工具箱上传计算 handler
 │  │  ├─ leave_handlers.go          # 年假/调休/加班/排班 handler
 │  │  ├─ performance_handlers.go    # 绩效相关 handler
+│  │  ├─ external_approval_handlers.go # 沐腾 OA 审批数据 handler
 │  │  └─ supplementary_handlers.go  # 补卡申请 handler
 │  ├─ cache\                        # Redis 初始化
 │  ├─ config\                       # 配置与 holidays.json
@@ -55,6 +56,7 @@ D:\ai项目
 │  │  ├─ annual_leave_grant_repository.go
 │  │  ├─ annual_leave_eligibility_repository.go
 │  │  ├─ approval_repository.go
+│  │  ├─ external_approval_repository.go # Doris OA 审批动态字段只读查询
 │  │  ├─ attendance_repository.go
 │  │  ├─ compensatory_leave_ledger_repository.go
 │  │  ├─ department_repository.go
@@ -81,6 +83,7 @@ D:\ai项目
 │     ├─ annual_leave_service.go
 │     ├─ annual_leave_grant_service.go
 │     ├─ approval_service.go
+│     ├─ external_approval_service.go # 沐腾组织 OA 数据访问约束
 │     ├─ audit_service.go
 │     ├─ compensatory_leave_service.go
 │     ├─ department_service.go
@@ -149,7 +152,7 @@ D:\ai项目
 | 认证 | 账号密码登录、钉钉扫码、钉钉内免登、JWT | `.ai/MODULES/auth.md` |
 | 组织与员工 | 部门树、部门维度轻量统计、员工列表、聚合员工详情、组织同步 | `.ai/MODULES/org.md` |
 | 考勤 | 记录查询、异常统计、导出、最近同步时间、考勤 Excel 工具箱入口 | `.ai/MODULES/attendance.md` |
-| 审批 | 审批模板、审批实例、审批详情、审批同步 | `.ai/MODULES/approval.md` |
+| 审批 | 审批模板、审批实例、审批详情、审批同步、沐腾外部 OA 明细 | `.ai/MODULES/approval.md` |
 | 员工档案 | 档案、调岗、离职、入职、人才分析 | `.ai/MODULES/employee-profile.md` |
 | 大小周排班 | 大小周规则、节假日、钉钉班次、手动覆盖、双向同步 | `.ai/MODULES/week-schedule.md` |
 | 年假与调休 | 资格计算、季度发放、补发、消费台账、同步钉钉假期 | `.ai/MODULES/leave-overtime.md` |
@@ -170,7 +173,7 @@ D:\ai项目
 | `/sync` | 钉钉同步（部门、用户、状态） | `handlers.go` |
 | `/org` | 组织架构（概览、部门树、员工列表、员工详情、同步） | `handlers.go` |
 | `/attendance` | 考勤记录、统计、导出、最近同步时间 | `handlers.go` |
-| `/approvals` | 审批模板、审批实例、审批详情、审批同步 | `handlers.go` |
+| `/approvals` | 审批模板、审批实例、审批详情、审批同步、沐腾 OA 数据 | `handlers.go` + `external_approval_handlers.go` |
 | `/permission` | 角色、权限 | `handlers.go` |
 | `/audit` | 审计日志 | `handlers.go` |
 | `/jobs` | 任务中心 | `handlers.go` |
@@ -206,6 +209,7 @@ D:\ai项目
 | `/approval-instances` | ApprovalInstance.tsx | 审批实例 |
 | `/approval-detail/:id` | ApprovalDetail.tsx | 审批实例详情 |
 | `/approval-stats` | ApprovalStats.tsx | 审批统计 |
+| `/oa-approval-data` | OAApprovalData.tsx | 沐腾组织外部 OA 审批明细 |
 | `/employee-profile` | EmployeeProfile.tsx | 员工档案 |
 | `/employee-flow` | EmployeeFlow.tsx | 入转调离流程与台账入口 |
 | `/employee-shift-config` | EmployeeShiftConfig.tsx | 员工自定义下班时间 |

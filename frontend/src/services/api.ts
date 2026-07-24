@@ -332,6 +332,8 @@ export const approvalAPI = {
   }) => api.get('/approvals/instances', { params }),
   getApproval: (id: string) => api.get(`/approvals/${id}`),
   sync: (data: { process_code: string; start_date?: string; end_date?: string }) => api.post('/approvals/sync', data),
+  getOAData: (params?: { page?: number; page_size?: number; keyword?: string }) =>
+    api.get('/approvals/oa-data', { params }),
 }
 
 export const permissionAPI = {
