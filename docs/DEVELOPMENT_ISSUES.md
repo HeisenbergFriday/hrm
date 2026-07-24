@@ -49,6 +49,13 @@ update_when:
 | `attendance-toolbox` `run-store` | 结果绑定 `user_id+org_id`；磁盘仅 `rootDir/<runID>`；禁止返回服务器绝对路径 | `.ai/MODULES/attendance.md` |
 | `attendance-toolbox` `permission` | 计算/审计/模板需 `attendance_toolbox_operate`；钉钉同步需 `attendance_toolbox_dingtalk_sync`；一键联动 AND | `.ai/MODULES/attendance.md` 权限矩阵 |
 
+### API / 路由契约
+
+| 标签 | 约束摘要 | 条目 |
+|---|---|---|
+| `api-contract` `router` `attendance` | 前端已调用且后端已有 Handler 的接口必须同时注册到 Router；新增 API 必须有路由清单回归测试，避免运行时 404 | [2026-07-23 考勤查询外部结果路由漏注册](#2026-07-23-p1-考勤查询外部结果路由漏注册导致进入页面-404) |
+| `attendance` `data-contract` `metrics` `frontend` | 同一业务指标必须明确数据源、计数单位和分母；禁止首页和业务页面各自维护不同统计口径 | [2026-07-23 P2 考勤统计口径分裂](#2026-07-23-p2-考勤统计口径分裂导致数字不可比) |
+
 ### 部署 / 配置
 
 | 标签 | 约束摘要 | 条目 / 文档 |
@@ -127,6 +134,21 @@ update_when:
 ---
 
 ## 问题条目
+
+### 2026-07-23 P1 考勤查询外部结果路由漏注册导致进入页面 404
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-23 |
+| 级别 | P1 |
+| 模块/标签 | `attendance` `api-contract` `router` `frontend` |
+| 范围 | 全栈（前后端 API 契约） |
+| 现象 | 进入考勤查询页面时，前端请求 `/attendance/external-sync/daily-results` 返回 404，页面显示“考勤结果加载失败”。状态、同步任务等同组外部考勤接口也未注册。 |
+| 根因 | 前端 `attendanceAPI.externalSync` 和后端 `ExternalAttendance*` Handler 已实现，但 `internal/api/router.go` 的 `/attendance` 路由组遗漏了 `external-sync` 子路由；原有 Handler 单测未覆盖 Router 路径清单。 |
+| 修复 | 在 `internal/api/router.go` 注册状态、每日结果、同步执行、任务列表和任务详情 5 个路由；查询沿用考勤菜单读权限或 `attendance_manage`，同步执行保留 `attendance_manage`；增加 `TestExternalAttendanceRoutesRegistered` 路由回归测试。 |
+| 验证 | `go test ./internal/api -run 'TestExternalAttendance|Test.*Attendance.*Router' -count=1`、`go vet ./internal/api`、`golangci-lint run`、`cd frontend && npm run lint`、`cd frontend && npm run build` 均通过。 |
+| 防复发 | 1. 新增或迁移前端 API 时，必须同时核对后端 Handler、Router 注册和权限中间件。<br>2. 每个跨前后端 API 子模块至少保留一条 Router 路径清单测试。<br>3. 页面首次加载使用的 GET 接口不能只依赖 Handler 单测，必须验证 `SetupRouter().Routes()` 中存在完整路径。 |
+| 状态 | fixed |
 
 ### 2026-07-23 P1 双远端 master 合并遗漏依赖与安全配套代码
 
@@ -230,6 +252,21 @@ update_when:
 | 修复 | `internal/api/handlers.go` 两处改为带组织构造：<br>- 内免登：`service.NewUserServiceWithOrgID(middleware.RequestDB(c), orgID)`<br>- 扫码回调：`service.NewUserServiceWithOrgID(middleware.RequestDB(c), resolvedOrgID)` |
 | 验证 | `go test ./internal/repository -run '^TestUserRepository_' -count=1` 通过<br>`go test ./internal/api -run 'Test.*(DingTalk\|Dingtalk)' -count=1` 通过<br>`go vet ./internal/api ./internal/repository` 通过 |
 | 防复发 | 1. 已解析组织后的用户读写必须用 `NewUserServiceWithOrgID`（或等价 `NewXxxWithOrgID`）。<br>2. 空组织继续 fail-closed，禁止发明 `default`。<br>3. 跨组织实体继续拒绝；禁止用实体上的 `OrgID` 字段代替仓储/服务构造绑定。<br>4. 相关回归：登录路径更新用户、缺 org、跨 org 写。 |
+| 状态 | fixed |
+
+### 2026-07-23 P2 考勤统计口径分裂导致数字不可比
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-23 |
+| 级别 | P2 |
+| 模块/标签 | `attendance` `data-contract` `metrics` `frontend` `api` |
+| 范围 | 前端首页 / 考勤查询 / 旧异常统计页 / 后端统计接口 |
+| 现象 | 考勤查询按外部同步每日结果展示员工日，旧异常统计页却按本地打卡记录和规则引擎重新计算；页面同时把员工人数、员工日和异常次数标成“人数”，导致同一日期范围的数字无法直接比较。首页考勤率继续依赖旧 `/attendance/stats`，进一步放大双口径问题。 |
+| 根因 | 同一业务指标存在两套数据源和两套聚合逻辑，且没有固定“人数/人次/员工日”的展示契约；首页直接复用旧统计接口，使删除页面时仍残留后端依赖。 |
+| 修复 | 统一以外部同步每日结果为准；首页读取 `external-sync/daily-results` 最近 30 天的 `summary`，按 `normal / total` 计算正常率，审批员工日保留在分母；删除旧异常统计页面、菜单、权限、路由、`/attendance/stats` Handler、旧规则引擎与相关文档。 |
+| 验证 | 首页口径单测 4/4 通过；考勤 service/API 定向测试通过；前端 lint、build 通过；`go vet ./...` 通过；全量旧引用搜索为 0。`golangci-lint` 被本次范围外未跟踪文件 `internal/repository/external_approval_repository.go` 的 `rows.Close()` 未检查问题阻塞。 |
+| 防复发 | 1. 考勤展示与首页指标统一读取外部每日结果，禁止另起规则引擎重复计算。<br>2. 新增统计字段必须写明数据源、时间范围、计数单位和分母。<br>3. 删除统计页面时必须同步核对首页、菜单权限、API 客户端、Router、Handler、Service 和文档引用。<br>4. 正常率固定为 `summary.normal / summary.total`，审批员工日保留在 `total` 分母。 |
 | 状态 | fixed |
 
 ---

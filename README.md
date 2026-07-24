@@ -143,7 +143,7 @@ go run ./cmd/main.go
 | 部门 | `GET /api/v1/departments`、`GET /api/v1/departments/:id` |
 | 同步 | `POST /api/v1/sync/departments`、`POST /api/v1/sync/users`、`GET /api/v1/sync/status` |
 | 组织 | `GET /api/v1/org/overview`、`GET /api/v1/org/departments/tree`、`GET /api/v1/org/employees` |
-| 考勤 | `GET /api/v1/attendance/records`、`GET /api/v1/attendance/stats`、`POST /api/v1/attendance/sync`、`POST /api/v1/attendance/export` |
+| 考勤 | `GET /api/v1/attendance/records`、`POST /api/v1/attendance/sync`、`POST /api/v1/attendance/export` |
 | 审批 | `GET /api/v1/approvals/templates`、`GET /api/v1/approvals/instances`、`GET /api/v1/approvals/:id`、`POST /api/v1/approvals/sync` |
 | 权限 | `GET /api/v1/permission/roles`、`POST /api/v1/permission/roles`、`GET /api/v1/permission/permissions` |
 | 审计 | `GET /api/v1/audit/logs` |

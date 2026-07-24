@@ -19,7 +19,6 @@ const menuKeys = [
   'menu:sync-log',
   'menu:attendance-group',
   'menu:attendance',
-  'menu:attendance-stats',
   'menu:attendance-export',
   'menu:attendance-processing',
   'menu:attendance-external-sync',
@@ -147,13 +146,28 @@ async function mockAPIs(page) {
       }))
     }
 
-    if (path.startsWith('/attendance/stats')) {
+    if (path.startsWith('/attendance/external-sync/daily-results')) {
       return route.fulfill(ok({
-        attendance_rate: 96.5,
-        late_count: 8,
-        early_leave_count: 3,
-        absent_count: 1,
-        leave_count: 12,
+        items: [{
+          key: 'u1|2026-07-23',
+          work_date: '2026-07-23',
+          user_id: 'u1',
+          external_user_id: 'ext-u1',
+          user_name: '张三',
+          department_id: 'dept-1',
+          department_name: '产品中心',
+          punches: [],
+          statuses: [{ code: 'normal', label: '正常', level: 'success', category: 'attendance' }],
+          approvals: [],
+          has_exception: false,
+          source_updated_at: '2026-07-23T09:00:00Z',
+        }],
+        total: 20,
+        page: 1,
+        page_size: 1,
+        start_date: '2026-07-17',
+        end_date: '2026-07-23',
+        summary: { total: 20, normal: 18, exception: 1, with_approval: 1 },
       }))
     }
 

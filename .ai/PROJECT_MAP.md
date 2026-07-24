@@ -78,7 +78,6 @@ D:\ai项目
 │     ├─ user_service.go
 │     ├─ attendance_service.go
 │     ├─ attendance_toolbox_service.go # 考勤 Excel 工具箱服务
-│     ├─ attendance_rule_engine.go
 │     ├─ attendance_record_filter.go
 │     ├─ annual_leave_service.go
 │     ├─ annual_leave_grant_service.go
@@ -201,7 +200,6 @@ D:\ai项目
 | `/employees` | EmployeeList.tsx | 员工列表 + 组织概览统计卡片入口 |
 | `/employees/:id` | EmployeeDetail.tsx | 聚合员工详情（组织关系/档案快照/时间轴） |
 | `/attendance` | Attendance.tsx | 考勤查询 |
-| `/attendance-stats` | AttendanceStats.tsx | 考勤异常统计 |
 | `/attendance-export` | AttendanceExport.tsx | 考勤导出 |
 | `/attendance-toolbox` | AttendanceToolbox.tsx | 考勤 Excel 工具箱（系统内上传计算） |
 | `/approval` | Approval.tsx | 审批列表 |

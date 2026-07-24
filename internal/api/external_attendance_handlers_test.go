@@ -137,3 +137,23 @@ func TestExternalAttendanceDailyResults_InvalidStatus(t *testing.T) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestExternalAttendanceRoutesRegistered(t *testing.T) {
+	router := SetupRouter()
+	routes := make(map[string]struct{})
+	for _, route := range router.Routes() {
+		routes[route.Method+" "+route.Path] = struct{}{}
+	}
+
+	for _, route := range []string{
+		"GET /api/v1/attendance/external-sync/status",
+		"GET /api/v1/attendance/external-sync/daily-results",
+		"POST /api/v1/attendance/external-sync/run",
+		"GET /api/v1/attendance/external-sync/jobs",
+		"GET /api/v1/attendance/external-sync/jobs/:id",
+	} {
+		if _, ok := routes[route]; !ok {
+			t.Fatalf("route %s is not registered", route)
+		}
+	}
+}

@@ -105,12 +105,6 @@ export const attendanceAPI = {
     end_date?: string
   }) => api.get('/attendance/records', { params }),
 
-  getStats: (params: {
-    start_date?: string
-    end_date?: string
-    department_id?: string
-  }) => api.get('/attendance/stats', { params }),
-
   sync: (data?: { start_date?: string; end_date?: string }) => api.post('/attendance/sync', data),
 
   export: (data: {

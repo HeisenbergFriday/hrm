@@ -67,7 +67,6 @@ export const menuConfig: MenuItem[] = [
     icon: <ClockCircleOutlined />,
     children: [
       { key: menuPermissionKey('attendance'), title: '考勤查询', label: <Link to="/attendance">考勤查询</Link>, icon: <ClockCircleOutlined /> },
-      { key: menuPermissionKey('attendance-stats'), title: '异常统计', label: <Link to="/attendance-stats">异常统计</Link>, icon: <WarningOutlined /> },
       { key: menuPermissionKey('attendance-export'), title: '导出记录', label: <Link to="/attendance-export">导出记录</Link>, icon: <FileExcelOutlined /> },
       { key: menuPermissionKey('attendance-processing'), title: '数据处理', label: <Link to="/attendance-processing">数据处理</Link>, icon: <ToolOutlined /> },
       { key: menuPermissionKey('attendance-external-sync'), title: '外部考勤同步', label: <Link to="/attendance/external-sync">外部同步</Link>, icon: <CloudSyncOutlined /> },

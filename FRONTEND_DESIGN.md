@@ -46,7 +46,6 @@
 | `/employee-flow` | `EmployeeFlow.tsx` | 入转调离 |
 | `/talent-analysis` | `TalentAnalysis.tsx` | 人才分析 |
 | `/attendance` | `Attendance.tsx` | 考勤查询 |
-| `/attendance-stats` | `AttendanceStats.tsx` | 考勤统计 |
 | `/attendance-export` | `AttendanceExport.tsx` | 考勤导出 |
 | `/week-schedule` | `WeekSchedule.tsx` | 大小周与节假日 |
 | `/employee-shift-config` | `EmployeeShiftConfig.tsx` | 员工下班时间 |

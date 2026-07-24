@@ -52,7 +52,6 @@ AI 应基于以下现有模块继续开发。
   - `frontend/src/pages/EmployeeShiftConfig.tsx`
   - `frontend/src/pages/LeaveOvertime.tsx`
   - `frontend/src/pages/Attendance.tsx`
-  - `frontend/src/pages/AttendanceStats.tsx`
 
 ### 3.2 组织基础
 
@@ -380,7 +379,7 @@ AI 必须严格按以下顺序工作：
 - 假勤处理：internal/api/leave_handlers.go、internal/api/handlers.go
 - 假勤服务：internal/service/attendance_service.go、internal/service/week_schedule_service.go、internal/service/shift_config_service.go、internal/service/annual_leave_service.go、internal/service/annual_leave_grant_service.go、internal/service/overtime_matching_service.go
 - 组织页面：frontend/src/pages/Organization.tsx、frontend/src/pages/EmployeeProfile.tsx、frontend/src/pages/EmployeeFlow.tsx
-- 假勤页面：frontend/src/pages/WeekSchedule.tsx、frontend/src/pages/EmployeeShiftConfig.tsx、frontend/src/pages/LeaveOvertime.tsx、frontend/src/pages/Attendance.tsx、frontend/src/pages/AttendanceStats.tsx
+- 假勤页面：frontend/src/pages/WeekSchedule.tsx、frontend/src/pages/EmployeeShiftConfig.tsx、frontend/src/pages/LeaveOvertime.tsx、frontend/src/pages/Attendance.tsx
 - 绩效现状：internal/database/models.go 中的 TalentAnalysis、frontend/src/pages/TalentAnalysis.tsx
 
 通用约束：

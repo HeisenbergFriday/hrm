@@ -68,7 +68,6 @@ const MenuPermission: React.FC = () => {
       key: 'attendance',
       children: [
         { title: '考勤查询', key: 'attendance' },
-        { title: '异常统计', key: 'attendance-stats' },
         { title: '导出记录', key: 'attendance-export' },
         { title: '年假与调休', key: 'leave-overtime' },
         { title: '大小周与节假日', key: 'week-schedule' },

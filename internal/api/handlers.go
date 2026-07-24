@@ -3662,36 +3662,6 @@ func GetAttendanceRecords(c *gin.Context) {
 	})
 }
 
-// GetAttendanceStats 获取考勤统计
-func GetAttendanceStats(c *gin.Context) {
-	filters := map[string]string{
-		"start_date":    c.Query("start_date"),
-		"end_date":      c.Query("end_date"),
-		"department_id": c.Query("department_id"),
-	}
-	if !currentUserHasAnyPermission(c, "attendance_manage") {
-		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
-			return
-		}
-	}
-
-	attendanceService := service.NewAttendanceService(middleware.RequestDB(c))
-	stats, err := attendanceService.GetStats(filters)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "获取考勤统计失败",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data:    stats,
-	})
-}
-
 // SyncAttendance 同步考勤数据
 func SyncAttendance(c *gin.Context) {
 	var req struct {

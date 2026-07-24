@@ -40,7 +40,6 @@ const EmployeeFlow = lazy(() => import('./pages/EmployeeFlow'))
 const TalentAnalysis = lazy(() => import('./pages/TalentAnalysis'))
 const SyncLog = lazy(() => import('./pages/SyncLog'))
 const Attendance = lazy(() => import('./pages/Attendance'))
-const AttendanceStats = lazy(() => import('./pages/AttendanceStats'))
 const AttendanceExport = lazy(() => import('./pages/AttendanceExport'))
 const AttendanceProcessing = lazy(() => import('./pages/AttendanceProcessing'))
 const AttendanceExternalSync = lazy(() => import('./pages/AttendanceExternalSync'))
@@ -140,7 +139,6 @@ const routeMenuKeys: Record<string, string> = {
   '/employees': menuPermissionKey('employees'),
   '/sync-log': menuPermissionKey('sync-log'),
   '/attendance': menuPermissionKey('attendance'),
-  '/attendance-stats': menuPermissionKey('attendance-stats'),
   '/attendance-export': menuPermissionKey('attendance-export'),
   '/attendance-processing': menuPermissionKey('attendance-processing'),
   '/attendance/external-sync': menuPermissionKey('attendance-external-sync'),
@@ -588,7 +586,6 @@ function App() {
                 <Route path="/sync-log" element={<RouteGuard menuKey="menu:sync-log"><SyncLog /></RouteGuard>} />
                 <Route path="/organization" element={<RouteGuard menuKey="menu:organization-dashboard"><Organization /></RouteGuard>} />
                 <Route path="/attendance" element={<RouteGuard menuKey="menu:attendance"><Attendance /></RouteGuard>} />
-                <Route path="/attendance-stats" element={<RouteGuard menuKey="menu:attendance-stats"><AttendanceStats /></RouteGuard>} />
                 <Route path="/attendance-export" element={<RouteGuard menuKey="menu:attendance-export"><AttendanceExport /></RouteGuard>} />
                 <Route path="/attendance-processing" element={<RouteGuard menuKey="menu:attendance-processing"><AttendanceProcessing /></RouteGuard>} />
                 <Route path="/attendance/external-sync" element={<RouteGuard menuKey="menu:attendance-external-sync"><AttendanceExternalSync /></RouteGuard>} />
