@@ -57,6 +57,12 @@ update_when:
 | `api-contract` `router` `attendance` | 前端已调用且后端已有 Handler 的接口必须同时注册到 Router；新增 API 必须有路由清单回归测试，避免运行时 404 | [2026-07-23 考勤查询外部结果路由漏注册](#2026-07-23-p1-考勤查询外部结果路由漏注册导致进入页面-404) |
 | `attendance` `data-contract` `metrics` `frontend` | 同一业务指标必须明确数据源、计数单位和分母；禁止首页和业务页面各自维护不同统计口径 | [2026-07-23 P2 考勤统计口径分裂](#2026-07-23-p2-考勤统计口径分裂导致数字不可比) |
 
+### 前端 / 时间展示
+
+| 标签 | 约束摘要 | 条目 / 文档 |
+|---|---|---|
+| `attendance` `frontend` `timezone` `test` | 考勤时间必须显式按业务时区 UTC+8 格式化；禁止依赖浏览器、Node 或 CI 宿主机时区 | [2026-07-24 考勤时间展示依赖宿主时区](#2026-07-24-p2-考勤时间展示依赖宿主时区导致-ci-失败) |
+
 ### 部署 / 配置
 
 | 标签 | 约束摘要 | 条目 / 文档 |
@@ -164,6 +170,21 @@ update_when:
 | 修复 | `internal/database/schema_expand_migrations.go` 的预检和更新 JOIN 均改为 `CAST(a.id AS BINARY) = CAST(p.activity_id AS BINARY)`，保留原有文本精确匹配语义并绕开字符排序规则；`performance_org_migrate_test.go` 增加两条 SQL 的回归断言，禁止退回 `CAST(a.id AS CHAR)`。 |
 | 验证 | `go test ./internal/database -run TestMigratePerformanceParticipantOrgIDs -count=1` 通过；`go test ./internal/database -count=1` 通过；`go vet ./internal/database` 通过；`go build ./cmd/...` 通过；`golangci-lint run --tests=false ./internal/database` 为 `0 issues`。全仓 `go vet ./...` 因工作区已有无权限目录 `codex_tmp_ascii/tmp*` 在包展开阶段阻塞，未作为代码失败处理。 |
 | 防复发 | 1. MySQL 迁移中跨类型 ID 关联不得依赖连接/列默认 collation。<br>2. 需要保持文本精确语义时，双方显式转换为二进制字符串比较；禁止用宽松数值转换自动匹配异常历史值。<br>3. 启动迁移回归测试必须同时覆盖预检 SELECT 与事务内 UPDATE 的 JOIN 表达式。<br>4. 不通过全库改 collation 或修改生产数据来掩盖单条迁移 SQL 的类型问题。 |
+| 状态 | fixed |
+
+### 2026-07-24 P2 考勤时间展示依赖宿主时区导致 CI 失败
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-24 |
+| 级别 | P2 |
+| 模块/标签 | `attendance` `frontend` `timezone` `vitest` `ci` |
+| 范围 | 前端 / 测试 / 发布 |
+| 现象 | 考勤日结果测试在 Windows/CST 本地通过，但 GitHub Ubuntu/UTC 中把 `2026-07-16T09:12:00+08:00` 显示为 `01:12`，导致 `Attendance.daily.test.tsx` 找不到预期的 `09:12`，阻塞主分支 PR。生产页面在非 UTC+8 运行环境也会出现同类时间偏移。 |
+| 根因 | `Attendance.tsx` 使用 `dayjs(value).format(...)`，格式化结果隐式采用宿主环境本地时区；代码没有声明 HR 业务时间统一使用 UTC+8。 |
+| 修复 | `Attendance.tsx` 启用 Day.js `utc` 插件，`formatTime` / `formatDateTime` 在输出前显式切换到 UTC+8；未改测试期望。 |
+| 验证 | `TZ=UTC npm run test -- src/pages/Attendance.daily.test.tsx` 2/2 通过；UTC 环境前端全量测试 18 files / 280 tests 通过；`npm run lint`、`npm run build` 通过。 |
+| 防复发 | 1. 考勤与审批业务时间展示必须显式指定 UTC+8，不得依赖宿主时区。<br>2. 涉及时区的前端用例至少在 `TZ=UTC` 下验证一次。<br>3. 合并发布前必须执行 CI 同等的前端全量单测，不能只跑 lint/build。 |
 | 状态 | fixed |
 
 ### 2026-07-23 P1 双远端 master 合并遗漏依赖与安全配套代码
