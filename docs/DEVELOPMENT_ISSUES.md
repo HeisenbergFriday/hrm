@@ -49,6 +49,12 @@ update_when:
 | `attendance-toolbox` `run-store` | 结果绑定 `user_id+org_id`；磁盘仅 `rootDir/<runID>`；禁止返回服务器绝对路径 | `.ai/MODULES/attendance.md` |
 | `attendance-toolbox` `permission` | 计算/审计/模板需 `attendance_toolbox_operate`；钉钉同步需 `attendance_toolbox_dingtalk_sync`；一键联动 AND | `.ai/MODULES/attendance.md` 权限矩阵 |
 
+### 前端 / 时间展示
+
+| 标签 | 约束摘要 | 条目 / 文档 |
+|---|---|---|
+| `attendance` `frontend` `timezone` `test` | 考勤时间必须显式按业务时区 UTC+8 格式化；禁止依赖浏览器、Node 或 CI 宿主机时区 | [2026-07-24 考勤时间展示依赖宿主时区](#2026-07-24-p2-考勤时间展示依赖宿主时区导致-ci-失败) |
+
 ### 部署 / 配置
 
 | 标签 | 约束摘要 | 条目 / 文档 |
@@ -127,6 +133,21 @@ update_when:
 ---
 
 ## 问题条目
+
+### 2026-07-24 P2 考勤时间展示依赖宿主时区导致 CI 失败
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-24 |
+| 级别 | P2 |
+| 模块/标签 | `attendance` `frontend` `timezone` `vitest` `ci` |
+| 范围 | 前端 / 测试 / 发布 |
+| 现象 | 考勤日结果测试在 Windows/CST 本地通过，但 GitHub Ubuntu/UTC 中把 `2026-07-16T09:12:00+08:00` 显示为 `01:12`，导致 `Attendance.daily.test.tsx` 找不到预期的 `09:12`，阻塞主分支 PR。生产页面在非 UTC+8 运行环境也会出现同类时间偏移。 |
+| 根因 | `Attendance.tsx` 使用 `dayjs(value).format(...)`，格式化结果隐式采用宿主环境本地时区；代码没有声明 HR 业务时间统一使用 UTC+8。 |
+| 修复 | `Attendance.tsx` 启用 Day.js `utc` 插件，`formatTime` / `formatDateTime` 在输出前显式切换到 UTC+8；未改测试期望。 |
+| 验证 | `TZ=UTC npm run test -- src/pages/Attendance.daily.test.tsx` 2/2 通过；UTC 环境前端全量测试 18 files / 280 tests 通过；`npm run lint`、`npm run build` 通过。 |
+| 防复发 | 1. 考勤与审批业务时间展示必须显式指定 UTC+8，不得依赖宿主时区。<br>2. 涉及时区的前端用例至少在 `TZ=UTC` 下验证一次。<br>3. 合并发布前必须执行 CI 同等的前端全量单测，不能只跑 lint/build。 |
+| 状态 | fixed |
 
 ### 2026-07-23 P1 双远端 master 合并遗漏依赖与安全配套代码
 

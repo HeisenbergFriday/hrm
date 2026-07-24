@@ -44,6 +44,7 @@ import {
 } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
 import { attendanceAPI, departmentAPI, userAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -54,6 +55,10 @@ import './Attendance.css'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
+
+dayjs.extend(utc)
+
+const BUSINESS_TIMEZONE_OFFSET_MINUTES = 8 * 60
 
 export interface AttendanceDailyPunch {
   check_type: string
@@ -145,13 +150,15 @@ const statusColor = (level: AttendanceDailyStatus['level']) => {
 const formatTime = (value?: string) => {
   if (!value) return '-'
   const parsed = dayjs(value)
-  return parsed.isValid() ? parsed.format('HH:mm') : '-'
+  return parsed.isValid() ? parsed.utcOffset(BUSINESS_TIMEZONE_OFFSET_MINUTES).format('HH:mm') : '-'
 }
 
 const formatDateTime = (value?: string) => {
   if (!value) return '-'
   const parsed = dayjs(value)
-  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm:ss') : '-'
+  return parsed.isValid()
+    ? parsed.utcOffset(BUSINESS_TIMEZONE_OFFSET_MINUTES).format('YYYY-MM-DD HH:mm:ss')
+    : '-'
 }
 
 // 钉钉考勤枚举值（后端保留英文原值用于逻辑判断）→ 面向用户文案的中文映射。
