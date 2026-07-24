@@ -40,6 +40,7 @@ update_when:
 | `multi-tenant` `repository` | tenant-scoped repository 缺 `orgID` 必须 fail-closed；优先 `NewXxxWithOrgID`；实体字段 `OrgID` ≠ 仓储绑定 | `.ai/ARCHITECTURE.md` 多租户隔离运行时边界 |
 | `multi-tenant` `handler` | 普通接口只认 JWT `orgID`；禁止 body/query/header 切 org | `.ai/ARCHITECTURE.md` / cerebrum |
 | `database-migration` `multi-tenant` `unique-index` | 租户业务唯一键必须以 `org_id` 开头；模型标签、迁移矩阵、旧兼容逻辑必须一致；启动迁移按 Prepare → AutoMigrate → Verify 执行；禁止自动改写组织归属、删行或合并 | [2026-07-21 多组织唯一索引与旧兼容迁移不一致导致连续部署失败](#2026-07-21-p1-多组织唯一索引与旧兼容迁移不一致导致连续部署失败) |
+| `database-migration` `mysql` `collation` | 迁移 SQL 跨数值/文本 ID 关联时必须使用不依赖 collation 的精确比较；禁止把数值 `CAST AS CHAR` 后直接与文本列比较 | [2026-07-23 绩效迁移 ID 比较触发排序规则冲突](#2026-07-23-p1-绩效迁移-id-比较触发-mysql-排序规则冲突) |
 | `shift-config` `attendance` `gorm` | 服务内直接 `s.db` 查用户/部门/节假日/班次目录必须 org 过滤；缺 org fail-closed 禁止全表；优先 `NewShiftConfigServiceWithOrgID` / `NewAttendanceServiceWithOrgID` | [2026-07-20 首次补用户/登出审计/直接GORM fail-open 收口](#2026-07-20-p1p2-org_id-隔离缺口收口首次补用户登出审计直接-gorm-fail-open) |
 
 ### 考勤工具箱
@@ -148,6 +149,21 @@ update_when:
 | 修复 | 在 `internal/api/router.go` 注册状态、每日结果、同步执行、任务列表和任务详情 5 个路由；查询沿用考勤菜单读权限或 `attendance_manage`，同步执行保留 `attendance_manage`；增加 `TestExternalAttendanceRoutesRegistered` 路由回归测试。 |
 | 验证 | `go test ./internal/api -run 'TestExternalAttendance|Test.*Attendance.*Router' -count=1`、`go vet ./internal/api`、`golangci-lint run`、`cd frontend && npm run lint`、`cd frontend && npm run build` 均通过。 |
 | 防复发 | 1. 新增或迁移前端 API 时，必须同时核对后端 Handler、Router 注册和权限中间件。<br>2. 每个跨前后端 API 子模块至少保留一条 Router 路径清单测试。<br>3. 页面首次加载使用的 GET 接口不能只依赖 Handler 单测，必须验证 `SetupRouter().Routes()` 中存在完整路径。 |
+| 状态 | fixed |
+
+### 2026-07-23 P1 绩效迁移 ID 比较触发 MySQL 排序规则冲突
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-23 |
+| 级别 | P1 |
+| 模块/标签 | `database-migration` `performance` `mysql` `collation` `deploy` |
+| 范围 | 后端 / 数据库 / 部署 |
+| 现象 | 测试服应用容器在启动迁移 `MigratePerformanceParticipantOrgIDsFromActivity` 的预检查询中失败，MySQL 返回 1267：`Illegal mix of collations (utf8mb4_general_ci,IMPLICIT) and (utf8mb4_unicode_ci,IMPLICIT) for operation '='`，导致健康检查失败。 |
+| 根因 | `performance_activities.id` 是数值主键，`performance_participants.activity_id` 是 `varchar(64)`；迁移 SQL 使用 `CAST(a.id AS CHAR) = p.activity_id`。数值转字符表达式继承连接排序规则，而历史文本列使用另一排序规则，两个隐式字符串排序规则无法比较。原测试仅验证软删除、事务与关联表更新，没有锁定 JOIN 表达式的 collation 安全性。 |
+| 修复 | `internal/database/schema_expand_migrations.go` 的预检和更新 JOIN 均改为 `CAST(a.id AS BINARY) = CAST(p.activity_id AS BINARY)`，保留原有文本精确匹配语义并绕开字符排序规则；`performance_org_migrate_test.go` 增加两条 SQL 的回归断言，禁止退回 `CAST(a.id AS CHAR)`。 |
+| 验证 | `go test ./internal/database -run TestMigratePerformanceParticipantOrgIDs -count=1` 通过；`go test ./internal/database -count=1` 通过；`go vet ./internal/database` 通过；`go build ./cmd/...` 通过；`golangci-lint run --tests=false ./internal/database` 为 `0 issues`。全仓 `go vet ./...` 因工作区已有无权限目录 `codex_tmp_ascii/tmp*` 在包展开阶段阻塞，未作为代码失败处理。 |
+| 防复发 | 1. MySQL 迁移中跨类型 ID 关联不得依赖连接/列默认 collation。<br>2. 需要保持文本精确语义时，双方显式转换为二进制字符串比较；禁止用宽松数值转换自动匹配异常历史值。<br>3. 启动迁移回归测试必须同时覆盖预检 SELECT 与事务内 UPDATE 的 JOIN 表达式。<br>4. 不通过全库改 collation 或修改生产数据来掩盖单条迁移 SQL 的类型问题。 |
 | 状态 | fixed |
 
 ### 2026-07-23 P1 双远端 master 合并遗漏依赖与安全配套代码

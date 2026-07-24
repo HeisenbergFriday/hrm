@@ -102,7 +102,7 @@ func MigratePerformanceParticipantOrgIDsFromActivity(db *gorm.DB) error {
 	if err := db.Raw(`
 		SELECT COUNT(*) FROM performance_participants p
 		INNER JOIN performance_activities a
-			ON CAST(a.id AS CHAR) = p.activity_id
+			ON CAST(a.id AS BINARY) = CAST(p.activity_id AS BINARY)
 		WHERE a.org_id IS NOT NULL AND a.org_id <> ''
 		  AND (p.org_id IS NULL OR p.org_id = '' OR p.org_id <> a.org_id)
 	`).Scan(&participantMisaligned).Error; err != nil {
@@ -147,7 +147,7 @@ func MigratePerformanceParticipantOrgIDsFromActivity(db *gorm.DB) error {
 		if err := tx.Exec(`
 			UPDATE performance_participants p
 			INNER JOIN performance_activities a
-				ON CAST(a.id AS CHAR) = p.activity_id
+				ON CAST(a.id AS BINARY) = CAST(p.activity_id AS BINARY)
 			SET p.org_id = a.org_id
 			WHERE a.org_id IS NOT NULL AND a.org_id <> ''
 			  AND (p.org_id IS NULL OR p.org_id = '' OR p.org_id <> a.org_id)
