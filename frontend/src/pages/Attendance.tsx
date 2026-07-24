@@ -154,10 +154,48 @@ const formatDateTime = (value?: string) => {
   return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm:ss') : '-'
 }
 
+// 钉钉考勤枚举值（后端保留英文原值用于逻辑判断）→ 面向用户文案的中文映射。
+// 禁止把下列原始英文值直接渲染到 UI：必须经过映射，未命中时透传以保留可观测性。
+const CHECK_TYPE_LABELS: Record<string, string> = {
+  OnDuty: '上班打卡',
+  OffDuty: '下班打卡',
+}
+
+const TIME_RESULT_LABELS: Record<string, string> = {
+  Normal: '正常',
+  Late: '迟到',
+  Early: '早退',
+  SeriousLate: '严重迟到',
+  Absenteeism: '旷工',
+  NotSigned: '缺卡',
+  LackOfPatrol: '缺巡',
+}
+
+const LOCATION_RESULT_LABELS: Record<string, string> = {
+  Normal: '正常范围',
+  Outside: '外勤',
+  NotSigned: '未打卡',
+  UnbindingDevice: '设备未绑定',
+}
+
+const checkTypeLabel = (type?: string) => {
+  if (!type) return '-'
+  return CHECK_TYPE_LABELS[type] ?? type
+}
+
+const timeResultLabel = (result?: string) => {
+  if (!result) return '正常'
+  return TIME_RESULT_LABELS[result] ?? result
+}
+
+const locationResultLabel = (result?: string) => {
+  if (!result) return '正常范围'
+  return LOCATION_RESULT_LABELS[result] ?? result
+}
+
 const locationLabel = (punch: AttendanceDailyPunch) => {
   if (punch.user_address) return punch.user_address
-  if (punch.location_result === 'Normal') return '正常范围'
-  return punch.location_result || '-'
+  return locationResultLabel(punch.location_result)
 }
 
 const statusOptions = [
@@ -785,9 +823,9 @@ const Attendance: React.FC = () => {
                   color: punch.time_result && punch.time_result !== 'Normal' ? 'orange' : 'green',
                   children: (
                     <Space direction="vertical" size={2}>
-                      <Text strong>{punch.check_type} · {formatDateTime(punch.check_time)}</Text>
+                      <Text strong>{checkTypeLabel(punch.check_type)} · {formatDateTime(punch.check_time)}</Text>
                       <Text type="secondary">地点：{locationLabel(punch)}</Text>
-                      <Text type="secondary">结果：{punch.time_result || 'Normal'} / {punch.location_result || 'Normal'}</Text>
+                      <Text type="secondary">结果：{timeResultLabel(punch.time_result)} / {locationResultLabel(punch.location_result)}</Text>
                     </Space>
                   ),
                 }))}

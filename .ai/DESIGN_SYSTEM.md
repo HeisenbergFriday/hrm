@@ -349,7 +349,7 @@ Modal.confirm({
 
 ### 5.1 组件命名
 
-- **文件名**：大驼峰，如 `EmployeeList.tsx`、`AttendanceStats.tsx`
+- **文件名**：大驼峰，如 `EmployeeList.tsx`、`AttendanceExport.tsx`
 - **组件名**：大驼峰，与文件名一致
 - **props 接口**：大驼峰 + `Props` 后缀，如 `EmployeeListProps`
 
@@ -502,3 +502,40 @@ antd 组件默认支持无障碍访问：
 - 不要忽略错误处理
 - 不要使用非语义化的 HTML 标签
 - 不要忘记无障碍属性（aria-label、alt、label）
+
+---
+
+## 10. 面向用户文案中文化（强制）
+
+### 10.1 强制规则
+
+**所有会显示给用户的字符串必须为中文。** 这里的"用户"指最终使用该 HR 系统的员工、主管、HR 与管理员，不含阅读源码的开发者。
+
+**禁止把后端返回的英文枚举值 / 接口字段名直接渲染到 UI。** 后端为兼容钉钉等第三方常保留英文原值（如 `OnDuty` / `OffDuty` / `Normal` / `Late` / `Early` / `NotSigned` / `Outside` 等），前端**必须在展示前经一层中文映射**，未命中时再透传原值以保留可观测性。示例见 [Attendance.tsx](../frontend/src/pages/Attendance.tsx) 的 `CHECK_TYPE_LABELS` / `TIME_RESULT_LABELS` / `LOCATION_RESULT_LABELS`。
+
+### 10.2 适用范围
+
+必须中文的位置（非穷举）：
+- JSX 文本节点：`<div>加载中</div>`、`<Text strong>上班打卡</Text>`
+- antd 组件文案类 props：`placeholder`、`title`、`okText`、`cancelText`、`label`、`description`、`content`、`message`、`tooltip`、`extra`、`summary`、`aria-label`、`emptyText`
+- `message.success/error/warning/info(...)`、`notification.*(...)`、`Modal.confirm({ title, content, ... })`
+- 表格列定义的 `title`、`render` 返回的可见文本
+- Tabs / Steps / Breadcrumb / Menu 的 `items` 中的 `label`
+
+可不中文的位置（保留英文 / 原值）：
+- `console.*`、`throw new Error(...)`、调试日志
+- 注释、import 路径、CSS 类名、组件名、变量 / 函数 / 类型名
+- URL、文件路径、MIME / meta 值（如 `text/html; charset=utf-8`）
+- 与后端做相等判断的字面量（如 `punch.time_result !== 'Normal'`，这是**比较**不是**展示**）
+- 行业通用缩写 / 专有名词（`HR`、`OKR`、`KPI`、`OA`、`IP`、`ID`、`Excel`、`CSV`、`Q1`、钉钉 API 名 `ManualLeave` 等），中英文混排时保留即可
+- 给开发者看的技术说明页里的后端字段名引用（如 `User.name / email / mobile / department_id`）
+
+### 10.3 自动校验
+
+提供扫描脚本 [frontend/scripts/check-user-facing-en.mjs](../frontend/scripts/check-user-facing-en.mjs)，已并入 `npm run lint`（同时提供单独命令 `npm run lint:i18n`）。脚本会扫描 `frontend/src` 下非测试的 `tsx/ts`，对前述文案类 props 的字符串字面量做"纯英文短语"命中检查，命中则报错退出。
+
+- 误报（专有名词 / 缩写 / 后端枚举）：把词加进脚本的 `ALLOW_PHRASES` 白名单。
+- 真实用户可见英文：改为中文，或经一层中文映射函数。
+- 新增展示型 prop 时，把 prop 名补进脚本的 `DISPLAY_PROPS`。
+
+脚本只做静态正则匹配，无法覆盖 JSX 文本节点与模板字符串插值；开发与 review 仍需人工把关 10.1 的强制规则。
