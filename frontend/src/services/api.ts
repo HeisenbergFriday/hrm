@@ -3,7 +3,7 @@ import { useAuthStore } from '../store/authStore'
 import { authRedirectTargetFromLocation, loginPathWithRedirect, rememberAuthRedirect } from '../utils/authRedirect'
 import { csrfHeadersForMethod } from '../utils/csrf'
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: '/api/v1',
   timeout: 10000,
   withCredentials: true,
@@ -76,10 +76,133 @@ export const departmentAPI = {
   getDepartment: (id: string) => api.get(`/departments/${id}`),
 }
 
+/** 组织全量同步响应（POST /org/sync） */
+export type OrgSyncStageResult = {
+  status: 'success' | 'partial_failed' | 'failed' | 'skipped'
+  success_count: number
+  fail_count: number
+  error: string
+  error_code?: string
+}
+
+export type OrgSyncResponse = {
+  overall_status: 'success' | 'partial_failed' | 'failed'
+  departments: OrgSyncStageResult
+  employees: OrgSyncStageResult & {
+    position_missing_count: number
+    employment_type_missing_count?: number
+    job_level_missing_count?: number
+    job_family_missing_count?: number
+    regularization_date_missing_count?: number
+    hrm_field_status?: 'success' | 'failed' | 'success_no_fields'
+    hrm_field_error?: string
+    overwrite_empty: boolean
+		default_role_assigned_count: number
+		deactivated_missing_count?: number
+		deactivation_status?: 'success' | 'failed'
+		deactivation_error?: string
+  }
+  sync_time: string
+  duration_ms: number
+  request_id: string
+}
+
+export type OrgSyncAPIResponse = {
+  code: 200 | 207 | 500
+  message: 'success' | 'partial_failed' | 'failed'
+  data: OrgSyncResponse
+}
+
+export const ORG_SYNC_TIMEOUT_MS = 10 * 60 * 1000
+export const ORG_SYNC_REQUEST_CONFIG = Object.freeze({ timeout: ORG_SYNC_TIMEOUT_MS })
+export const ORG_SYNC_POLL_INTERVAL_MS = 2 * 1000
+export const ORG_SYNC_SHORT_REQUEST_TIMEOUT_MS = 10 * 1000
+export const ORG_SYNC_SHORT_REQUEST_CONFIG = Object.freeze({ timeout: ORG_SYNC_SHORT_REQUEST_TIMEOUT_MS })
+
+export type OrgSyncStartAPIResponse = {
+  code: 202
+  message: 'running'
+  data: {
+    status: 'running'
+    request_id: string
+  }
+}
+
+export type OrgSyncRunningAPIResponse = {
+  code: 202
+  message: 'running'
+  data: {
+    status: 'running'
+    request_id: string
+    duration_ms?: number
+  }
+}
+
+export type OrgSyncTaskResponse = {
+  status: 'success' | 'partial_failed' | 'failed' | 'skipped'
+  success_count: number
+  fail_count: number
+  error: string
+  error_code?: string
+  request_id: string
+  duration_ms: number
+  position_missing_count?: number
+  employment_type_missing_count?: number
+  job_level_missing_count?: number
+  job_family_missing_count?: number
+  regularization_date_missing_count?: number
+  hrm_field_status?: 'success' | 'failed' | 'success_no_fields'
+  hrm_field_error?: string
+  overwrite_empty?: boolean
+	default_role_assigned_count?: number
+	change_log_count?: number
+	deactivated_missing_count?: number
+	deactivation_status?: 'success' | 'failed'
+	deactivation_error?: string
+}
+
+export type OrgSyncStatusRecord = {
+  last_sync_time: string | null
+  status: 'never' | 'running' | 'success' | 'partial_failed' | 'failed' | 'skipped'
+  message?: string
+  request_id?: string
+  duration_ms?: number
+  error_code?: string
+  success_count?: number
+  fail_count?: number
+  details?: Record<string, unknown>
+}
+
+export type OrgSyncStatusAPIResponse = {
+  code: number
+  message: string
+  data: {
+    status: {
+      departments: OrgSyncStatusRecord
+      users: OrgSyncStatusRecord
+      [key: string]: OrgSyncStatusRecord
+    }
+  }
+}
+
+export type OrgSyncTaskAPIResponse = {
+  code: 200 | 207 | 500
+  message: string
+  data: OrgSyncTaskResponse
+}
+
 export const syncAPI = {
-  syncDepartments: () => api.post('/sync/departments'),
-  syncUsers: () => api.post('/sync/users'),
-  getSyncStatus: () => api.get('/sync/status'),
+  syncDepartments: () => api.post<OrgSyncTaskAPIResponse, OrgSyncTaskAPIResponse>(
+    '/sync/departments',
+    {},
+    ORG_SYNC_REQUEST_CONFIG,
+  ),
+  syncUsers: () => api.post<OrgSyncTaskAPIResponse, OrgSyncTaskAPIResponse>(
+    '/sync/users',
+    {},
+    ORG_SYNC_REQUEST_CONFIG,
+  ),
+  getSyncStatus: () => api.get<OrgSyncStatusAPIResponse, OrgSyncStatusAPIResponse>('/sync/status'),
 }
 
 export const orgAPI = {
@@ -90,8 +213,33 @@ export const orgAPI = {
     api.get('/org/employees', { params }),
   getEmployee: (id: string) => api.get(`/org/employees/${id}`),
   getEmployeePositionDiagnostic: (id: string) => api.get(`/org/employees/${id}/position-sync-diagnostic`),
-  // 多租户：普通接口只同步当前 JWT 组织，不再接受 org_id/target_org_id 参数
-  syncOrg: () => api.post('/org/sync'),
+  // 长任务先由短请求启动，再轮询短查询，避免网关等待单条连接超过 90 秒后返回 504。
+  syncOrg: async (): Promise<OrgSyncAPIResponse> => {
+    const startedAt = Date.now()
+    const startResponse = await api.post<OrgSyncStartAPIResponse, OrgSyncStartAPIResponse>(
+      '/org/sync/start',
+      {},
+      ORG_SYNC_SHORT_REQUEST_CONFIG,
+    )
+    const requestID = startResponse.data?.request_id
+    if (startResponse.code !== 202 || startResponse.data?.status !== 'running' || !requestID) {
+      throw new Error('组织同步启动响应异常，请稍后重试')
+    }
+    while (Date.now() - startedAt < ORG_SYNC_TIMEOUT_MS) {
+      const remainingWaitMS = ORG_SYNC_TIMEOUT_MS - (Date.now() - startedAt)
+      await new Promise((resolve) => setTimeout(resolve, Math.min(ORG_SYNC_POLL_INTERVAL_MS, remainingWaitMS)))
+      if (Date.now() - startedAt >= ORG_SYNC_TIMEOUT_MS) break
+      const response = await api.get<OrgSyncAPIResponse | OrgSyncRunningAPIResponse, OrgSyncAPIResponse | OrgSyncRunningAPIResponse>(
+        `/org/sync/${encodeURIComponent(requestID)}`,
+        ORG_SYNC_SHORT_REQUEST_CONFIG,
+      )
+      if (response.code === 202 || ('status' in response.data && response.data.status === 'running')) {
+        continue
+      }
+      return response as OrgSyncAPIResponse
+    }
+    throw new Error('组织同步页面等待超时，后台任务可能仍在执行，请前往同步日志确认结果，暂勿重复点击')
+  },
   getOrganizations: () => api.get('/auth/orgs'),
 }
 
@@ -195,24 +343,27 @@ export type AttendanceToolboxRunResponse = {
   expires_at: string
 }
 
+// 后端工具箱默认 600 秒；客户端多等待 60 秒，以便接收后端超时响应。
+export const ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS = 11 * 60 * 1000
+
 export const attendanceToolboxAPI = {
   getDefaults: () => api.get('/attendance/toolbox/defaults'),
   run: (module: string, data: FormData) => api.post(`/attendance/toolbox/${module}/run`, data, {
     responseType: 'blob',
-    timeout: 10 * 60 * 1000,
+    timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
     headers: {
       'Content-Type': 'multipart/form-data',
     },
   }),
   /** Structured workflow: returns run_id + file metadata instead of raw blob. */
   runWorkflow: (module: string, data: FormData) => api.post(`/attendance/toolbox/workflows/${module}`, data, {
-    timeout: 10 * 60 * 1000,
+    timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
     headers: {
       'Content-Type': 'multipart/form-data',
     },
   }),
   runQuickWorkflow: (data: FormData) => api.post('/attendance/toolbox/workflows/quick', data, {
-    timeout: 10 * 60 * 1000,
+    timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
     headers: {
       'Content-Type': 'multipart/form-data',
     },
@@ -220,11 +371,11 @@ export const attendanceToolboxAPI = {
   getRun: (runId: string) => api.get(`/attendance/toolbox/runs/${runId}`),
   downloadRunFile: (runId: string, fileKey: string) => api.get(`/attendance/toolbox/runs/${runId}/files/${encodeURIComponent(fileKey)}`, {
     responseType: 'blob',
-    timeout: 10 * 60 * 1000,
+    timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
   }),
   downloadRunZip: (runId: string) => api.get(`/attendance/toolbox/runs/${runId}/zip`, {
     responseType: 'blob',
-    timeout: 10 * 60 * 1000,
+    timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
   }),
   runDingtalkSync: (data: {
     start_date: string
@@ -238,7 +389,7 @@ export const attendanceToolboxAPI = {
     process_position_transfer?: string
   }) => api.post('/attendance/toolbox/dingtalk-sync', data, {
     responseType: 'blob',
-    timeout: 10 * 60 * 1000,
+    timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
   }),
   /** Structured dingtalk sync via workflow API. */
   runDingtalkSyncStructured: (data: FormData | {
@@ -250,7 +401,7 @@ export const attendanceToolboxAPI = {
   }) => {
     if (data instanceof FormData) {
       return api.post('/attendance/toolbox/workflows/dingtalk_sync', data, {
-        timeout: 10 * 60 * 1000,
+        timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
         headers: { 'Content-Type': 'multipart/form-data' },
       })
     }
@@ -261,7 +412,7 @@ export const attendanceToolboxAPI = {
     if (data.max_instances != null) form.append('dingtalk_sync_max_instances', String(data.max_instances))
     if (data.padding_days != null) form.append('dingtalk_sync_padding_days', String(data.padding_days))
     return api.post('/attendance/toolbox/workflows/dingtalk_sync', form, {
-      timeout: 10 * 60 * 1000,
+      timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
@@ -320,7 +471,9 @@ export const approvalAPI = {
     page_size?: number
     status?: string
     template_id?: string
+    category?: string
     applicant_id?: string
+    title?: string
     start_date?: string
     end_date?: string
   }) => api.get('/approvals/instances', { params }),
@@ -425,6 +578,14 @@ export const weekScheduleAPI = {
   /** 作息表个人推送：multipart(image, user_ids, title, content)，不写考勤排班 */
   pushPersonalSchedule: (formData: FormData) =>
     api.post('/week-schedule/push/personal', formData, {
+      timeout: 120000,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+  /** 查询当前组织已绑定的群聊；响应不包含 openConversationId 或钉钉凭据。 */
+  getGroupTargets: () => api.get('/week-schedule/group-targets'),
+  /** 作息表群聊推送：前端仅提交本地 group_target_id。 */
+  pushGroupSchedule: (formData: FormData) =>
+    api.post('/week-schedule/push/group', formData, {
       timeout: 120000,
       headers: { 'Content-Type': 'multipart/form-data' },
     }),

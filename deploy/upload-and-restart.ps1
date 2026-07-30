@@ -35,7 +35,7 @@
 
 .PARAMETER FullStack
     Use compose down + up -d for the whole test stack (same as build-and-deploy.ps1).
-    Default is app-only: force-recreate peopleops-hr so MySQL/Redis stay up.
+    Default recreates peopleops-hr and dingtalk-stream so MySQL/Redis stay up.
 
 .PARAMETER SkipHealthCheck
     Skip /health polling after restart (not recommended).
@@ -114,6 +114,7 @@ $DEPLOY_DIR = "/home/ubuntu/peopleops-hr-test"
 $COMPOSE_PROJECT = "peopleops-hr-test"
 $COMPOSE_FILE = "docker-compose.test.yml"
 $APP_SERVICE = "peopleops-hr"
+$STREAM_SERVICE = "dingtalk-stream"
 $REMOTE_TAR = "$DEPLOY_DIR/$(Split-Path -Leaf $TarFile)"
 
 # --- Preflight ---
@@ -122,6 +123,10 @@ if (-not (Test-Path -LiteralPath $TarFile)) {
     Write-Err "Local tar not found: $TarFile"
     Write-Warn "This script only uploads an existing image. Build first with:"
     Write-Host "    .\deploy\build-and-deploy.ps1 -SkipConfigUpload" -ForegroundColor Cyan
+    exit 1
+}
+if (-not (Test-Path -LiteralPath $COMPOSE_FILE)) {
+    Write-Err "Local Compose file not found: $COMPOSE_FILE"
     exit 1
 }
 
@@ -157,10 +162,12 @@ if ($sshCode -ne 0) {
 }
 Write-Success "SSH OK"
 
-# --- Clear incomplete remote tar ---
+# --- Clear incomplete remote tar and back up Compose ---
 Write-Host ""
 Write-Step "[3/6] Preparing remote path..."
-$prepCode = Invoke-Remote "mkdir -p '$DEPLOY_DIR' && rm -f '$REMOTE_TAR' && df -h '$DEPLOY_DIR' | tail -1"
+$remoteComposeFile = "$DEPLOY_DIR/$COMPOSE_FILE"
+$remoteComposeBackup = "$remoteComposeFile.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
+$prepCode = Invoke-Remote "mkdir -p '$DEPLOY_DIR' && rm -f '$REMOTE_TAR' && if [ -f '$remoteComposeFile' ]; then cp '$remoteComposeFile' '$remoteComposeBackup'; fi && df -h '$DEPLOY_DIR' | tail -1"
 if ($prepCode -ne 0) {
     Write-Err "Failed to prepare remote deploy directory"
     exit 1
@@ -190,6 +197,20 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 Write-Success "Upload finished"
+
+Write-Step "Uploading current Compose definition..."
+scp -P $ServerPort `
+    -o BatchMode=yes `
+    -o ConnectTimeout=15 `
+    -o StrictHostKeyChecking=accept-new `
+    $COMPOSE_FILE `
+    "${ServerHost}:$remoteComposeFile"
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "Compose upload failed"
+    Invoke-Remote "if [ -f '$remoteComposeBackup' ]; then cp '$remoteComposeBackup' '$remoteComposeFile'; fi" | Out-Null
+    exit 1
+}
+Write-Success "Compose definition uploaded"
 
 # --- Size verify ---
 Write-Host ""
@@ -223,8 +244,8 @@ if ($FullStack) {
     Write-Host "  Mode: full stack (down + up -d)" -ForegroundColor DarkGray
     $deployCmd = "cd '$DEPLOY_DIR' && docker load -i '$REMOTE_TAR' && docker compose -p '$COMPOSE_PROJECT' -f '$COMPOSE_FILE' down && docker compose -p '$COMPOSE_PROJECT' -f '$COMPOSE_FILE' up -d && sleep 8 && docker compose -p '$COMPOSE_PROJECT' -f '$COMPOSE_FILE' ps"
 } else {
-    Write-Host "  Mode: app only (force-recreate $APP_SERVICE; MySQL/Redis stay up)" -ForegroundColor DarkGray
-    $deployCmd = "cd '$DEPLOY_DIR' && docker load -i '$REMOTE_TAR' && docker compose -p '$COMPOSE_PROJECT' -f '$COMPOSE_FILE' up -d --force-recreate --no-deps '$APP_SERVICE' && sleep 8 && docker compose -p '$COMPOSE_PROJECT' -f '$COMPOSE_FILE' ps"
+    Write-Host "  Mode: app + Stream (force-recreate; MySQL/Redis stay up)" -ForegroundColor DarkGray
+    $deployCmd = "cd '$DEPLOY_DIR' && docker load -i '$REMOTE_TAR' && docker compose -p '$COMPOSE_PROJECT' -f '$COMPOSE_FILE' up -d --force-recreate --no-deps '$APP_SERVICE' '$STREAM_SERVICE' && sleep 8 && docker compose -p '$COMPOSE_PROJECT' -f '$COMPOSE_FILE' ps"
 }
 
 $deployCode = Invoke-Remote $deployCmd
@@ -258,6 +279,7 @@ if ($CleanupLocal) {
     Remove-Item "Dockerfile.deploy" -Force -ErrorAction SilentlyContinue
     Remove-Item "Dockerfile.deploy.dockerignore" -Force -ErrorAction SilentlyContinue
     Remove-Item "peopleops" -Force -ErrorAction SilentlyContinue
+    Remove-Item "dingtalk_stream" -Force -ErrorAction SilentlyContinue
     Write-Success "Local tar and deploy leftovers removed"
 } else {
     Write-Host ""

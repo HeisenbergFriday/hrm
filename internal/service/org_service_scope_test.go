@@ -45,6 +45,40 @@ func TestOrgServiceBaseEmployeeQueryScopesJoinedProfilesByOrg(t *testing.T) {
 	}
 }
 
+func TestOrgServiceBaseEmployeeQueryIncludesSecondaryDepartmentMemberships(t *testing.T) {
+	db := newDryRunServiceDB(t, "muteng")
+	svc := NewOrgService(db)
+	var users []database.User
+	stmt := svc.baseEmployeeQuery([]string{"dept-secondary"}).Select("users.*").Find(&users).Statement
+	sql := strings.ToLower(stmt.SQL.String())
+	if !strings.Contains(sql, "user_department_memberships") || !strings.Contains(sql, "exists") {
+		t.Fatalf("sql = %s, want secondary department membership EXISTS query", stmt.SQL.String())
+	}
+}
+
+func TestRollupTreeUniqueCountsDeduplicatesMultiDepartmentEmployee(t *testing.T) {
+	root := &OrgDepartmentTreeNode{ID: "root"}
+	left := &OrgDepartmentTreeNode{ID: "left"}
+	right := &OrgDepartmentTreeNode{ID: "right"}
+	root.Children = []*OrgDepartmentTreeNode{left, right}
+	directUsers := make(map[string]*departmentUserSets)
+	ensureDepartmentUserSets(directUsers, "left").add("employee-1", "active")
+	ensureDepartmentUserSets(directUsers, "right").add("employee-1", "active")
+	ensureDepartmentUserSets(directUsers, "right").add("employee-2", "inactive")
+
+	rollupTreeUniqueCounts(root, directUsers)
+
+	if left.ActiveCount != 1 || left.Headcount != 1 {
+		t.Fatalf("left counts = active:%d total:%d", left.ActiveCount, left.Headcount)
+	}
+	if right.ActiveCount != 1 || right.InactiveCount != 1 || right.Headcount != 2 {
+		t.Fatalf("right counts = active:%d inactive:%d total:%d", right.ActiveCount, right.InactiveCount, right.Headcount)
+	}
+	if root.ActiveCount != 1 || root.InactiveCount != 1 || root.Headcount != 2 {
+		t.Fatalf("root counts = active:%d inactive:%d total:%d, want unique 1/1/2", root.ActiveCount, root.InactiveCount, root.Headcount)
+	}
+}
+
 func TestOrgServiceBuildEmployeeListQuerySelfScopesOrgStatusAndSearch(t *testing.T) {
 	db := newDryRunServiceDB(t, "org-a")
 	svc := NewOrgServiceWithOrgID(db, "org-a")

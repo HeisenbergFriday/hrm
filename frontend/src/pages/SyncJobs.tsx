@@ -2,16 +2,18 @@ import React from 'react'
 import { Typography, Table, Spin, Empty, Alert, Button, message, Modal, Tooltip } from 'antd'
 import { SyncOutlined, ReloadOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { attendanceAPI, jobAPI, orgAPI, syncAPI } from '../services/api'
+import { attendanceAPI, jobAPI, syncAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { formatDateTime } from '../utils/format'
 import { hasPermission } from '../utils/permission'
+import { formatSyncTaskResult, resolveSyncErrorMessage } from '../utils/orgSyncAction'
+import type { OrgSyncTaskAPIResponse } from '../services/api'
 
 const { Text } = Typography
 
-interface Job {
+export interface Job {
   id: string
   name: string
   description: string
@@ -21,23 +23,34 @@ interface Job {
   next_run_time: string
 }
 
-/** 将列表中的任务 id/type 映射到真实同步调用（避免 RunJob 仅改状态的假成功） */
-async function runRealJob(job: Job): Promise<void> {
-  const key = `${job.id}|${job.type}`.toLowerCase()
-  if (key.includes('user') || job.id === '1' || job.type === 'sync_users') {
-    await syncAPI.syncUsers()
-    return
+export type JobRunResult =
+  | { kind: 'org_sync'; response: OrgSyncTaskAPIResponse }
+  | { kind: 'attendance' }
+
+/** 将后端任务清单中的已支持类型映射到真实同步调用。 */
+export async function runRealJob(job: Job): Promise<JobRunResult> {
+  switch (job.type.trim().toLowerCase()) {
+    case 'sync_users':
+      return { kind: 'org_sync', response: await syncAPI.syncUsers() }
+    case 'sync_departments':
+      return { kind: 'org_sync', response: await syncAPI.syncDepartments() }
+    case 'sync_attendance':
+      await attendanceAPI.sync()
+      return { kind: 'attendance' }
+    default:
+      throw new Error('不支持的同步任务类型')
   }
-  if (key.includes('department') || job.id === '2' || job.type === 'sync_departments') {
-    await syncAPI.syncDepartments()
-    return
+}
+
+export async function completeJobRun(result: JobRunResult, onCompleted: () => void | Promise<void>): Promise<void> {
+  if (result.kind === 'org_sync' && result.response.data.status === 'partial_failed') {
+    message.warning(formatSyncTaskResult(result.response.data))
+  } else if (result.kind === 'org_sync' && result.response.data.status !== 'success') {
+    message.error(formatSyncTaskResult(result.response.data))
+  } else {
+    message.success(result.kind === 'org_sync' ? formatSyncTaskResult(result.response.data) : '同步任务已执行')
   }
-  if (key.includes('attendance') || job.id === '3' || job.type === 'sync_attendance') {
-    await attendanceAPI.sync()
-    return
-  }
-  // 兜底：组织花名册全量同步（部门+用户）
-  await orgAPI.syncOrg()
+  await onCompleted()
 }
 
 const SyncJobs: React.FC = () => {
@@ -50,12 +63,19 @@ const SyncJobs: React.FC = () => {
 
   const runJobMutation = useMutation({
     mutationFn: (job: Job) => runRealJob(job),
-    onSuccess: () => {
-      message.success('同步任务已执行')
-      refetch()
+    onSuccess: async (result) => {
+      try {
+        await completeJobRun(result, async () => { await refetch() })
+      } catch {
+        message.warning('同步已完成，但任务状态刷新失败，请手动刷新')
+      }
     },
-    onError: (err: any) => {
-      message.error(err?.response?.data?.message || err?.response?.data?.error || '任务运行失败')
+    onError: (err: unknown) => {
+      if (err instanceof Error && err.message === '不支持的同步任务类型') {
+        message.error(err.message)
+        return
+      }
+      message.error(resolveSyncErrorMessage(err))
     },
   })
 
@@ -78,6 +98,10 @@ const SyncJobs: React.FC = () => {
         return <StatusTag color="green">运行中</StatusTag>
       case 'failed':
         return <StatusTag color="red">失败</StatusTag>
+      case 'skipped':
+        return <StatusTag color="default">已跳过</StatusTag>
+      case 'partial_failed':
+        return <StatusTag color="orange">部分成功</StatusTag>
       case 'completed':
       case 'success':
         return <StatusTag color="green">成功</StatusTag>

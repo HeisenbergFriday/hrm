@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-22T03:06:54.446295+00:00",
+  "generated_at": "2026-07-30T01:10:32.030059+00:00",
   "app_root_label": "app",
   "toolbox_root_relpath": "tools/attendance_toolbox/python",
   "normalization": "CRLF/CR -> LF; allowlist adapter strip for fill_overtime/finally",

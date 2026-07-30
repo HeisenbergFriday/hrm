@@ -8,6 +8,10 @@ import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
+
+dayjs.locale('zh-cn')
 
 const { Title, Text } = Typography
 const { RangePicker } = DatePicker
@@ -159,7 +163,12 @@ const ApprovalStats: React.FC = () => {
               </Option>
             ))}
           </Select>
-          <RangePicker onChange={setDateRange} />
+          <RangePicker
+            onChange={setDateRange}
+            placeholder={['开始日期', '结束日期']}
+            format="YYYY-MM-DD"
+            locale={datePickerZhCN}
+          />
           <Button
             type="primary"
             icon={<BarChartOutlined />}

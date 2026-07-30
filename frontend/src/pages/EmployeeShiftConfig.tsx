@@ -16,6 +16,7 @@ import {
 } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ClockCircleOutlined, DeleteOutlined, SettingOutlined, TeamOutlined } from '@ant-design/icons'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { shiftConfigAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import StatusTag from '../components/StatusTag'
@@ -580,6 +581,9 @@ export default function EmployeeShiftConfig() {
           <RangePicker
             style={{ width: '100%', marginTop: 'var(--space-2)' }}
             value={batchForm.date_range}
+            placeholder={['开始日期', '结束日期']}
+            format="YYYY-MM-DD"
+            locale={datePickerZhCN}
             onChange={(dates) => {
               if (!dates || !dates[0] || !dates[1]) {
                 return

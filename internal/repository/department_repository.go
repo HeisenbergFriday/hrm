@@ -91,6 +91,15 @@ func (r *DepartmentRepository) FindByDepartmentID(departmentID string) (*databas
 	return &department, nil
 }
 
+func (r *DepartmentRepository) FindByDingTalkDepartmentID(dingTalkDepartmentID string) (*database.Department, error) {
+	var department database.Department
+	err := r.scoped().Where("dingtalk_department_id = ?", dingTalkDepartmentID).First(&department).Error
+	if err != nil {
+		return nil, err
+	}
+	return &department, nil
+}
+
 func (r *DepartmentRepository) FindByID(id string) (*database.Department, error) {
 	var department database.Department
 	err := r.scoped().First(&department, "id = ?", id).Error

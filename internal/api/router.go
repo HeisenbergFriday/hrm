@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"peopleops/internal/middleware"
+	"peopleops/internal/service"
 	"strings"
 
 	"github.com/gin-contrib/cors"
@@ -55,6 +56,8 @@ func SetupRouter() *gin.Engine {
 	router.Use(middleware.RequestMetrics())
 
 	router.GET("/health", HealthCheck)
+	// 钉钉服务端通过短期随机令牌读取作息表图片；查询参数不会进入应用访问日志。
+	router.GET("/api/v1/week-schedule/group-image", ServeWeekScheduleGroupImage)
 	// 文件下载：JWT + TenantContext，按 org 元数据鉴权（与 authRequired 一致）
 	router.GET("/api/v1/files/:filename", middleware.JWTAuth(), middleware.TenantContext(), ServeFile)
 
@@ -138,6 +141,8 @@ func SetupRouter() *gin.Engine {
 				org.GET("/employees/:id/position-sync-diagnostic", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployeePositionSyncDiagnostic)
 
 				org.POST("/sync", middleware.RequirePermission("attendance_manage"), SyncOrgData)
+				org.POST("/sync/start", middleware.RequirePermission("attendance_manage"), StartOrgSyncData)
+				org.GET("/sync/:request_id", middleware.RequirePermission("attendance_manage"), GetOrgSyncResult)
 			}
 
 			attendance := authRequired.Group("/attendance")
@@ -294,6 +299,10 @@ func SetupRouter() *gin.Engine {
 				weekSchedule.POST("/sync/to-dingtalk", middleware.RequirePermission("attendance_manage"), SyncWeekToDingTalk)
 				weekSchedule.POST("/sync/from-dingtalk", middleware.RequirePermission("attendance_manage"), SyncWeekFromDingTalk)
 				weekSchedule.GET("/sync/logs", middleware.RequirePermission("attendance_manage"), GetWeekSyncLogs)
+				weekSchedule.POST("/push/personal", middleware.RequirePermission("attendance_manage"), PushPersonalWeekSchedule)
+				weekSchedule.GET("/group-targets", middleware.RequirePermission(service.WeekScheduleGroupPushPermission, "attendance_manage"), GetWeekScheduleGroupTargets)
+				weekSchedule.DELETE("/group-targets/:id", middleware.RequirePermission(service.WeekScheduleGroupPushPermission, "attendance_manage"), UnbindWeekScheduleGroupTarget)
+				weekSchedule.POST("/push/group", middleware.RequirePermission(service.WeekScheduleGroupPushPermission, "attendance_manage"), PushWeekScheduleToGroup)
 
 				weekSchedule.GET("/holidays", middleware.RequirePermission("attendance_manage"), GetHolidays)
 				weekSchedule.POST("/holidays", middleware.RequirePermission("attendance_manage"), CreateHoliday)

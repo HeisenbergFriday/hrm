@@ -262,8 +262,9 @@ test.describe('Attendance toolbox E2E', () => {
     await expect(page.getByText('考勤数据处理工具')).toBeVisible({ timeout: 30_000 })
     await uploadByLabel(page, '作息表', 'schedule.xlsx')
     await page.getByRole('tab', { name: /钉钉同步/ }).click()
-    await page.getByPlaceholder('开始日期').fill('2026-03-01')
-    await page.getByPlaceholder('结束日期').fill('2026-03-31')
+    const syncPanel = page.getByRole('tabpanel', { name: /sync 钉钉同步/ })
+    await syncPanel.getByPlaceholder('开始日期').fill('2026-03-01')
+    await syncPanel.getByPlaceholder('结束日期').fill('2026-03-31')
     await page.keyboard.press('Enter')
     await page.getByRole('button', { name: /一键同步并生成请假\/加班/ }).click()
 

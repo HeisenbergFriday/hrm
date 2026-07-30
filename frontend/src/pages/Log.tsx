@@ -4,9 +4,13 @@ import { HistoryOutlined, CalendarOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { auditAPI } from '../services/api'
 import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import { formatDateTime } from '../utils/format'
+
+dayjs.locale('zh-cn')
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -73,7 +77,12 @@ const Log: React.FC = () => {
             <Option value="删除">删除</Option>
             <Option value="同步">同步</Option>
           </Select>
-          <RangePicker onChange={handleDateChange} />
+          <RangePicker
+            onChange={handleDateChange}
+            placeholder={['开始日期', '结束日期']}
+            format="YYYY-MM-DD"
+            locale={datePickerZhCN}
+          />
           <Button type="primary" onClick={() => refetch()} icon={<CalendarOutlined />}>
             查询
           </Button>

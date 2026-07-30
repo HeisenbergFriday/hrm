@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"log"
@@ -55,6 +56,19 @@ func RequestDB(c *gin.Context) *gorm.DB {
 		return database.DB
 	}
 	return database.DB.WithContext(c.Request.Context())
+}
+
+// RebindRequestContext replaces the request context and refreshes the cached
+// request-scoped DB. Long-running server operations can use a context detached
+// from the client connection while preserving request metadata and tenant values.
+func RebindRequestContext(c *gin.Context, ctx context.Context) {
+	if c == nil || c.Request == nil || ctx == nil {
+		return
+	}
+	c.Request = c.Request.WithContext(ctx)
+	if database.DB != nil {
+		c.Set(requestDBKey, database.DB.WithContext(ctx))
+	}
 }
 
 func requestID(c *gin.Context) string {

@@ -19,6 +19,7 @@ import {
   Spin,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -39,6 +40,7 @@ const USERS_MAX_PAGES = 50 // 最多拉取 200*50=10000 人，覆盖全员选人
 type ScopeType = 'company' | 'department' | 'user'
 type WeekType = 'big' | 'small'
 type HolidayType = 'holiday' | 'workday'
+type PushTargetType = 'personal' | 'group'
 type CalendarCellState = 'work' | 'rest' | 'holiday' | 'workday' | 'saturday-work' | 'outside'
 
 interface UserOption {
@@ -104,6 +106,14 @@ interface SyncLogRecord {
   status: 'success' | 'failed' | 'partial' | string
   message: string
   created_at: string
+}
+
+interface WeekScheduleGroupTarget {
+  id: number
+  group_name: string
+  status: 'active' | 'unbound' | string
+  bound_by_user_name: string
+  bound_at: string
 }
 
 interface RuleFormValues {
@@ -443,44 +453,58 @@ async function renderMonthSchedulePng(section: MonthCalendarSection, title: stri
   })
 }
 
+export function buildUpcomingSaturdayNotice(
+  today: Dayjs,
+  saturday: Dayjs,
+  isWork: boolean,
+  weekLabel: string,
+): string[] {
+  const dayDiff = saturday.startOf('day').diff(today.startOf('day'), 'day')
+  let relativeLabel = '本周六'
+  if (dayDiff === 0) {
+    relativeLabel = '今天'
+  } else if (dayDiff === 1) {
+    relativeLabel = '明天'
+  } else if (today.day() === 0) {
+    relativeLabel = '下周六'
+  }
+
+  const statusLabel = isWork ? '需上班' : '休息'
+  const dateLabel = saturday.format('YYYY年M月D日')
+  const dateContext = relativeLabel.endsWith('周六') ? dateLabel : `${dateLabel}，周六`
+  const lines = [
+    `【${relativeLabel}${statusLabel}】`,
+    `${relativeLabel}（${dateContext}）${isWork ? '需上班，请提前安排。' : '休息，无需上班。'}`,
+  ]
+  if (weekLabel) {
+    lines.push(`${relativeLabel === '下周六' ? '下周' : '本周'}为${weekLabel}。`)
+  }
+  return lines
+}
+
 function buildSchedulePushContent(
   month: Dayjs,
   section: MonthCalendarSection | null,
 ): { title: string; content: string } {
   const title = `${month.format('YYYY年M月')}作息时间表`
-  const lines: string[] = [`${title}，请查收。`]
+  const lines: string[] = []
 
   const today = dayjs().startOf('day')
   if (section && today.isSame(month, 'month')) {
-    const tomorrow = today.add(1, 'day')
-    const todayRow = section.rows.find((row) =>
-      row.cells.some((cell) => cell.date === today.format('YYYY-MM-DD') && cell.inCurrentMonth),
+    const saturday = today.add((6 - today.day() + 7) % 7, 'day')
+    const saturdayRow = section.rows.find((row) =>
+      !saturday.isBefore(dayjs(row.week.week_start), 'day') &&
+      !saturday.isAfter(dayjs(row.week.week_end), 'day'),
     )
-    let weekLabel = ''
-    if (todayRow) {
-      weekLabel = todayRow.week.week_type === 'small' ? '小周' : '大周'
-    }
-
-    const tomorrowCell = section.rows
-      .flatMap((row) => row.cells)
-      .find((cell) => cell.date === tomorrow.format('YYYY-MM-DD') && cell.inCurrentMonth)
-
-    if (tomorrowCell) {
+    if (saturdayRow) {
+      const saturdayState = getDayState(saturdayRow.week, saturday).state
       const isWork =
-        tomorrowCell.state === 'work' ||
-        tomorrowCell.state === 'workday' ||
-        tomorrowCell.state === 'saturday-work'
-      const dateLabel = tomorrow.format('YYYY年M月D日')
-      // 贴近目标文案：「本周小周，明天（…）上班，请大家注意。」
-      if (weekLabel) {
-        lines.push(`本周${weekLabel}，明天（${dateLabel}）${isWork ? '上班' : '休息'}，请大家注意。`)
-      } else {
-        lines.push(`明天（${dateLabel}）${isWork ? '上班' : '休息'}，请大家注意。`)
-      }
-    } else if (weekLabel) {
-      lines.push(`本周${weekLabel}。`)
+        saturdayState === 'work' || saturdayState === 'workday' || saturdayState === 'saturday-work'
+      const weekLabel = saturdayRow.week.week_type === 'small' ? '小周' : '大周'
+      lines.push(...buildUpcomingSaturdayNotice(today, saturday, isWork, weekLabel))
     }
   }
+  lines.push(`${title}，请查收。`)
 
   return { title, content: lines.join('\n') }
 }
@@ -489,6 +513,8 @@ export default function WeekSchedule() {
   const queryClient = useQueryClient()
   const permissions = useAuthStore((state) => state.permissions)
   const canManageAttendance = permissions.includes('attendance_manage')
+  const canPushWeekScheduleGroup = canManageAttendance || permissions.includes('week_schedule_group_push')
+  const canPushWeekSchedule = canManageAttendance || canPushWeekScheduleGroup
   const [calendarScopeType, setCalendarScopeType] = useState<ScopeType>(canManageAttendance ? 'company' : 'user')
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('')
   const [selectedUserId, setSelectedUserId] = useState('')
@@ -501,7 +527,9 @@ export default function WeekSchedule() {
   const [holidayImportModalOpen, setHolidayImportModalOpen] = useState(false)
   const [shiftModalOpen, setShiftModalOpen] = useState(false)
   const [pushModalOpen, setPushModalOpen] = useState(false)
+  const [pushTargetType, setPushTargetType] = useState<PushTargetType>('personal')
   const [pushRecipientIds, setPushRecipientIds] = useState<string[]>([])
+  const [pushGroupTargetId, setPushGroupTargetId] = useState<number | undefined>()
   const [pushUserSearch, setPushUserSearch] = useState('')
   const [pushUserOptions, setPushUserOptions] = useState<UserOption[]>([])
   const [pushUserSearching, setPushUserSearching] = useState(false)
@@ -549,11 +577,19 @@ export default function WeekSchedule() {
     retry: false,
   })
 
+  const groupTargetsQuery = useQuery({
+    queryKey: ['week-schedule', 'group-targets'],
+    queryFn: () => weekScheduleAPI.getGroupTargets(),
+    enabled: pushModalOpen && canPushWeekScheduleGroup,
+    retry: false,
+  })
+
   const users = usersQuery.data ?? []
   const departments = unwrapData<{ departments: DepartmentOption[] }>(departmentsQuery.data, { departments: [] }).departments ?? []
   const shifts = getItems<ShiftOption>(shiftsQuery.data)
   const rules = getItems<WeekScheduleRule>(rulesQuery.data)
   const syncLogs = getItems<SyncLogRecord>(logsQuery.data)
+  const groupTargets = getItems<WeekScheduleGroupTarget>(groupTargetsQuery.data)
 
   const pushSelectOptions = useMemo(() => {
     const byID = new Map<string, UserOption>()
@@ -817,6 +853,20 @@ export default function WeekSchedule() {
     onError: (error) => message.error(getErrorMessage(error, '作息表推送失败')),
   })
 
+  const pushGroupMutation = useMutation({
+    mutationFn: (formData: FormData) => weekScheduleAPI.pushGroupSchedule(formData),
+    onSuccess: (response) => {
+      const result = unwrapData<{ status?: string; message?: string }>(response, {})
+      if (result.status === 'submitted') {
+        message.success('已提交')
+        setPushModalOpen(false)
+        return
+      }
+      message.warning(result.message || '钉钉受理状态待确认')
+    },
+    onError: (error) => message.error(getErrorMessage(error, '群聊推送提交失败')),
+  })
+
   const syncFromMutation = useMutation({
     mutationFn: () => weekScheduleAPI.syncFromDingtalk(),
     onSuccess: async (response) => {
@@ -916,7 +966,7 @@ export default function WeekSchedule() {
   }
 
   const openPushModal = () => {
-    if (!canManageAttendance) return
+    if (!canPushWeekSchedule) return
     if (!selectedMonth) {
       message.warning('请先选择月份')
       return
@@ -925,8 +975,10 @@ export default function WeekSchedule() {
       message.warning('当前月份暂无作息表数据，请先加载日历')
       return
     }
-    // 默认空选，禁止写死真实人名，避免误推钉钉消息
+    // 默认不选择任何员工或群聊，避免误推钉钉消息。
+    setPushTargetType(canManageAttendance ? 'personal' : 'group')
     setPushRecipientIds([])
+    setPushGroupTargetId(undefined)
     setPushModalOpen(true)
   }
 
@@ -935,8 +987,12 @@ export default function WeekSchedule() {
       message.warning('请先选择月份')
       return
     }
-    if (pushRecipientIds.length === 0) {
+    if (pushTargetType === 'personal' && pushRecipientIds.length === 0) {
       message.warning('请至少选择一位收件人')
+      return
+    }
+    if (pushTargetType === 'group' && !pushGroupTargetId) {
+      message.warning('请选择已绑定群聊')
       return
     }
     const section = filteredMonthSections[0]
@@ -947,6 +1003,31 @@ export default function WeekSchedule() {
 
     try {
       const { title, content } = buildSchedulePushContent(selectedMonth, section)
+      if (pushTargetType === 'group') {
+        const target = groupTargets.find((item) => item.id === pushGroupTargetId)
+        if (!target) {
+          message.warning('所选群聊已失效，请重新选择')
+          return
+        }
+        Modal.confirm({
+          title: '确认推送到群聊？',
+          content: `将 ${selectedMonth.format('YYYY年M月')} 作息表推送到“${target.group_name}”。钉钉受理后页面仅显示“已提交”。`,
+          okText: '确认推送',
+          cancelText: '返回检查',
+          async onOk() {
+            const blob = await renderMonthSchedulePng(section, title)
+            const formData = new FormData()
+            formData.append('image', blob, `${selectedMonth.format('YYYY-MM')}-schedule.png`)
+            formData.append('group_target_id', String(target.id))
+            formData.append('title', title)
+            formData.append('content', content)
+            formData.append('month', selectedMonth.format('YYYY-MM'))
+            await pushGroupMutation.mutateAsync(formData)
+          },
+        })
+        return
+      }
+
       const blob = await renderMonthSchedulePng(section, title)
       const formData = new FormData()
       formData.append('image', blob, `${selectedMonth.format('YYYY-MM')}-schedule.png`)
@@ -1232,16 +1313,21 @@ export default function WeekSchedule() {
                 <Button loading={syncFromMutation.isPending} onClick={() => syncFromMutation.mutate()}>
                   从钉钉拉取
                 </Button>
+              </>
+            )}
+            <Tooltip title={canPushWeekSchedule ? undefined : '你缺少作息表推送权限，需要联系管理员添加'}>
+              <span>
                 <Button
                   type="primary"
                   icon={<SyncOutlined />}
-                  loading={pushPersonalMutation.isPending}
+                  loading={pushPersonalMutation.isPending || pushGroupMutation.isPending}
                   onClick={openPushModal}
+                  disabled={!canPushWeekSchedule}
                 >
                   作息表推送
                 </Button>
-              </>
-            )}
+              </span>
+            </Tooltip>
             <Text type="secondary" className="ws-scope-hint">当前：{currentScopeName || '未选择'}</Text>
             <DatePicker
               picker="month"
@@ -1489,65 +1575,116 @@ export default function WeekSchedule() {
         okText="确认推送"
         cancelText="取消"
         onCancel={() => {
-          if (pushPersonalMutation.isPending) return
+          if (pushPersonalMutation.isPending || pushGroupMutation.isPending) return
           setPushModalOpen(false)
         }}
         onOk={handleConfirmPush}
-        confirmLoading={pushPersonalMutation.isPending}
+        confirmLoading={pushPersonalMutation.isPending || pushGroupMutation.isPending}
+        okButtonProps={{
+          disabled: pushTargetType === 'personal' ? pushRecipientIds.length === 0 : !pushGroupTargetId,
+        }}
         destroyOnClose
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <div>
+            <Text type="secondary">推送对象</Text>
+            <Segmented<PushTargetType>
+              block
+              style={{ marginTop: 8 }}
+              value={pushTargetType}
+              options={[
+                { label: '员工', value: 'personal', disabled: !canManageAttendance },
+                { label: '群聊', value: 'group', disabled: !canPushWeekScheduleGroup },
+              ]}
+              onChange={(value) => {
+                setPushTargetType(value)
+                setPushRecipientIds([])
+                setPushGroupTargetId(undefined)
+              }}
+            />
+          </div>
           <Alert
             type="info"
             showIcon
-            message={`将推送 ${selectedMonth?.format('YYYY年M月') || ''} 作息时间表图片与文字提醒到所选员工钉钉（不写入考勤排班）`}
+            message={pushTargetType === 'personal'
+              ? `将推送 ${selectedMonth?.format('YYYY年M月') || ''} 作息时间表图片与文字提醒到所选员工钉钉（不写入考勤排班）`
+              : `将提交 ${selectedMonth?.format('YYYY年M月') || ''} 作息时间表图片与文字到已绑定钉钉群聊`}
           />
           <div>
             <Text type="secondary">推送月份</Text>
             <div style={{ marginTop: 4, fontWeight: 600 }}>{selectedMonth?.format('YYYY年M月') || '-'}</div>
           </div>
-          <div>
-            <Text type="secondary">
-              收件人
-              {usersQuery.isFetching || pushUserSearching ? '（加载中…）' : `（${users.length} 人可选）`}
-            </Text>
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              placeholder={usersQuery.isLoading ? '正在加载员工列表…' : '搜索姓名 / 选择收件人'}
-              style={{ width: '100%', marginTop: 8 }}
-              value={pushRecipientIds}
-              onChange={(values) => setPushRecipientIds(values)}
-              onSearch={(value) => setPushUserSearch(value)}
-              filterOption={(input, option) => {
-                const label = String(option?.label ?? '')
-                const value = String(option?.value ?? '')
-                const q = input.trim().toLowerCase()
-                return label.toLowerCase().includes(q) || value.toLowerCase().includes(q)
-              }}
-              optionFilterProp="label"
-              options={pushSelectOptions}
-              maxTagCount="responsive"
-              listHeight={320}
-              virtual
-              notFoundContent={usersQuery.isLoading || pushUserSearching ? <Spin size="small" /> : '未找到匹配员工'}
-            />
-            <div style={{ marginTop: 8 }}>
-              <Space wrap size={8}>
-                <Button
-                  size="small"
-                  onClick={() => setPushRecipientIds(users.map((u) => u.user_id))}
-                  disabled={users.length === 0}
-                >
-                  全选当前列表
-                </Button>
-                <Button size="small" onClick={() => setPushRecipientIds([])}>
-                  清空
-                </Button>
-              </Space>
+          {pushTargetType === 'personal' ? (
+            <div>
+              <Text type="secondary">
+                收件人
+                {usersQuery.isFetching || pushUserSearching ? '（加载中…）' : `（${users.length} 人可选）`}
+              </Text>
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                placeholder={usersQuery.isLoading ? '正在加载员工列表…' : '搜索姓名 / 选择收件人'}
+                style={{ width: '100%', marginTop: 8 }}
+                value={pushRecipientIds}
+                onChange={(values) => setPushRecipientIds(values)}
+                onSearch={(value) => setPushUserSearch(value)}
+                filterOption={(input, option) => {
+                  const label = String(option?.label ?? '')
+                  const value = String(option?.value ?? '')
+                  const q = input.trim().toLowerCase()
+                  return label.toLowerCase().includes(q) || value.toLowerCase().includes(q)
+                }}
+                optionFilterProp="label"
+                options={pushSelectOptions}
+                maxTagCount="responsive"
+                listHeight={320}
+                virtual
+                notFoundContent={usersQuery.isLoading || pushUserSearching ? <Spin size="small" /> : '未找到匹配员工'}
+              />
+              <div style={{ marginTop: 8 }}>
+                <Space wrap size={8}>
+                  <Button
+                    size="small"
+                    onClick={() => setPushRecipientIds(users.map((u) => u.user_id))}
+                    disabled={users.length === 0}
+                  >
+                    全选当前列表
+                  </Button>
+                  <Button size="small" onClick={() => setPushRecipientIds([])}>
+                    清空
+                  </Button>
+                </Space>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div>
+              <Text type="secondary">已绑定群聊</Text>
+              <Select<number>
+                allowClear
+                showSearch
+                placeholder={groupTargetsQuery.isLoading ? '正在加载群聊…' : '请选择群聊'}
+                style={{ width: '100%', marginTop: 8 }}
+                value={pushGroupTargetId}
+                onChange={(value) => setPushGroupTargetId(value)}
+                optionFilterProp="label"
+                options={groupTargets.map((item) => ({ label: item.group_name, value: item.id }))}
+                notFoundContent={groupTargetsQuery.isLoading ? <Spin size="small" /> : '暂无已绑定群聊'}
+              />
+              {groupTargetsQuery.isError && (
+                <Alert style={{ marginTop: 8 }} type="error" showIcon message="群聊加载失败" description={getErrorMessage(groupTargetsQuery.error, '请稍后重试')} />
+              )}
+              {!groupTargetsQuery.isLoading && !groupTargetsQuery.isError && groupTargets.length === 0 && (
+                <Alert style={{ marginTop: 8 }} type="info" showIcon message="暂无已绑定群聊" description="请在目标钉钉群内 @机器人发送“绑定作息表”。" />
+              )}
+              {pushGroupTargetId && (
+                <div style={{ marginTop: 8 }}>
+                  <Text type="secondary">目标群聊：</Text>
+                  <Text strong>{groupTargets.find((item) => item.id === pushGroupTargetId)?.group_name || '-'}</Text>
+                </div>
+              )}
+            </div>
+          )}
           {selectedMonth && filteredMonthSections[0] && (
             <div>
               <Text type="secondary">文字预览</Text>

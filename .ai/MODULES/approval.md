@@ -56,7 +56,9 @@ update_when:
 - `page_size`
 - `status`
 - `template_id`
+- `category`（流程分类，白名单：`leave`/`overtime`/`expense`/`business_trip`/`outing`/`punch_fix`/`other`；仅在未传 `template_id` 时生效，直接按 `approvals.title LIKE '%关键字%'` 命中或排除过滤，因为库里 `extension->>'$.template_id'` 长期为空、模板同步也未必齐全，标题反而稳定含"请假/加班/补卡"等语义词；`other` 走排除法（不含任一已知分类关键字）；映射常量见 `internal/service/approval_category.go`）
 - `applicant_id`
+- `title`（标题模糊搜索，后端按 `title LIKE %关键词%` 过滤，前端审批实例页 300ms 防抖触发）
 - `start_date`
 - `end_date`
 

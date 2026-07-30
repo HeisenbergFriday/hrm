@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"strings"
+
 	"peopleops/internal/database"
 
 	"gorm.io/gorm"
@@ -53,7 +55,7 @@ func (r *SyncRepository) Upsert(status *database.SyncStatus) error {
 	status.OrgID = merged
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "org_id"}, {Name: "type"}},
-		DoUpdates: clause.AssignmentColumns([]string{"last_sync_time", "status", "message", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"last_sync_time", "status", "message", "request_id", "duration_ms", "error_code", "success_count", "fail_count", "details", "updated_at"}),
 	}).Create(status).Error
 }
 
@@ -68,6 +70,26 @@ func (r *SyncRepository) FindByOrgAndType(orgID, syncType string) (*database.Syn
 	}
 	var status database.SyncStatus
 	err = r.db.Where("org_id = ? AND type = ?", bound, syncType).First(&status).Error
+	if err != nil {
+		return nil, err
+	}
+	return &status, nil
+}
+
+func (r *SyncRepository) FindByOrgTypeAndRequestID(orgID, syncType, requestID string) (*database.SyncStatus, error) {
+	bound, err := r.requireOrgID()
+	if err != nil {
+		return nil, err
+	}
+	if orgID = normalizeOrgID(orgID); orgID != "" && orgID != bound {
+		return nil, ErrOrgMismatch
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var status database.SyncStatus
+	err = r.db.Where("org_id = ? AND type = ? AND request_id = ?", bound, syncType, requestID).First(&status).Error
 	if err != nil {
 		return nil, err
 	}

@@ -45,6 +45,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { attendanceAPI, departmentAPI, userAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -628,6 +629,9 @@ const Attendance: React.FC = () => {
           <RangePicker
             value={dateRange}
             allowClear={false}
+            placeholder={['开始日期', '结束日期']}
+            format="YYYY-MM-DD"
+            locale={datePickerZhCN}
             onChange={(dates) => {
               if (dates?.[0] && dates?.[1]) {
                 setDateRange([dates[0], dates[1]])

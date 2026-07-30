@@ -32,7 +32,7 @@ services:
       retries: 12
 
   peopleops-hr:
-    image: peopleops-hr:test
+    image: ${PEOPLEOPS_TEST_IMAGE:-peopleops-hr:test}
     container_name: peopleops-hr-test
     restart: unless-stopped
     depends_on:
@@ -46,3 +46,27 @@ services:
       - "18080:8080"
     volumes:
       - ./uploads:/app/uploads
+
+  # 钉钉 Stream 长连接：增量同步审批事件 + 群聊 @机器人绑定作息表。
+  # 与主服务共用同一镜像（内含 dingtalk_stream 二进制）和同一 env_file，
+  # 复用测试栈的 MySQL/Redis。该服务仅出站长连接，无需暴露端口。
+  dingtalk-stream:
+    image: ${PEOPLEOPS_TEST_IMAGE:-peopleops-hr:test}
+    container_name: peopleops-hr-test-dingtalk-stream
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ./deploy/peopleops.test.env
+    # stream 进程不监听 HTTP，不能用镜像默认的 :8080/health 健康检查；
+    # 改为检查主进程（PID 1）是否存活，配合 restart: unless-stopped 与日志监控。
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    command: ["/app/dingtalk_stream"]

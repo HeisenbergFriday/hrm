@@ -7,8 +7,12 @@ import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { formatDateTime } from '../utils/format'
 import { downloadAuthorizedFile } from '../utils/authFileUrl'
+
+dayjs.locale('zh-cn')
 
 const { Title } = Typography
 const { RangePicker } = DatePicker
@@ -236,6 +240,9 @@ const AttendanceExport: React.FC = () => {
             <RangePicker
               style={{ width: '100%' }}
               onChange={handleDateChange}
+              placeholder={['开始日期', '结束日期']}
+              format="YYYY-MM-DD"
+              locale={datePickerZhCN}
             />
           </div>
           <div style={{ marginBottom: 'var(--space-4)' }}>

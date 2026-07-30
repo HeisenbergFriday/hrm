@@ -111,6 +111,20 @@ curl http://127.0.0.1:18080/health
 http://服务器IP或域名:18080/
 ```
 
+## 钉钉 Stream 服务（dingtalk-stream）
+
+`docker-compose.test.yml` 已定义独立的 `dingtalk-stream` 服务，复用测试栈的 MySQL/Redis，启动命令指向镜像内的 `/app/dingtalk_stream`。启动整个测试栈时它会随主服务一起拉起：
+
+```bash
+docker compose -p peopleops-hr-test -f docker-compose.test.yml up -d
+docker compose -p peopleops-hr-test -f docker-compose.test.yml ps
+docker logs --tail=50 peopleops-hr-test-dingtalk-stream
+```
+
+- 通过 `DINGTALK_STREAM_ORG_ID`（默认 `default`）绑定组织；多组织需为每个组织各起一个容器并改用对应 AppKey/AppSecret。
+- 该服务仅出站长连接，不暴露端口；健康判断看日志是否出现 `钉钉 Stream 已连接`。
+- 测试服若要验证 **作息表群聊推送**，`DINGTALK_APP_HOME_URL` / `APP_BASE_URL` / `FRONTEND_BASE_URL` 必须是公网可达的 HTTPS（钉钉回拉临时图片要求），否则推送会返回 503。测试服无 HTTPS 证书时，群推送功能可联调但图片会被钉钉拒绝。
+
 ## 更新
 
 ### 日常完整更新（有代码改动）

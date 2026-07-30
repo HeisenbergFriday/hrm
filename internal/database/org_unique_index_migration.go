@@ -266,6 +266,16 @@ func lifecycleSpecsAsOrgSpecs() []OrgCompositeUniqueSpec {
 func phase4SupplementalOrgCompositeUniqueSpecs() []OrgCompositeUniqueSpec {
 	return []OrgCompositeUniqueSpec{
 		{
+			Table: "user_department_memberships", NewIndex: "idx_user_department_membership",
+			Columns:                 []string{"org_id", "user_id", "department_id"},
+			AllowDefaultOrgBackfill: false, SkipIfMissingTable: true,
+		},
+		{
+			Table: "week_schedule_group_targets", NewIndex: "idx_week_schedule_group_target_org_conversation",
+			Columns:                 []string{"org_id", "open_conversation_id"},
+			AllowDefaultOrgBackfill: false, SkipIfMissingTable: true,
+		},
+		{
 			Table: "users", NewIndex: "idx_users_org_dingtalk_user",
 			Columns:       []string{"org_id", "ding_talk_user_id"},
 			OldIndexes:    []string{"uni_users_ding_talk_user_id", "idx_users_ding_talk_user_id"},

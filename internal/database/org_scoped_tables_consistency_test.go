@@ -19,6 +19,7 @@ func TestOrganizationScopedTablesIncludeAllOrgIDModels(t *testing.T) {
 	// Models that carry OrgID and must be in the organization-scoped allowlist.
 	orgModels := []interface{}{
 		&User{},
+		&UserDepartmentMembership{},
 		&Department{},
 		&DepartmentChangeLog{},
 		&Attendance{},
@@ -45,6 +46,8 @@ func TestOrganizationScopedTablesIncludeAllOrgIDModels(t *testing.T) {
 		&WeekScheduleRule{},
 		&WeekScheduleOverride{},
 		&WeekScheduleSyncLog{},
+		&WeekScheduleGroupTarget{},
+		&WeekScheduleGroupPushLog{},
 		&StatutoryHoliday{},
 		&LeaveRuleConfig{},
 		&AnnualLeaveEligibility{},
@@ -129,7 +132,10 @@ func TestOrganizationScopedTablesIncludeAllOrgIDModels(t *testing.T) {
 	// Required tables from security checklist.
 	required := []string{
 		"organization_users",
+		"user_department_memberships",
 		"ding_talk_event_logs", // GORM default for DingTalkEventLog
+		"week_schedule_group_targets",
+		"week_schedule_group_push_logs",
 		"performance_import_batches",
 		"external_attendance_raw",
 		"external_attendance_approve_links",

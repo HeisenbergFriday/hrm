@@ -156,6 +156,13 @@ export const buildAttendanceToolboxWorkflowOptionFields = (
   return result
 }
 
+export const getPreviousCalendarMonthRange = (
+  reference: dayjs.Dayjs = dayjs(),
+): [dayjs.Dayjs, dayjs.Dayjs] => {
+  const previousMonth = reference.subtract(1, 'month')
+  return [previousMonth.startOf('month'), previousMonth.endOf('month')]
+}
+
 const MATERNITY_LEAVE_STORAGE_KEY = 'attendance-toolbox-maternity-leave-overrides'
 
 const loadMaternityLeaveOverrides = (): MaternityLeaveOverride[] => {
@@ -188,7 +195,7 @@ const modules: ModuleConfig[] = [
   {
     key: 'leave',
     title: '请假明细',
-    description: '上传请假系统导出表和作息表，生成请假明细表。',
+    description: '从钉钉拉取或上传请假系统导出表，并配合作息表生成请假明细表。',
     outputName: '请假明细表.xlsx',
     fileFields: [
       { name: 'leave_src', label: '请假系统导出表', required: true, templateId: 'leave_export' },
@@ -340,12 +347,18 @@ function getDownloadName(config: ModuleConfig, blob: Blob) {
   return config.outputName
 }
 
-async function resolveErrorMessage(error: unknown) {
+export async function resolveErrorMessage(error: unknown) {
   const status =
     axios.isAxiosError(error)
       ? error.response?.status
       : (error as { response?: { status?: number } } | null)?.response?.status
 
+  if (status === 504) {
+    return '网关等待钉钉响应超时，请稍后重试；若持续出现，请联系管理员检查代理超时配置'
+  }
+  if (status === 502 || status === 503) {
+    return '服务网关暂时不可用，请稍后重试'
+  }
   if (status === 410) {
     return '结果已过期，请重新计算'
   }
@@ -360,6 +373,9 @@ async function resolveErrorMessage(error: unknown) {
   }
 
   if (axios.isAxiosError(error)) {
+    if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+      return '请求等待超时，请稍后重试；若持续出现，请联系管理员检查长任务超时配置'
+    }
     const data = error.response?.data
     if (data instanceof Blob) {
       const text = await data.text()
@@ -367,7 +383,10 @@ async function resolveErrorMessage(error: unknown) {
         const parsed = JSON.parse(text)
         return parsed?.message || parsed?.error || '计算失败'
       } catch {
-        return text || '计算失败'
+        if (/<!doctype\s+html|<html[\s>]/i.test(text)) {
+          return '服务网关返回异常，请稍后重试'
+        }
+        return text.length > 500 ? `${text.slice(0, 500)}…` : (text || '计算失败')
       }
     }
     if (typeof data?.message === 'string') return data.message
@@ -490,9 +509,12 @@ const heroBadges = [
 ]
 
 const AUTO_SYNC_UPLOADS = {
+  leave: ['leave_src'],
   roster: ['overtime_roster', 'final_active'],
   transfer: ['final_transfer'],
 } as const
+
+const LEAVE_SYNC_PADDING_DAYS = 31
 
 // ── Main component ──
 
@@ -536,12 +558,18 @@ const AttendanceToolbox: React.FC = () => {
   const [templateMeta, setTemplateMeta] = useState<TemplateMetaItem[]>([])
   const [downloadingTemplate, setDownloadingTemplate] = useState<string | null>(null)
   const [requirementView, setRequirementView] = useState<Record<string, string>>({})
+  const [leaveSourceSync, setLeaveSourceSync] = useState<SyncState>({ loading: false })
+  const [leaveSourceDateRange, setLeaveSourceDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>(
+    getPreviousCalendarMonthRange,
+  )
   const [rosterSync, setRosterSync] = useState<SyncState>({ loading: false })
   const [transferSync, setTransferSync] = useState<SyncState>({ loading: false })
   const autoSyncStartedRef = useRef(false)
 
   // DingTalk sync specific state
-  const [dingtalkDateRange, setDingtalkDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
+  const [dingtalkDateRange, setDingtalkDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(
+    getPreviousCalendarMonthRange,
+  )
   const [dingtalkFlowKeys, setDingtalkFlowKeys] = useState<string[]>(['leave', 'overtime', 'attendance_correction', 'position_transfer'])
   const [dingtalkUnlimited, setDingtalkUnlimited] = useState(true)
   const [dingtalkMaxInstances, setDingtalkMaxInstances] = useState<number>(100)
@@ -640,6 +668,35 @@ const AttendanceToolbox: React.FC = () => {
       return next
     })
   }, [])
+
+  const syncLeaveSourceFromDingtalk = useCallback(async () => {
+    if (runningModule) {
+      messageApi.warning('当前有任务正在执行，请稍候')
+      return
+    }
+
+    setLeaveSourceSync({ loading: true })
+    try {
+      const blob = await attendanceToolboxAPI.runDingtalkSync({
+        start_date: leaveSourceDateRange[0].format('YYYY-MM-DD'),
+        end_date: leaveSourceDateRange[1].format('YYYY-MM-DD'),
+        flow_keys: ['leave'],
+        padding_days: LEAVE_SYNC_PADDING_DAYS,
+      }) as unknown as Blob
+
+      if (blob.type === 'application/zip') {
+        throw new Error('请假数据拉取返回了多个文件，请稍后重试或改用手动上传')
+      }
+
+      applySyncedFile([...AUTO_SYNC_UPLOADS.leave], '请假系统导出_钉钉同步.xlsx', blob)
+      setLeaveSourceSync({ loading: false, lastSyncAt: dayjs().format('YYYY-MM-DD HH:mm') })
+      messageApi.success('请假数据拉取完成，已自动回填到请假系统导出表')
+    } catch (error) {
+      const errorMessage = await resolveErrorMessage(error)
+      setLeaveSourceSync({ loading: false, error: errorMessage })
+      messageApi.error(`请假数据拉取失败：${errorMessage}`)
+    }
+  }, [applySyncedFile, leaveSourceDateRange, runningModule])
 
   const syncRosterFromDingtalk = useCallback(async (mode: SyncMode = 'manual') => {
     setRosterSync({ loading: true })
@@ -1621,6 +1678,65 @@ const AttendanceToolbox: React.FC = () => {
           />
         )}
 
+        {config.key === 'leave' && (
+          <Card size="small" title="钉钉请假数据" style={{ borderRadius: 'var(--radius-lg)' }}>
+            <Row gutter={[16, 12]} align="middle">
+              <Col xs={24} md={12}>
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  <Text strong>请假日期范围</Text>
+                  <RangePicker
+                    style={{ width: '100%' }}
+                    value={leaveSourceDateRange as RangePickerProps['value']}
+                    onChange={(dates) => {
+                      if (dates?.[0] && dates[1]) {
+                        setLeaveSourceDateRange([dates[0], dates[1]])
+                      }
+                    }}
+                    allowClear={false}
+                    placeholder={['开始日期', '结束日期']}
+                    aria-label="钉钉请假拉取日期范围"
+                  />
+                </Space>
+              </Col>
+              <Col xs={24} md={12}>
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  <Tooltip
+                    title={!canDingtalkSync
+                      ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加'
+                      : undefined}
+                  >
+                    <span style={{ display: 'inline-block' }}>
+                      <Button
+                        type="primary"
+                        icon={<SyncOutlined />}
+                        aria-label="从钉钉拉取请假表"
+                        loading={leaveSourceSync.loading}
+                        disabled={!canDingtalkSync || !!runningModule}
+                        onClick={() => void syncLeaveSourceFromDingtalk()}
+                      >
+                        从钉钉拉取请假表
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    按请假审批流程直接生成源表并回填；会自动扩展前后 {LEAVE_SYNC_PADDING_DAYS} 天查询，手动上传仍可作为兜底。
+                  </Text>
+                  {leaveSourceSync.lastSyncAt && (
+                    <Text type="success" style={{ fontSize: 12 }}>
+                      上次拉取：{leaveSourceSync.lastSyncAt}
+                    </Text>
+                  )}
+                  {leaveSourceSync.error && (
+                    <Text type="danger" style={{ fontSize: 12 }}>
+                      拉取失败：{leaveSourceSync.error}
+                    </Text>
+                  )}
+                </Space>
+              </Col>
+            </Row>
+          </Card>
+        )}
+
         {requiredFields.length > 0 && (
           <>
             <Title level={5} style={{ margin: 0 }}>
@@ -1939,6 +2055,7 @@ const AttendanceToolbox: React.FC = () => {
                   value={dingtalkDateRange as RangePickerProps['value']}
                   onChange={(dates) => setDingtalkDateRange(dates as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null)}
                   placeholder={['开始日期', '结束日期']}
+                  aria-label="钉钉同步日期范围"
                 />
               </Space>
             </Col>

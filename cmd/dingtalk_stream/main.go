@@ -11,8 +11,10 @@ import (
 
 	"peopleops/internal/config"
 	"peopleops/internal/database"
+	"peopleops/internal/dingtalk"
 	"peopleops/internal/service"
 
+	"github.com/open-dingtalk/dingtalk-stream-sdk-go/chatbot"
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/client"
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/logger"
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/payload"
@@ -24,31 +26,27 @@ func main() {
 		log.Printf("加载配置警告: %v", err)
 	}
 
-	clientID := strings.TrimSpace(os.Getenv("DINGTALK_APP_KEY"))
-	clientSecret := strings.TrimSpace(os.Getenv("DINGTALK_APP_SECRET"))
-	if clientID == "" || clientSecret == "" {
-		log.Fatal("缺少 DINGTALK_APP_KEY 或 DINGTALK_APP_SECRET")
-	}
-
 	db, err := openStreamDB()
 	if err != nil {
 		log.Fatalf("初始化数据库失败: %v", err)
 	}
 
-	orgID, err := resolveStreamOrgID(db, clientID)
+	connectionConfig, err := resolveStreamConnectionConfig(db)
 	if err != nil {
-		log.Fatalf("解析 Stream 所属组织失败: %v", err)
+		log.Fatalf("解析 Stream 连接配置失败: %v", err)
 	}
+	orgID := connectionConfig.OrgID
 
 	streamService := service.NewDingTalkStreamService(db, orgID).
 		WithLogPayload(truthyEnv("DINGTALK_STREAM_LOG_PAYLOAD"))
+	groupService := service.NewWeekScheduleGroupServiceWithOrgID(db, orgID)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	logger.SetLogger(streamSDKLogger{})
 	options := []client.ClientOption{
-		client.WithAppCredential(client.NewAppCredentialConfig(clientID, clientSecret)),
+		client.WithAppCredential(client.NewAppCredentialConfig(connectionConfig.ClientID, connectionConfig.ClientSecret)),
 		client.WithAutoReconnect(true),
 	}
 	if proxy := strings.TrimSpace(os.Getenv("DINGTALK_STREAM_PROXY")); proxy != "" {
@@ -59,6 +57,29 @@ func main() {
 	streamClient.RegisterAllEventRouter(func(ctx context.Context, dataFrame *payload.DataFrame) (*payload.DataFrameResponse, error) {
 		return streamService.HandleDataFrame(ctx, dataFrame)
 	})
+	streamClient.RegisterChatBotCallbackRouter(func(ctx context.Context, data *chatbot.BotCallbackDataModel) ([]byte, error) {
+		if data != nil {
+			log.Printf(
+				"收到钉钉机器人回调: org_id=%s conversation_type=%s msg_type=%s at_robot=%t command_match=%t",
+				orgID,
+				strings.TrimSpace(data.ConversationType),
+				strings.TrimSpace(data.Msgtype),
+				data.IsInAtList,
+				strings.TrimSpace(data.Text.Content) == "绑定作息表",
+			)
+		}
+		result, bindErr := groupService.HandleChatbotMessage(data)
+		if bindErr != nil {
+			log.Printf("钉钉群聊作息表绑定处理失败: org_id=%s err=%s", orgID, dingtalk.SafeErrorSummary(bindErr))
+		}
+		if result.Handled && strings.TrimSpace(result.Reply) != "" && data != nil && strings.TrimSpace(data.SessionWebhook) != "" {
+			if replyErr := chatbot.NewChatbotReplier().SimpleReplyText(ctx, data.SessionWebhook, []byte(result.Reply)); replyErr != nil {
+				// SessionWebhook contains a credential-like token; never include it or the raw error in logs.
+				log.Printf("钉钉群聊作息表绑定结果回复失败: org_id=%s", orgID)
+			}
+		}
+		return []byte(""), nil
+	})
 
 	log.Printf("正在连接钉钉 Stream，org_id=%s，等待建立长连接...", orgID)
 	if err := streamClient.Start(ctx); err != nil {
@@ -66,7 +87,7 @@ func main() {
 	}
 	defer streamClient.Close()
 
-	log.Printf("钉钉 Stream 已连接。审批事件将增量同步到 approvals 表。")
+	log.Printf("钉钉 Stream 已连接。审批事件将增量同步，群聊可通过 @机器人发送“绑定作息表”完成绑定。")
 	<-ctx.Done()
 	log.Printf("收到退出信号，正在关闭钉钉 Stream 连接")
 }
@@ -90,6 +111,12 @@ type gormStreamOrgSource struct {
 	db *gorm.DB
 }
 
+type streamConnectionConfig struct {
+	OrgID        string
+	ClientID     string
+	ClientSecret string
+}
+
 func (s gormStreamOrgSource) GetActiveOrg(orgID string) (*database.Organization, error) {
 	var org database.Organization
 	err := s.db.Where("org_id = ? AND status = ? AND deleted_at IS NULL", orgID, "active").First(&org).Error
@@ -108,6 +135,64 @@ func (s gormStreamOrgSource) ListActiveByAppKey(appKey string) ([]database.Organ
 		Where(&database.Organization{DingTalkAppKey: appKey}).
 		Find(&orgs).Error
 	return orgs, err
+}
+
+func resolveStreamConnectionConfig(db *gorm.DB) (streamConnectionConfig, error) {
+	if db == nil {
+		return streamConnectionConfig{}, fmt.Errorf("database is required to resolve stream connection config")
+	}
+	return resolveStreamConnectionConfigWithSource(
+		gormStreamOrgSource{db: db},
+		strings.TrimSpace(os.Getenv("DINGTALK_STREAM_ORG_ID")),
+		strings.TrimSpace(os.Getenv("DINGTALK_APP_KEY")),
+		strings.TrimSpace(os.Getenv("DINGTALK_APP_SECRET")),
+	)
+}
+
+// resolveStreamConnectionConfigWithSource 保证组织与 Stream 凭据来自同一配置源：
+// 1) 显式指定组织时，直接使用该 active 组织持久化的 AppKey/Secret；
+// 2) 未指定组织时，继续使用全局环境凭据，并要求 AppKey 唯一匹配 active 组织；
+// 3) 任一必要配置缺失都 fail-closed，禁止静默回退 default 或混用其他组织凭据。
+func resolveStreamConnectionConfigWithSource(
+	src streamOrgSource,
+	explicitOrg string,
+	envClientID string,
+	envClientSecret string,
+) (streamConnectionConfig, error) {
+	if src == nil {
+		return streamConnectionConfig{}, fmt.Errorf("organization source is required")
+	}
+
+	if explicit := strings.TrimSpace(explicitOrg); explicit != "" {
+		orgID := database.NormalizeOrganizationID(explicit)
+		org, err := src.GetActiveOrg(orgID)
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return streamConnectionConfig{}, fmt.Errorf("organization %s not found or inactive", orgID)
+			}
+			return streamConnectionConfig{}, err
+		}
+		clientID := strings.TrimSpace(org.DingTalkAppKey)
+		clientSecret := strings.TrimSpace(org.DingTalkSecret)
+		if clientID == "" {
+			return streamConnectionConfig{}, fmt.Errorf("organization %s has empty dingtalk app key", orgID)
+		}
+		if clientSecret == "" {
+			return streamConnectionConfig{}, fmt.Errorf("organization %s has empty dingtalk secret", orgID)
+		}
+		return streamConnectionConfig{OrgID: orgID, ClientID: clientID, ClientSecret: clientSecret}, nil
+	}
+
+	clientID := strings.TrimSpace(envClientID)
+	clientSecret := strings.TrimSpace(envClientSecret)
+	if clientID == "" || clientSecret == "" {
+		return streamConnectionConfig{}, fmt.Errorf("DINGTALK_APP_KEY and DINGTALK_APP_SECRET are required when DINGTALK_STREAM_ORG_ID is empty")
+	}
+	orgID, err := resolveStreamOrgIDWithSource(src, "", clientID)
+	if err != nil {
+		return streamConnectionConfig{}, err
+	}
+	return streamConnectionConfig{OrgID: orgID, ClientID: clientID, ClientSecret: clientSecret}, nil
 }
 
 func resolveStreamOrgID(db *gorm.DB, clientID string) (string, error) {

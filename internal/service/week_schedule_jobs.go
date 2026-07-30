@@ -95,12 +95,7 @@ func (s *WeekScheduleJobScheduler) sendFridayReminderForOrg(orgID string, userID
 
 	dateLabel := fmt.Sprintf("%d年%d月%d日", tomorrow.Year(), int(tomorrow.Month()), tomorrow.Day())
 	title := "周末作息提醒"
-	// Friday tip focuses on whether tomorrow (Saturday) is workday.
-	workWord := "休息"
-	if satWork {
-		workWord = "上班"
-	}
-	content := fmt.Sprintf("本周%s，明天（%s，周六）%s，请大家注意。", weekLabel, dateLabel, workWord)
+	content := buildFridaySaturdayReminderContent(weekLabel, dateLabel, satWork)
 
 	// Reuse personal push pipeline but text-only: empty image not allowed, so send text directly via same recipient resolution.
 	result, err := svc.SendPersonalTextNotice(userIDs, title, content)
@@ -110,6 +105,16 @@ func (s *WeekScheduleJobScheduler) sendFridayReminderForOrg(orgID string, userID
 	log.Printf("[WeekScheduleJobs] org=%s friday reminder status=%s success=%d failed=%d skipped=%d msg=%s",
 		orgID, result.Status, result.SuccessCount, result.FailedCount, result.SkippedCount, result.Message)
 	return nil
+}
+
+func buildFridaySaturdayReminderContent(weekLabel, dateLabel string, saturdayWork bool) string {
+	statusLabel := "休息"
+	detail := "休息，无需上班。"
+	if saturdayWork {
+		statusLabel = "需上班"
+		detail = "需上班，请提前安排。"
+	}
+	return fmt.Sprintf("【明天%s】\n明天（%s，周六）%s\n本周为%s。", statusLabel, dateLabel, detail, weekLabel)
 }
 
 func resolveTomorrowSaturdayTip(weeks []WeekInfo, tomorrow time.Time) (weekLabel string, saturdayWork bool, ok bool) {

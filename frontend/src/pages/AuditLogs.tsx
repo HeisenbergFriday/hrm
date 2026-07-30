@@ -4,9 +4,13 @@ import { HistoryOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/ico
 import { useQuery } from '@tanstack/react-query'
 import { auditAPI, userAPI } from '../services/api'
 import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import { formatDateTime } from '../utils/format'
+
+dayjs.locale('zh-cn')
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -154,7 +158,12 @@ const AuditLogs: React.FC = () => {
     >
       <PageCard>
         <div style={{ marginBottom: 'var(--space-4)', display: 'flex', gap: 'var(--space-4)', alignItems: 'center', flexWrap: 'wrap' }}>
-          <RangePicker onChange={setDateRange} />
+          <RangePicker
+            onChange={setDateRange}
+            placeholder={['开始日期', '结束日期']}
+            format="YYYY-MM-DD"
+            locale={datePickerZhCN}
+          />
           <Input
             placeholder="搜索操作"
             style={{ width: 200 }}

@@ -1,13 +1,14 @@
 import React, { useState } from 'react'
-import { Typography, Button, Spin, Empty, Alert, Row, Col, Tooltip, Modal, message } from 'antd'
+import { Typography, Button, Spin, Empty, Alert, Row, Col, Tooltip } from 'antd'
 import { SettingOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
-import { orgAPI, syncAPI } from '../services/api'
+import { syncAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import { formatDateTime } from '../utils/format'
 import {
   canSyncOrgData,
+  confirmOrgSync,
   missingOrgSyncPermissionTip,
 } from '../utils/orgSyncAction'
 
@@ -21,30 +22,20 @@ const Setting: React.FC = () => {
     queryKey: ['syncStatus'],
     queryFn: async () => {
       const res = await syncAPI.getSyncStatus()
-      return res.data?.data?.status || res.data?.data
+      return res.data.status
     },
   })
 
   // 多租户：普通设置页只能同步当前登录组织，跨组织同步须走受控运维入口。
   const handleSyncCurrentOrg = () => {
     if (!canSync) return
-    Modal.confirm({
+    confirmOrgSync({
       title: '同步当前组织花名册',
       content: '将从钉钉重新拉取当前登录组织的部门与员工数据并写入本系统，可能耗时较长。确认开始同步？',
-      okText: '确认同步',
-      cancelText: '取消',
-      onOk: async () => {
-        setSyncing(true)
-        try {
-          await orgAPI.syncOrg()
-          message.success('当前组织花名册同步成功')
-          await refetchSyncStatus()
-        } catch {
-          message.error('当前组织花名册同步失败')
-          return Promise.reject(new Error('sync failed'))
-        } finally {
-          setSyncing(false)
-        }
+      onStart: () => setSyncing(true),
+      onSettled: () => setSyncing(false),
+      onCompleted: async () => {
+        await refetchSyncStatus()
       },
     })
   }

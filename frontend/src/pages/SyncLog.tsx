@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Button, message, Spin, DatePicker, Tooltip } from 'antd'
+import { Table, Button, message, Spin, DatePicker, Tooltip, Typography } from 'antd'
 import { SyncOutlined, ReloadOutlined } from '@ant-design/icons'
-import { syncAPI } from '../services/api'
+import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
+import { syncAPI, type OrgSyncStatusRecord } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
@@ -12,12 +15,42 @@ import {
   missingOrgSyncPermissionTip,
 } from '../utils/orgSyncAction'
 
+dayjs.locale('zh-cn')
+
 const { RangePicker } = DatePicker
+const { Text } = Typography
+
+type SyncLogRow = OrgSyncStatusRecord & {
+  id: string
+  type: 'departments' | 'employees'
+}
+
+const syncStatusLabel = (status: OrgSyncStatusRecord['status']) => {
+  switch (status) {
+    case 'success':
+      return <StatusTag color="success">成功</StatusTag>
+    case 'partial_failed':
+      return <StatusTag color="warning">部分成功</StatusTag>
+    case 'failed':
+      return <StatusTag color="error">失败</StatusTag>
+    case 'skipped':
+      return <StatusTag color="default">已跳过</StatusTag>
+    default:
+      return <StatusTag color="default">未同步</StatusTag>
+  }
+}
+
+const formatDuration = (durationMS?: number) => {
+  if (durationMS === undefined || durationMS < 0) return '未知'
+  if (durationMS < 1000) return `${durationMS} 毫秒`
+  return `${(durationMS / 1000).toFixed(2)} 秒`
+}
 
 const SyncLog: React.FC = () => {
-  const [logs, setLogs] = useState<any[]>([])
+  const [logs, setLogs] = useState<SyncLogRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [syncStatus, setSyncStatus] = useState<any>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncStatus, setSyncStatus] = useState<Record<string, OrgSyncStatusRecord> | null>(null)
 
   useEffect(() => {
     fetchSyncStatus()
@@ -41,27 +74,21 @@ const SyncLog: React.FC = () => {
       const status = response.data.status
       
       // 转换为日志格式
-      const generatedLogs = []
+      const generatedLogs: SyncLogRow[] = []
       
       if (status.departments) {
         generatedLogs.push({
-          id: 1,
+          id: 'departments',
           type: 'departments',
-          status: status.departments.status,
-          count: 0, // 从消息中提取数量
-          sync_time: status.departments.last_sync_time,
-          duration: '未知',
+          ...status.departments,
         })
       }
       
       if (status.users) {
         generatedLogs.push({
-          id: 2,
+          id: 'employees',
           type: 'employees',
-          status: status.users.status,
-          count: 0, // 从消息中提取数量
-          sync_time: status.users.last_sync_time,
-          duration: '未知',
+          ...status.users,
         })
       }
       
@@ -78,9 +105,9 @@ const SyncLog: React.FC = () => {
   const handleSync = () => {
     if (!canSync) return
     confirmOrgSync({
-      successMessage: '同步成功',
-      errorMessage: '同步失败',
-      onSuccess: async () => {
+      onStart: () => setSyncing(true),
+      onSettled: () => setSyncing(false),
+      onCompleted: async () => {
         setLoading(true)
         try {
           await fetchSyncStatus()
@@ -105,29 +132,43 @@ const SyncLog: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string) => {
-        return status === 'success' ? (
-          <StatusTag color="success">成功</StatusTag>
-        ) : (
-          <StatusTag color="error">失败</StatusTag>
-        )
-      },
+      render: (status: OrgSyncStatusRecord['status']) => syncStatusLabel(status),
     },
     {
       title: '同步数量',
-      dataIndex: 'count',
-      key: 'count',
+      dataIndex: 'success_count',
+      key: 'success_count',
+      render: (count?: number) => count ?? 0,
     },
     {
       title: '同步时间',
-      dataIndex: 'sync_time',
-      key: 'sync_time',
-      render: (syncTime: string) => formatDateTime(syncTime),
+      dataIndex: 'last_sync_time',
+      key: 'last_sync_time',
+      render: (syncTime: string | null) => syncTime ? formatDateTime(syncTime) : '-',
     },
     {
       title: '耗时',
-      dataIndex: 'duration',
-      key: 'duration',
+      dataIndex: 'duration_ms',
+      key: 'duration_ms',
+      render: (durationMS?: number) => formatDuration(durationMS),
+    },
+    {
+      title: '安全原因',
+      dataIndex: 'message',
+      key: 'message',
+      render: (reason?: string) => reason || '-',
+    },
+    {
+      title: '错误码',
+      dataIndex: 'error_code',
+      key: 'error_code',
+      render: (errorCode?: string) => errorCode ? <Text code>{errorCode}</Text> : '-',
+    },
+    {
+      title: '请求编号',
+      dataIndex: 'request_id',
+      key: 'request_id',
+      render: (requestID?: string) => requestID ? <Text code copyable>{requestID}</Text> : '-',
     },
   ]
 
@@ -141,7 +182,7 @@ const SyncLog: React.FC = () => {
             type="primary"
             icon={<SyncOutlined />}
             onClick={handleSync}
-            loading={loading}
+            loading={loading || syncing}
             disabled={!canSync}
           >
             手动同步
@@ -155,18 +196,23 @@ const SyncLog: React.FC = () => {
           {syncStatus && (
             <div style={{ display: 'flex', gap: 'var(--space-6)', marginTop: 'var(--space-2)' }}>
               <div>
-                <p>部门同步状态: {syncStatus.departments.status === 'success' ? '成功' : syncStatus.departments.status}</p>
-                <p>最后同步时间: {formatDateTime(syncStatus.departments.last_sync_time)}</p>
+                <p>部门同步状态: {syncStatusLabel(syncStatus.departments.status)}</p>
+                <p>最后同步时间: {syncStatus.departments.last_sync_time ? formatDateTime(syncStatus.departments.last_sync_time) : '-'}</p>
               </div>
               <div>
-                <p>员工同步状态: {syncStatus.users.status === 'success' ? '成功' : syncStatus.users.status}</p>
-                <p>最后同步时间: {formatDateTime(syncStatus.users.last_sync_time)}</p>
+                <p>员工同步状态: {syncStatusLabel(syncStatus.users.status)}</p>
+                <p>最后同步时间: {syncStatus.users.last_sync_time ? formatDateTime(syncStatus.users.last_sync_time) : '-'}</p>
               </div>
             </div>
           )}
         </div>
         <div style={{ marginBottom: 'var(--space-4)', display: 'flex', gap: 'var(--space-4)', alignItems: 'center' }}>
-          <RangePicker style={{ width: 300 }} />
+          <RangePicker
+            style={{ width: 300 }}
+            placeholder={['开始日期', '结束日期']}
+            format="YYYY-MM-DD"
+            locale={datePickerZhCN}
+          />
           <Button 
             icon={<ReloadOutlined />} 
             onClick={fetchSyncLogs}

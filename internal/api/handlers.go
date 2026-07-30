@@ -29,11 +29,13 @@ import (
 	"peopleops/internal/repository"
 	"peopleops/internal/requestmeta"
 	"peopleops/internal/service"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -46,6 +48,55 @@ var (
 	dingtalkStates   = make(map[string]loginState)
 	dingtalkStatesMu sync.Mutex
 	dingtalkStateTTL = 5 * time.Minute
+)
+
+// 组织同步进程内并发锁：同一组织的用户、部门和全量同步共享同一门闩。
+// 该锁只适用于单实例部署；多实例部署需要后续引入分布式锁或任务队列。
+var orgSyncLocks sync.Map // orgID -> *sync.Mutex
+
+type orgSyncStatusUpdate struct {
+	SyncType     string
+	Status       string
+	Message      string
+	RequestID    string
+	DurationMS   int64
+	ErrorCode    string
+	SuccessCount int
+	FailCount    int
+	Details      map[string]interface{}
+}
+
+// 测试缝隙：可替换的钉钉同步函数，避免测试时真实调用钉钉 API
+var (
+	syncDepartmentsForOrg     = dingtalk.SyncDepartmentsForOrg
+	syncUsersForOrg           = dingtalk.SyncUsersForOrg
+	syncUsersWithDeptsForOrg  = dingtalk.SyncUsersWithDeptsForOrg
+	persistOrgSyncDepartments = func(c *gin.Context, orgID string, depts []dingtalk.DeptInfo) (service.OrgDepartmentSyncResult, error) {
+		orgService := service.NewOrgService(middleware.RequestDB(c))
+		return orgService.SyncDepartmentsWithChangeLog(orgID, dingtalkDepartmentsToOrgSyncItems(orgID, depts), "dingtalk_sync")
+	}
+	writeOrgSyncStatusForRequest = func(c *gin.Context, orgID string, update orgSyncStatusUpdate) error {
+		update.Message = sanitizeSyncLogText(update.Message)
+		update.RequestID = sanitizeSyncLogText(update.RequestID)
+		update.ErrorCode = sanitizeSyncLogText(update.ErrorCode)
+		err := service.NewSyncService(middleware.RequestDB(c)).UpdateSyncStatusDetails(&database.SyncStatus{
+			OrgID:        orgID,
+			Type:         update.SyncType,
+			LastSyncTime: time.Now(),
+			Status:       update.Status,
+			Message:      update.Message,
+			RequestID:    update.RequestID,
+			DurationMS:   update.DurationMS,
+			ErrorCode:    update.ErrorCode,
+			SuccessCount: update.SuccessCount,
+			FailCount:    update.FailCount,
+			Details:      update.Details,
+		})
+		if err != nil {
+			log.Printf("[sync-status] type=%s status=%s result=failed error_type=%T", update.SyncType, update.Status, err)
+		}
+		return err
+	}
 )
 
 var (
@@ -67,7 +118,7 @@ func updateSyncStatus(syncService *service.SyncService, orgID, syncType, status,
 		return
 	}
 	if err := syncService.UpdateSyncStatus(orgID, syncType, status, message); err != nil {
-		log.Printf("[sync-status] update %s=%s failed: %v", syncType, status, err)
+		log.Printf("[sync-status] type=%s status=%s result=failed error_type=%T", syncType, status, err)
 	}
 }
 
@@ -672,9 +723,20 @@ func applyDingTalkProfileFields(profile *database.EmployeeProfile, user dingtalk
 	if user.PlannedRegularDate != "" {
 		profile.PlannedRegularDate = user.PlannedRegularDate
 	}
+	if user.ProbationEndDate != "" {
+		profile.ProbationEndDate = user.ProbationEndDate
+	}
 	if user.ActualRegularDate != "" {
 		profile.ActualRegularDate = user.ActualRegularDate
-		profile.ProbationEndDate = user.ActualRegularDate
+	}
+	if user.EmploymentType != "" {
+		profile.EmploymentType = user.EmploymentType
+	}
+	if user.JobLevel != "" {
+		profile.JobLevel = user.JobLevel
+	}
+	if user.JobFamily != "" {
+		profile.JobFamily = user.JobFamily
 	}
 }
 
@@ -908,6 +970,7 @@ func dingtalkDepartmentsToOrgSyncItems(orgID string, depts []dingtalk.DeptInfo) 
 			DingTalkDepartmentID: rawDepartmentID,
 			Name:                 d.Name,
 			ParentID:             scopedDingTalkID(orgID, rawParentID),
+			DingTalkParentID:     rawParentID,
 			HeadUserIDs:          headUserIDs,
 			Extension:            d.Extension,
 		})
@@ -1336,7 +1399,7 @@ func newLocalUserFromDingTalk(orgID string, u dingtalk.UserInfo, deptID, status 
 		DingTalkUserID: strings.TrimSpace(u.UserID),
 		Name:           u.Name,
 		Email:          u.Email,
-		Mobile:         u.Mobile,
+		Mobile:         normalizeDingTalkMobile(u.Mobile),
 		DepartmentID:   scopedDingTalkID(orgID, deptID),
 		Position:       u.Position,
 		Avatar:         u.Avatar,
@@ -1399,7 +1462,9 @@ func applyDingTalkOrgUser(existing *database.User, orgID string, u dingtalk.User
 	existing.DingTalkUserID = strings.TrimSpace(u.UserID)
 	existing.Name = u.Name
 	existing.Email = u.Email
-	existing.Mobile = u.Mobile
+	if mobile := normalizeDingTalkMobile(u.Mobile); mobile != "" {
+		existing.Mobile = mobile
+	}
 	existing.DepartmentID = scopedDingTalkID(orgID, deptID)
 	if strings.TrimSpace(u.Position) != "" || overwriteEmpty {
 		existing.Position = strings.TrimSpace(u.Position)
@@ -1411,6 +1476,14 @@ func applyDingTalkOrgUser(existing *database.User, orgID string, u dingtalk.User
 		existing.ManagerName = strings.TrimSpace(u.ManagerName)
 	}
 	applyDingTalkOrgDiagnostics(existing, u)
+}
+
+func normalizeDingTalkMobile(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "10000000000" {
+		return ""
+	}
+	return value
 }
 
 func applyDingTalkOrgDiagnostics(user *database.User, u dingtalk.UserInfo) {
@@ -2095,138 +2168,462 @@ func GetDepartment(c *gin.Context) {
 	})
 }
 
-// SyncUsers 同步用户
-func SyncUsers(c *gin.Context) {
-	orgID, ok := currentOrgIDOrAbort(c)
-	if !ok {
-		return
-	}
-	if !rejectCrossOrgParam(c, orgID, c.Query("org_id"), c.Query("target_org_id")) {
-		return
-	}
-	syncService := service.NewSyncService(middleware.RequestDB(c))
+type orgSyncUserDependencies struct {
+	FindUser                     func(string) (*database.User, error)
+	FindUserByDingTalkID         func(string) (*database.User, error)
+	FindDepartmentByDingTalkID   func(string) (*database.Department, error)
+	CreateUser                   func(*database.User) error
+	UpdateUser                   func(*database.User) error
+	AssignDefaultRole            func(string) (bool, error)
+	FindProfile                  func(string) (*database.EmployeeProfile, error)
+	CreateProfile                func(*database.EmployeeProfile) error
+	UpdateProfile                func(*database.EmployeeProfile) error
+	ReplaceDepartmentMemberships func(string, []string) error
+	DeactivateMissingUsers       func([]string) ([]string, error)
+	RevokeSessions               func(string)
+}
 
-	// 从钉钉拉取用户
-	users, err := dingtalk.SyncUsersForOrg(orgID)
-	if err != nil {
-		updateSyncStatus(syncService, orgID, "users", "failed", err.Error())
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "同步用户失败: " + err.Error(),
-		})
-		return
-	}
-
-	// 写入数据库
+func orgSyncUserDependenciesForRequest(c *gin.Context, orgID string) orgSyncUserDependencies {
 	userService := service.NewUserServiceWithOrgID(middleware.RequestDB(c), orgID)
 	employeeService := employeeServiceForOrg(c, orgID)
 	permissionService := service.NewPermissionServiceWithOrgID(middleware.RequestDB(c), orgID)
-	count := 0
-	positionMissingCount := 0
-	defaultRoleAssignedCount := 0
-	overwriteEmpty := shouldOverwriteEmptyDingTalkOrgFields(c)
-	for _, u := range users {
+	departmentService := service.NewDepartmentServiceWithOrgID(middleware.RequestDB(c), orgID)
+	return orgSyncUserDependencies{
+		FindUser:                     userService.GetUserByUserID,
+		FindUserByDingTalkID:         userService.GetUserByDingTalkUserID,
+		FindDepartmentByDingTalkID:   departmentService.GetDepartmentByDingTalkDepartmentID,
+		CreateUser:                   userService.CreateUser,
+		UpdateUser:                   userService.UpdateUser,
+		AssignDefaultRole:            permissionService.AssignDefaultEmployeeRoleIfUnassigned,
+		FindProfile:                  employeeService.GetProfileByUserID,
+		CreateProfile:                employeeService.CreateProfile,
+		UpdateProfile:                employeeService.UpdateProfile,
+		ReplaceDepartmentMemberships: userService.ReplaceDepartmentMemberships,
+		DeactivateMissingUsers:       userService.DeactivateUsersMissingFromDingTalk,
+		RevokeSessions: func(userID string) {
+			revokeActiveSessionsForUser(orgID, userID, "sync_org_inactive")
+		},
+	}
+}
+
+func dedupeOrgSyncUsers(users []dingtalk.UserInfo) []dingtalk.UserInfo {
+	result := make([]dingtalk.UserInfo, 0, len(users))
+	indexes := make(map[string]int, len(users))
+	for _, user := range users {
+		key := strings.TrimSpace(user.UserID)
+		if key == "" {
+			result = append(result, user)
+			continue
+		}
+		if index, ok := indexes[key]; ok {
+			result[index] = user
+			continue
+		}
+		indexes[key] = len(result)
+		result = append(result, user)
+	}
+	return result
+}
+
+func syncDingTalkUsers(ctx context.Context, orgID string, users []dingtalk.UserInfo, overwriteEmpty bool, deps orgSyncUserDependencies, requestID, maskedOrgID string, startTime time.Time) orgSyncEmployeeStageResult {
+	result := orgSyncEmployeeStageResult{Status: "success", OverwriteEmpty: overwriteEmpty, HRMFieldStatus: "success"}
+	dedupedUsers := dedupeOrgSyncUsers(users)
+	for itemIndex, user := range dedupedUsers {
+		if err := ctx.Err(); err != nil {
+			result.Status = "failed"
+			if result.SuccessCount > 0 {
+				result.Status = "partial_failed"
+			}
+			result.Error = employeeSyncCanceledMessage
+			result.ErrorCode = employeeSyncCanceledErrorCode
+			logOrgSyncError(requestID, maskedOrgID, "employees", "request_canceled", err, startTime, result.SuccessCount, result.FailCount)
+			break
+		}
+		itemFailed := false
+		userID := strings.TrimSpace(user.UserID)
+		if strings.TrimSpace(user.Position) == "" {
+			result.PositionMissingCount++
+		}
+		if user.Active {
+			if strings.TrimSpace(user.EmploymentType) == "" {
+				result.EmploymentTypeMissingCount++
+			}
+			if strings.TrimSpace(user.JobLevel) == "" {
+				result.JobLevelMissingCount++
+			}
+			if strings.TrimSpace(user.JobFamily) == "" {
+				result.JobFamilyMissingCount++
+			}
+			if strings.TrimSpace(user.ActualRegularDate) == "" && strings.TrimSpace(user.PlannedRegularDate) == "" && strings.TrimSpace(user.ProbationEndDate) == "" {
+				result.RegularizationDateMissingCount++
+			}
+		}
+		if strings.EqualFold(strings.TrimSpace(user.HRMFieldSyncStatus), dingtalk.HRMFieldSyncStatusFailed) {
+			result.HRMFieldStatus = "failed"
+		}
+		if strings.EqualFold(strings.TrimSpace(user.HRMFieldSyncStatus), dingtalk.HRMFieldSyncStatusNoFields) && result.HRMFieldStatus != "failed" {
+			result.HRMFieldStatus = "success_no_fields"
+		}
+		if userID == "" {
+			itemFailed = true
+			logOrgSyncError(requestID, maskedOrgID, "employees", "validation", errors.New("missing dingtalk user id"), startTime, result.SuccessCount, result.FailCount+1)
+			result.FailCount++
+			continue
+		}
+
 		deptID := ""
-		if len(u.DeptIDList) > 0 {
-			deptID = fmt.Sprintf("%d", u.DeptIDList[0])
+		localDepartmentIDs := make([]string, 0, len(user.DeptIDList))
+		seenDepartmentIDs := make(map[string]struct{}, len(user.DeptIDList))
+		for _, rawDepartmentID := range user.DeptIDList {
+			externalDepartmentID := fmt.Sprintf("%d", rawDepartmentID)
+			if _, exists := seenDepartmentIDs[externalDepartmentID]; exists {
+				continue
+			}
+			seenDepartmentIDs[externalDepartmentID] = struct{}{}
+			localDepartmentID := ""
+			if deps.FindDepartmentByDingTalkID != nil {
+				department, err := deps.FindDepartmentByDingTalkID(externalDepartmentID)
+				if err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						continue
+					}
+					itemFailed = true
+					logOrgSyncError(requestID, maskedOrgID, "employees", "department_lookup", err, startTime, result.SuccessCount, result.FailCount+1)
+					continue
+				}
+				if department == nil || strings.TrimSpace(department.DepartmentID) == "" {
+					continue
+				}
+				if departmentOrgID := strings.TrimSpace(department.OrgID); departmentOrgID != "" && departmentOrgID != orgID {
+					itemFailed = true
+					logOrgSyncError(requestID, maskedOrgID, "employees", "department_org_mismatch", errors.New("department belongs to another organization"), startTime, result.SuccessCount, result.FailCount+1)
+					continue
+				}
+				localDepartmentID = strings.TrimSpace(department.DepartmentID)
+			} else {
+				// 测试缝隙或显式无仓储调用方仍保持 scoped ID；生产依赖始终提供租户部门查询。
+				localDepartmentID = scopedDingTalkID(orgID, externalDepartmentID)
+			}
+			if deptID == "" {
+				deptID = externalDepartmentID
+			}
+			localDepartmentIDs = append(localDepartmentIDs, localDepartmentID)
+		}
+		if len(user.DeptIDList) > 0 && len(localDepartmentIDs) == 0 {
+			logOrgSyncError(requestID, maskedOrgID, "employees", "department_validation", errors.New("no valid departments"), startTime, result.SuccessCount, result.FailCount+1)
+			result.FailCount++
+			continue
 		}
 		status := "active"
-		if !u.Active {
+		if !user.Active {
 			status = "inactive"
 		}
-		localUserID := scopedDingTalkID(orgID, u.UserID)
+		localDepartmentID := scopedDingTalkID(orgID, deptID)
+		if len(localDepartmentIDs) > 0 {
+			localDepartmentID = localDepartmentIDs[0]
+		}
+		localManagerUserID := scopedDingTalkID(orgID, user.ManagerUserID)
+		if deps.FindUserByDingTalkID != nil && strings.TrimSpace(user.ManagerUserID) != "" {
+			if manager, err := deps.FindUserByDingTalkID(user.ManagerUserID); err == nil && manager != nil && strings.TrimSpace(manager.UserID) != "" {
+				localManagerUserID = manager.UserID
+			} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				itemFailed = true
+				logOrgSyncError(requestID, maskedOrgID, "employees", "manager_lookup", err, startTime, result.SuccessCount, result.FailCount+1)
+			}
+		}
 
-		existing, err := userService.GetUserByUserID(localUserID)
+		localUserID := scopedDingTalkID(orgID, userID)
+		existing, findErr := deps.FindUser(localUserID)
+		if errors.Is(findErr, gorm.ErrRecordNotFound) && deps.FindUserByDingTalkID != nil {
+			if stableUser, stableErr := deps.FindUserByDingTalkID(userID); stableErr == nil && stableUser != nil {
+				existing = stableUser
+				localUserID = stableUser.UserID
+				findErr = nil
+			} else if stableErr != nil && !errors.Is(stableErr, gorm.ErrRecordNotFound) {
+				findErr = stableErr
+			}
+		}
+		created := false
+		userPersisted := false
+		if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			itemFailed = true
+			logOrgSyncError(requestID, maskedOrgID, "employees", "user_lookup", findErr, startTime, result.SuccessCount, result.FailCount+1)
+		} else if errors.Is(findErr, gorm.ErrRecordNotFound) {
+			newUser := newLocalUserFromDingTalk(orgID, user, deptID, status)
+			newUser.DepartmentID = localDepartmentID
+			newUser.ManagerUserID = localManagerUserID
+			if err := deps.CreateUser(newUser); err != nil {
+				itemFailed = true
+				logOrgSyncError(requestID, maskedOrgID, "employees", "user_create", err, startTime, result.SuccessCount, result.FailCount+1)
+			} else {
+				created = true
+				userPersisted = true
+				assigned, err := deps.AssignDefaultRole(localUserID)
+				if err != nil {
+					itemFailed = true
+					logOrgSyncError(requestID, maskedOrgID, "employees", "role_assign", err, startTime, result.SuccessCount, result.FailCount+1)
+				} else if assigned {
+					result.DefaultRoleAssignedCount++
+				}
+			}
+		} else {
+			applyDingTalkOrgUser(existing, orgID, user, deptID, status, overwriteEmpty)
+			existing.DepartmentID = localDepartmentID
+			existing.ManagerUserID = localManagerUserID
+			if err := deps.UpdateUser(existing); err != nil {
+				itemFailed = true
+				logOrgSyncError(requestID, maskedOrgID, "employees", "user_update", err, startTime, result.SuccessCount, result.FailCount+1)
+			} else if !isActiveUser(existing) && deps.RevokeSessions != nil {
+				userPersisted = true
+				deps.RevokeSessions(existing.UserID)
+			} else {
+				userPersisted = true
+			}
+		}
+		if userPersisted && deps.ReplaceDepartmentMemberships != nil {
+			if err := deps.ReplaceDepartmentMemberships(localUserID, localDepartmentIDs); err != nil {
+				itemFailed = true
+				logOrgSyncError(requestID, maskedOrgID, "employees", "department_memberships", err, startTime, result.SuccessCount, result.FailCount+1)
+			}
+		}
+
+		// 用户主数据写入失败时无法安全写档案；角色失败后仍继续档案写入用于数据修复。
+		if !itemFailed || created {
+			profile, profileErr := deps.FindProfile(localUserID)
+			if created || errors.Is(profileErr, gorm.ErrRecordNotFound) {
+				profile = &database.EmployeeProfile{OrgID: orgID, UserID: localUserID, EmployeeID: localUserID}
+				applyDingTalkProfileFields(profile, user, status)
+				if err := deps.CreateProfile(profile); err != nil {
+					itemFailed = true
+					logOrgSyncError(requestID, maskedOrgID, "employees", "profile_create", err, startTime, result.SuccessCount, result.FailCount+1)
+				}
+			} else if profileErr != nil {
+				itemFailed = true
+				logOrgSyncError(requestID, maskedOrgID, "employees", "profile_lookup", profileErr, startTime, result.SuccessCount, result.FailCount+1)
+			} else {
+				profile.OrgID = orgID
+				applyDingTalkProfileFields(profile, user, status)
+				if err := deps.UpdateProfile(profile); err != nil {
+					itemFailed = true
+					logOrgSyncError(requestID, maskedOrgID, "employees", "profile_update", err, startTime, result.SuccessCount, result.FailCount+1)
+				}
+			}
+		}
+
+		if itemFailed {
+			result.FailCount++
+			log.Printf("[org-sync] request_id=%s org=%s stage=employees result=item_failed item_index=%d success_count=%d fail_count=%d",
+				sanitizeSyncLogText(requestID), maskedOrgID, itemIndex, result.SuccessCount, result.FailCount)
+		} else {
+			result.SuccessCount++
+		}
+	}
+	deactivationFailed := false
+	if ctx.Err() == nil && deps.DeactivateMissingUsers != nil && len(dedupedUsers) > 0 {
+		sourceUserIDs := make([]string, 0, len(dedupedUsers))
+		for _, user := range dedupedUsers {
+			if userID := strings.TrimSpace(user.UserID); userID != "" {
+				sourceUserIDs = append(sourceUserIDs, userID)
+			}
+		}
+		deactivatedUserIDs, err := deps.DeactivateMissingUsers(sourceUserIDs)
 		if err != nil {
-			// 新建
-			newUser := newLocalUserFromDingTalk(orgID, u, deptID, status)
-			if err := userService.CreateUser(newUser); err != nil {
-				log.Printf("[SyncUsers] 创建用户 %s 失败: %v", u.UserID, err)
-				continue
-			}
-			if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, localUserID, "SyncUsers"); err == nil && assigned {
-				defaultRoleAssignedCount++
-			}
+			deactivationFailed = true
+			result.DeactivationStatus = "failed"
+			result.DeactivationError = employeeDeactivationFailedMessage
+			logOrgSyncError(requestID, maskedOrgID, "employees", "deactivate_missing_users", err, startTime, result.SuccessCount, result.FailCount)
 		} else {
-			// 更新
-			applyDingTalkOrgUser(existing, orgID, u, deptID, status, overwriteEmpty)
-			if err := userService.UpdateUser(existing); err != nil {
-				log.Printf("[SyncUsers] 更新用户 %s 失败: %v", u.UserID, err)
-				continue
-			}
-			if !isActiveUser(existing) {
-				revokeActiveSessionsForUser(orgID, existing.UserID, "sync_users_inactive")
+			result.DeactivationStatus = "success"
+			result.DeactivatedMissingCount = len(deactivatedUserIDs)
+			if deps.RevokeSessions != nil {
+				for _, userID := range deactivatedUserIDs {
+					deps.RevokeSessions(userID)
+				}
 			}
 		}
-		if strings.TrimSpace(u.Position) == "" {
-			positionMissingCount++
+	}
+	if result.FailCount > 0 {
+		result.Status = "failed"
+		if result.SuccessCount > 0 {
+			result.Status = "partial_failed"
 		}
+		result.Error = employeeSyncFailedMessage
+		result.ErrorCode = employeeSyncFailedErrorCode
+	}
+	if deactivationFailed {
+		result.Status = "partial_failed"
+		result.Error = employeeDeactivationFailedMessage
+		result.ErrorCode = employeeDeactivationFailedErrorCode
+	}
+	if result.HRMFieldStatus == "failed" {
+		result.HRMFieldError = employeeHRMSyncFailedMessage
+		if result.Status == "success" {
+			result.Status = "partial_failed"
+			result.Error = employeeHRMSyncFailedMessage
+			result.ErrorCode = dingtalk.ErrorCodePermissionDenied
+		}
+	}
+	if result.HRMFieldStatus == "success_no_fields" {
+		result.HRMFieldError = employeeHRMNoFieldsMessage
+	}
+	return result
+}
 
-		profile, profileErr := employeeService.GetProfileByUserID(localUserID)
-		if profileErr != nil {
-			profile := &database.EmployeeProfile{
-				OrgID:      orgID,
-				UserID:     localUserID,
-				EmployeeID: localUserID,
-			}
-			applyDingTalkProfileFields(profile, u, status)
-			if err := employeeService.CreateProfile(profile); err != nil {
-				log.Printf("[SyncUsers] 创建员工档案 %s 失败: %v", u.UserID, err)
-				continue
-			}
-		} else {
-			profile.OrgID = orgID
-			applyDingTalkProfileFields(profile, u, status)
-			if err := employeeService.UpdateProfile(profile); err != nil {
-				log.Printf("[SyncUsers] 更新员工档案 %s 失败: %v", u.UserID, err)
-				continue
-			}
+func validateOrgSyncRequestSelectors(c *gin.Context, orgID string) bool {
+	if !rejectCrossOrgParam(c, orgID,
+		c.Query("org_id"), c.Query("target_org_id"),
+		c.GetHeader("X-Org-ID"), c.GetHeader("X-Organization-ID"),
+	) {
+		return false
+	}
+	var input struct {
+		OrgID       *string `json:"org_id"`
+		TargetOrgID *string `json:"target_org_id"`
+	}
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "请求格式错误"})
+			return false
 		}
-		count++
+		if !rejectClientOrganizationID(c, input.OrgID) || !rejectClientOrganizationID(c, input.TargetOrgID) {
+			return false
+		}
+	}
+	return true
+}
+
+func orgSyncStageHTTPStatus(status string) int {
+	switch status {
+	case "success":
+		return http.StatusOK
+	case "partial_failed":
+		return http.StatusMultiStatus
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func respondOrgSyncStage(c *gin.Context, syncType string, result orgSyncEmployeeStageResult, requestID string, duration time.Duration, extra gin.H) {
+	data := gin.H{
+		"status": result.Status, "success_count": result.SuccessCount, "fail_count": result.FailCount,
+		"error": result.Error, "error_code": result.ErrorCode, "request_id": requestID, "duration_ms": duration.Milliseconds(),
+	}
+	for key, value := range extra {
+		data[key] = value
+	}
+	messageText := "success"
+	switch result.Status {
+	case "partial_failed":
+		messageText = "同步部分完成，请前往同步日志查看失败项"
+	case "failed":
+		messageText = employeeSyncFailedMessage
+		if syncType == "departments" {
+			messageText = departmentSyncFailedMessage
+		}
+	}
+	statusCode := orgSyncStageHTTPStatus(result.Status)
+	c.JSON(statusCode, Response{Code: statusCode, Message: messageText, Data: data})
+}
+
+// SyncUsers 同步用户
+func SyncUsers(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok || !validateOrgSyncRequestSelectors(c, orgID) {
+		return
+	}
+	startTime := time.Now()
+	requestID := orgSyncRequestID(c, startTime)
+	maskedOrgID := redactOrgIDForSyncLog(orgID)
+	unlock, locked := tryAcquireOrgSync(orgID)
+	if !locked {
+		respondOrgSyncConflict(c, requestID, maskedOrgID, startTime)
+		return
+	}
+	defer unlock()
+
+	users, err := syncUsersForOrg(orgID)
+	if err != nil {
+		logOrgSyncError(requestID, maskedOrgID, "employees", "source_fetch", err, startTime, 0, 1)
+		errorCode, safeMessage := orgSyncErrorDetails(err, employeeSyncFailedErrorCode, employeeSyncFailedMessage)
+		result := orgSyncEmployeeStageResult{Status: "failed", FailCount: 1, Error: safeMessage, ErrorCode: errorCode}
+		_ = writeOrgSyncStatusForRequest(c, orgID, orgSyncStatusUpdate{SyncType: "users", Status: "failed", Message: safeMessage, RequestID: requestID, DurationMS: time.Since(startTime).Milliseconds(), ErrorCode: errorCode, FailCount: 1})
+		respondOrgSyncStage(c, "users", result, requestID, time.Since(startTime), nil)
+		return
 	}
 
-	updateSyncStatus(syncService, orgID, "users", "success", fmt.Sprintf("同步 %d 个用户", count))
-
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data:    gin.H{"count": count, "position_missing_count": positionMissingCount, "overwrite_empty": overwriteEmpty, "default_role_assigned_count": defaultRoleAssignedCount},
+	result := syncDingTalkUsers(c.Request.Context(), orgID, users, shouldOverwriteEmptyDingTalkOrgFields(c), orgSyncUserDependenciesForRequest(c, orgID), requestID, maskedOrgID, startTime)
+	statusMessage := fmt.Sprintf("同步 %d 个用户", result.SuccessCount)
+	switch result.Status {
+	case "partial_failed":
+		if result.FailCount == 0 && result.HRMFieldStatus == "failed" {
+			statusMessage = employeeHRMSyncFailedMessage
+		} else {
+			statusMessage = fmt.Sprintf("同步部分完成：成功 %d，失败 %d", result.SuccessCount, result.FailCount)
+		}
+	case "failed":
+		statusMessage = employeeSyncFailedMessage
+	}
+	_ = writeOrgSyncStatusForRequest(c, orgID, orgSyncStatusUpdate{SyncType: "users", Status: result.Status, Message: statusMessage, RequestID: requestID, DurationMS: time.Since(startTime).Milliseconds(), ErrorCode: result.ErrorCode, SuccessCount: result.SuccessCount, FailCount: result.FailCount})
+	respondOrgSyncStage(c, "users", result, requestID, time.Since(startTime), gin.H{
+		"position_missing_count": result.PositionMissingCount, "overwrite_empty": result.OverwriteEmpty,
+		"default_role_assigned_count":       result.DefaultRoleAssignedCount,
+		"employment_type_missing_count":     result.EmploymentTypeMissingCount,
+		"job_level_missing_count":           result.JobLevelMissingCount,
+		"job_family_missing_count":          result.JobFamilyMissingCount,
+		"regularization_date_missing_count": result.RegularizationDateMissingCount,
+		"hrm_field_status":                  result.HRMFieldStatus,
+		"hrm_field_error":                   result.HRMFieldError,
+		"deactivated_missing_count":         result.DeactivatedMissingCount,
+		"deactivation_status":               result.DeactivationStatus,
+		"deactivation_error":                result.DeactivationError,
 	})
 }
 
 // SyncDepartments 同步部门
 func SyncDepartments(c *gin.Context) {
-	syncService := service.NewSyncService(middleware.RequestDB(c))
-	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
-
-	// 从钉钉拉取部门
-	depts, err := dingtalk.SyncDepartmentsForOrg(orgID)
-	if err != nil {
-		updateSyncStatus(syncService, orgID, "departments", "failed", err.Error())
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "同步部门失败: " + err.Error(),
-		})
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok || !validateOrgSyncRequestSelectors(c, orgID) {
 		return
 	}
-
-	orgService := service.NewOrgService(middleware.RequestDB(c))
-	result, err := orgService.SyncDepartmentsWithChangeLog(orgID, dingtalkDepartmentsToOrgSyncItems(orgID, depts), "dingtalk_sync")
-	if err != nil {
-		updateSyncStatus(syncService, orgID, "departments", "failed", err.Error())
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "同步部门失败: " + err.Error(),
-		})
+	startTime := time.Now()
+	requestID := orgSyncRequestID(c, startTime)
+	maskedOrgID := redactOrgIDForSyncLog(orgID)
+	unlock, locked := tryAcquireOrgSync(orgID)
+	if !locked {
+		respondOrgSyncConflict(c, requestID, maskedOrgID, startTime)
 		return
 	}
-	updateSyncStatus(syncService, orgID, "departments", "success", fmt.Sprintf("同步 %d 个部门", result.Count))
+	defer unlock()
 
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data:    gin.H{"count": result.Count, "change_log_count": result.ChangeLogCount},
-	})
+	result := orgSyncEmployeeStageResult{Status: "success"}
+	changeLogCount := 0
+	depts, err := syncDepartmentsForOrg(orgID)
+	if err == nil {
+		err = validateOrgSyncDepartments(depts)
+	}
+	if err == nil {
+		persisted, persistErr := persistOrgSyncDepartments(c, orgID, depts)
+		if persistErr == nil {
+			result.SuccessCount = persisted.Count
+			changeLogCount = persisted.ChangeLogCount
+		} else {
+			err = &orgSyncCodedError{
+				Code:        departmentPersistErrorCode,
+				SafeMessage: departmentPersistFailedMessage,
+				Cause:       persistErr,
+			}
+		}
+	}
+	if err != nil {
+		result.Status = "failed"
+		result.FailCount = max(len(depts), 1)
+		result.ErrorCode, result.Error = orgSyncErrorDetails(err, dingtalk.ErrorCodeResponseInvalid, departmentSyncFailedMessage)
+		logOrgSyncError(requestID, maskedOrgID, "departments", "sync", err, startTime, 0, result.FailCount)
+		_ = writeOrgSyncStatusForRequest(c, orgID, orgSyncStatusUpdate{SyncType: "departments", Status: "failed", Message: result.Error, RequestID: requestID, DurationMS: time.Since(startTime).Milliseconds(), ErrorCode: result.ErrorCode, FailCount: result.FailCount})
+	} else {
+		_ = writeOrgSyncStatusForRequest(c, orgID, orgSyncStatusUpdate{SyncType: "departments", Status: "success", Message: fmt.Sprintf("同步 %d 个部门", result.SuccessCount), RequestID: requestID, DurationMS: time.Since(startTime).Milliseconds(), SuccessCount: result.SuccessCount})
+	}
+	respondOrgSyncStage(c, "departments", result, requestID, time.Since(startTime), gin.H{"change_log_count": changeLogCount})
 }
 
 // GetDingTalkConfig 返回钉钉前端配置（corpId 等），供 JS-SDK 初始化
@@ -3055,6 +3452,12 @@ func GetSyncStatus(c *gin.Context) {
 			"last_sync_time": s.LastSyncTime,
 			"status":         s.Status,
 			"message":        s.Message,
+			"request_id":     s.RequestID,
+			"duration_ms":    s.DurationMS,
+			"error_code":     s.ErrorCode,
+			"success_count":  s.SuccessCount,
+			"fail_count":     s.FailCount,
+			"details":        s.Details,
 		}
 	}
 	// 确保 departments 和 users 总存在
@@ -3476,153 +3879,595 @@ func GetEmployee(c *gin.Context) {
 	})
 }
 
+// syncOverallResult 汇总阶段执行结果，返回整体状态与对应 HTTP 状态码。
+type syncOverallResult struct {
+	OverallStatus string // "success" | "partial_failed" | "failed"
+	HTTPStatus    int
+}
+
+func computeSyncOverallResult(deptStatus, userStatus string) syncOverallResult {
+	if deptStatus == "success" && userStatus == "success" {
+		return syncOverallResult{OverallStatus: "success", HTTPStatus: http.StatusOK}
+	}
+	if deptStatus != "partial_failed" && userStatus != "partial_failed" && deptStatus != "success" && userStatus != "success" {
+		return syncOverallResult{OverallStatus: "failed", HTTPStatus: http.StatusInternalServerError}
+	}
+	return syncOverallResult{OverallStatus: "partial_failed", HTTPStatus: http.StatusMultiStatus}
+}
+
+type orgSyncStageResult struct {
+	Status       string `json:"status"`
+	SuccessCount int    `json:"success_count"`
+	FailCount    int    `json:"fail_count"`
+	Error        string `json:"error"`
+	ErrorCode    string `json:"error_code"`
+}
+
+type orgSyncEmployeeStageResult struct {
+	Status                         string `json:"status"`
+	SuccessCount                   int    `json:"success_count"`
+	FailCount                      int    `json:"fail_count"`
+	Error                          string `json:"error"`
+	ErrorCode                      string `json:"error_code"`
+	PositionMissingCount           int    `json:"position_missing_count"`
+	EmploymentTypeMissingCount     int    `json:"employment_type_missing_count"`
+	JobLevelMissingCount           int    `json:"job_level_missing_count"`
+	JobFamilyMissingCount          int    `json:"job_family_missing_count"`
+	RegularizationDateMissingCount int    `json:"regularization_date_missing_count"`
+	HRMFieldStatus                 string `json:"hrm_field_status"`
+	HRMFieldError                  string `json:"hrm_field_error"`
+	OverwriteEmpty                 bool   `json:"overwrite_empty"`
+	DefaultRoleAssignedCount       int    `json:"default_role_assigned_count"`
+	DeactivatedMissingCount        int    `json:"deactivated_missing_count"`
+	DeactivationStatus             string `json:"deactivation_status"`
+	DeactivationError              string `json:"deactivation_error"`
+}
+
+type orgSyncResponseData struct {
+	OverallStatus string                     `json:"overall_status"`
+	Departments   orgSyncStageResult         `json:"departments"`
+	Employees     orgSyncEmployeeStageResult `json:"employees"`
+	SyncTime      string                     `json:"sync_time"`
+	DurationMS    int64                      `json:"duration_ms"`
+	RequestID     string                     `json:"request_id"`
+}
+
+var runOrgSyncForRequest = performOrgSync
+
+var (
+	syncURLTokenPattern = regexp.MustCompile(`(?i)([?&](?:access_token|token|secret|password|app_?key|app_?secret|authorization|cookie)=)[^&\s]+`)
+	syncKeyValuePattern = regexp.MustCompile(`(?i)["']?\b(access[_-]?token|token|secret|password|authorization|cookie|app[_-]?key|app[_-]?secret|dsn|database[_-]?url|db[_-]?password)\b["']?(?:\s*[:=]\s*|\s+)("[^"]*"|'[^']*'|[^\s,;]+)`)
+	syncBearerPattern   = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;]+`)
+	syncDSNPattern      = regexp.MustCompile(`(?i)[^\s:]+:[^@\s]+@(?:tcp\([^)]*\)|[^/\s]+)/[^\s]+`)
+	syncSQLPattern      = regexp.MustCompile(`(?is)\b(select|insert|update|delete|replace|alter|drop|create|truncate)\b\s+.*`)
+)
+
+func sanitizeSyncLogText(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	value = syncURLTokenPattern.ReplaceAllString(value, `${1}[REDACTED]`)
+	value = syncKeyValuePattern.ReplaceAllString(value, `${1}=[REDACTED]`)
+	value = syncBearerPattern.ReplaceAllString(value, `Bearer [REDACTED]`)
+	value = syncDSNPattern.ReplaceAllString(value, `[DSN_REDACTED]`)
+	value = syncSQLPattern.ReplaceAllString(value, `[SQL_REDACTED]`)
+	if len(value) > 512 {
+		value = value[:512] + "..."
+	}
+	return value
+}
+
+func safeSyncErrorSummary(err error) string {
+	if err == nil {
+		return ""
+	}
+	summary := sanitizeSyncLogText(err.Error())
+	if summary == "" {
+		return "error summary unavailable"
+	}
+	return summary
+}
+
+func syncErrorCategory(err error) string {
+	if code := dingtalk.SyncErrorCode(err); code != "" {
+		switch code {
+		case dingtalk.ErrorCodeNetworkFailed:
+			return "network"
+		case dingtalk.ErrorCodeConfigMissing:
+			return "config"
+		case dingtalk.ErrorCodePermissionDenied:
+			return "permission"
+		case dingtalk.ErrorCodeTokenFailed:
+			return "token"
+		default:
+			return "external_response"
+		}
+	}
+	switch {
+	case err == nil:
+		return "none"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return "network"
+	}
+	messageText := strings.ToLower(err.Error())
+	if strings.Contains(messageText, "sql") || strings.Contains(messageText, "database") || strings.Contains(messageText, "gorm") || strings.Contains(messageText, "dsn") {
+		return "database"
+	}
+	return "internal"
+}
+
+func logOrgSyncError(requestID, maskedOrgID, stage, operation string, err error, startTime time.Time, successCount, failCount int) {
+	log.Printf("[org-sync] request_id=%s org=%s stage=%s operation=%s result=failed error_category=%s error_summary=%q duration_ms=%d success_count=%d fail_count=%d",
+		sanitizeSyncLogText(requestID), sanitizeSyncLogText(maskedOrgID), sanitizeSyncLogText(stage), sanitizeSyncLogText(operation),
+		syncErrorCategory(err), safeSyncErrorSummary(err), time.Since(startTime).Milliseconds(), successCount, failCount)
+}
+
+func tryAcquireOrgSync(orgID string) (func(), bool) {
+	orgMuIface, _ := orgSyncLocks.LoadOrStore(orgID, &sync.Mutex{})
+	orgMu := orgMuIface.(*sync.Mutex)
+	if !orgMu.TryLock() {
+		return nil, false
+	}
+	return orgMu.Unlock, true
+}
+
+func respondOrgSyncConflict(c *gin.Context, requestID, maskedOrgID string, startTime time.Time) {
+	log.Printf("[org-sync] request_id=%s org=%s stage=lock result=conflict duration_ms=%d success_count=0 fail_count=1",
+		sanitizeSyncLogText(requestID), sanitizeSyncLogText(maskedOrgID), time.Since(startTime).Milliseconds())
+	c.JSON(http.StatusConflict, Response{
+		Code:    http.StatusConflict,
+		Message: "该组织正在同步中，请勿重复提交",
+		Data:    gin.H{"request_id": requestID},
+	})
+}
+
+func validateOrgSyncDepartments(depts []dingtalk.DeptInfo) error {
+	if len(depts) == 0 {
+		return &orgSyncCodedError{Code: dingtalk.ErrorCodeDepartmentEmpty, SafeMessage: "钉钉返回的部门数据为空", Cause: errors.New("department payload is empty")}
+	}
+	seen := make(map[int64]struct{}, len(depts))
+	rootFound := false
+	for _, dept := range depts {
+		if dept.DeptID <= 0 || strings.TrimSpace(dept.Name) == "" {
+			return &orgSyncCodedError{Code: dingtalk.ErrorCodeResponseInvalid, SafeMessage: "钉钉返回的部门数据格式异常", Cause: errors.New("department payload validation failed")}
+		}
+		if _, ok := seen[dept.DeptID]; ok {
+			return &orgSyncCodedError{Code: dingtalk.ErrorCodeResponseInvalid, SafeMessage: "钉钉返回的部门数据格式异常", Cause: errors.New("duplicate department id")}
+		}
+		seen[dept.DeptID] = struct{}{}
+		if dept.DeptID == 1 {
+			rootFound = true
+		}
+	}
+	if !rootFound {
+		return &orgSyncCodedError{Code: dingtalk.ErrorCodeResponseInvalid, SafeMessage: "钉钉返回的根部门数据异常", Cause: errors.New("root department is missing")}
+	}
+	return nil
+}
+
+type orgSyncCodedError struct {
+	Code        string
+	SafeMessage string
+	Cause       error
+}
+
+func (e *orgSyncCodedError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Cause == nil {
+		return e.Code
+	}
+	return e.Code + ": " + safeSyncErrorSummary(e.Cause)
+}
+
+func orgSyncErrorDetails(err error, fallbackCode, fallbackMessage string) (string, string) {
+	if err == nil {
+		return "", ""
+	}
+	var coded *orgSyncCodedError
+	if errors.As(err, &coded) {
+		return coded.Code, coded.SafeMessage
+	}
+	if code := dingtalk.SyncErrorCode(err); code != "" {
+		messageText := dingtalk.SyncErrorSafeMessage(err)
+		if messageText == "" {
+			messageText = fallbackMessage
+		}
+		return code, messageText
+	}
+	return fallbackCode, fallbackMessage
+}
+
+func orgSyncRequestID(c *gin.Context, now time.Time) string {
+	if value, ok := c.Get("requestID"); ok {
+		if requestID, ok := value.(string); ok && strings.TrimSpace(requestID) != "" {
+			if requestID = sanitizeSyncLogText(strings.TrimSpace(requestID)); len(requestID) <= 128 {
+				return requestID
+			}
+		}
+	}
+	if requestID := strings.TrimSpace(c.GetHeader("X-Request-ID")); requestID != "" && len(requestID) <= 128 {
+		return sanitizeSyncLogText(requestID)
+	}
+	return fmt.Sprintf("org-sync-%d", now.UnixMilli())
+}
+
+func redactOrgIDForSyncLog(orgID string) string {
+	runes := []rune(sanitizeSyncLogText(strings.TrimSpace(orgID)))
+	if len(runes) <= 4 {
+		return "***"
+	}
+	return string(runes[:2]) + "***" + string(runes[len(runes)-2:])
+}
+
 // SyncOrgData 同步组织数据
 func SyncOrgData(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok || !validateOrgSyncRequestSelectors(c, orgID) {
+		return
+	}
+
+	startTime := time.Now()
+	requestID := orgSyncRequestID(c, startTime)
+	maskedOrgID := redactOrgIDForSyncLog(orgID)
+
+	unlock, locked := tryAcquireOrgSync(orgID)
+	if !locked {
+		respondOrgSyncConflict(c, requestID, maskedOrgID, startTime)
+		return
+	}
+	defer unlock()
+
+	// 组织同步是服务器长任务。外层代理或浏览器断开连接后继续使用带租户值的
+	// 独立执行上下文，避免请求取消把尚未处理的全部员工误记为失败。
+	syncContext, cancelSync := newOrgSyncExecutionContext(c.Request.Context())
+	defer cancelSync()
+	middleware.RebindRequestContext(c, syncContext)
+
+	result, overall := executeOrgSync(c, orgID, requestID, maskedOrgID, startTime)
+
+	c.JSON(overall.HTTPStatus, Response{
+		Code:    overall.HTTPStatus,
+		Message: result.OverallStatus,
+		Data:    result,
+	})
+}
+
+// StartOrgSyncData 启动后台组织同步。启动与查询均为短请求，避免外层代理在长任务完成前返回 504。
+func StartOrgSyncData(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok || !validateOrgSyncRequestSelectors(c, orgID) {
+		return
+	}
+	startTime := time.Now()
+	requestID := orgSyncRequestID(c, startTime)
+	maskedOrgID := redactOrgIDForSyncLog(orgID)
+	unlock, locked := tryAcquireOrgSync(orgID)
+	if !locked {
+		respondOrgSyncConflict(c, requestID, maskedOrgID, startTime)
+		return
+	}
+
+	syncContext, cancelSync := newOrgSyncExecutionContext(c.Request.Context())
+	backgroundContext := c.Copy()
+	middleware.RebindRequestContext(backgroundContext, syncContext)
+	if err := writeOrgSyncStatusForRequest(c, orgID, orgSyncStatusUpdate{
+		SyncType:  "organization",
+		Status:    "running",
+		Message:   "组织数据正在后台同步",
+		RequestID: requestID,
+	}); err != nil {
+		cancelSync()
+		unlock()
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "创建组织同步任务失败，请稍后重试",
+			Data:    gin.H{"request_id": requestID},
+		})
+		return
+	}
+
+	go func() {
+		defer unlock()
+		defer cancelSync()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				statusContext, cancelStatus := newOrgSyncStatusContext(backgroundContext)
+				defer cancelStatus()
+				failedResult := orgSyncResponseData{
+					OverallStatus: "failed",
+					Departments:   orgSyncStageResult{Status: "failed", FailCount: 1, Error: orgSyncPanicMessage, ErrorCode: orgSyncPanicErrorCode},
+					Employees:     orgSyncEmployeeStageResult{Status: "skipped", Error: employeeSyncSkippedMessage, ErrorCode: employeeSyncSkippedErrorCode},
+					SyncTime:      time.Now().Format(time.RFC3339),
+					DurationMS:    time.Since(startTime).Milliseconds(),
+					RequestID:     requestID,
+				}
+				if err := writeOrgSyncStatusForRequest(statusContext, orgID, orgSyncStatusUpdate{
+					SyncType:   "organization",
+					Status:     "failed",
+					Message:    orgSyncPanicMessage,
+					RequestID:  requestID,
+					DurationMS: failedResult.DurationMS,
+					ErrorCode:  orgSyncPanicErrorCode,
+					FailCount:  1,
+					Details:    map[string]interface{}{"result": failedResult},
+				}); err != nil {
+					log.Printf("[SyncOrgData] request_id=%s org=%s stage=background result=panic_status_persist_failed error_type=%T", sanitizeSyncLogText(requestID), maskedOrgID, err)
+				}
+				log.Printf("[SyncOrgData] request_id=%s org=%s stage=background result=panic panic_type=%T", sanitizeSyncLogText(requestID), maskedOrgID, recovered)
+			}
+		}()
+
+		result, _ := executeOrgSync(backgroundContext, orgID, requestID, maskedOrgID, startTime)
+		statusContext, cancelStatus := newOrgSyncStatusContext(backgroundContext)
+		defer cancelStatus()
+		if err := writeOrgSyncStatusForRequest(statusContext, orgID, orgSyncStatusUpdate{
+			SyncType:     "organization",
+			Status:       result.OverallStatus,
+			Message:      result.OverallStatus,
+			RequestID:    requestID,
+			DurationMS:   result.DurationMS,
+			ErrorCode:    orgSyncResultErrorCode(result),
+			SuccessCount: result.Departments.SuccessCount + result.Employees.SuccessCount,
+			FailCount:    result.Departments.FailCount + result.Employees.FailCount,
+			Details:      map[string]interface{}{"result": result},
+		}); err != nil {
+			log.Printf("[SyncOrgData] request_id=%s org=%s stage=background result=final_status_persist_failed error_type=%T", sanitizeSyncLogText(requestID), maskedOrgID, err)
+		}
+	}()
+
+	c.JSON(http.StatusAccepted, Response{
+		Code:    http.StatusAccepted,
+		Message: "running",
+		Data: gin.H{
+			"status":     "running",
+			"request_id": requestID,
+		},
+	})
+}
+
+// GetOrgSyncResult 查询当前组织指定后台同步请求的运行状态或最终完整结果。
+func GetOrgSyncResult(c *gin.Context) {
 	orgID, ok := currentOrgIDOrAbort(c)
 	if !ok {
 		return
 	}
-	if !rejectCrossOrgParam(c, orgID, c.Query("target_org_id"), c.Query("org_id")) {
+	rawRequestID := strings.TrimSpace(c.Param("request_id"))
+	requestID := sanitizeSyncLogText(rawRequestID)
+	if requestID == "" || len(rawRequestID) > 128 || len(requestID) > 128 {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "同步请求编号无效"})
 		return
 	}
-	syncService := service.NewSyncService(middleware.RequestDB(c))
+	status, err := service.NewSyncService(middleware.RequestDB(c)).GetSyncStatusByRequestID(orgID, "organization", requestID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "未找到该同步任务"})
+		return
+	}
+	if err != nil {
+		log.Printf("[SyncOrgData] request_id=%s org=%s stage=query result=failed error_type=%T", requestID, redactOrgIDForSyncLog(orgID), err)
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "查询组织同步任务失败，请稍后重试"})
+		return
+	}
+	if status == nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "未找到该同步任务"})
+		return
+	}
+	if status.Status == "running" {
+		c.JSON(http.StatusAccepted, Response{
+			Code:    http.StatusAccepted,
+			Message: "running",
+			Data: gin.H{
+				"status":      "running",
+				"request_id":  requestID,
+				"duration_ms": time.Since(status.LastSyncTime).Milliseconds(),
+			},
+		})
+		return
+	}
+	result, exists := status.Details["result"]
+	if !exists {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "同步已结束，但结果详情不可用"})
+		return
+	}
+	httpStatus := http.StatusInternalServerError
+	switch status.Status {
+	case "success":
+		httpStatus = http.StatusOK
+	case "partial_failed":
+		httpStatus = http.StatusMultiStatus
+	}
+	c.JSON(httpStatus, Response{Code: httpStatus, Message: status.Status, Data: result})
+}
 
-	// 同步部门
-	depts, deptErr := dingtalk.SyncDepartmentsForOrg(orgID)
-	deptCount := 0
+func executeOrgSync(c *gin.Context, orgID, requestID, maskedOrgID string, startTime time.Time) (orgSyncResponseData, syncOverallResult) {
+	result := runOrgSyncForRequest(c, orgID, requestID, startTime)
+	if errors.Is(c.Request.Context().Err(), context.DeadlineExceeded) {
+		result = markOrgSyncTimedOut(result)
+	}
+	overall := computeSyncOverallResult(result.Departments.Status, result.Employees.Status)
+	result.OverallStatus = overall.OverallStatus
+	result.SyncTime = time.Now().Format(time.RFC3339)
+	result.DurationMS = time.Since(startTime).Milliseconds()
+	result.RequestID = requestID
+	log.Printf("[SyncOrgData] request_id=%s org=%s 阶段=overall 结果=%s 耗时=%dms 成功数=%d 失败数=%d dept_ok=%d dept_fail=%d user_ok=%d user_fail=%d",
+		requestID, maskedOrgID, result.OverallStatus, result.DurationMS,
+		result.Departments.SuccessCount+result.Employees.SuccessCount,
+		result.Departments.FailCount+result.Employees.FailCount,
+		result.Departments.SuccessCount, result.Departments.FailCount,
+		result.Employees.SuccessCount, result.Employees.FailCount)
+	return result, overall
+}
+
+const (
+	orgSyncMaxExecutionTimeout          = 15 * time.Minute
+	orgSyncStatusPersistTimeout         = 5 * time.Second
+	departmentSyncFailedMessage         = "部门同步失败，请前往同步日志查看或联系管理员"
+	departmentPersistFailedMessage      = "部门数据写入失败，原有组织数据未被覆盖"
+	employeeSyncFailedMessage           = "员工同步失败，请前往同步日志查看或联系管理员"
+	employeeSyncCanceledMessage         = "同步连接已中断，员工同步未完成，请前往同步日志确认"
+	employeeSyncSkippedMessage          = "部门同步未完成，已跳过员工同步"
+	employeeHRMSyncFailedMessage        = "员工基础资料已同步，但智能人事字段同步失败，请检查钉钉应用的智能人事花名册权限"
+	employeeHRMNoFieldsMessage          = "智能人事接口调用成功，但未获取到员工类型、职级、岗位序列字段，请检查钉钉应用的花名册字段权限或字段代码配置"
+	departmentPersistErrorCode          = "DEPARTMENT_PERSIST_FAILED"
+	employeeSyncSkippedErrorCode        = "EMPLOYEE_SYNC_SKIPPED"
+	employeeSyncFailedErrorCode         = "EMPLOYEE_SYNC_FAILED"
+	employeeSyncCanceledErrorCode       = "EMPLOYEE_SYNC_CANCELED"
+	employeeDeactivationFailedErrorCode = "EMPLOYEE_DEACTIVATION_FAILED"
+	employeeDeactivationFailedMessage   = "员工基础资料已同步，但历史员工安全停用未完成，请前往同步日志查看"
+	orgSyncTimeoutErrorCode             = "ORG_SYNC_TIMEOUT"
+	orgSyncTimeoutMessage               = "组织同步执行超时，请前往同步日志查看或稍后重试"
+	orgSyncPanicErrorCode               = "ORG_SYNC_PANIC"
+	orgSyncPanicMessage                 = "组织同步异常终止，请前往同步日志查看或联系管理员"
+)
+
+var orgSyncExecutionTimeout = orgSyncMaxExecutionTimeout
+
+func newOrgSyncExecutionContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := orgSyncExecutionTimeout
+	if timeout <= 0 || timeout > orgSyncMaxExecutionTimeout {
+		timeout = orgSyncMaxExecutionTimeout
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), timeout)
+}
+
+func newOrgSyncStatusContext(source *gin.Context) (*gin.Context, context.CancelFunc) {
+	statusContext := source.Copy()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(source.Request.Context()), orgSyncStatusPersistTimeout)
+	middleware.RebindRequestContext(statusContext, ctx)
+	return statusContext, cancel
+}
+
+func markOrgSyncTimedOut(result orgSyncResponseData) orgSyncResponseData {
+	if result.Departments.Status == "" {
+		result.Departments.Status = "failed"
+		result.Departments.FailCount = max(result.Departments.FailCount, 1)
+		result.Departments.Error = orgSyncTimeoutMessage
+		result.Departments.ErrorCode = orgSyncTimeoutErrorCode
+	}
+	if result.Employees.Status == "" || result.Employees.Status == "success" {
+		result.Employees.Status = "failed"
+		result.Employees.FailCount = max(result.Employees.FailCount, 1)
+		result.Employees.Error = orgSyncTimeoutMessage
+		result.Employees.ErrorCode = orgSyncTimeoutErrorCode
+	} else if result.Employees.ErrorCode == "" {
+		result.Employees.Error = orgSyncTimeoutMessage
+		result.Employees.ErrorCode = orgSyncTimeoutErrorCode
+	}
+	return result
+}
+
+func orgSyncResultErrorCode(result orgSyncResponseData) string {
+	if result.Departments.ErrorCode != "" {
+		return result.Departments.ErrorCode
+	}
+	return result.Employees.ErrorCode
+}
+
+func fetchOrgSyncUsers(orgID string, depts []dingtalk.DeptInfo, departmentStageErr error) ([]dingtalk.UserInfo, error) {
+	if departmentStageErr != nil {
+		return nil, errors.New(employeeSyncSkippedMessage)
+	}
+	users, userErr := syncUsersWithDeptsForOrg(orgID, depts)
+	return users, userErr
+}
+
+func performOrgSync(c *gin.Context, orgID, requestID string, startTime time.Time) orgSyncResponseData {
+	maskedOrgID := redactOrgIDForSyncLog(orgID)
+
+	// --- 阶段 1：同步部门 ---
+	depts, departmentStageErr := syncDepartmentsForOrg(orgID)
+	deptSuccessCount := 0
+	deptFailCount := 0
 	deptStatus := "success"
 	deptErrMsg := ""
-	if deptErr != nil {
+	deptErrorCode := ""
+	if departmentStageErr == nil {
+		departmentStageErr = validateOrgSyncDepartments(depts)
+	}
+	if departmentStageErr != nil {
 		deptStatus = "failed"
-		deptErrMsg = deptErr.Error()
-		log.Printf("[SyncOrgData] 部门同步失败: %v", deptErr)
+		deptFailCount = max(len(depts), 1)
+		deptErrorCode, deptErrMsg = orgSyncErrorDetails(departmentStageErr, dingtalk.ErrorCodeResponseInvalid, departmentSyncFailedMessage)
+		logOrgSyncError(requestID, maskedOrgID, "departments", "source_or_validation", departmentStageErr, startTime, 0, deptFailCount)
 	} else {
-		orgService := service.NewOrgService(middleware.RequestDB(c))
-		deptResult, err := orgService.SyncDepartmentsWithChangeLog(orgID, dingtalkDepartmentsToOrgSyncItems(orgID, depts), "dingtalk_sync")
+		deptResult, err := persistOrgSyncDepartments(c, orgID, depts)
 		if err != nil {
+			departmentStageErr = &orgSyncCodedError{Code: departmentPersistErrorCode, SafeMessage: departmentPersistFailedMessage, Cause: err}
 			deptStatus = "failed"
-			deptErrMsg = err.Error()
-			log.Printf("[SyncOrgData] 部门落库失败: %v", err)
+			deptFailCount = max(len(depts), 1)
+			deptErrorCode = departmentPersistErrorCode
+			deptErrMsg = departmentPersistFailedMessage
+			logOrgSyncError(requestID, maskedOrgID, "departments", "persist", departmentStageErr, startTime, 0, deptFailCount)
 		} else {
-			deptCount = deptResult.Count
-			updateSyncStatus(syncService, orgID, "departments", "success", fmt.Sprintf("同步 %d 个部门", deptCount))
+			deptSuccessCount = deptResult.Count
+			log.Printf("[org-sync] request_id=%s org=%s stage=departments result=success duration_ms=%d success_count=%d fail_count=0",
+				sanitizeSyncLogText(requestID), maskedOrgID, time.Since(startTime).Milliseconds(), deptSuccessCount)
 		}
 	}
+	deptSyncMessage := fmt.Sprintf("同步 %d 个部门", deptSuccessCount)
+	if deptStatus != "success" {
+		deptSyncMessage = deptErrMsg
+	}
+	_ = writeOrgSyncStatusForRequest(c, orgID, orgSyncStatusUpdate{SyncType: "departments", Status: deptStatus, Message: deptSyncMessage, RequestID: requestID, DurationMS: time.Since(startTime).Milliseconds(), ErrorCode: deptErrorCode, SuccessCount: deptSuccessCount, FailCount: deptFailCount})
 
-	// 同步用户（复用已有部门列表，避免重复调用 SyncDepartments）
-	users, userErr := dingtalk.SyncUsersWithDeptsForOrg(orgID, depts)
-	userCount := 0
-	positionMissingCount := 0
-	userStatus := "success"
-	userErrMsg := ""
-	defaultRoleAssignedCount := 0
+	// --- 阶段 2：同步用户（复用已有部门列表，避免重复调用 SyncDepartments） ---
+	users, userErr := fetchOrgSyncUsers(orgID, depts, departmentStageErr)
 	overwriteEmpty := shouldOverwriteEmptyDingTalkOrgFields(c)
+	userResult := orgSyncEmployeeStageResult{Status: "success", OverwriteEmpty: overwriteEmpty}
 	if userErr != nil {
-		userStatus = "failed"
-		userErrMsg = userErr.Error()
-		log.Printf("[SyncOrgData] 用户同步失败: %v", userErr)
+		if departmentStageErr != nil {
+			userResult.Status = "skipped"
+			userResult.FailCount = 0
+			userResult.Error = employeeSyncSkippedMessage
+			userResult.ErrorCode = employeeSyncSkippedErrorCode
+		} else {
+			userResult.Status = "failed"
+			userResult.FailCount = 1
+			userResult.ErrorCode, userResult.Error = orgSyncErrorDetails(userErr, employeeSyncFailedErrorCode, employeeSyncFailedMessage)
+		}
+		logOrgSyncError(requestID, maskedOrgID, "employees", "source_or_skipped", userErr, startTime, 0, userResult.FailCount)
 	} else {
-		userService := service.NewUserServiceWithOrgID(middleware.RequestDB(c), orgID)
-		employeeService := employeeServiceForOrg(c, orgID)
-		permissionService := service.NewPermissionServiceWithOrgID(middleware.RequestDB(c), orgID)
-		for _, u := range users {
-			deptID := ""
-			if len(u.DeptIDList) > 0 {
-				deptID = fmt.Sprintf("%d", u.DeptIDList[0])
-			}
-			status := "active"
-			if !u.Active {
-				status = "inactive"
-			}
-			localUserID := scopedDingTalkID(orgID, u.UserID)
-			existing, err := userService.GetUserByUserID(localUserID)
-			if err != nil {
-				if err := userService.CreateUser(newLocalUserFromDingTalk(orgID, u, deptID, status)); err != nil {
-					userStatus = "failed"
-					userErrMsg = err.Error()
-					log.Printf("[SyncOrgData] 创建用户 %s 失败: %v", u.UserID, err)
-					continue
-				} else if assigned, err := assignDefaultEmployeeRoleForSyncedUser(permissionService, localUserID, "SyncOrgData"); err != nil {
-					userStatus = "failed"
-					userErrMsg = err.Error()
-				} else if assigned {
-					defaultRoleAssignedCount++
-				}
-				// 同时创建员工档案
-				profile := &database.EmployeeProfile{
-					OrgID:      orgID,
-					UserID:     localUserID,
-					EmployeeID: localUserID,
-				}
-				applyDingTalkProfileFields(profile, u, status)
-				if err := employeeService.CreateProfile(profile); err != nil {
-					userStatus = "failed"
-					userErrMsg = err.Error()
-					log.Printf("[SyncOrgData] 创建员工档案 %s 失败: %v", u.UserID, err)
-					continue
-				}
-			} else {
-				applyDingTalkOrgUser(existing, orgID, u, deptID, status, overwriteEmpty)
-				if err := userService.UpdateUser(existing); err != nil {
-					userStatus = "failed"
-					userErrMsg = err.Error()
-					log.Printf("[SyncOrgData] 更新用户 %s 失败: %v", u.UserID, err)
-					continue
-				}
-				if !isActiveUser(existing) {
-					revokeActiveSessionsForUser(orgID, existing.UserID, "sync_org_inactive")
-				}
-				// 检查是否存在员工档案
-				profile, profileErr := employeeService.GetProfileByUserID(localUserID)
-				if profileErr != nil {
-					// 创建员工档案
-					profile := &database.EmployeeProfile{
-						OrgID:      orgID,
-						UserID:     localUserID,
-						EmployeeID: localUserID,
-					}
-					applyDingTalkProfileFields(profile, u, status)
-					if err := employeeService.CreateProfile(profile); err != nil {
-						userStatus = "failed"
-						userErrMsg = err.Error()
-						log.Printf("[SyncOrgData] 创建员工档案 %s 失败: %v", u.UserID, err)
-						continue
-					}
-				} else {
-					// 更新员工档案：始终同步入职日期（若钉钉有值则覆盖）
-					profile.OrgID = orgID
-					applyDingTalkProfileFields(profile, u, status)
-					if err := employeeService.UpdateProfile(profile); err != nil {
-						userStatus = "failed"
-						userErrMsg = err.Error()
-						log.Printf("[SyncOrgData] 更新员工档案 %s 失败: %v", u.UserID, err)
-						continue
-					}
-				}
-			}
-			if strings.TrimSpace(u.Position) == "" {
-				positionMissingCount++
-			}
-			userCount++
-		}
-		userSyncMessage := fmt.Sprintf("同步 %d 个用户", userCount)
-		if userStatus == "failed" && userErrMsg != "" {
-			userSyncMessage = fmt.Sprintf("同步 %d 个用户，部分失败: %s", userCount, userErrMsg)
-		}
-		updateSyncStatus(syncService, orgID, "users", userStatus, userSyncMessage)
+		userResult = syncDingTalkUsers(c.Request.Context(), orgID, users, overwriteEmpty, orgSyncUserDependenciesForRequest(c, orgID), requestID, maskedOrgID, startTime)
 	}
 
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data: gin.H{
-			"sync_status": gin.H{
-				"departments": gin.H{"count": deptCount, "status": deptStatus, "error": deptErrMsg},
-				"employees":   gin.H{"count": userCount, "status": userStatus, "error": userErrMsg, "position_missing_count": positionMissingCount, "overwrite_empty": overwriteEmpty, "default_role_assigned_count": defaultRoleAssignedCount},
-				"sync_time":   time.Now(),
-			},
+	userSyncMessage := fmt.Sprintf("同步 %d 个用户", userResult.SuccessCount)
+	switch userResult.Status {
+	case "partial_failed":
+		if userResult.FailCount == 0 && userResult.HRMFieldStatus == "failed" {
+			userSyncMessage = employeeHRMSyncFailedMessage
+		} else {
+			userSyncMessage = fmt.Sprintf("同步部分完成：成功 %d，失败 %d", userResult.SuccessCount, userResult.FailCount)
+		}
+	case "failed":
+		userSyncMessage = userResult.Error
+	case "skipped":
+		userSyncMessage = employeeSyncSkippedMessage
+	}
+	_ = writeOrgSyncStatusForRequest(c, orgID, orgSyncStatusUpdate{SyncType: "users", Status: userResult.Status, Message: userSyncMessage, RequestID: requestID, DurationMS: time.Since(startTime).Milliseconds(), ErrorCode: userResult.ErrorCode, SuccessCount: userResult.SuccessCount, FailCount: userResult.FailCount})
+	log.Printf("[org-sync] request_id=%s org=%s stage=employees result=%s duration_ms=%d success_count=%d fail_count=%d",
+		sanitizeSyncLogText(requestID), maskedOrgID, userResult.Status, time.Since(startTime).Milliseconds(), userResult.SuccessCount, userResult.FailCount)
+
+	return orgSyncResponseData{
+		Departments: orgSyncStageResult{
+			Status:       deptStatus,
+			SuccessCount: deptSuccessCount,
+			FailCount:    deptFailCount,
+			Error:        deptErrMsg,
+			ErrorCode:    deptErrorCode,
 		},
-	})
+		Employees: userResult,
+	}
 }
 
 // GetAttendanceRecords 获取考勤记录列表
@@ -3965,15 +4810,53 @@ func GetApprovalInstances(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 
+	templateID := c.Query("template_id")
 	filters := map[string]string{
 		"status":       c.Query("status"),
-		"template_id":  c.Query("template_id"),
+		"template_id":  templateID,
 		"applicant_id": c.Query("applicant_id"),
+		"title":        strings.TrimSpace(c.Query("title")),
 		"start_date":   c.Query("start_date"),
 		"end_date":     c.Query("end_date"),
 	}
 
-	approvalService := service.NewApprovalServiceWithOrgID(middleware.RequestDB(c), orgID)
+	db := middleware.RequestDB(c)
+	approvalService := service.NewApprovalServiceWithOrgID(db, orgID)
+
+	// category 参数：仅当未显式指定 template_id 时才生效（template_id 优先），
+	// 并强制走白名单避免 SQL 注入或未知取值退化为无条件查询。
+	// 匹配策略走审批标题关键字，因为 extension->>'$.template_id' 库里大量为空。
+	if templateID == "" {
+		if categoryKey, ok := service.ParseApprovalCategory(c.Query("category")); ok {
+			var keywords []string
+			include := true
+			if categoryKey == service.ApprovalCategoryOther {
+				keywords = service.AllApprovalCategoryTitleKeywords()
+				include = false
+			} else {
+				keywords = service.ApprovalCategoryTitleKeywords(categoryKey)
+			}
+			delete(filters, "template_id")
+			instances, total, err := approvalService.GetInstancesFilteredByTitleKeywords(page, pageSize, keywords, include, filters)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, Response{
+					Code:    http.StatusInternalServerError,
+					Message: "获取审批实例失败",
+				})
+				return
+			}
+			c.JSON(http.StatusOK, Response{
+				Code:    http.StatusOK,
+				Message: "success",
+				Data: gin.H{
+					"items": instances,
+					"total": total,
+				},
+			})
+			return
+		}
+	}
+
 	instances, total, err := approvalService.GetInstances(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
