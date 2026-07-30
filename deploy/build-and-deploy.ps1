@@ -133,8 +133,8 @@ if (-not $SkipConfigUpload -and (Test-Path $ConfigFile)) {
     }
 }
 
-# Step 1: Build Go backend
-Write-Step "[1/8] Building Go backend..."
+# Step 1: Build Go backend and DingTalk Stream worker
+Write-Step "[1/8] Building Go backend and DingTalk Stream worker..."
 $env:CGO_ENABLED = "0"
 $env:GOOS = "linux"
 $env:GOARCH = "amd64"
@@ -143,7 +143,12 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to build backend"
     exit 1
 }
-Write-Success "Backend built"
+go build -o dingtalk_stream ./cmd/dingtalk_stream
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to build DingTalk Stream worker"
+    exit 1
+}
+Write-Success "Backend and DingTalk Stream worker built"
 
 # Step 2: Build React frontend
 Write-Host ""
@@ -178,11 +183,12 @@ ENV APP_ENV=production \
     ATTENDANCE_TOOLBOX_PYTHON=/opt/attendance-toolbox-venv/bin/python \
     ATTENDANCE_TOOLBOX_DIR=/app/tools/attendance_toolbox/python
 COPY peopleops /app/peopleops
+COPY dingtalk_stream /app/dingtalk_stream
 COPY frontend/dist /app/frontend/dist
 COPY internal/config/holidays.json /app/internal/config/holidays.json
 COPY tools/attendance_toolbox /app/tools/attendance_toolbox
 RUN mkdir -p /app/uploads \
-    && chmod +x /app/peopleops
+    && chmod +x /app/peopleops /app/dingtalk_stream
 EXPOSE 8080
 VOLUME ["/app/uploads"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
@@ -194,6 +200,7 @@ Set-Content -Path "Dockerfile.deploy" -Value $dockerfile -Encoding UTF8
 $dockerignore = @"
 *
 !peopleops
+!dingtalk_stream
 !frontend
 !frontend/dist
 !frontend/dist/**
@@ -247,7 +254,13 @@ if ($LASTEXITCODE -ne 0 -or $toolboxSmokeText -notmatch '"ok"\s*:\s*true') {
     Write-Host $toolboxSmokeText
     exit 1
 }
-Write-Success "Docker image built and attendance toolbox runtime verified"
+Write-Step "Verifying DingTalk Stream worker in image..."
+docker run --rm --entrypoint /bin/sh peopleops-hr:test -c "test -x /app/dingtalk_stream"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "DingTalk Stream worker is missing or not executable in image"
+    exit 1
+}
+Write-Success "Docker image built; attendance toolbox and DingTalk Stream worker verified"
 
 # Step 5: Export to tar
 Write-Host ""
@@ -264,15 +277,29 @@ if ($LASTEXITCODE -ne 0) {
 $tarSize = (Get-Item $tarFile).Length / 1MB
 Write-Success "Image exported ($([math]::Round($tarSize, 2)) MB)"
 
-# Step 6: Upload to server
+# Step 6: Upload image and current Compose definition to server
 Write-Host ""
-Write-Step "[6/8] Uploading to server..."
+Write-Step "[6/8] Uploading image and Compose definition to server..."
 scp -P $ServerPort $tarFile "${ServerHost}:/home/ubuntu/peopleops-hr-test/$tarFile"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to upload"
     exit 1
 }
-Write-Success "Uploaded"
+$remoteComposeFile = "$DEPLOY_DIR/docker-compose.test.yml"
+$remoteComposeBackup = "$remoteComposeFile.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
+$composePrepCmd = "if [ -f '$remoteComposeFile' ]; then cp '$remoteComposeFile' '$remoteComposeBackup'; fi"
+ssh -p $ServerPort $ServerHost $composePrepCmd
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to back up remote Compose definition"
+    exit 1
+}
+scp -P $ServerPort "docker-compose.test.yml" "${ServerHost}:$remoteComposeFile"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to upload docker-compose.test.yml"
+    ssh -p $ServerPort $ServerHost "if [ -f '$remoteComposeBackup' ]; then cp '$remoteComposeBackup' '$remoteComposeFile'; fi"
+    exit 1
+}
+Write-Success "Image and Compose definition uploaded"
 
 # Step 7: Upload runtime config
 Write-Host ""
@@ -352,6 +379,7 @@ Remove-Item $tarFile -Force -ErrorAction SilentlyContinue
 Remove-Item "Dockerfile.deploy" -Force -ErrorAction SilentlyContinue
 Remove-Item "Dockerfile.deploy.dockerignore" -Force -ErrorAction SilentlyContinue
 Remove-Item "peopleops" -Force -ErrorAction SilentlyContinue
+Remove-Item "dingtalk_stream" -Force -ErrorAction SilentlyContinue
 Write-Success "Cleaned"
 
 # Done

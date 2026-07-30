@@ -27,6 +27,86 @@ func (f fakeStreamOrgSource) ListActiveByAppKey(appKey string) ([]database.Organ
 	return f.byAppKey[appKey], nil
 }
 
+func TestResolveStreamConnectionConfig_ExplicitUsesOrganizationCredentials(t *testing.T) {
+	src := fakeStreamOrgSource{
+		byOrgID: map[string]*database.Organization{
+			"muteng": {
+				OrgID:          "muteng",
+				DingTalkAppKey: "ding-muteng-app-key",
+				DingTalkSecret: "muteng-app-secret",
+				Status:         "active",
+			},
+		},
+	}
+
+	got, err := resolveStreamConnectionConfigWithSource(
+		src,
+		"muteng",
+		"ding-default-app-key",
+		"default-app-secret",
+	)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got.OrgID != "muteng" || got.ClientID != "ding-muteng-app-key" || got.ClientSecret != "muteng-app-secret" {
+		t.Fatalf("unexpected config: %#v", got)
+	}
+}
+
+func TestResolveStreamConnectionConfig_ExplicitMissingCredentialsFailsClosed(t *testing.T) {
+	secret := "must-not-leak-secret"
+	tests := []struct {
+		name string
+		org  *database.Organization
+	}{
+		{
+			name: "missing app key",
+			org:  &database.Organization{OrgID: "muteng", DingTalkSecret: secret, Status: "active"},
+		},
+		{
+			name: "missing secret",
+			org:  &database.Organization{OrgID: "muteng", DingTalkAppKey: "ding-muteng-app-key", Status: "active"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := fakeStreamOrgSource{byOrgID: map[string]*database.Organization{"muteng": tt.org}}
+			_, err := resolveStreamConnectionConfigWithSource(src, "muteng", "", "")
+			if err == nil {
+				t.Fatal("expected missing credential error")
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("error leaked secret: %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveStreamConnectionConfig_AutoUsesEnvironmentCredentials(t *testing.T) {
+	src := fakeStreamOrgSource{
+		byAppKey: map[string][]database.Organization{
+			"ding-only-app-key": {{OrgID: "org-a", DingTalkAppKey: "ding-only-app-key", Status: "active"}},
+		},
+	}
+
+	got, err := resolveStreamConnectionConfigWithSource(src, "", "ding-only-app-key", "environment-secret")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got.OrgID != "org-a" || got.ClientID != "ding-only-app-key" || got.ClientSecret != "environment-secret" {
+		t.Fatalf("unexpected config: %#v", got)
+	}
+}
+
+func TestResolveStreamConnectionConfig_AutoMissingEnvironmentFailsClosed(t *testing.T) {
+	src := fakeStreamOrgSource{}
+	_, err := resolveStreamConnectionConfigWithSource(src, "", "", "")
+	if err == nil {
+		t.Fatal("expected missing environment credential error")
+	}
+}
+
 func TestResolveStreamOrgID_ExplicitMatchSuccess(t *testing.T) {
 	src := fakeStreamOrgSource{
 		byOrgID: map[string]*database.Organization{

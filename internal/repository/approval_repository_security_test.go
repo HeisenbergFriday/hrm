@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"peopleops/internal/database"
+
+	"gorm.io/gorm"
 )
 
 func TestMergeApprovalExtensionAppliesPatchWithoutDroppingExistingFields(t *testing.T) {
@@ -81,5 +83,71 @@ func TestApprovalUpsertRejectsCrossOrgRecord(t *testing.T) {
 	err := repo.UpsertByOrgProcessID(&database.Approval{OrgID: "org-b", ProcessID: "process-1"})
 	if err != ErrOrgMismatch {
 		t.Fatalf("err = %v, want ErrOrgMismatch", err)
+	}
+}
+
+// TestApprovalFindAllTitleFilterGeneratesLike 断言 FindAll 在传入 title 过滤时，
+// 生成 SQL 中包含 title LIKE 子句，且 org_id 过滤仍存在。
+func TestApprovalFindAllTitleFilterGeneratesLike(t *testing.T) {
+	db := newDryRunGORM(t)
+
+	session := db.Session(&gorm.Session{DryRun: true, NewDB: false})
+	var sql string
+	var vars []interface{}
+	name := "approval-title-sql-" + t.Name()
+	_ = session.Callback().Query().After("gorm:query").Register(name, func(tx *gorm.DB) {
+		sql = tx.Statement.SQL.String()
+		vars = append([]interface{}{}, tx.Statement.Vars...)
+	})
+	t.Cleanup(func() {
+		_ = session.Callback().Query().Remove(name)
+	})
+
+	scoped := NewApprovalRepositoryWithOrgID(session, "muteng")
+	_, _, _ = scoped.FindAll(1, 10, map[string]string{"title": "请假"})
+
+	lower := strings.ToLower(sql)
+	if !strings.Contains(lower, "title like") {
+		t.Fatalf("expected 'title LIKE ?' in SQL, got %s", sql)
+	}
+	if !strings.Contains(lower, "org_id = ?") {
+		t.Fatalf("expected org_id filter to remain in SQL, got %s", sql)
+	}
+	found := false
+	for _, v := range vars {
+		if s, ok := v.(string); ok && s == "%请假%" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected %%请假%% in vars, got %#v", vars)
+	}
+}
+
+// TestApprovalFindAllEmptyTitleDoesNotFilter 断言 title 为空时不附加 LIKE 条件，
+// 避免误把整张表过滤成空。
+func TestApprovalFindAllEmptyTitleDoesNotFilter(t *testing.T) {
+	db := newDryRunGORM(t)
+
+	session := db.Session(&gorm.Session{DryRun: true, NewDB: false})
+	var sql string
+	name := "approval-title-empty-" + t.Name()
+	_ = session.Callback().Query().After("gorm:query").Register(name, func(tx *gorm.DB) {
+		sql = tx.Statement.SQL.String()
+	})
+	t.Cleanup(func() {
+		_ = session.Callback().Query().Remove(name)
+	})
+
+	scoped := NewApprovalRepositoryWithOrgID(session, "muteng")
+	_, _, _ = scoped.FindAll(1, 10, map[string]string{"title": ""})
+
+	lower := strings.ToLower(sql)
+	if strings.Contains(lower, "title like") {
+		t.Fatalf("title LIKE should not appear when title empty, got %s", sql)
+	}
+	if !strings.Contains(lower, "org_id = ?") {
+		t.Fatalf("expected org_id filter to remain in SQL, got %s", sql)
 	}
 }

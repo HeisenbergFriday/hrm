@@ -75,6 +75,18 @@ type User struct {
 	DeletedAt      gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
+// UserDepartmentMembership 保存员工在钉钉中的完整部门归属。
+// User.DepartmentID 继续作为主部门兼容既有业务；本表用于兼任部门人数、列表和数据范围查询。
+type UserDepartmentMembership struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	OrgID        string    `gorm:"type:varchar(64);not null;uniqueIndex:idx_user_department_membership,priority:1;index:idx_user_department_lookup,priority:1" json:"org_id"`
+	UserID       string    `gorm:"type:varchar(64);not null;uniqueIndex:idx_user_department_membership,priority:2;index" json:"user_id"`
+	DepartmentID string    `gorm:"type:varchar(64);not null;uniqueIndex:idx_user_department_membership,priority:3;index:idx_user_department_lookup,priority:2" json:"department_id"`
+	IsPrimary    bool      `gorm:"not null;default:false;index" json:"is_primary"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 // Department 部门模型
 type Department struct {
 	ID                   uint                   `gorm:"primaryKey" json:"id"`
@@ -256,14 +268,20 @@ type OperationLog struct {
 
 // SyncStatus 同步状态模型
 type SyncStatus struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	OrgID        string    `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_org_sync_type;index" json:"org_id"`
-	Type         string    `gorm:"type:varchar(32);not null;uniqueIndex:idx_org_sync_type" json:"type"`
-	LastSyncTime time.Time `json:"last_sync_time"`
-	Status       string    `gorm:"type:varchar(32);not null" json:"status"`
-	Message      string    `gorm:"type:text" json:"message"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           uint                   `gorm:"primaryKey" json:"id"`
+	OrgID        string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_org_sync_type;index" json:"org_id"`
+	Type         string                 `gorm:"type:varchar(32);not null;uniqueIndex:idx_org_sync_type" json:"type"`
+	LastSyncTime time.Time              `json:"last_sync_time"`
+	Status       string                 `gorm:"type:varchar(32);not null" json:"status"`
+	Message      string                 `gorm:"type:text" json:"message"`
+	RequestID    string                 `gorm:"type:varchar(128)" json:"request_id"`
+	DurationMS   int64                  `gorm:"not null;default:0" json:"duration_ms"`
+	ErrorCode    string                 `gorm:"type:varchar(64)" json:"error_code"`
+	SuccessCount int                    `gorm:"not null;default:0" json:"success_count"`
+	FailCount    int                    `gorm:"not null;default:0" json:"fail_count"`
+	Details      map[string]interface{} `gorm:"type:json;serializer:json" json:"details,omitempty"`
+	CreatedAt    time.Time              `json:"created_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
 }
 
 // IdempotencyRecord stores completed write responses for safe client retries.
@@ -582,6 +600,43 @@ type WeekScheduleSyncLog struct {
 	Status     string    `gorm:"type:varchar(32);not null" json:"status"`    // success/failed
 	Message    string    `gorm:"type:text" json:"message"`
 	CreatedAt  time.Time `json:"created_at"`
+}
+
+// WeekScheduleGroupTarget stores a DingTalk group bound through the Stream
+// chatbot callback. OpenConversationID is server-side only and must never be
+// accepted from or exposed to the browser.
+type WeekScheduleGroupTarget struct {
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	OrgID              string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_week_schedule_group_target_org_conversation,priority:1;index" json:"-"`
+	OpenConversationID string     `gorm:"type:varchar(256);not null;uniqueIndex:idx_week_schedule_group_target_org_conversation,priority:2" json:"-"`
+	GroupName          string     `gorm:"type:varchar(256);not null" json:"group_name"`
+	Status             string     `gorm:"type:varchar(32);not null;default:'active';index" json:"status"` // active / unbound
+	BoundByUserID      string     `gorm:"type:varchar(64);not null;index" json:"bound_by_user_id"`
+	BoundByUserName    string     `gorm:"type:varchar(128);not null" json:"bound_by_user_name"`
+	BoundAt            time.Time  `gorm:"not null" json:"bound_at"`
+	UnboundByUserID    string     `gorm:"type:varchar(64)" json:"unbound_by_user_id,omitempty"`
+	UnboundByUserName  string     `gorm:"type:varchar(128)" json:"unbound_by_user_name,omitempty"`
+	UnboundAt          *time.Time `json:"unbound_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+// WeekScheduleGroupPushLog records the submission outcome without storing
+// Webhooks, credentials, temporary image tokens, or raw third-party errors.
+type WeekScheduleGroupPushLog struct {
+	ID                uint      `gorm:"primaryKey" json:"id"`
+	OrgID             string    `gorm:"type:varchar(64);not null;index:idx_week_schedule_group_push_lookup,priority:1" json:"-"`
+	OperatorUserID    string    `gorm:"type:varchar(64);not null;index" json:"operator_user_id"`
+	OperatorUserName  string    `gorm:"type:varchar(128);not null" json:"operator_user_name"`
+	Month             string    `gorm:"type:varchar(7);not null;index:idx_week_schedule_group_push_lookup,priority:3" json:"month"`
+	GroupTargetID     uint      `gorm:"not null;index:idx_week_schedule_group_push_lookup,priority:2" json:"group_target_id"`
+	GroupName         string    `gorm:"type:varchar(256);not null" json:"group_name"`
+	Status            string    `gorm:"type:varchar(32);not null;index:idx_week_schedule_group_push_lookup,priority:4" json:"status"` // processing / submitted / rejected / failed
+	DingTalkRequestID string    `gorm:"type:varchar(256)" json:"dingtalk_request_id,omitempty"`
+	ErrorCode         string    `gorm:"type:varchar(64)" json:"error_code,omitempty"`
+	ErrorSummary      string    `gorm:"type:varchar(512)" json:"error_summary,omitempty"`
+	CreatedAt         time.Time `gorm:"index:idx_week_schedule_group_push_lookup,priority:5" json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // StatutoryHoliday 法定节假日/调休上班日

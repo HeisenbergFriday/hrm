@@ -8,54 +8,146 @@ import (
 	"io"
 	"math"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"peopleops/internal/database"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
 
 var (
-	appKey     string
-	appSecret  string
-	corpID     string
-	tokenMu    sync.Mutex
-	tokenByOrg = make(map[string]accessTokenCacheEntry)
+	appKey             string
+	appSecret          string
+	corpID             string
+	tokenMu            sync.Mutex
+	tokenByOrg         = make(map[string]accessTokenCacheEntry)
+	dingTalkHTTPClient = &http.Client{Timeout: 30 * time.Second}
 )
 
+const (
+	ErrorCodeConfigMissing        = "DINGTALK_CONFIG_MISSING"
+	ErrorCodeTokenFailed          = "DINGTALK_TOKEN_FAILED"
+	ErrorCodePermissionDenied     = "DINGTALK_PERMISSION_DENIED"
+	ErrorCodeNetworkFailed        = "DINGTALK_NETWORK_FAILED"
+	ErrorCodeResponseInvalid      = "DINGTALK_RESPONSE_INVALID"
+	ErrorCodeDepartmentEmpty      = "DINGTALK_DEPARTMENT_EMPTY"
+	ErrorCodeUserSourceIncomplete = "DINGTALK_USER_SOURCE_INCOMPLETE"
+)
+
+type SyncError struct {
+	Code        string
+	SafeMessage string
+	detail      string
+}
+
+func (e *SyncError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.detail == "" {
+		return e.Code
+	}
+	return e.Code + ": " + e.detail
+}
+
+func SyncErrorCode(err error) string {
+	var syncErr *SyncError
+	if errors.As(err, &syncErr) {
+		return syncErr.Code
+	}
+	return ""
+}
+
+func SyncErrorSafeMessage(err error) string {
+	var syncErr *SyncError
+	if errors.As(err, &syncErr) {
+		return syncErr.SafeMessage
+	}
+	return ""
+}
+
+var (
+	dingTalkURLSecretPattern = regexp.MustCompile(`(?i)([?&](?:access_token|token|secret|password|app_?key|app_?secret|authorization|cookie|session_?webhook|webhook)=)[^&\s]+`)
+	dingTalkKeyValuePattern  = regexp.MustCompile(`(?i)["']?\b(access[_-]?token|token|secret|password|authorization|cookie|app[_-]?key|app[_-]?secret|session[_-]?webhook|webhook|robot[_-]?code|dsn|database[_-]?url|db[_-]?password)\b["']?(?:\s*[:=]\s*|\s+)("[^"]*"|'[^']*'|[^\s,;]+)`)
+	dingTalkBearerPattern    = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;]+`)
+	dingTalkDSNPattern       = regexp.MustCompile(`(?i)[^\s:]+:[^@\s]+@(?:tcp\([^)]*\)|[^/\s]+)/[^\s]+`)
+)
+
+func sanitizeDingTalkDiagnostic(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	value = dingTalkURLSecretPattern.ReplaceAllString(value, `${1}[REDACTED]`)
+	value = dingTalkKeyValuePattern.ReplaceAllString(value, `${1}=[REDACTED]`)
+	value = dingTalkBearerPattern.ReplaceAllString(value, `Bearer [REDACTED]`)
+	value = dingTalkDSNPattern.ReplaceAllString(value, `[DSN_REDACTED]`)
+	if len(value) > 512 {
+		value = value[:512] + "..."
+	}
+	return value
+}
+
+func newSyncError(code, safeMessage string, cause error) error {
+	detail := ""
+	if cause != nil {
+		detail = sanitizeDingTalkDiagnostic(cause.Error())
+	}
+	return &SyncError{Code: code, SafeMessage: safeMessage, detail: detail}
+}
+
+func safeDingTalkErrorForLog(err error) string {
+	if err == nil {
+		return ""
+	}
+	return sanitizeDingTalkDiagnostic(err.Error())
+}
+
 type AppConfig struct {
-	OrgID       string `json:"org_id"`
-	Name        string `json:"name"`
-	CorpID      string `json:"corp_id"`
-	AppKey      string `json:"app_key"`
-	AppSecret   string `json:"app_secret"`
-	AgentID     string `json:"agent_id"`
-	AdminUserID string `json:"-"`
-	AppHomeURL  string `json:"app_home_url"`
-	RedirectURI string `json:"redirect_uri"`
-	Status      string `json:"status"`
+	OrgID         string              `json:"org_id"`
+	Name          string              `json:"name"`
+	CorpID        string              `json:"corp_id"`
+	AppKey        string              `json:"app_key"`
+	AppSecret     string              `json:"app_secret"`
+	AgentID       string              `json:"agent_id"`
+	AdminUserID   string              `json:"-"`
+	RobotCode     string              `json:"-"`
+	AppHomeURL    string              `json:"app_home_url"`
+	RedirectURI   string              `json:"redirect_uri"`
+	Status        string              `json:"status"`
+	HRMFieldCodes map[string][]string `json:"-"`
+	HRMFieldNames map[string][]string `json:"-"`
 }
 
 var ErrUserNotNotifiable = errors.New("dingtalk user is not active/notifiable")
 
 type Config struct {
-	OrgID        string
-	AppKey       string
-	AppSecret    string
-	CorpID       string
-	AgentID      string
-	AdminUserID  string
-	AppHomeURL   string
-	RedirectURI  string
-	ProcessCodes map[string]string
+	OrgID         string
+	AppKey        string
+	AppSecret     string
+	CorpID        string
+	AgentID       string
+	AdminUserID   string
+	RobotCode     string
+	AppHomeURL    string
+	RedirectURI   string
+	ProcessCodes  map[string]string
+	HRMFieldCodes map[string][]string
+	HRMFieldNames map[string][]string
 }
 
 type accessTokenCacheEntry struct {
@@ -113,15 +205,18 @@ func Init() error {
 // GetCorpID 杩斿洖浼佷笟 CorpId锛屼緵鍓嶇 JS-SDK 浣跨敤
 func DefaultConfig() Config {
 	return Config{
-		OrgID:        database.DefaultOrganizationID,
-		AppKey:       firstNonEmpty(appKey, os.Getenv("DINGTALK_APP_KEY")),
-		AppSecret:    firstNonEmpty(appSecret, os.Getenv("DINGTALK_APP_SECRET")),
-		CorpID:       firstNonEmpty(corpID, os.Getenv("DINGTALK_CORP_ID")),
-		AgentID:      os.Getenv("DINGTALK_AGENT_ID"),
-		AdminUserID:  os.Getenv("DINGTALK_ADMIN_USER_ID"),
-		AppHomeURL:   firstNonEmpty(os.Getenv("DINGTALK_APP_HOME_URL"), os.Getenv("APP_BASE_URL"), os.Getenv("FRONTEND_BASE_URL")),
-		RedirectURI:  os.Getenv("DINGTALK_REDIRECT_URI"),
-		ProcessCodes: processCodesFromEnv(),
+		OrgID:         database.DefaultOrganizationID,
+		AppKey:        firstNonEmpty(appKey, os.Getenv("DINGTALK_APP_KEY")),
+		AppSecret:     firstNonEmpty(appSecret, os.Getenv("DINGTALK_APP_SECRET")),
+		CorpID:        firstNonEmpty(corpID, os.Getenv("DINGTALK_CORP_ID")),
+		AgentID:       os.Getenv("DINGTALK_AGENT_ID"),
+		AdminUserID:   os.Getenv("DINGTALK_ADMIN_USER_ID"),
+		RobotCode:     firstNonEmpty(os.Getenv("DINGTALK_ROBOT_CODE"), os.Getenv("DINGTALK_APP_KEY")),
+		AppHomeURL:    firstNonEmpty(os.Getenv("DINGTALK_APP_HOME_URL"), os.Getenv("APP_BASE_URL"), os.Getenv("FRONTEND_BASE_URL")),
+		RedirectURI:   os.Getenv("DINGTALK_REDIRECT_URI"),
+		ProcessCodes:  processCodesFromEnv(),
+		HRMFieldCodes: hrmFieldCodesFromEnv(),
+		HRMFieldNames: hrmFieldNamesFromEnv(),
 	}
 }
 
@@ -129,7 +224,7 @@ func ConfigForOrgID(orgID string) (Config, error) {
 	// Fail closed: empty org must not silently become "default" and reuse env credentials.
 	orgID = strings.TrimSpace(orgID)
 	if orgID == "" {
-		return Config{}, fmt.Errorf("orgID is empty")
+		return Config{}, newSyncError(ErrorCodeConfigMissing, "钉钉组织配置缺失", errors.New("orgID is empty"))
 	}
 	orgID = database.NormalizeOrganizationID(orgID)
 	if database.DB != nil {
@@ -145,24 +240,31 @@ func ConfigForOrgID(orgID string) (Config, error) {
 	if orgID == database.DefaultOrganizationID {
 		return DefaultConfig(), nil
 	}
-	return Config{}, fmt.Errorf("dingtalk organization %s not configured", orgID)
+	return Config{}, newSyncError(ErrorCodeConfigMissing, "钉钉组织配置缺失", fmt.Errorf("dingtalk organization %s not configured", orgID))
 }
 
 func ConfigFromOrganization(org database.Organization) Config {
 	cfg := Config{
-		OrgID:        database.NormalizeOrganizationID(org.OrgID),
-		AppKey:       strings.TrimSpace(org.DingTalkAppKey),
-		AppSecret:    strings.TrimSpace(org.DingTalkSecret),
-		CorpID:       strings.TrimSpace(org.CorpID),
-		AgentID:      strings.TrimSpace(org.DingTalkAgentID),
-		AdminUserID:  strings.TrimSpace(org.DingTalkAdminUserID),
-		AppHomeURL:   strings.TrimRight(strings.TrimSpace(org.AppHomeURL), "/"),
-		RedirectURI:  strings.TrimSpace(org.RedirectURI),
-		ProcessCodes: processCodesFromOrganizationExtension(org.Extension),
+		OrgID:         database.NormalizeOrganizationID(org.OrgID),
+		AppKey:        strings.TrimSpace(org.DingTalkAppKey),
+		AppSecret:     strings.TrimSpace(org.DingTalkSecret),
+		CorpID:        strings.TrimSpace(org.CorpID),
+		AgentID:       strings.TrimSpace(org.DingTalkAgentID),
+		AdminUserID:   strings.TrimSpace(org.DingTalkAdminUserID),
+		RobotCode:     firstNonEmpty(organizationExtensionString(org.Extension, "dingtalk_robot_code"), org.DingTalkAppKey),
+		AppHomeURL:    strings.TrimRight(strings.TrimSpace(org.AppHomeURL), "/"),
+		RedirectURI:   strings.TrimSpace(org.RedirectURI),
+		ProcessCodes:  processCodesFromOrganizationExtension(org.Extension),
+		HRMFieldCodes: hrmFieldMapFromOrganizationExtension(org.Extension, "dingtalk_hrm_field_codes"),
+		HRMFieldNames: hrmFieldMapFromOrganizationExtension(org.Extension, "dingtalk_hrm_field_names"),
 	}
 	// default org: env fallback for admin is encapsulated here.
 	if cfg.OrgID == database.DefaultOrganizationID && cfg.AdminUserID == "" {
 		cfg.AdminUserID = strings.TrimSpace(os.Getenv("DINGTALK_ADMIN_USER_ID"))
+	}
+	if cfg.OrgID == database.DefaultOrganizationID {
+		cfg.HRMFieldCodes = mergeHRMFieldMaps(cfg.HRMFieldCodes, hrmFieldCodesFromEnv())
+		cfg.HRMFieldNames = mergeHRMFieldMaps(cfg.HRMFieldNames, hrmFieldNamesFromEnv())
 	}
 	return cfg
 }
@@ -174,9 +276,12 @@ func (cfg Config) normalized() Config {
 	cfg.CorpID = strings.TrimSpace(cfg.CorpID)
 	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
 	cfg.AdminUserID = strings.TrimSpace(cfg.AdminUserID)
+	cfg.RobotCode = strings.TrimSpace(cfg.RobotCode)
 	cfg.AppHomeURL = strings.TrimRight(strings.TrimSpace(cfg.AppHomeURL), "/")
 	cfg.RedirectURI = strings.TrimSpace(cfg.RedirectURI)
 	cfg.ProcessCodes = normalizeProcessCodes(cfg.ProcessCodes)
+	cfg.HRMFieldCodes = normalizeHRMFieldMap(cfg.HRMFieldCodes)
+	cfg.HRMFieldNames = normalizeHRMFieldMap(cfg.HRMFieldNames)
 	return cfg
 }
 
@@ -216,30 +321,41 @@ func InitWithConfig(cfg AppConfig) error {
 }
 
 func configFromAppConfig(cfg AppConfig) Config {
-	return Config{
-		OrgID:       cfg.OrgID,
-		AppKey:      cfg.AppKey,
-		AppSecret:   cfg.AppSecret,
-		CorpID:      cfg.CorpID,
-		AgentID:     cfg.AgentID,
-		AdminUserID: cfg.AdminUserID,
-		AppHomeURL:  cfg.AppHomeURL,
-		RedirectURI: cfg.RedirectURI,
+	result := Config{
+		OrgID:         cfg.OrgID,
+		AppKey:        cfg.AppKey,
+		AppSecret:     cfg.AppSecret,
+		CorpID:        cfg.CorpID,
+		AgentID:       cfg.AgentID,
+		AdminUserID:   cfg.AdminUserID,
+		RobotCode:     cfg.RobotCode,
+		AppHomeURL:    cfg.AppHomeURL,
+		RedirectURI:   cfg.RedirectURI,
+		HRMFieldCodes: cfg.HRMFieldCodes,
+		HRMFieldNames: cfg.HRMFieldNames,
 	}.normalized()
+	if result.OrgID == database.DefaultOrganizationID {
+		result.HRMFieldCodes = mergeHRMFieldMaps(result.HRMFieldCodes, hrmFieldCodesFromEnv())
+		result.HRMFieldNames = mergeHRMFieldMaps(result.HRMFieldNames, hrmFieldNamesFromEnv())
+	}
+	return result.normalized()
 }
 
 func appConfigFromConfig(cfg Config) AppConfig {
 	cfg = cfg.normalized()
 	return AppConfig{
-		OrgID:       cfg.OrgID,
-		CorpID:      cfg.CorpID,
-		AppKey:      cfg.AppKey,
-		AppSecret:   cfg.AppSecret,
-		AgentID:     cfg.AgentID,
-		AdminUserID: cfg.AdminUserID,
-		AppHomeURL:  cfg.AppHomeURL,
-		RedirectURI: cfg.RedirectURI,
-		Status:      "active",
+		OrgID:         cfg.OrgID,
+		CorpID:        cfg.CorpID,
+		AppKey:        cfg.AppKey,
+		AppSecret:     cfg.AppSecret,
+		AgentID:       cfg.AgentID,
+		AdminUserID:   cfg.AdminUserID,
+		RobotCode:     cfg.RobotCode,
+		AppHomeURL:    cfg.AppHomeURL,
+		RedirectURI:   cfg.RedirectURI,
+		Status:        "active",
+		HRMFieldCodes: cfg.HRMFieldCodes,
+		HRMFieldNames: cfg.HRMFieldNames,
 	}
 }
 
@@ -252,7 +368,7 @@ func DefaultAppConfig() AppConfig {
 func ActiveAppConfigs() []AppConfig {
 	configs, err := ListActiveOrganizationConfigs()
 	if err != nil {
-		logrus.Warnf("list active DingTalk organization configs failed: %v", err)
+		logrus.Warnf("list active DingTalk organization configs failed: %s", safeDingTalkErrorForLog(err))
 		return []AppConfig{DefaultAppConfig()}
 	}
 	result := make([]AppConfig, 0, len(configs))
@@ -435,6 +551,137 @@ func normalizeProcessCodes(codes map[string]string) map[string]string {
 		return nil
 	}
 	return normalized
+}
+
+const (
+	hrmFieldPosition         = "position"
+	hrmFieldEmploymentType   = "employment_type"
+	hrmFieldJobLevel         = "job_level"
+	hrmFieldJobFamily        = "job_family"
+	hrmFieldProbationEndDate = "probation_end_date"
+)
+
+// HRMFieldSyncStatus values written to UserInfo.HRMFieldSyncStatus.
+const (
+	HRMFieldSyncStatusSuccess  = "success"
+	HRMFieldSyncStatusFailed   = "failed"
+	HRMFieldSyncStatusNoFields = "success_no_fields"
+)
+
+var supportedHRMFieldKeys = []string{
+	hrmFieldPosition,
+	hrmFieldEmploymentType,
+	hrmFieldJobLevel,
+	hrmFieldJobFamily,
+	hrmFieldProbationEndDate,
+}
+
+func hrmFieldCodesFromEnv() map[string][]string {
+	return normalizeHRMFieldMap(map[string][]string{
+		hrmFieldPosition:         splitConfiguredList(os.Getenv("DINGTALK_HRM_POSITION_FIELD_CODES")),
+		hrmFieldEmploymentType:   splitConfiguredList(os.Getenv("DINGTALK_HRM_EMPLOYMENT_TYPE_FIELD_CODES")),
+		hrmFieldJobLevel:         splitConfiguredList(os.Getenv("DINGTALK_HRM_JOB_LEVEL_FIELD_CODES")),
+		hrmFieldJobFamily:        splitConfiguredList(os.Getenv("DINGTALK_HRM_JOB_FAMILY_FIELD_CODES")),
+		hrmFieldProbationEndDate: splitConfiguredList(os.Getenv("DINGTALK_HRM_PROBATION_END_DATE_FIELD_CODES")),
+	})
+}
+
+func hrmFieldNamesFromEnv() map[string][]string {
+	return normalizeHRMFieldMap(map[string][]string{
+		hrmFieldPosition:         splitConfiguredList(os.Getenv("DINGTALK_HRM_POSITION_FIELD_NAMES")),
+		hrmFieldEmploymentType:   splitConfiguredList(os.Getenv("DINGTALK_HRM_EMPLOYMENT_TYPE_FIELD_NAMES")),
+		hrmFieldJobLevel:         splitConfiguredList(os.Getenv("DINGTALK_HRM_JOB_LEVEL_FIELD_NAMES")),
+		hrmFieldJobFamily:        splitConfiguredList(os.Getenv("DINGTALK_HRM_JOB_FAMILY_FIELD_NAMES")),
+		hrmFieldProbationEndDate: splitConfiguredList(os.Getenv("DINGTALK_HRM_PROBATION_END_DATE_FIELD_NAMES")),
+	})
+}
+
+func organizationExtensionString(extension map[string]interface{}, key string) string {
+	if extension == nil {
+		return ""
+	}
+	value, ok := extension[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String())
+	default:
+		return ""
+	}
+}
+
+func hrmFieldMapFromOrganizationExtension(extension map[string]interface{}, extensionKey string) map[string][]string {
+	if extension == nil {
+		return nil
+	}
+	raw, ok := extension[extensionKey]
+	if !ok || raw == nil {
+		return nil
+	}
+	result := map[string][]string{}
+	switch values := raw.(type) {
+	case map[string]interface{}:
+		for key, value := range values {
+			result[key] = stringListFromConfigValue(value)
+		}
+	case map[string][]string:
+		for key, value := range values {
+			result[key] = value
+		}
+	case map[string]string:
+		for key, value := range values {
+			result[key] = splitConfiguredList(value)
+		}
+	}
+	return normalizeHRMFieldMap(result)
+}
+
+func stringListFromConfigValue(value interface{}) []string {
+	switch typed := value.(type) {
+	case string:
+		return splitConfiguredList(typed)
+	case []string:
+		return uniqueNonEmptyStrings(typed)
+	case []interface{}:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				result = append(result, text)
+			}
+		}
+		return uniqueNonEmptyStrings(result)
+	default:
+		return nil
+	}
+}
+
+func normalizeHRMFieldMap(values map[string][]string) map[string][]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string][]string, len(values))
+	for _, key := range supportedHRMFieldKeys {
+		items := uniqueNonEmptyStrings(values[key])
+		if len(items) > 0 {
+			result[key] = items
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func mergeHRMFieldMaps(primary, fallback map[string][]string) map[string][]string {
+	result := make(map[string][]string, len(primary)+len(fallback))
+	for _, key := range supportedHRMFieldKeys {
+		result[key] = uniqueNonEmptyStrings(append(append([]string{}, primary[key]...), fallback[key]...))
+	}
+	return normalizeHRMFieldMap(result)
 }
 
 func buildCallbackURL(appHomeURL string) string {
@@ -621,7 +868,7 @@ func GetAccessTokenForOrg(orgID string) (string, error) {
 func getAccessTokenWithConfig(cfg Config) (string, error) {
 	cfg = cfg.normalized()
 	if cfg.AppKey == "" || cfg.AppSecret == "" {
-		return "", fmt.Errorf("missing dingtalk app credentials for org %s", cfg.OrgID)
+		return "", newSyncError(ErrorCodeConfigMissing, "钉钉组织配置缺失", fmt.Errorf("missing dingtalk app credentials for org %s", cfg.OrgID))
 	}
 	tokenMu.Lock()
 	defer tokenMu.Unlock()
@@ -638,12 +885,15 @@ func getAccessTokenWithConfig(cfg Config) (string, error) {
 	}
 	resp, err := postJSON("https://api.dingtalk.com/v1.0/oauth2/accessToken", body, nil)
 	if err != nil {
-		return "", fmt.Errorf("get access_token failed: %w", err)
+		if SyncErrorCode(err) == ErrorCodeNetworkFailed {
+			return "", err
+		}
+		return "", newSyncError(ErrorCodeTokenFailed, "获取钉钉访问凭证失败", err)
 	}
 
 	accessToken, ok := resp["accessToken"].(string)
-	if !ok {
-		return "", fmt.Errorf("unexpected access_token response: %v", resp)
+	if !ok || strings.TrimSpace(accessToken) == "" {
+		return "", newSyncError(ErrorCodeTokenFailed, "获取钉钉访问凭证失败", errors.New("access token response missing accessToken"))
 	}
 
 	expireIn := 7200.0
@@ -994,6 +1244,11 @@ type UserInfo struct {
 	HiredDate              string                 `json:"hired_date"` // 入职日期，格式 YYYY-MM-DD
 	PlannedRegularDate     string                 `json:"planned_regular_date"`
 	ActualRegularDate      string                 `json:"actual_regular_date"`
+	ProbationEndDate       string                 `json:"probation_end_date"`
+	EmploymentType         string                 `json:"employment_type"`
+	JobLevel               string                 `json:"job_level"`
+	JobFamily              string                 `json:"job_family"`
+	HRMFieldSyncStatus     string                 `json:"hrm_field_sync_status"`
 }
 
 // SyncDepartments 鍚屾鎵€鏈夐儴闂?
@@ -1007,17 +1262,23 @@ func SyncDepartmentsForOrg(orgID string) ([]DeptInfo, error) {
 		return nil, err
 	}
 
-	var allDepts []DeptInfo
+	rootDept, err := fetchDeptDetail(accessToken, 1)
+	if err != nil {
+		return nil, err
+	}
+	if rootDept == nil || rootDept.DeptID != 1 || strings.TrimSpace(rootDept.Name) == "" {
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的根部门数据异常", errors.New("root department is missing or invalid"))
+	}
+
+	allDepts := []DeptInfo{*rootDept}
 
 	// Recursively fetch all departments starting from root department 1.
 	if err := fetchDeptTree(accessToken, 1, &allDepts); err != nil {
 		return nil, err
 	}
 
-	// Also include the root department itself.
-	rootDept, err := fetchDeptDetail(accessToken, 1)
-	if err == nil && rootDept != nil {
-		allDepts = append([]DeptInfo{*rootDept}, allDepts...)
+	if len(allDepts) == 0 {
+		return nil, newSyncError(ErrorCodeDepartmentEmpty, "钉钉返回的部门数据为空", errors.New("department list is empty"))
 	}
 
 	logrus.Infof("dingtalk sync departments complete: %d", len(allDepts))
@@ -1031,17 +1292,23 @@ func SyncDepartmentsForConfig(cfg AppConfig) ([]DeptInfo, error) {
 		return nil, err
 	}
 
-	var allDepts []DeptInfo
+	rootDept, err := fetchDeptDetail(accessToken, 1)
+	if err != nil {
+		return nil, err
+	}
+	if rootDept == nil || rootDept.DeptID != 1 || strings.TrimSpace(rootDept.Name) == "" {
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的根部门数据异常", errors.New("root department is missing or invalid"))
+	}
+
+	allDepts := []DeptInfo{*rootDept}
 
 	// Recursively fetch all departments starting from root department 1.
 	if err := fetchDeptTree(accessToken, 1, &allDepts); err != nil {
 		return nil, err
 	}
 
-	// Also include the root department itself.
-	rootDept, err := fetchDeptDetail(accessToken, 1)
-	if err == nil && rootDept != nil {
-		allDepts = append([]DeptInfo{*rootDept}, allDepts...)
+	if len(allDepts) == 0 {
+		return nil, newSyncError(ErrorCodeDepartmentEmpty, "钉钉返回的部门数据为空", errors.New("department list is empty"))
 	}
 
 	logrus.Infof("dingtalk sync departments complete for org=%s: %d", cfg.OrgID, len(allDepts))
@@ -1063,37 +1330,47 @@ func fetchDeptTree(accessToken string, parentID int64, result *[]DeptInfo) error
 	errcode, _ := resp["errcode"].(float64)
 	if errcode != 0 {
 		errmsg, _ := resp["errmsg"].(string)
-		return fmt.Errorf("鑾峰彇瀛愰儴闂ㄥけ璐? %s", errmsg)
+		return dingTalkDepartmentAPIError("list departments", errcode, errmsg)
 	}
 
-	resultList, ok := resp["result"].([]interface{})
+	rawResult, exists := resp["result"]
+	if !exists {
+		return newSyncError(ErrorCodeResponseInvalid, "钉钉返回的部门数据格式异常", errors.New("department list response missing result"))
+	}
+	resultList, ok := rawResult.([]interface{})
 	if !ok {
-		return nil // No sub departments.
+		return newSyncError(ErrorCodeResponseInvalid, "钉钉返回的部门数据格式异常", errors.New("department list result has invalid type"))
 	}
 
 	for _, item := range resultList {
 		m, ok := item.(map[string]interface{})
 		if !ok {
-			continue
+			return newSyncError(ErrorCodeResponseInvalid, "钉钉返回的部门数据格式异常", errors.New("department list item has invalid type"))
 		}
 		dept := parseDeptInfo(m)
-		if detail, err := fetchDeptDetail(accessToken, dept.DeptID); err == nil && detail != nil {
-			if detail.Name != "" {
-				dept.Name = detail.Name
-			}
-			if detail.ParentID != 0 {
-				dept.ParentID = detail.ParentID
-			}
-			dept.DeptManagerUserIDs = detail.DeptManagerUserIDs
-			dept.Extension = detail.Extension
-		} else if err != nil {
-			logrus.Warnf("dingtalk department detail skipped: dept_id=%d err=%v", dept.DeptID, err)
+		if dept.DeptID <= 0 {
+			return newSyncError(ErrorCodeResponseInvalid, "钉钉返回的部门数据格式异常", errors.New("department list item missing dept_id"))
 		}
+		detail, err := fetchDeptDetail(accessToken, dept.DeptID)
+		if err != nil {
+			return err
+		}
+		if detail == nil {
+			return newSyncError(ErrorCodeResponseInvalid, "钉钉返回的部门数据格式异常", errors.New("department detail is nil"))
+		}
+		if detail.Name != "" {
+			dept.Name = detail.Name
+		}
+		if detail.ParentID != 0 {
+			dept.ParentID = detail.ParentID
+		}
+		dept.DeptManagerUserIDs = detail.DeptManagerUserIDs
+		dept.Extension = detail.Extension
 		*result = append(*result, dept)
 
 		// Recursively fetch child departments.
 		if err := fetchDeptTree(accessToken, dept.DeptID, result); err != nil {
-			logrus.Warnf("鑾峰彇閮ㄩ棬 %d 鐨勫瓙閮ㄩ棬澶辫触: %v", dept.DeptID, err)
+			return err
 		}
 	}
 
@@ -1114,16 +1391,33 @@ func fetchDeptDetail(accessToken string, deptID int64) (*DeptInfo, error) {
 
 	errcode, _ := resp["errcode"].(float64)
 	if errcode != 0 {
-		return nil, fmt.Errorf("鑾峰彇閮ㄩ棬璇︽儏澶辫触")
+		errmsg, _ := resp["errmsg"].(string)
+		return nil, dingTalkDepartmentAPIError("get department detail", errcode, errmsg)
 	}
 
-	result, ok := resp["result"].(map[string]interface{})
+	rawResult, exists := resp["result"]
+	if !exists {
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的部门数据格式异常", errors.New("department detail response missing result"))
+	}
+	result, ok := rawResult.(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("閮ㄩ棬璇︽儏鏍煎紡寮傚父")
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的部门数据格式异常", errors.New("department detail result has invalid type"))
 	}
 
 	dept := parseDeptInfo(result)
+	if dept.DeptID <= 0 || strings.TrimSpace(dept.Name) == "" {
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的部门数据格式异常", errors.New("department detail missing required fields"))
+	}
 	return &dept, nil
+}
+
+func dingTalkDepartmentAPIError(operation string, errcode float64, errmsg string) error {
+	detail := fmt.Errorf("%s failed: errcode=%.0f errmsg=%s", operation, errcode, sanitizeDingTalkDiagnostic(errmsg))
+	normalized := strings.ToLower(strings.TrimSpace(errmsg))
+	if strings.Contains(normalized, "权限") || strings.Contains(normalized, "permission") || strings.Contains(normalized, "forbidden") || strings.Contains(normalized, "not authorized") || strings.Contains(normalized, "access denied") {
+		return newSyncError(ErrorCodePermissionDenied, "钉钉通讯录权限不足", detail)
+	}
+	return newSyncError(ErrorCodeResponseInvalid, "钉钉返回部门数据失败", detail)
 }
 
 func parseDeptInfo(result map[string]interface{}) DeptInfo {
@@ -1174,16 +1468,22 @@ func SyncUsersWithDeptsForOrg(orgID string, depts []DeptInfo) ([]UserInfo, error
 	for _, dept := range depts {
 		users, err := fetchDeptUsers(accessToken, dept.DeptID)
 		if err != nil {
-			logrus.Warnf("鑾峰彇閮ㄩ棬 %d(%s) 鐢ㄦ埛澶辫触: %v", dept.DeptID, dept.Name, err)
-			continue
+			logrus.Warnf("dingtalk department users fetch failed: dept_id=%d err=%s", dept.DeptID, safeDingTalkErrorForLog(err))
+			return nil, newSyncError(ErrorCodeUserSourceIncomplete, "钉钉员工源数据不完整，已停止同步以避免误停用历史员工", err)
 		}
 		for _, u := range users {
+			if existing, ok := userMap[u.UserID]; ok {
+				u.DeptIDList = mergeDingTalkDepartmentIDs(existing.DeptIDList, u.DeptIDList)
+			}
 			userMap[u.UserID] = u
 		}
 	}
+	if len(userMap) == 0 {
+		return nil, newSyncError(ErrorCodeUserSourceIncomplete, "钉钉员工源数据为空，已停止同步以避免误停用历史员工", errors.New("all department user lists are empty"))
+	}
 
 	if err := enrichUsersWithUserDetails(accessToken, userMap); err != nil {
-		logrus.Warnf("dingtalk user detail sync skipped partially: %v", err)
+		logrus.Warnf("dingtalk user detail sync skipped partially: %s", safeDingTalkErrorForLog(err))
 	}
 	resolveManagerNames(userMap)
 	cfg, cfgErr := ConfigForOrgID(orgID)
@@ -1191,7 +1491,12 @@ func SyncUsersWithDeptsForOrg(orgID string, depts []DeptInfo) ([]UserInfo, error
 		return nil, cfgErr
 	}
 	if err := enrichUsersWithHRMFieldsForOrg(accessToken, userMap, cfg); err != nil {
-		logrus.Warnf("dingtalk hrm field sync skipped: %v", err)
+		logrus.Warnf("dingtalk hrm field sync skipped: %s", safeDingTalkErrorForLog(err))
+		markUsersHRMFieldSyncStatus(userMap, HRMFieldSyncStatusFailed)
+	} else if hasAnyHRMTargetField(userMap) {
+		markUsersHRMFieldSyncStatus(userMap, HRMFieldSyncStatusSuccess)
+	} else {
+		markUsersHRMFieldSyncStatus(userMap, HRMFieldSyncStatusNoFields)
 	}
 	resolveManagerNames(userMap)
 
@@ -1216,20 +1521,31 @@ func SyncUsersWithDeptsForConfig(cfg AppConfig, depts []DeptInfo) ([]UserInfo, e
 	for _, dept := range depts {
 		users, err := fetchDeptUsers(accessToken, dept.DeptID)
 		if err != nil {
-			logrus.Warnf("获取部门 %d(%s) 用户失败: %v", dept.DeptID, dept.Name, err)
-			continue
+			logrus.Warnf("dingtalk department users fetch failed: dept_id=%d err=%s", dept.DeptID, safeDingTalkErrorForLog(err))
+			return nil, newSyncError(ErrorCodeUserSourceIncomplete, "钉钉员工源数据不完整，已停止同步以避免误停用历史员工", err)
 		}
 		for _, u := range users {
+			if existing, ok := userMap[u.UserID]; ok {
+				u.DeptIDList = mergeDingTalkDepartmentIDs(existing.DeptIDList, u.DeptIDList)
+			}
 			userMap[u.UserID] = u
 		}
+	}
+	if len(userMap) == 0 {
+		return nil, newSyncError(ErrorCodeUserSourceIncomplete, "钉钉员工源数据为空，已停止同步以避免误停用历史员工", errors.New("all department user lists are empty"))
 	}
 
 	if err := enrichUsersWithUserDetails(accessToken, userMap); err != nil {
 		logrus.Warnf("dingtalk user detail sync skipped partially: %v", err)
 	}
 	resolveManagerNames(userMap)
-	if err := enrichUsersWithHRMFields(accessToken, userMap); err != nil {
+	if err := enrichUsersWithHRMFieldsForOrg(accessToken, userMap, configFromAppConfig(cfg)); err != nil {
 		logrus.Warnf("dingtalk hrm field sync skipped: %v", err)
+		markUsersHRMFieldSyncStatus(userMap, HRMFieldSyncStatusFailed)
+	} else if hasAnyHRMTargetField(userMap) {
+		markUsersHRMFieldSyncStatus(userMap, HRMFieldSyncStatusSuccess)
+	} else {
+		markUsersHRMFieldSyncStatus(userMap, HRMFieldSyncStatusNoFields)
 	}
 	resolveManagerNames(userMap)
 
@@ -1240,6 +1556,29 @@ func SyncUsersWithDeptsForConfig(cfg AppConfig, depts []DeptInfo) ([]UserInfo, e
 
 	logrus.Infof("dingtalk sync users complete for org=%s: %d", cfg.OrgID, len(allUsers))
 	return allUsers, nil
+}
+
+func markUsersHRMFieldSyncStatus(users map[string]UserInfo, status string) {
+	status = strings.TrimSpace(status)
+	for userID, user := range users {
+		user.HRMFieldSyncStatus = status
+		users[userID] = user
+	}
+}
+
+// hasAnyHRMTargetField reports whether at least one user has a non-empty
+// employment type, job level, or job family value populated from the HRM API.
+// It is used to distinguish "API succeeded but returned no target fields"
+// from "API succeeded and returned target fields".
+func hasAnyHRMTargetField(users map[string]UserInfo) bool {
+	for _, user := range users {
+		if strings.TrimSpace(user.EmploymentType) != "" ||
+			strings.TrimSpace(user.JobLevel) != "" ||
+			strings.TrimSpace(user.JobFamily) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func enrichUsersWithUserDetails(accessToken string, users map[string]UserInfo) error {
@@ -1332,10 +1671,14 @@ func prefixedDingTalkSource(apiName, source string) string {
 }
 
 type hrmRegularDates struct {
-	Planned        string
-	Actual         string
-	Position       string
-	PositionSource string
+	Planned          string
+	Actual           string
+	ProbationEndDate string
+	EmploymentType   string
+	JobLevel         string
+	JobFamily        string
+	Position         string
+	PositionSource   string
 }
 
 func enrichUsersWithHRMFields(accessToken string, users map[string]UserInfo) error {
@@ -1370,6 +1713,10 @@ func enrichUsersWithHRMFieldsForOrg(accessToken string, users map[string]UserInf
 			}
 			user.PlannedRegularDate = regularDates.Planned
 			user.ActualRegularDate = regularDates.Actual
+			user.ProbationEndDate = regularDates.ProbationEndDate
+			user.EmploymentType = regularDates.EmploymentType
+			user.JobLevel = regularDates.JobLevel
+			user.JobFamily = regularDates.JobFamily
 			if strings.TrimSpace(user.Position) == "" && strings.TrimSpace(regularDates.Position) != "" {
 				user.Position = strings.TrimSpace(regularDates.Position)
 				user.PositionSource = regularDates.PositionSource
@@ -1397,11 +1744,15 @@ func fetchHRMRegularDatesForOrg(accessToken string, userIDs []string, cfg Config
 	if len(userIDs) == 0 {
 		return result, nil
 	}
+	agentID, err := requireDingTalkAgentID(cfg)
+	if err != nil {
+		return result, err
+	}
 
 	body := map[string]interface{}{
-		"agentid":           dingTalkAgentIDFromConfig(cfg),
+		"agentid":           agentID,
 		"userid_list":       strings.Join(userIDs, ","),
-		"field_filter_list": strings.Join(configuredHRMFieldCodes(), ","),
+		"field_filter_list": strings.Join(configuredHRMFieldCodes(cfg), ","),
 	}
 	resp, err := postJSONOAPI(
 		fmt.Sprintf("https://oapi.dingtalk.com/topapi/smartwork/hrm/employee/v2/list?access_token=%s", accessToken),
@@ -1417,12 +1768,16 @@ func fetchHRMRegularDatesForOrg(accessToken string, userIDs []string, cfg Config
 		if errmsg == "" {
 			errmsg = fmt.Sprintf("unknown errcode %.0f", errcode)
 		}
-		return result, fmt.Errorf("fetch hrm regular dates failed: %s", errmsg)
+		return result, dingTalkDepartmentAPIError("fetch hrm employee fields", errcode, errmsg)
 	}
 
-	items, ok := resp["result"].([]interface{})
+	rawItems, exists := resp["result"]
+	if !exists {
+		return result, newSyncError(ErrorCodeResponseInvalid, "钉钉智能人事字段返回格式异常", errors.New("hrm employee response missing result"))
+	}
+	items, ok := rawItems.([]interface{})
 	if !ok {
-		return result, nil
+		return result, newSyncError(ErrorCodeResponseInvalid, "钉钉智能人事字段返回格式异常", errors.New("hrm employee result has invalid type"))
 	}
 	for _, item := range items {
 		record, ok := item.(map[string]interface{})
@@ -1434,32 +1789,49 @@ func fetchHRMRegularDatesForOrg(accessToken string, userIDs []string, cfg Config
 			continue
 		}
 
-		var regularDates hrmRegularDates
 		fields, ok := record["field_data_list"].([]interface{})
 		if !ok {
 			continue
 		}
-		for _, field := range fields {
-			fieldMap, ok := field.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			value := extractHRMFieldValue(fieldMap)
-			switch getString(fieldMap, "field_code") {
-			case "sys01-planRegularTime":
-				regularDates.Planned = value
-			case "sys01-regularTime":
-				regularDates.Actual = value
-			}
-			if regularDates.Position == "" && isHRMPositionField(fieldMap) {
-				regularDates.Position = extractHRMTextFieldValue(fieldMap)
-				regularDates.PositionSource = firstNonEmptyStringValue(getString(fieldMap, "field_code"), getString(fieldMap, "field_name"), getString(fieldMap, "name"))
-			}
-		}
+		regularDates := parseHRMEmployeeFields(fields, cfg)
 		result[userID] = regularDates
 	}
 
 	return result, nil
+}
+
+func parseHRMEmployeeFields(fields []interface{}, cfg Config) hrmRegularDates {
+	var result hrmRegularDates
+	for _, field := range fields {
+		fieldMap, ok := field.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		value := extractHRMFieldValue(fieldMap)
+		switch getString(fieldMap, "field_code") {
+		case "sys01-planRegularTime":
+			result.Planned = value
+		case "sys01-regularTime":
+			result.Actual = value
+		}
+		if result.ProbationEndDate == "" && matchesConfiguredHRMField(fieldMap, cfg, hrmFieldProbationEndDate) {
+			result.ProbationEndDate = value
+		}
+		if result.EmploymentType == "" && matchesConfiguredHRMField(fieldMap, cfg, hrmFieldEmploymentType) {
+			result.EmploymentType = extractHRMTextFieldValue(fieldMap)
+		}
+		if result.JobLevel == "" && matchesConfiguredHRMField(fieldMap, cfg, hrmFieldJobLevel) {
+			result.JobLevel = extractHRMTextFieldValue(fieldMap)
+		}
+		if result.JobFamily == "" && matchesConfiguredHRMField(fieldMap, cfg, hrmFieldJobFamily) {
+			result.JobFamily = extractHRMTextFieldValue(fieldMap)
+		}
+		if result.Position == "" && matchesConfiguredHRMField(fieldMap, cfg, hrmFieldPosition) {
+			result.Position = extractHRMTextFieldValue(fieldMap)
+			result.PositionSource = firstNonEmptyStringValue(getString(fieldMap, "field_code"), getString(fieldMap, "field_name"), getString(fieldMap, "name"))
+		}
+	}
+	return result
 }
 
 func getDingTalkAgentID() int64 {
@@ -1467,18 +1839,24 @@ func getDingTalkAgentID() int64 {
 }
 
 func dingTalkAgentIDFromConfig(cfg Config) int64 {
+	id, _ := requireDingTalkAgentID(cfg)
+	return id
+}
+
+func requireDingTalkAgentID(cfg Config) (int64, error) {
+	cfg = cfg.normalized()
 	raw := strings.TrimSpace(cfg.AgentID)
-	if raw == "" {
+	if raw == "" && cfg.OrgID == database.DefaultOrganizationID {
 		raw = strings.TrimSpace(os.Getenv("DINGTALK_AGENT_ID"))
 	}
 	if raw == "" {
-		return 1
+		return 0, newSyncError(ErrorCodeConfigMissing, "钉钉组织配置缺少 AgentID", fmt.Errorf("missing dingtalk agent id for org %s", cfg.OrgID))
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
-		return 1
+		return 0, newSyncError(ErrorCodeConfigMissing, "钉钉组织配置中的 AgentID 格式错误", fmt.Errorf("invalid dingtalk agent id for org %s", cfg.OrgID))
 	}
-	return id
+	return id, nil
 }
 
 func extractHRMFieldValue(field map[string]interface{}) string {
@@ -2748,13 +3126,34 @@ func truthyEnv(key string) bool {
 	}
 }
 
-func configuredHRMFieldCodes() []string {
+// defaultHRMFieldCodes returns the standard DingTalk HRM system field codes that
+// should always be requested in field_filter_list so the API returns them.
+// Reference: https://open.dingtalk.com/document/isvapp/get-roster-field-group-details
+func defaultHRMFieldCodes(fieldKey string) []string {
+	switch fieldKey {
+	case hrmFieldEmploymentType:
+		return []string{"sys01-employeeType"}
+	case hrmFieldJobLevel:
+		return []string{"sys01-positionLevel"}
+	case hrmFieldPosition:
+		return []string{"sys00-position"}
+	default:
+		return nil
+	}
+}
+
+func configuredHRMFieldCodes(cfg Config) []string {
+	cfg = cfg.normalized()
 	codes := []string{"sys01-planRegularTime", "sys01-regularTime"}
-	codes = append(codes, splitConfiguredList(os.Getenv("DINGTALK_HRM_POSITION_FIELD_CODES"))...)
+	for _, key := range supportedHRMFieldKeys {
+		codes = append(codes, defaultHRMFieldCodes(key)...)
+		codes = append(codes, cfg.HRMFieldCodes[key]...)
+	}
 	return uniqueNonEmptyStrings(codes)
 }
 
-func isHRMPositionField(field map[string]interface{}) bool {
+func matchesConfiguredHRMField(field map[string]interface{}, cfg Config, fieldKey string) bool {
+	cfg = cfg.normalized()
 	identifiers := []string{
 		getString(field, "field_code"),
 		getString(field, "fieldCode"),
@@ -2763,10 +3162,10 @@ func isHRMPositionField(field map[string]interface{}) bool {
 		getString(field, "name"),
 		getString(field, "label"),
 	}
-	candidates := append(
-		splitConfiguredList(os.Getenv("DINGTALK_HRM_POSITION_FIELD_CODES")),
-		configuredDingTalkFieldPaths("DINGTALK_HRM_POSITION_FIELD_NAMES", []string{"岗位", "职位", "position", "jobTitle", "job_title", "title"})...,
-	)
+	candidates := append([]string{}, defaultHRMFieldCodes(fieldKey)...)
+	candidates = append(candidates, cfg.HRMFieldCodes[fieldKey]...)
+	candidates = append(candidates, cfg.HRMFieldNames[fieldKey]...)
+	candidates = append(candidates, defaultHRMFieldNames(fieldKey)...)
 	for _, identifier := range identifiers {
 		if strings.TrimSpace(identifier) == "" {
 			continue
@@ -2778,6 +3177,23 @@ func isHRMPositionField(field map[string]interface{}) bool {
 		}
 	}
 	return false
+}
+
+func defaultHRMFieldNames(fieldKey string) []string {
+	switch fieldKey {
+	case hrmFieldPosition:
+		return []string{"岗位", "职位", "position", "jobTitle", "job_title", "title"}
+	case hrmFieldEmploymentType:
+		return []string{"员工类型", "雇佣类型", "用工类型", "人员类型", "employmentType", "employment_type"}
+	case hrmFieldJobLevel:
+		return []string{"职级", "职等", "岗位等级", "jobLevel", "job_level"}
+	case hrmFieldJobFamily:
+		return []string{"岗位序列", "职位序列", "职族", "职类", "人员类别", "jobFamily", "job_family"}
+	case hrmFieldProbationEndDate:
+		return []string{"试用期结束日期", "试用期到期日", "试用结束日期", "probationEndDate", "probation_end_date"}
+	default:
+		return nil
+	}
 }
 
 func extractHRMTextFieldValue(field map[string]interface{}) string {
@@ -2834,26 +3250,31 @@ func fetchDeptUsers(accessToken string, deptID int64) ([]UserInfo, error) {
 		errcode, _ := resp["errcode"].(float64)
 		if errcode != 0 {
 			errmsg, _ := resp["errmsg"].(string)
-			if errmsg == "" {
-				errmsg = fmt.Sprintf("unknown errcode %.0f", errcode)
-			}
-			return nil, fmt.Errorf("鑾峰彇閮ㄩ棬鐢ㄦ埛澶辫触: %s", errmsg)
+			return nil, dingTalkDepartmentAPIError("fetch department users", errcode, errmsg)
 		}
 
-		result, ok := resp["result"].(map[string]interface{})
+		rawResult, exists := resp["result"]
+		if !exists {
+			return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的员工数据格式异常", errors.New("department users response missing result"))
+		}
+		result, ok := rawResult.(map[string]interface{})
 		if !ok {
-			break
+			return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的员工数据格式异常", errors.New("department users result has invalid type"))
 		}
 
-		list, ok := result["list"].([]interface{})
+		rawList, exists := result["list"]
+		if !exists {
+			return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的员工数据格式异常", errors.New("department users result missing list"))
+		}
+		list, ok := rawList.([]interface{})
 		if !ok {
-			break
+			return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的员工数据格式异常", errors.New("department users list has invalid type"))
 		}
 
 		for _, item := range list {
 			m, ok := item.(map[string]interface{})
 			if !ok {
-				continue
+				return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的员工数据格式异常", errors.New("department users item has invalid type"))
 			}
 			position, positionSource := resolveDingTalkPosition(m)
 			managerUserID, managerSource := resolveDingTalkDirectManagerID(m)
@@ -2872,6 +3293,9 @@ func fetchDeptUsers(accessToken string, deptID int64) ([]UserInfo, error) {
 				Avatar:                 getString(m, "avatar"),
 				Active:                 getBool(m, "active"),
 			}
+			if strings.TrimSpace(user.UserID) == "" {
+				return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的员工数据格式异常", errors.New("department users item missing userid"))
+			}
 			logDingTalkUserFieldDiagnostic(user.UserID, m, user.Position, user.PositionSource, user.ManagerUserID, user.ManagerSource)
 
 			// hired_date 是毫秒时间戳，转成 YYYY-MM-DD
@@ -2884,10 +3308,9 @@ func fetchDeptUsers(accessToken string, deptID int64) ([]UserInfo, error) {
 				user.Email = user.UserID + "@dingtalk.com"
 			}
 
-			// 澶勭悊绌?mobile 鐨勬儏鍐碉紝鐢熸垚鍞竴 mobile
-			if user.Mobile == "" {
-				user.Mobile = "10000000000"
-			}
+			// 手机号缺失时保持为空，由持久化层写入 NULL；禁止使用共享占位手机号，
+			// 否则会触发租户内手机号唯一索引冲突。
+			user.Mobile = strings.TrimSpace(user.Mobile)
 			if deptList, ok := m["dept_id_list"].([]interface{}); ok && len(deptList) > 0 {
 				for _, d := range deptList {
 					if id, ok := d.(float64); ok {
@@ -2895,18 +3318,43 @@ func fetchDeptUsers(accessToken string, deptID int64) ([]UserInfo, error) {
 					}
 				}
 			}
+			user.DeptIDList = mergeDingTalkDepartmentIDs(user.DeptIDList, []int64{deptID})
 			allUsers = append(allUsers, user)
 		}
 
-		hasMore, _ := result["has_more"].(bool)
+		hasMore, ok := result["has_more"].(bool)
+		if !ok {
+			return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的员工数据格式异常", errors.New("department users result missing has_more"))
+		}
 		if !hasMore {
 			break
 		}
-		nextCursor, _ := result["next_cursor"].(float64)
+		nextCursor, ok := result["next_cursor"].(float64)
+		if !ok || int(nextCursor) == cursor {
+			return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回的员工分页游标异常", errors.New("department users next_cursor missing or unchanged"))
+		}
 		cursor = int(nextCursor)
 	}
 
 	return allUsers, nil
+}
+
+func mergeDingTalkDepartmentIDs(groups ...[]int64) []int64 {
+	result := make([]int64, 0)
+	seen := make(map[int64]struct{})
+	for _, group := range groups {
+		for _, departmentID := range group {
+			if departmentID <= 0 {
+				continue
+			}
+			if _, exists := seen[departmentID]; exists {
+				continue
+			}
+			seen[departmentID] = struct{}{}
+			result = append(result, departmentID)
+		}
+	}
+	return result
 }
 
 // ===================== 鑰冨嫟鍚屾 =====================
@@ -3202,40 +3650,43 @@ func getApprovalDetail(accessToken, instanceID string) (*ApprovalInstance, error
 // ===================== HTTP 宸ュ叿 =====================
 
 // postJSON 鍙戦€?POST 璇锋眰鍒版柊鐗?API锛坅pi.dingtalk.com锛?
-func postJSON(url string, body interface{}, headers map[string]string) (map[string]interface{}, error) {
+func postJSON(endpoint string, body interface{}, headers map[string]string) (map[string]interface{}, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return nil, err
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉请求数据格式异常", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonBody))
 	if err != nil {
-		return nil, err
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉请求地址异常", fmt.Errorf("create request %s failed: %s", safeDingTalkEndpoint(endpoint), sanitizeDingTalkDiagnostic(err.Error())))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := dingTalkHTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, dingTalkNetworkError("POST", endpoint, err)
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, dingTalkNetworkError("POST", endpoint, err)
+	}
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		detail := fmt.Errorf("POST %s returned HTTP %d: %s", safeDingTalkEndpoint(endpoint), resp.StatusCode, sanitizeDingTalkDiagnostic(string(data)))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, newSyncError(ErrorCodePermissionDenied, "钉钉应用权限不足", detail)
+		}
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉接口返回异常", detail)
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("JSON 瑙ｆ瀽澶辫触: %s", string(data))
-	}
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("DingTalk API HTTP %d: %s", resp.StatusCode, string(data))
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回数据格式异常", fmt.Errorf("decode POST %s response failed", safeDingTalkEndpoint(endpoint)))
 	}
 
 	return result, nil
@@ -3247,37 +3698,70 @@ func postJSONOAPI(url string, body interface{}) (map[string]interface{}, error) 
 }
 
 // getJSON 鍙戦€?GET 璇锋眰
-func getJSON(url string, headers map[string]string) (map[string]interface{}, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func getJSON(endpoint string, headers map[string]string) (map[string]interface{}, error) {
+	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
-		return nil, err
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉请求地址异常", fmt.Errorf("create request %s failed: %s", safeDingTalkEndpoint(endpoint), sanitizeDingTalkDiagnostic(err.Error())))
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := dingTalkHTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, dingTalkNetworkError("GET", endpoint, err)
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, dingTalkNetworkError("GET", endpoint, err)
+	}
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		detail := fmt.Errorf("GET %s returned HTTP %d: %s", safeDingTalkEndpoint(endpoint), resp.StatusCode, sanitizeDingTalkDiagnostic(string(data)))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, newSyncError(ErrorCodePermissionDenied, "钉钉应用权限不足", detail)
+		}
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉接口返回异常", detail)
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("JSON 瑙ｆ瀽澶辫触: %s", string(data))
-	}
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("DingTalk API HTTP %d: %s", resp.StatusCode, string(data))
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉返回数据格式异常", fmt.Errorf("decode GET %s response failed", safeDingTalkEndpoint(endpoint)))
 	}
 
 	return result, nil
+}
+
+func safeDingTalkEndpoint(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return sanitizeDingTalkDiagnostic(endpoint)
+	}
+	query := parsed.Query()
+	for key := range query {
+		normalized := strings.ToLower(strings.ReplaceAll(key, "_", ""))
+		if strings.Contains(normalized, "token") || strings.Contains(normalized, "secret") || strings.Contains(normalized, "password") || strings.Contains(normalized, "authorization") || strings.Contains(normalized, "cookie") || strings.Contains(normalized, "appkey") {
+			query.Set(key, "[REDACTED]")
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return sanitizeDingTalkDiagnostic(parsed.String())
+}
+
+func dingTalkNetworkError(method, endpoint string, err error) error {
+	detailErr := err
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		detailErr = urlErr.Err
+	}
+	detail := fmt.Errorf("%s %s failed: %s", method, safeDingTalkEndpoint(endpoint), sanitizeDingTalkDiagnostic(detailErr.Error()))
+	var netErr net.Error
+	if errors.As(detailErr, &netErr) && netErr.Timeout() {
+		detail = fmt.Errorf("%s %s timed out", method, safeDingTalkEndpoint(endpoint))
+	}
+	return newSyncError(ErrorCodeNetworkFailed, "连接钉钉服务失败", detail)
 }
 
 // ===================== 宸ュ叿鍑芥暟 =====================
@@ -4751,8 +5235,12 @@ func sendCorpMessagePayloadToUserForOrg(orgID, userID, title string, body map[st
 	if err != nil {
 		return err
 	}
+	agentID, err := requireDingTalkAgentID(cfg)
+	if err != nil {
+		return err
+	}
 	body["userid_list"] = userID
-	body["agent_id"] = dingTalkAgentIDFromConfig(cfg)
+	body["agent_id"] = agentID
 	accessToken, err := getAccessTokenWithConfig(cfg)
 	if err != nil {
 		return err

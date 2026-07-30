@@ -1,8 +1,9 @@
 package repository
 
 import (
-	"peopleops/internal/database"
 	"strings"
+
+	"peopleops/internal/database"
 
 	"gorm.io/gorm"
 )
@@ -10,6 +11,16 @@ import (
 type UserRepository struct {
 	db    *gorm.DB
 	orgID string
+}
+
+func applyDepartmentMembershipFilter(query *gorm.DB, orgID string, departmentIDs []string) *gorm.DB {
+	return query.Where(`(EXISTS (
+		SELECT 1 FROM user_department_memberships udm
+		WHERE udm.org_id = ? AND udm.user_id = users.user_id AND udm.department_id IN ?
+	) OR (users.department_id IN ? AND NOT EXISTS (
+		SELECT 1 FROM user_department_memberships udm_fallback
+		WHERE udm_fallback.org_id = ? AND udm_fallback.user_id = users.user_id
+	)))`, orgID, departmentIDs, departmentIDs, orgID)
 }
 
 // NewUserRepository constructs a user repository bound to the org context on db
@@ -76,7 +87,11 @@ func (r *UserRepository) Create(user *database.User) error {
 		return err
 	}
 	user.OrgID = merged
-	return r.db.Create(user).Error
+	db := r.db
+	if strings.TrimSpace(user.Mobile) == "" {
+		db = db.Omit("mobile")
+	}
+	return db.Create(user).Error
 }
 
 func (r *UserRepository) Update(user *database.User) error {
@@ -92,7 +107,11 @@ func (r *UserRepository) Update(user *database.User) error {
 		return err
 	}
 	user.OrgID = merged
-	return r.scoped().Where("id = ?", user.ID).Save(user).Error
+	db := r.scoped().Where("id = ?", user.ID)
+	if strings.TrimSpace(user.Mobile) == "" {
+		db = db.Omit("mobile")
+	}
+	return db.Save(user).Error
 }
 
 func (r *UserRepository) Delete(userID string) error {
@@ -108,6 +127,21 @@ func (r *UserRepository) FindByUserID(userID string) (*database.User, error) {
 	}
 	var user database.User
 	tx := r.scoped().Where("user_id = ?", userID).Limit(1).Find(&user)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &user, nil
+}
+
+func (r *UserRepository) FindByDingTalkUserID(dingTalkUserID string) (*database.User, error) {
+	if _, err := r.requireBoundOrg(); err != nil {
+		return nil, err
+	}
+	var user database.User
+	tx := r.scoped().Where("ding_talk_user_id = ?", strings.TrimSpace(dingTalkUserID)).Limit(1).Find(&user)
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
@@ -295,7 +329,8 @@ func (r *UserRepository) FindSyncedEmployees(page, pageSize int) ([]database.Use
 }
 
 func (r *UserRepository) FindByDepartment(departmentID string, page, pageSize int) ([]database.User, int64, error) {
-	if _, err := r.requireBoundOrg(); err != nil {
+	orgID, err := r.requireBoundOrg()
+	if err != nil {
 		return nil, 0, err
 	}
 	var users []database.User
@@ -304,13 +339,15 @@ func (r *UserRepository) FindByDepartment(departmentID string, page, pageSize in
 	offset := (page - 1) * pageSize
 
 	// 计算总数
-	err := r.scopedTable().Where("department_id = ?", departmentID).Count(&total).Error
+	query := applyDepartmentMembershipFilter(r.scopedTable(), orgID, []string{departmentID})
+	err = query.Count(&total).Error
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// 查询数据
-	err = r.scoped().Where("department_id = ?", departmentID).Offset(offset).Limit(pageSize).Find(&users).Error
+	err = applyDepartmentMembershipFilter(r.scopedTable(), orgID, []string{departmentID}).
+		Offset(offset).Limit(pageSize).Find(&users).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -331,8 +368,8 @@ func (r *UserRepository) FindSyncedEmployeesByDepartment(departmentID string, pa
 		Joins("JOIN employee_profiles ON employee_profiles.org_id = users.org_id AND employee_profiles.user_id = users.user_id AND employee_profiles.deleted_at IS NULL").
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin").
-		Where("users.department_id = ?", departmentID).
 		Where("users.org_id = ?", orgID)
+	query = applyDepartmentMembershipFilter(query, orgID, []string{departmentID})
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -343,4 +380,117 @@ func (r *UserRepository) FindSyncedEmployeesByDepartment(departmentID string, pa
 	}
 
 	return users, total, nil
+}
+
+// ReplaceDepartmentMemberships 原子替换员工的完整部门归属；departmentIDs[0] 为主部门。
+func (r *UserRepository) ReplaceDepartmentMemberships(userID string, departmentIDs []string) error {
+	orgID, err := r.requireBoundOrg()
+	if err != nil {
+		return err
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return gorm.ErrInvalidData
+	}
+
+	uniqueDepartmentIDs := make([]string, 0, len(departmentIDs))
+	seen := make(map[string]struct{}, len(departmentIDs))
+	for _, departmentID := range departmentIDs {
+		departmentID = strings.TrimSpace(departmentID)
+		if departmentID == "" {
+			continue
+		}
+		if _, exists := seen[departmentID]; exists {
+			continue
+		}
+		seen[departmentID] = struct{}{}
+		uniqueDepartmentIDs = append(uniqueDepartmentIDs, departmentID)
+	}
+
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var userCount int64
+		if err := tx.Model(&database.User{}).
+			Where("org_id = ? AND user_id = ? AND deleted_at IS NULL", orgID, userID).
+			Count(&userCount).Error; err != nil {
+			return err
+		}
+		if userCount != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		if len(uniqueDepartmentIDs) > 0 {
+			var departmentCount int64
+			if err := tx.Model(&database.Department{}).
+				Where("org_id = ? AND department_id IN ? AND deleted_at IS NULL", orgID, uniqueDepartmentIDs).
+				Distinct("department_id").
+				Count(&departmentCount).Error; err != nil {
+				return err
+			}
+			if departmentCount != int64(len(uniqueDepartmentIDs)) {
+				return gorm.ErrRecordNotFound
+			}
+		}
+		if err := tx.Where("org_id = ? AND user_id = ?", orgID, userID).
+			Delete(&database.UserDepartmentMembership{}).Error; err != nil {
+			return err
+		}
+		if len(uniqueDepartmentIDs) == 0 {
+			return nil
+		}
+		memberships := make([]database.UserDepartmentMembership, 0, len(uniqueDepartmentIDs))
+		for index, departmentID := range uniqueDepartmentIDs {
+			memberships = append(memberships, database.UserDepartmentMembership{
+				OrgID:        orgID,
+				UserID:       userID,
+				DepartmentID: departmentID,
+				IsPrimary:    index == 0,
+			})
+		}
+		return tx.Create(&memberships).Error
+	})
+}
+
+// DeactivateUsersMissingFromDingTalk 将本次完整钉钉通讯录中已不存在的历史同步用户标为停用。
+// 空源列表会 fail-closed，避免第三方异常返回空数据时误停用全员。
+func (r *UserRepository) DeactivateUsersMissingFromDingTalk(sourceDingTalkUserIDs []string) ([]string, error) {
+	orgID, err := r.requireBoundOrg()
+	if err != nil {
+		return nil, err
+	}
+	sourceSet := make(map[string]struct{}, len(sourceDingTalkUserIDs))
+	for _, userID := range sourceDingTalkUserIDs {
+		userID = strings.TrimSpace(userID)
+		if userID != "" {
+			sourceSet[userID] = struct{}{}
+		}
+	}
+	if len(sourceSet) == 0 {
+		return nil, gorm.ErrInvalidData
+	}
+
+	var candidates []database.User
+	if err := r.db.Where("org_id = ? AND deleted_at IS NULL AND status = ? AND ding_talk_user_id <> ?", orgID, "active", "").
+		Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+	deactivatedUserIDs := make([]string, 0)
+	for _, user := range candidates {
+		if _, exists := sourceSet[strings.TrimSpace(user.DingTalkUserID)]; !exists {
+			deactivatedUserIDs = append(deactivatedUserIDs, user.UserID)
+		}
+	}
+	if len(deactivatedUserIDs) == 0 {
+		return deactivatedUserIDs, nil
+	}
+
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&database.User{}).
+			Where("org_id = ? AND user_id IN ? AND deleted_at IS NULL", orgID, deactivatedUserIDs).
+			Update("status", "inactive").Error; err != nil {
+			return err
+		}
+		return tx.Model(&database.EmployeeProfile{}).
+			Where("org_id = ? AND user_id IN ? AND deleted_at IS NULL", orgID, deactivatedUserIDs).
+			Update("profile_status", "inactive").Error
+	})
+	return deactivatedUserIDs, err
 }

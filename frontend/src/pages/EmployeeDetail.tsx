@@ -282,13 +282,10 @@ const EmployeeDetail: React.FC = () => {
   const handleSync = () => {
     if (!canSync) return
     confirmOrgSync({
-      onSuccess: async () => {
-        setSyncing(true)
-        try {
-          await loadDetail(false)
-        } finally {
-          setSyncing(false)
-        }
+      onStart: () => setSyncing(true),
+      onSettled: () => setSyncing(false),
+      onCompleted: async () => {
+        await loadDetail(false)
       },
     })
   }

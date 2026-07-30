@@ -21,10 +21,17 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -ldflags="-s -w" -o /out/peopleops ./cmd/main.go
+    go build -trimpath -ldflags="-s -w" -o /out/peopleops ./cmd/main.go && \
+    go build -trimpath -ldflags="-s -w" -o /out/dingtalk_stream ./cmd/dingtalk_stream
 
 FROM python:3.12-slim AS runtime
 WORKDIR /app
+
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+
+LABEL org.opencontainers.image.revision=$VCS_REF \
+      org.opencontainers.image.created=$BUILD_DATE
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata wget \
@@ -44,6 +51,7 @@ ENV APP_ENV=production \
     ATTENDANCE_TOOLBOX_DIR=/app/tools/attendance_toolbox/python
 
 COPY --from=backend-builder /out/peopleops /app/peopleops
+COPY --from=backend-builder /out/dingtalk_stream /app/dingtalk_stream
 COPY --from=frontend-builder /src/frontend/dist /app/frontend/dist
 COPY tools/attendance_toolbox /app/tools/attendance_toolbox
 

@@ -640,6 +640,7 @@ func TestOrgUniqueSpecsMatchGormModelIndexes(t *testing.T) {
 	models := map[string]interface{}{
 		"organization_users":                &OrganizationUser{},
 		"users":                             &User{},
+		"user_department_memberships":       &UserDepartmentMembership{},
 		"departments":                       &Department{},
 		"employee_profiles":                 &EmployeeProfile{},
 		"attendances":                       &Attendance{},
@@ -655,6 +656,7 @@ func TestOrgUniqueSpecsMatchGormModelIndexes(t *testing.T) {
 		"dingtalk_shift_catalogs":           &DingTalkShiftCatalog{},
 		"week_schedule_rules":               &WeekScheduleRule{},
 		"week_schedule_overrides":           &WeekScheduleOverride{},
+		"week_schedule_group_targets":       &WeekScheduleGroupTarget{},
 		"statutory_holidays":                &StatutoryHoliday{},
 		"annual_leave_eligibilities":        &AnnualLeaveEligibility{},
 		"annual_leave_grants":               &AnnualLeaveGrant{},
@@ -722,6 +724,20 @@ func TestAnnualLeaveConsumeLegacyApprovalUniqueIsInAtomicMigrationMatrix(t *test
 		return
 	}
 	t.Fatal("annual_leave_consume_logs phase-4 spec not found")
+}
+
+func TestUserDepartmentMembershipUniqueContractStartsWithOrganization(t *testing.T) {
+	for _, spec := range AllOrgCompositeUniqueSpecs() {
+		if spec.Table != "user_department_memberships" {
+			continue
+		}
+		want := []string{"org_id", "user_id", "department_id"}
+		if spec.NewIndex != "idx_user_department_membership" || !equalColumns(spec.Columns, want) {
+			t.Fatalf("membership unique contract = %#v, want index with columns %v", spec, want)
+		}
+		return
+	}
+	t.Fatal("user_department_memberships unique contract missing from migration matrix")
 }
 
 func TestUserDingTalkBackfillStopsBeforeUpdateOnSameOrgConflict(t *testing.T) {

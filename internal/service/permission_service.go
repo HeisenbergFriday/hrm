@@ -79,6 +79,7 @@ var systemPermissionDefinitions = []SystemPermissionDefinition{
 	{Name: "用户管理", Code: "user_manage", Description: "用户管理权限"},
 	{Name: "部门管理", Code: "department_manage", Description: "部门管理权限"},
 	{Name: "考勤管理", Code: "attendance_manage", Description: "考勤管理权限"},
+	{Name: "作息表群聊推送", Code: "week_schedule_group_push", Description: "绑定群聊并推送月作息表"},
 	{Name: "考勤工具箱操作", Code: "attendance_toolbox_operate", Description: "考勤工具箱计算、下载与普通操作"},
 	{Name: "考勤工具箱钉钉同步", Code: "attendance_toolbox_dingtalk_sync", Description: "考勤工具箱钉钉同步"},
 	{Name: "考勤工具箱规则编辑", Code: "attendance_toolbox_rules_edit", Description: "考勤工具箱加班规则编辑与应用"},

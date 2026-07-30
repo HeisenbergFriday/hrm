@@ -185,6 +185,79 @@ func (r *ApprovalRepository) FindAll(page, pageSize int, filters map[string]stri
 	if v, ok := filters["applicant_id"]; ok && v != "" {
 		query = query.Where("applicant_id = ?", v)
 	}
+	if v, ok := filters["title"]; ok && v != "" {
+		query = query.Where("title LIKE ?", "%"+v+"%")
+	}
+	if v, ok := filters["start_date"]; ok && v != "" {
+		t, err := time.Parse("2006-01-02", v)
+		if err == nil {
+			query = query.Where("create_time >= ?", t)
+		}
+	}
+	if v, ok := filters["end_date"]; ok && v != "" {
+		t, err := time.Parse("2006-01-02", v)
+		if err == nil {
+			query = query.Where("create_time < ?", t.AddDate(0, 0, 1))
+		}
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * pageSize
+	if err := query.Order("create_time DESC").Offset(offset).Limit(pageSize).Find(&approvals).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return approvals, total, nil
+}
+
+// FindAllByTitleKeywords 与 FindAll 逻辑一致，只是先按标题关键字命中/排除过滤。
+// include=true 时匹配 title LIKE 任一关键字（用于具体分类）；
+// include=false 时排除所有关键字（用于 "other" 分类）。
+// keywords 为空且 include=true 时返回空结果集，避免退化为无条件查询。
+func (r *ApprovalRepository) FindAllByTitleKeywords(page, pageSize int, keywords []string, include bool, filters map[string]string) ([]database.Approval, int64, error) {
+	if _, err := r.requireOrgID(); err != nil {
+		return nil, 0, err
+	}
+	if include && len(keywords) == 0 {
+		return []database.Approval{}, 0, nil
+	}
+	var approvals []database.Approval
+	var total int64
+
+	query := r.scoped().Model(&database.Approval{})
+
+	if len(keywords) > 0 {
+		clauses := make([]string, 0, len(keywords))
+		args := make([]interface{}, 0, len(keywords))
+		for _, kw := range keywords {
+			if strings.TrimSpace(kw) == "" {
+				continue
+			}
+			clauses = append(clauses, "title LIKE ?")
+			args = append(args, "%"+kw+"%")
+		}
+		if len(clauses) > 0 {
+			combined := strings.Join(clauses, " OR ")
+			if include {
+				query = query.Where(combined, args...)
+			} else {
+				query = query.Where("NOT ("+combined+")", args...)
+			}
+		}
+	}
+
+	if v, ok := filters["status"]; ok && v != "" {
+		query = query.Where("status = ?", v)
+	}
+	if v, ok := filters["applicant_id"]; ok && v != "" {
+		query = query.Where("applicant_id = ?", v)
+	}
+	if v, ok := filters["title"]; ok && v != "" {
+		query = query.Where("title LIKE ?", "%"+v+"%")
+	}
 	if v, ok := filters["start_date"]; ok && v != "" {
 		t, err := time.Parse("2006-01-02", v)
 		if err == nil {

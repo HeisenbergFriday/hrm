@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input, message } from 'antd'
 import { FileTextOutlined, SyncOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
@@ -10,6 +10,7 @@ import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { formatDateTime } from '../utils/format'
 
 dayjs.locale('zh-cn')
@@ -36,16 +37,39 @@ const ApprovalInstance: React.FC = () => {
   const navigate = useNavigate()
   const [status, setStatus] = useState<string>('')
   const [templateID, setTemplateID] = useState<string>('')
+  const [category, setCategory] = useState<string>('')
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null]>([null, null])
   const [searchText, setSearchText] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+
+  const CATEGORY_OPTIONS: { value: string; label: string }[] = [
+    { value: 'leave', label: '请假' },
+    { value: 'overtime', label: '加班' },
+    { value: 'punch_fix', label: '补卡' },
+    { value: 'expense', label: '报销' },
+    { value: 'business_trip', label: '出差' },
+    { value: 'outing', label: '外出' },
+    { value: 'other', label: '其他' },
+  ]
+
+  // 防抖搜索：输入停顿 300ms 后触发查询，并把分页重置到第一页
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(searchText.trim())
+      setPage(1)
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [searchText])
 
   const queryParams = {
     page,
     page_size: pageSize,
     status: status || undefined,
     template_id: templateID || undefined,
+    category: templateID ? undefined : (category || undefined),
+    title: debouncedSearch || undefined,
     start_date: dateRange[0]?.format('YYYY-MM-DD') || undefined,
     end_date: dateRange[1]?.format('YYYY-MM-DD') || undefined,
   }
@@ -179,10 +203,23 @@ const ApprovalInstance: React.FC = () => {
             <Option value="pending">待处理</Option>
           </Select>
           <Select
+            placeholder="流程分类"
+            style={{ width: 140 }}
+            allowClear
+            value={category || undefined}
+            onChange={(v) => { setCategory(v || ''); setPage(1) }}
+            disabled={!!templateID}
+          >
+            {CATEGORY_OPTIONS.map((opt) => (
+              <Option key={opt.value} value={opt.value}>{opt.label}</Option>
+            ))}
+          </Select>
+          <Select
             placeholder="审批模板"
             style={{ width: 150 }}
             allowClear
-            onChange={setTemplateID}
+            value={templateID || undefined}
+            onChange={(v) => { setTemplateID(v || ''); setPage(1) }}
           >
             {templatesData?.data?.items?.map((template: any) => (
               <Option key={template.template_id} value={template.template_id}>
@@ -194,11 +231,13 @@ const ApprovalInstance: React.FC = () => {
             onChange={setDateRange}
             placeholder={['开始日期', '结束日期']}
             format="YYYY-MM-DD"
+            locale={datePickerZhCN}
           />
           <Input
             placeholder="搜索标题"
             style={{ width: 200 }}
             prefix={<SearchOutlined />}
+            allowClear
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
           />

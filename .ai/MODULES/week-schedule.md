@@ -1,11 +1,15 @@
 ---
 purpose: 大小周排班模块业务规则说明
-last_updated: 2026-07-20
+last_updated: 2026-07-29
 source_of_truth:
   - internal/api/handlers.go（排班相关 handler）
   - internal/service/week_schedule_service.go
+  - internal/service/week_schedule_group_service.go
   - internal/dingtalk/dingtalk.go（GetScheduleListBatchByDayForOrg / ResolveAdminUserID / UploadImageMediaForOrg / SendCorpImageToUserForOrg）
-  - internal/database/models.go（WeekScheduleRule、WeekScheduleOverride、WeekScheduleSyncLog、StatutoryHoliday 模型）
+  - internal/dingtalk/group_robot.go（企业内部机器人群消息）
+  - internal/api/week_schedule_group_handlers.go
+  - internal/database/models.go（WeekScheduleRule、WeekScheduleOverride、WeekScheduleSyncLog、WeekScheduleGroupTarget、WeekScheduleGroupPushLog、StatutoryHoliday 模型）
+  - cmd/dingtalk_stream/main.go（群聊绑定 Stream 回调）
   - frontend/src/pages/WeekSchedule.tsx（排班管理页面）
 update_when:
   - 修改大小周计算规则时
@@ -14,13 +18,14 @@ update_when:
   - 修改手动覆盖逻辑时
   - 修改多企业排班读取/写入隔离时
   - 修改作息表个人推送（图片消息）时
+  - 修改作息表群聊绑定、解绑、推送或临时图片访问时
 ---
 
 # 大小周排班模块
 
 ## 模块定位
 
-管理大小周排班规则、法定节假日、钉钉班次配置、手动覆盖、双向同步到钉钉考勤组；以及月作息时间表个人推送（文字+图片，不写考勤排班）。
+管理大小周排班规则、法定节假日、钉钉班次配置、手动覆盖、双向同步到钉钉考勤组；以及月作息时间表个人/群聊推送（文字+图片，不写考勤排班）。
 
 ---
 
@@ -107,6 +112,11 @@ type DingTalkShiftCatalog struct {
     UpdatedAt time.Time
 }
 ```
+
+### WeekScheduleGroupTarget / WeekScheduleGroupPushLog
+
+- `WeekScheduleGroupTarget` 保存当前组织绑定的本地群目标 ID、群名称和服务端专用 `openConversationId`；唯一键为 `(org_id, open_conversation_id)`，API JSON 禁止暴露组织 ID 和会话 ID。
+- `WeekScheduleGroupPushLog` 保存操作人、组织、月份、本地群目标、群名称、`processing/submitted/rejected/failed` 状态、钉钉请求 ID 与安全错误摘要；不得记录 Webhook、凭据、临时图片令牌或原始第三方错误。
 
 ---
 
@@ -281,6 +291,22 @@ Body：
 
 行为：按 JWT `org_id` 查用户 → 上传一次图片得 `media_id` → 逐人发送文字 + 图片消息（`msgtype: image`）；优先 `DingTalkUserID`，回退 `UserID`；单人失败不阻断；返回 success/partial/failed 与 `recipients[]`。**不写考勤排班**。
 
+#### GET /api/v1/week-schedule/group-targets
+
+权限：`week_schedule_group_push`，兼容 `attendance_manage`。只返回 JWT 当前 `org_id` 的 active 群目标，响应不包含 `openConversationId`。
+
+#### DELETE /api/v1/week-schedule/group-targets/:id
+
+按 JWT 当前 `org_id` 软解绑本地群目标；跨组织 ID 一律按不存在处理。
+
+#### POST /api/v1/week-schedule/push/group
+
+权限：`week_schedule_group_push`，兼容 `attendance_manage`。
+
+multipart 字段：`image`（PNG/JPEG）、`group_target_id`、`title`、`content`、`month`（`YYYY-MM`）。客户端只能提交本地 `group_target_id`；请求出现 `org_id`、Webhook、AppKey/Secret、RobotCode 或任意 `openConversationId` 时拒绝。
+
+钉钉群消息接口仅表示异步受理，因此成功响应状态固定为 `submitted`，页面文案为“已提交”，不得显示已送达或推送成功。同组织、月份、群目标 10 分钟内的 `processing/submitted` 会被拦截。
+
 #### POST /api/v1/week-schedule/sync/from-dingtalk
 从钉钉同步
 
@@ -381,11 +407,21 @@ Body：
 4. **记录同步日志**
    - 写入 `WeekScheduleSyncLog`（仅同步过程开始后；缺配置时不得落库）
 
+### 群聊绑定与推送流程
+
+1. 每个 Stream 实例显式配置 `DINGTALK_STREAM_ORG_ID` 时，必须从该 active 组织读取配套 AppKey/Secret；未显式配置时才使用全局 AppKey/Secret 唯一匹配 active 组织。组织不存在、凭据缺失、0 条/多条匹配均启动失败，禁止回退 default 或混用其他组织凭据。
+2. 群内 @机器人发送精确文本“绑定作息表”；发送者必须映射为当前组织在职本地用户，并具备 `week_schedule_group_push` 或 `attendance_manage`。
+3. 服务端保存 `openConversationId` 和群名称；前端只查询/提交本地群目标 ID。
+4. 群图片不能复用个人消息 `media_id`：生成 32 字节随机令牌的 HTTPS 临时地址，内存仅保存令牌 SHA-256，默认 10 分钟过期；无效/过期返回 404，禁止日志记录访问令牌。
+5. 通过 `robot/groupMessages/send` 提交 `sampleMarkdown`（文字 + HTTPS 图片）；RobotCode、AppKey、Secret 只从当前组织配置解析。
+6. 只有群推送日志成功落为 `submitted` 后才能向页面返回“已提交”；钉钉拒绝/超时/配置缺失映射为安全错误，原始第三方信息和凭据不回显。
+7. 个人/群聊推送文案以最近周六的实际日历状态为准，首行突出“今天/明天/本周六/下周六需上班或休息”；大周/小周仅作为补充说明，不得代替 `saturday_work` 与节假日调班状态判断。
+
 ### 周五自动提醒（可选）
 
 默认关闭。开启后按本地时区（建议 TZ=Asia/Shanghai）在每周五指定时刻向配置名单发送文字提醒：
 
-- 内容：本周大/小周 + 明天（周六）是否上班
+- 内容：首行突出“明天需上班/明天休息”，随后显示周六日期和本周大/小周；是否上班以实际日历状态为准
 - 不写考勤排班；不上传图片
 - 环境变量：
   - WEEK_SCHEDULE_FRIDAY_REMINDER_ENABLED=true
@@ -427,6 +463,9 @@ Body：
 - 周历查看
 - 手动覆盖
 - 作息表推送（月历 PNG + 文字到选定员工的个人钉钉；默认不预选）
+- 推送弹窗支持“员工/群聊”切换；两种模式默认均不选择目标，群聊显示已绑定群名称并在提交前二次确认
+- 缺少群推送权限时写按钮 disabled + Tooltip；钉钉受理后只显示“已提交”
+- 推送文字按发送日期自适应：周五写“明天”、周六写“今天”、周一至周四写“本周六”、周日写“下周六”，并将“需上班/休息”置于首行
 - 旧「按日期写入考勤排班」接口仍保留为 `/sync/to-dingtalk`，页面主按钮不再调用
 
 ---
@@ -436,6 +475,9 @@ Body：
 - `DINGTALK_ATTENDANCE_GROUP_ID`：钉钉考勤组 ID
 - `DINGTALK_ATTENDANCE_GROUP_NAME`：钉钉考勤组名称
 - `JUHE_API_KEY`：聚合数据节假日接口 Key（可选）
+- `DINGTALK_STREAM_ORG_ID`：Stream 实例显式所属组织（可选；配置后从该组织读取 AppKey/Secret，未配置时全局 AppKey 必须唯一匹配 active 组织）
+- 当前组织 `AppHomeURL`：必须为钉钉可访问的 HTTPS 地址，用于短期群图片访问
+- 当前组织扩展 `dingtalk_robot_code`：群机器人编码；未配置时使用该组织 AppKey
 
 ---
 
@@ -457,6 +499,9 @@ Body：
 - 检查钉钉应用是否具备企业内部消息与媒体上传权限
 - 检查收件人 dingtalk_user_id/user_id 是否可通知
 - 单人失败不影响其他人，查看响应 recipients[]
+- 群聊推送需先在群内 @机器人发送“绑定作息表”，并检查绑定人本地映射与 `week_schedule_group_push`/`attendance_manage`
+- 群聊图片要求当前组织配置可公网访问的 HTTPS `AppHomeURL`；临时地址过期后返回 404 属正常安全行为
+- “已提交”仅代表钉钉接口受理，不代表最终送达
 
 ### 法定节假日不生效
 - 检查 `StatutoryHoliday` 表是否有数据

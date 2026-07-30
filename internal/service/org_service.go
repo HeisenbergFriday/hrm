@@ -165,6 +165,7 @@ type OrgDepartmentSyncItem struct {
 	DingTalkDepartmentID string
 	Name                 string
 	ParentID             string
+	DingTalkParentID     string
 	Order                int
 	HeadUserIDs          []string
 	Extension            map[string]interface{}
@@ -489,7 +490,68 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepar
 
 	result := OrgDepartmentSyncResult{}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		for _, item := range items {
+		var storedDepartments []database.Department
+		if err := tx.Unscoped().Where("org_id = ?", orgID).Find(&storedDepartments).Error; err != nil {
+			return err
+		}
+		byLocalID := make(map[string]*database.Department, len(storedDepartments))
+		byDingTalkID := make(map[string]*database.Department, len(storedDepartments))
+		for i := range storedDepartments {
+			department := &storedDepartments[i]
+			byLocalID[strings.TrimSpace(department.DepartmentID)] = department
+			if externalID := strings.TrimSpace(department.DingTalkDepartmentID); externalID != "" {
+				if previous, exists := byDingTalkID[externalID]; exists && previous.ID != department.ID {
+					return fmt.Errorf("duplicate stored dingtalk department id %s", externalID)
+				}
+				byDingTalkID[externalID] = department
+			}
+		}
+
+		resolvedItems := append([]OrgDepartmentSyncItem(nil), items...)
+		localIDByDingTalkID := make(map[string]string, len(resolvedItems))
+		for i := range resolvedItems {
+			item := &resolvedItems[i]
+			item.OrgID = orgID
+			item.DepartmentID = strings.TrimSpace(item.DepartmentID)
+			item.DingTalkDepartmentID = strings.TrimSpace(item.DingTalkDepartmentID)
+			item.DingTalkParentID = strings.TrimSpace(item.DingTalkParentID)
+			if existing := byLocalID[item.DepartmentID]; existing != nil {
+				if item.DingTalkDepartmentID != "" {
+					if stableMatch := byDingTalkID[item.DingTalkDepartmentID]; stableMatch != nil && stableMatch.ID != existing.ID {
+						return fmt.Errorf("department identity conflict for dingtalk id %s", item.DingTalkDepartmentID)
+					}
+				}
+			} else if existing := byDingTalkID[item.DingTalkDepartmentID]; existing != nil {
+				// Historical rows may still use the unscoped local department_id. Preserve
+				// that identifier so existing user/permission references remain valid.
+				item.DepartmentID = existing.DepartmentID
+			}
+			if item.DingTalkDepartmentID != "" {
+				if previous, exists := localIDByDingTalkID[item.DingTalkDepartmentID]; exists && previous != item.DepartmentID {
+					return fmt.Errorf("duplicate incoming dingtalk department id %s", item.DingTalkDepartmentID)
+				}
+				localIDByDingTalkID[item.DingTalkDepartmentID] = item.DepartmentID
+			}
+		}
+		for i := range resolvedItems {
+			item := &resolvedItems[i]
+			if item.DingTalkParentID == "" {
+				continue
+			}
+			if parentID, exists := localIDByDingTalkID[item.DingTalkParentID]; exists {
+				item.ParentID = parentID
+				continue
+			}
+			if item.DingTalkParentID == "0" {
+				if existing := byLocalID[item.DepartmentID]; existing != nil && strings.TrimSpace(existing.ParentID) != "" {
+					item.ParentID = existing.ParentID
+				}
+				continue
+			}
+			return fmt.Errorf("parent department %s not found in sync payload", item.DingTalkParentID)
+		}
+
+		for _, item := range resolvedItems {
 			// The explicit method argument is the trusted tenant boundary. Do not allow
 			// a per-item organization value to redirect writes to another tenant.
 			item.OrgID = orgID
@@ -502,9 +564,8 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepar
 			}
 
 			result.Count++
-			var existing database.Department
-			err := tx.Where("org_id = ? AND department_id = ?", orgID, item.DepartmentID).First(&existing).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
+			existing := byLocalID[item.DepartmentID]
+			if existing == nil {
 				department := database.Department{
 					OrgID:                orgID,
 					DepartmentID:         item.DepartmentID,
@@ -517,14 +578,15 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepar
 				if err := tx.Create(&department).Error; err != nil {
 					return err
 				}
+				byLocalID[department.DepartmentID] = &department
+				if department.DingTalkDepartmentID != "" {
+					byDingTalkID[department.DingTalkDepartmentID] = &department
+				}
 				if err := createDepartmentChangeLog(tx, orgID, item.DepartmentID, item.Name, "created", "department", "", item.Name, source, s.nowFn()); err != nil {
 					return err
 				}
 				result.ChangeLogCount++
 				continue
-			}
-			if err != nil {
-				return err
 			}
 
 			logs := make([]database.DepartmentChangeLog, 0, 5)
@@ -544,6 +606,10 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepar
 				logs = append(logs, newDepartmentChangeLog(orgID, item.DepartmentID, item.Name, "updated", "dingtalk_department_id", existing.DingTalkDepartmentID, item.DingTalkDepartmentID, source, s.nowFn()))
 				existing.DingTalkDepartmentID = item.DingTalkDepartmentID
 			}
+			if existing.DeletedAt.Valid {
+				logs = append(logs, newDepartmentChangeLog(orgID, item.DepartmentID, item.Name, "updated", "deleted_at", "deleted", "restored", source, s.nowFn()))
+				existing.DeletedAt = gorm.DeletedAt{}
+			}
 			nextExtension := departmentSyncExtension(existing.Extension, item)
 			if !reflect.DeepEqual(existing.Extension, nextExtension) {
 				logs = append(logs, newDepartmentChangeLog(orgID, item.DepartmentID, item.Name, "updated", "extension", "", "dingtalk_department_head_sync", source, s.nowFn()))
@@ -552,7 +618,7 @@ func (s *OrgService) SyncDepartmentsWithChangeLog(orgID string, items []OrgDepar
 			if len(logs) == 0 {
 				continue
 			}
-			if err := tx.Save(&existing).Error; err != nil {
+			if err := tx.Unscoped().Save(existing).Error; err != nil {
 				return err
 			}
 			if err := tx.Create(&logs).Error; err != nil {
@@ -800,6 +866,10 @@ func (s *OrgService) GetDepartmentTree(scope *OrgDataScope) ([]*OrgDepartmentTre
 	if err != nil {
 		return nil, err
 	}
+	orgID, err := resolveServiceOrgID(s.orgID, s.db)
+	if err != nil {
+		return nil, err
+	}
 
 	if scope != nil && !scope.IsAll() {
 		filtered := make([]database.Department, 0, len(scope.DepartmentIDs))
@@ -832,39 +902,53 @@ func (s *OrgService) GetDepartmentTree(scope *OrgDataScope) ([]*OrgDepartmentTre
 		snapshots = filteredSnapshots
 	}
 
-	directCounts := make(map[string]*OrgDepartmentTreeNode)
+	snapshotByUserID := make(map[string]orgEmployeeSnapshot, len(snapshots))
 	for _, snapshot := range snapshots {
-		count := directCounts[snapshot.DepartmentID]
-		if count == nil {
-			count = &OrgDepartmentTreeNode{}
-			directCounts[snapshot.DepartmentID] = count
+		snapshotByUserID[snapshot.UserID] = snapshot
+	}
+	visibleDepartmentIDs := make([]string, 0, len(departments))
+	for _, department := range departments {
+		visibleDepartmentIDs = append(visibleDepartmentIDs, department.DepartmentID)
+	}
+	var memberships []database.UserDepartmentMembership
+	membershipQuery := s.db.Where("org_id = ?", orgID)
+	if len(visibleDepartmentIDs) > 0 {
+		membershipQuery = membershipQuery.Where("department_id IN ?", visibleDepartmentIDs)
+	}
+	if err := membershipQuery.Find(&memberships).Error; err != nil {
+		return nil, err
+	}
+	directUsers := make(map[string]*departmentUserSets, len(departments))
+	usersWithMembership := make(map[string]struct{}, len(memberships))
+	for _, membership := range memberships {
+		snapshot, ok := snapshotByUserID[membership.UserID]
+		if !ok {
+			continue
 		}
-		count.Headcount++
-		count.DirectHeadcount++
-		if strings.EqualFold(snapshot.Status, "active") {
-			count.ActiveCount++
-			count.DirectActiveCount++
-		} else {
-			count.InactiveCount++
+		usersWithMembership[membership.UserID] = struct{}{}
+		ensureDepartmentUserSets(directUsers, membership.DepartmentID).add(snapshot.UserID, snapshot.Status)
+	}
+	// 兼容迁移前或人工创建且尚未生成成员关系的用户，继续按主部门计数。
+	for _, snapshot := range snapshots {
+		if _, ok := usersWithMembership[snapshot.UserID]; ok {
+			continue
 		}
+		ensureDepartmentUserSets(directUsers, snapshot.DepartmentID).add(snapshot.UserID, snapshot.Status)
 	}
 
 	nodeMap := make(map[string]*OrgDepartmentTreeNode, len(departments))
 	roots := make([]*OrgDepartmentTreeNode, 0)
 	for _, department := range departments {
-		count := directCounts[department.DepartmentID]
-		if count == nil {
-			count = &OrgDepartmentTreeNode{}
-		}
+		sets := ensureDepartmentUserSets(directUsers, department.DepartmentID)
 		nodeMap[department.DepartmentID] = &OrgDepartmentTreeNode{
 			ID:                department.DepartmentID,
 			Name:              department.Name,
 			ParentID:          department.ParentID,
-			Headcount:         count.Headcount,
-			ActiveCount:       count.ActiveCount,
-			InactiveCount:     count.InactiveCount,
-			DirectHeadcount:   count.DirectHeadcount,
-			DirectActiveCount: count.DirectActiveCount,
+			Headcount:         len(sets.all),
+			ActiveCount:       len(sets.active),
+			InactiveCount:     len(sets.inactive),
+			DirectHeadcount:   len(sets.all),
+			DirectActiveCount: len(sets.active),
 			Children:          []*OrgDepartmentTreeNode{},
 		}
 	}
@@ -881,7 +965,7 @@ func (s *OrgService) GetDepartmentTree(scope *OrgDataScope) ([]*OrgDepartmentTre
 
 	sortDepartmentTree(roots)
 	for _, root := range roots {
-		rollupTreeCounts(root)
+		rollupTreeUniqueCounts(root, directUsers)
 	}
 	return roots, nil
 }
@@ -963,7 +1047,13 @@ func (s *OrgService) baseEmployeeQuery(departmentIDs []string) *gorm.DB {
 		Where("users.deleted_at IS NULL").
 		Where("users.user_id <> ?", "admin")
 	if len(departmentIDs) > 0 {
-		query = query.Where("users.department_id IN ?", departmentIDs)
+		query = query.Where(`(EXISTS (
+			SELECT 1 FROM user_department_memberships udm
+			WHERE udm.org_id = ? AND udm.user_id = users.user_id AND udm.department_id IN ?
+		) OR (users.department_id IN ? AND NOT EXISTS (
+			SELECT 1 FROM user_department_memberships udm_fallback
+			WHERE udm_fallback.org_id = ? AND udm_fallback.user_id = users.user_id
+		)))`, orgID, departmentIDs, departmentIDs, orgID)
 	}
 	return query
 }
@@ -1693,13 +1783,73 @@ func buildDepartmentPath(departmentID string, scope *OrgDataScope, departmentMap
 	return path[firstVisible:]
 }
 
-func rollupTreeCounts(node *OrgDepartmentTreeNode) {
-	for _, child := range node.Children {
-		rollupTreeCounts(child)
-		node.Headcount += child.Headcount
-		node.ActiveCount += child.ActiveCount
-		node.InactiveCount += child.InactiveCount
+type departmentUserSets struct {
+	all      map[string]struct{}
+	active   map[string]struct{}
+	inactive map[string]struct{}
+}
+
+func ensureDepartmentUserSets(items map[string]*departmentUserSets, departmentID string) *departmentUserSets {
+	sets := items[departmentID]
+	if sets == nil {
+		sets = &departmentUserSets{
+			all:      make(map[string]struct{}),
+			active:   make(map[string]struct{}),
+			inactive: make(map[string]struct{}),
+		}
+		items[departmentID] = sets
 	}
+	return sets
+}
+
+func (s *departmentUserSets) add(userID, status string) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return
+	}
+	s.all[userID] = struct{}{}
+	if strings.EqualFold(strings.TrimSpace(status), "active") {
+		s.active[userID] = struct{}{}
+		delete(s.inactive, userID)
+		return
+	}
+	if _, active := s.active[userID]; !active {
+		s.inactive[userID] = struct{}{}
+	}
+}
+
+func (s *departmentUserSets) merge(other *departmentUserSets) {
+	if other == nil {
+		return
+	}
+	for userID := range other.all {
+		s.all[userID] = struct{}{}
+	}
+	for userID := range other.active {
+		s.active[userID] = struct{}{}
+		delete(s.inactive, userID)
+	}
+	for userID := range other.inactive {
+		if _, active := s.active[userID]; !active {
+			s.inactive[userID] = struct{}{}
+		}
+	}
+}
+
+func rollupTreeUniqueCounts(node *OrgDepartmentTreeNode, directUsers map[string]*departmentUserSets) *departmentUserSets {
+	combined := &departmentUserSets{
+		all:      make(map[string]struct{}),
+		active:   make(map[string]struct{}),
+		inactive: make(map[string]struct{}),
+	}
+	combined.merge(directUsers[node.ID])
+	for _, child := range node.Children {
+		combined.merge(rollupTreeUniqueCounts(child, directUsers))
+	}
+	node.Headcount = len(combined.all)
+	node.ActiveCount = len(combined.active)
+	node.InactiveCount = len(combined.inactive)
+	return combined
 }
 
 func sortDepartmentTree(nodes []*OrgDepartmentTreeNode) {

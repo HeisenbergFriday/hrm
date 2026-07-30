@@ -2,10 +2,13 @@ import React from 'react'
 import { render, screen, waitFor, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import dayjs from 'dayjs'
 import AttendanceToolbox, {
   buildAttendanceToolboxWorkflowOptionFields,
   getAttendanceToolboxDownloadableFiles,
+  getPreviousCalendarMonthRange,
   getSubsidyAuditMeta,
+  resolveErrorMessage,
 } from './AttendanceToolbox'
 
 const mockRun = vi.fn()
@@ -168,7 +171,29 @@ describe('getAttendanceToolboxDownloadableFiles', () => {
   })
 })
 
+describe('attendance toolbox error messages', () => {
+  it('hides nginx HTML and returns a friendly message for gateway timeouts', async () => {
+    const message = await resolveErrorMessage({
+      response: {
+        status: 504,
+        data: new Blob(['<html><head><title>504 Gateway Time-out</title></head></html>']),
+      },
+    })
+
+    expect(message).toBe('网关等待钉钉响应超时，请稍后重试；若持续出现，请联系管理员检查代理超时配置')
+    expect(message).not.toContain('<html>')
+  })
+})
+
 describe('attendance toolbox workflow options', () => {
+  it('uses the previous complete calendar month as the month-end default', () => {
+    const [start, end] = getPreviousCalendarMonthRange(dayjs('2026-07-03'))
+    expect([start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')]).toEqual([
+      '2026-06-01',
+      '2026-06-30',
+    ])
+  })
+
   it('passes the month lock and custom rules to subsidy', () => {
     expect(buildAttendanceToolboxWorkflowOptionFields(
       'subsidy',
@@ -321,6 +346,52 @@ describe('AttendanceToolbox', () => {
     await waitForToolboxReady()
     await user.click(screen.getByRole('tab', { name: /钉钉同步/ }))
     expect(await screen.findByRole('button', { name: /从钉钉同步并生成中间表/ })).toBeInTheDocument()
+    const dateInputs = await screen.findAllByLabelText('钉钉同步日期范围')
+    const previousMonth = dayjs().subtract(1, 'month')
+    expect(dateInputs.map((input) => (input as HTMLInputElement).value)).toEqual([
+      previousMonth.startOf('month').format('YYYY-MM-DD'),
+      previousMonth.endOf('month').format('YYYY-MM-DD'),
+    ])
+  })
+
+  it('pulls the leave export from dingtalk and fills the upload field', async () => {
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await user.click(screen.getByRole('button', { name: '从钉钉拉取请假表' }))
+
+    await waitFor(() => {
+      const previousMonth = dayjs().subtract(1, 'month')
+      expect(mockRunDingtalkSync).toHaveBeenCalledWith(expect.objectContaining({
+        start_date: previousMonth.startOf('month').format('YYYY-MM-DD'),
+        end_date: previousMonth.endOf('month').format('YYYY-MM-DD'),
+        flow_keys: ['leave'],
+        padding_days: 31,
+      }))
+    })
+    expect(await screen.findByText('请假系统导出_钉钉同步.xlsx')).toBeInTheDocument()
+    expect(messageApi.success).toHaveBeenCalledWith('请假数据拉取完成，已自动回填到请假系统导出表')
+  })
+
+  it('keeps manual upload available when pulling leave data fails', async () => {
+    mockRunDingtalkSync.mockImplementation((request: { flow_keys?: string[] }) => {
+      if (request.flow_keys?.includes('leave')) {
+        return Promise.reject({ response: { status: 400, data: { message: '请假流程未配置' } } })
+      }
+      return Promise.resolve(new Blob(['excel'], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      }))
+    })
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await user.click(screen.getByRole('button', { name: '从钉钉拉取请假表' }))
+
+    await waitFor(() => expect(messageApi.error).toHaveBeenCalledWith('请假数据拉取失败：请假流程未配置'))
+    expect(screen.getByText('拉取失败：请假流程未配置')).toBeInTheDocument()
+    expect(screen.getAllByText('点击或拖拽 Excel 到这里').length).toBeGreaterThan(0)
   })
 
   it('auto syncs roster and transfer files while keeping manual upload flows available', async () => {
@@ -352,6 +423,7 @@ describe('AttendanceToolbox', () => {
     await waitForToolboxReady()
     // 无钉钉同步权限时不应自动拉花名册/异动
     expect(mockRunDingtalkSync).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '从钉钉拉取请假表' })).toBeDisabled()
     await user.click(screen.getByRole('tab', { name: /钉钉同步/ }))
     expect(await screen.findByRole('button', { name: /从钉钉同步并生成中间表/ })).toBeDisabled()
   })

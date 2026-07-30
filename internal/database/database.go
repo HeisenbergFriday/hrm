@@ -896,6 +896,7 @@ func organizationScopedTables() []string {
 func organizationScopedModelTables() []string {
 	models := []interface{}{
 		&User{},
+		&UserDepartmentMembership{},
 		&Department{},
 		&DepartmentChangeLog{},
 		&Attendance{},
@@ -922,6 +923,8 @@ func organizationScopedModelTables() []string {
 		&WeekScheduleRule{},
 		&WeekScheduleOverride{},
 		&WeekScheduleSyncLog{},
+		&WeekScheduleGroupTarget{},
+		&WeekScheduleGroupPushLog{},
 		&StatutoryHoliday{},
 		&LeaveRuleConfig{},
 		&AnnualLeaveEligibility{},
@@ -978,6 +981,7 @@ func organizationScopedModelTables() []string {
 
 var organizationScopedTableNameSet = map[string]struct{}{
 	"users":                                {},
+	"user_department_memberships":          {},
 	"departments":                          {},
 	"department_change_logs":               {},
 	"attendances":                          {},
@@ -1004,6 +1008,8 @@ var organizationScopedTableNameSet = map[string]struct{}{
 	"week_schedule_rules":                  {},
 	"week_schedule_overrides":              {},
 	"week_schedule_sync_logs":              {},
+	"week_schedule_group_targets":          {},
+	"week_schedule_group_push_logs":        {},
 	"statutory_holidays":                   {},
 	"leave_rule_configs":                   {},
 	"annual_leave_eligibilities":           {},
@@ -1232,6 +1238,7 @@ func migrate() error {
 		&Organization{},
 		&OrganizationUser{},
 		&User{},
+		&UserDepartmentMembership{},
 		&Department{},
 		&DepartmentChangeLog{},
 		&Attendance{},
@@ -1261,6 +1268,8 @@ func migrate() error {
 		&WeekScheduleRule{},
 		&WeekScheduleOverride{},
 		&WeekScheduleSyncLog{},
+		&WeekScheduleGroupTarget{},
+		&WeekScheduleGroupPushLog{},
 		&PerformanceTemplate{},
 		&PerformanceTemplateSection{},
 		&PerformanceTemplateItem{},

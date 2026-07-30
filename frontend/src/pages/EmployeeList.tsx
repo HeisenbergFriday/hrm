@@ -5,7 +5,6 @@ import {
   Col,
   Empty,
   Input,
-  Modal,
   Row,
   Select,
   Skeleton,
@@ -25,6 +24,7 @@ import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { hasPermission } from '../utils/permission'
 import { maskEmail, maskMobile } from '../utils/maskPii'
+import { confirmOrgSync } from '../utils/orgSyncAction'
 
 const { Text } = Typography
 const { Search } = Input
@@ -206,23 +206,11 @@ const EmployeeList: React.FC = () => {
 
   const handleSync = () => {
     if (!canSyncOrg) return
-    Modal.confirm({
-      title: '同步组织数据',
-      content: '将从钉钉重新拉取部门与员工数据并写入本系统，可能耗时较长。确认开始同步？',
-      okText: '确认同步',
-      cancelText: '取消',
-      onOk: async () => {
-        setSyncing(true)
-        try {
-          await orgAPI.syncOrg()
-          message.success('组织数据同步成功')
-          await loadData(false)
-        } catch {
-          message.error('组织数据同步失败')
-          return Promise.reject(new Error('sync failed'))
-        } finally {
-          setSyncing(false)
-        }
+    confirmOrgSync({
+      onStart: () => setSyncing(true),
+      onSettled: () => setSyncing(false),
+      onCompleted: async () => {
+        await loadData(false)
       },
     })
   }

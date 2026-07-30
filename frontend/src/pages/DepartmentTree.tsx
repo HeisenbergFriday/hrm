@@ -235,15 +235,22 @@ const DepartmentTree: React.FC = () => {
         title: (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, width: '100%', padding: '4px 0' }}>
             <span style={{ fontWeight: node.children?.length ? 500 : 400 }}>{node.name}</span>
-            <span style={{
-              color: 'var(--color-text-tertiary)',
-              fontSize: 'var(--font-size-xs)',
-              background: 'var(--color-bg-light)',
-              padding: '2px 8px',
-              borderRadius: 'var(--radius-sm)'
-            }}>
-              {node.active_count} 人{node.direct_active_count !== node.active_count ? ` (直属 ${node.direct_active_count})` : ''}
-            </span>
+            <Tooltip title={
+              node.direct_active_count !== node.active_count
+                ? `含下级部门去重：${node.active_count} 人 | 直属本部门：${node.direct_active_count} 人`
+                : `直属本部门：${node.active_count} 人`
+            }>
+              <span style={{
+                color: 'var(--color-text-tertiary)',
+                fontSize: 'var(--font-size-xs)',
+                background: 'var(--color-bg-light)',
+                padding: '2px 8px',
+                borderRadius: 'var(--radius-sm)',
+                cursor: 'default'
+              }}>
+                {node.active_count} 人{node.direct_active_count !== node.active_count ? ` (直属 ${node.direct_active_count})` : ''}
+              </span>
+            </Tooltip>
           </div>
         ),
         children: mapNodes(node.children || []),
@@ -270,13 +277,10 @@ const DepartmentTree: React.FC = () => {
   const handleSync = () => {
     if (!canSync) return
     confirmOrgSync({
-      onSuccess: async () => {
-        setSyncing(true)
-        try {
-          await loadTree(false)
-        } finally {
-          setSyncing(false)
-        }
+      onStart: () => setSyncing(true),
+      onSettled: () => setSyncing(false),
+      onCompleted: async () => {
+        await loadTree(false)
       },
     })
   }
@@ -349,7 +353,8 @@ const DepartmentTree: React.FC = () => {
                 style={{ marginBottom: 16 }}
                 type="info"
                 showIcon
-                message="展示部门层级中的在职人数，区分直属在职与含下级汇总在职，帮助快速查看组织结构。"
+                message="人数口径说明"
+                description="树中显示的数字为「含下级部门去重」的在职人数；括号内「直属」为本部门直接归属在职人数。多部门员工在各部门各计一次，父部门汇总时按员工 ID 去重。鼠标悬停人数标签可查看详细口径。"
               />
               <div style={{ maxHeight: 'calc(100vh - 380px)', overflow: 'auto' }}>
               <Tree
@@ -399,7 +404,9 @@ const DepartmentTree: React.FC = () => {
                   ) : (
                     <>
                       <div style={{ marginTop: 12, marginBottom: 8 }}>
-                        <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>统计口径：含下级部门汇总数据</Text>
+                        <Tooltip title="主数字为含下级部门去重的在职人数；括号内为直属本部门人数。多部门员工在父部门汇总时按员工 ID 去重。">
+                          <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>统计口径：含下级部门汇总数据</Text>
+                        </Tooltip>
                       </div>
                       <Row gutter={[12, 12]}>
                         <Col span={8}>

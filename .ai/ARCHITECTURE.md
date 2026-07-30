@@ -1,6 +1,6 @@
 ---
 purpose: 项目整体架构、数据流、核心设计约束
-last_updated: 2026-07-20
+last_updated: 2026-07-29
 source_of_truth:
   - go.mod（后端技术栈）
   - frontend/package.json（前端技术栈）
@@ -62,7 +62,7 @@ update_when:
 4. **审批同步**：钉钉审批实例 → 本地 `approvals` 表
 5. **年假发放**：本地计算 → 写入 `annual_leave_grants` → 同步到钉钉假期配置
 6. **加班匹配**：钉钉审批 + 本地打卡 → 计算有效加班时长 → 写入 `overtime_match_results` → 生成调休余额 → 同步到钉钉
-7. **大小周排班**：本地配置 `week_schedule_rules` → 计算每周班次 → 同步到钉钉考勤组
+7. **大小周排班与通知**：本地配置 `week_schedule_rules` → 计算每周班次 → 同步到钉钉考勤组；或生成月作息表 → 个人消息 / 已绑定企业内部机器人群消息
 8. **绩效管理**：活动创建 → 参与人刷新 →（沐腾）双门槛开启 + 参与人独立流水线 /（旧流程）统一阶段推进 → 结果确认/公布 → 归档
 9. **员工全生命周期**：入职 → 档案管理 → 转岗 → 离职
 10. **补卡申请**：员工提交补卡 → 审批流程 → 钉钉同步
@@ -123,6 +123,11 @@ type Response struct {
 - 旧 URL `/api/v1/files/<random_filename>`：**fail-closed**（无元数据所有权证明即 404），不开放全企业访问
 - 安全保留：扩展名白名单、内容嗅探、ClamAV（可选）、`X-Content-Type-Options: nosniff`、路径穿越防护
 - 绩效附件：业务字段仍存 URL 字符串；`AttachmentUpload` + `authFileUrl` 用 `credentials: include` 预览，新上传自然得到 file_id URL
+
+#### 作息表群聊临时图片
+- 群机器人 Markdown 不支持复用个人企业消息 `media_id`，使用钉钉可访问的 HTTPS 临时地址。
+- 图片仅在内存短期保存；URL 令牌为 32 字节 CSPRNG，map key 仅存 SHA-256，默认 10 分钟过期；无效/过期统一 404。
+- 公共入口固定为 `/api/v1/week-schedule/group-image?token=...`，不得返回物理路径、组织目录或永久公开文件；访问日志不得记录查询令牌。
 
 #### 钉钉 ID 存储
 - `User.UserID` 和 `Department.DepartmentID` 存钉钉原始 ID（字符串），不是本地自增主键
@@ -197,6 +202,9 @@ type Response struct {
 2. 可手动覆盖特定周（`WeekScheduleOverride`）
 3. 同步到钉钉班次（`WeekScheduleService.SyncToDingTalk`）：按用户分配钉钉 Shift；读写钉钉必须走当前 JWT `org_id` 的 access_token / `op_user_id`
 4. 从钉钉回读（`SyncFromDingTalk` / `SyncFromDingTalkConservative`）仅调用 `GetScheduleListBatchByDayForOrg(orgID, ...)`，禁止非 default 企业走默认 `GetScheduleListBatchByDay` / `GetAccessToken`
+5. 群聊绑定由 `cmd/dingtalk_stream` Chatbot 回调处理；Stream AppKey 必须唯一解析到 active 组织或与显式 `DINGTALK_STREAM_ORG_ID` 一致，禁止 default 回退。
+6. 群内 @机器人“绑定作息表”时，发送者需映射当前组织在职用户并具备 `week_schedule_group_push`（兼容 `attendance_manage`）；只把本地群目标 ID 暴露给前端。
+7. 群推送通过 `robot/groupMessages/send` 提交 Markdown 文字 + HTTPS 临时图片；`submitted` 只表示钉钉受理，必须在本地日志终态持久化后返回。
 
 ### 绩效管理流程
 1. **活动配置**：HR 创建绩效活动，设置时间范围、参与人范围、关联指标库；按 `flow_type` 区分小铁文娱旧流程与沐腾科技新流程
@@ -226,7 +234,9 @@ type Response struct {
 - **tenant-scoped 缺 org fail-closed**：仓储/服务在缺少 `orgID` 时必须硬失败（如 `repository: orgID required for tenant-scoped operation` / `ErrMissingOrgID`），禁止发明 `default`、禁止无过滤全表扫描。
 - **已解析组织优先 `NewXxxWithOrgID`**：Handler/登录路径一旦解析出 `orgID`（JWT、钉钉回调 `resolvedOrgID`、state 等），构造用户/部门/审批等服务时必须 `NewXxxServiceWithOrgID(db, orgID)`，**禁止**先 `NewXxxService(db)` 再指望实体字段补作用域。
 - **实体字段 `OrgID` ≠ 仓储绑定**：`User.OrgID` / 模型上的 `org_id` 列只描述数据归属；**不能**替代 repository/service 构造时注入的组织绑定。跨 org 实体写入必须拒绝。
+- **外部稳定身份 ≠ 本地引用 ID**：钉钉同步以租户内 `dingtalk_department_id` / `ding_talk_user_id` 识别同一外部实体；`department_id` / `user_id` 是内部引用，历史值可能未加租户前缀。upsert 必须优先按 `org_id + 外部稳定 ID` 匹配并保留既有本地 ID，再解析父部门、部门、主管、档案和角色引用，禁止用新 scoped ID 直接插入撞唯一键或破坏历史引用。
 - **钉钉工具调用**：考勤工具箱等直接调用钉钉的功能必须使用 JWT `org_id` 解析 `organizations` 中的 AppKey/AppSecret；审批流程码存于 `organizations.extension.dingtalk_process_codes`，非默认组织禁止回退全局钉钉凭证或流程码，且请求 body/multipart 不得覆盖服务端解析的组织配置。
+- **Stream 回调组织归属**：长连接启动时必须把当前 AppKey fail-closed 绑定到唯一 active `org_id`；群聊绑定只使用该 Stream 组织上下文，不从消息体推断或回退 default。群目标查询、解绑、推送继续只认 JWT `org_id`。
 - **钉钉 op_user_id（企业管理员）**：`organizations.ding_talk_admin_user_id`（模型字段 `DingTalkAdminUserID`）为权威来源；`dingtalk.ResolveAdminUserID(orgID)` / `ResolveAdminUserIDFromConfig` 统一解析。非 default 企业**禁止**回退全局 `DINGTALK_ADMIN_USER_ID`；default 企业可在 `DefaultConfig` / `ConfigFromOrganization` 配置解析层兼容环境变量。排班读写、班次创建、年假/调休额度写钉钉均须走该解析，业务层禁止直接 `os.Getenv("DINGTALK_ADMIN_USER_ID")`。
 - **班次 ID 进程缓存**：`ShiftConfigService` 的 `shiftIDCache` key 必须为 `orgID|shiftKey`；提供 `ClearShiftIDCacheForTest` 避免测试互相污染。相同班次名+时间在不同企业不得共享钉钉 `shift_id`。
 - **缺配置 fail-closed**：非 default 企业缺少 App 凭证或 `DingTalkAdminUserID` 时，排班同步/班次创建/假期写钉钉须直接报错，禁止写库后 partial 成功、禁止静默用 default 企业 token。
@@ -262,6 +272,8 @@ type Response struct {
 - `DINGTALK_ORGANIZATIONS`：JSON 数组种子/更新多企业钉钉配置，字段含 `org_id` / `corp_id` / `app_key` / `app_secret` / `agent_id` / `admin_user_id`|`dingtalk_admin_user_id` / `process_codes` 等
 - `DINGTALK_REDIRECT_URI`：OAuth 回调地址
 - `DINGTALK_APP_HOME_URL`：应用首页地址
+- `DINGTALK_STREAM_ORG_ID`：Stream 实例显式组织；未配置时当前 AppKey 必须唯一匹配 active 组织
+- `DINGTALK_ROBOT_CODE`：default 企业机器人编码兼容项；多企业优先 `organizations.extension.dingtalk_robot_code`，未配置时使用本组织 AppKey
 - `APP_BASE_URL`：后端服务地址
 - `FRONTEND_BASE_URL`：前端服务地址
 

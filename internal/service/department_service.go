@@ -40,6 +40,10 @@ func (s *DepartmentService) GetDepartmentByDepartmentID(departmentID string) (*d
 	return s.departmentRepo.FindByDepartmentID(departmentID)
 }
 
+func (s *DepartmentService) GetDepartmentByDingTalkDepartmentID(dingTalkDepartmentID string) (*database.Department, error) {
+	return s.departmentRepo.FindByDingTalkDepartmentID(dingTalkDepartmentID)
+}
+
 func (s *DepartmentService) GetDepartmentByID(id string) (*database.Department, error) {
 	return s.departmentRepo.FindByID(id)
 }

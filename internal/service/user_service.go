@@ -40,6 +40,10 @@ func (s *UserService) GetUserByUserID(userID string) (*database.User, error) {
 	return s.userRepo.FindByUserID(userID)
 }
 
+func (s *UserService) GetUserByDingTalkUserID(dingTalkUserID string) (*database.User, error) {
+	return s.userRepo.FindByDingTalkUserID(dingTalkUserID)
+}
+
 // GetUserByOrgAndUserID 根据组织ID和用户ID获取用户（多租户）
 func (s *UserService) GetUserByOrgAndUserID(orgID, userID string) (*database.User, error) {
 	return s.userRepo.FindByOrgAndUserID(orgID, userID)
@@ -85,6 +89,14 @@ func (s *UserService) GetSyncedEmployees(page, pageSize int) ([]database.User, i
 
 func (s *UserService) GetSyncedEmployeesByDepartment(departmentID string, page, pageSize int) ([]database.User, int64, error) {
 	return s.userRepo.FindSyncedEmployeesByDepartment(departmentID, page, pageSize)
+}
+
+func (s *UserService) ReplaceDepartmentMemberships(userID string, departmentIDs []string) error {
+	return s.userRepo.ReplaceDepartmentMemberships(userID, departmentIDs)
+}
+
+func (s *UserService) DeactivateUsersMissingFromDingTalk(sourceDingTalkUserIDs []string) ([]string, error) {
+	return s.userRepo.DeactivateUsersMissingFromDingTalk(sourceDingTalkUserIDs)
 }
 
 func (s *UserService) UpdateUserExtension(userID string, extension map[string]interface{}) error {

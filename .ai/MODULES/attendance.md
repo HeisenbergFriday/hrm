@@ -386,6 +386,7 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 
 功能：
 - 六个页签：钉钉同步、请假明细、加班明细、补贴扣款、最终汇总、兼职汇总
+- 请假明细页签可选择日期范围，直接按当前组织的钉钉请假审批流程拉取“请假系统导出表”并自动回填；手动上传继续作为兜底。月结操作默认选择上一个完整自然月（例如 7 月 2 日操作默认 6 月 1 日至 6 月 30 日），钉钉同步页签使用相同默认值；用户仍可手动调整。该数据是审批实例级源表，不等同于考勤查询使用的外部同步每日聚合结果，禁止从每日结果反向拼接审批导出表。
 - 上传 Excel 后由 HR 后端调用 `tools/attendance_toolbox/python/runner.py`
 - 结果直接下载，不再跳转到外部 Streamlit 工具
 - 特殊名单、成都作息名单、产研部门关键字、晚走补贴人员、兼职特殊人员名单进入页面时直接展示原工具默认值，用户可按需修改或清空
@@ -440,6 +441,7 @@ Body：
 - `ATTENDANCE_TOOLBOX_DIR`：考勤工具箱 Python 引擎目录，默认自动查找 `tools/attendance_toolbox/python`
 - `ATTENDANCE_TOOLBOX_PYTHON`：Python 可执行文件，默认 Windows 使用 `python`，Linux 使用 `python3`
 - `ATTENDANCE_TOOLBOX_TIMEOUT_SECONDS`：工具箱单次计算超时时间，默认 600 秒
+- 工具箱长任务超时顺序必须保持：后端 `ATTENDANCE_TOOLBOX_TIMEOUT_SECONDS` 默认 600 秒 < Nginx/外层网关 630 秒 < 前端请求 660 秒。任一外层代理仍为默认约 60 秒时，钉钉同步会被提前截断并返回 504；部署配置见 `deploy/README.md`。
 
 ---
 
