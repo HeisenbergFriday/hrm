@@ -377,7 +377,8 @@ type EmployeeProfile struct {
 	Nationality  string `gorm:"type:varchar(64)" json:"nationality"`                                                         // 国籍
 	IDCardNumber string `gorm:"type:varchar(32)" json:"id_card_number"`                                                      // 身份证号
 	// 工作信息（本地业务字段）
-	EmploymentType     string `gorm:"type:varchar(32)" json:"employment_type"`      // 雇佣类型：全职、兼职、实习
+	EmploymentType     string `gorm:"type:varchar(128)" json:"employment_type"`     // 钉钉返回或组织配置解析后的员工类型名称
+	EmploymentTypeCode string `gorm:"type:varchar(64)" json:"employment_type_code"` // 钉钉员工类型原始代码；不得用猜测名称替代
 	EntryDate          string `gorm:"type:varchar(32)" json:"entry_date"`           // 入职日期
 	ProbationEndDate   string `gorm:"type:varchar(32)" json:"probation_end_date"`   // 试用期结束日期
 	PlannedRegularDate string `gorm:"type:varchar(32)" json:"planned_regular_date"` // 计划转正日期

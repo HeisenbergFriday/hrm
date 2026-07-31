@@ -72,7 +72,7 @@ var (
 	syncUsersForOrg           = dingtalk.SyncUsersForOrg
 	syncUsersWithDeptsForOrg  = dingtalk.SyncUsersWithDeptsForOrg
 	persistOrgSyncDepartments = func(c *gin.Context, orgID string, depts []dingtalk.DeptInfo) (service.OrgDepartmentSyncResult, error) {
-		orgService := service.NewOrgService(middleware.RequestDB(c))
+		orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 		return orgService.SyncDepartmentsWithChangeLog(orgID, dingtalkDepartmentsToOrgSyncItems(orgID, depts), "dingtalk_sync")
 	}
 	writeOrgSyncStatusForRequest = func(c *gin.Context, orgID string, update orgSyncStatusUpdate) error {
@@ -731,6 +731,7 @@ func applyDingTalkProfileFields(profile *database.EmployeeProfile, user dingtalk
 	}
 	if user.EmploymentType != "" {
 		profile.EmploymentType = user.EmploymentType
+		profile.EmploymentTypeCode = user.EmploymentTypeCode
 	}
 	if user.JobLevel != "" {
 		profile.JobLevel = user.JobLevel
@@ -1959,7 +1960,7 @@ func GetUsers(c *gin.Context) {
 			})
 			return
 		}
-		orgService := service.NewOrgService(middleware.RequestDB(c))
+		orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 		users, total, err := orgService.ListEmployees(scope, page, pageSize, service.OrgEmployeeFilters{
 			DepartmentID: c.Query("department_id"),
 			Search:       c.Query("search"),
@@ -3476,6 +3477,10 @@ func GetSyncStatus(c *gin.Context) {
 }
 
 func GetOrgOverview(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	scope, err := resolveOrgScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3486,7 +3491,7 @@ func GetOrgOverview(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	overview, err := orgService.GetOverview(scope, c.Query("department_id"))
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
@@ -3546,13 +3551,17 @@ func GetScopedDepartments(c *gin.Context) {
 }
 
 func GetOrgDepartmentTree(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	// ?all=true 跳过 scope 过滤，用于配置数据权限时展示全部部门
 	if c.Query("all") == "true" {
 		if !currentUserHasAnyPermission(c, "permission_manage", "user_manage") {
 			respondOrgAccessDenied(c)
 			return
 		}
-		orgService := service.NewOrgService(middleware.RequestDB(c))
+		orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 		tree, err := orgService.GetDepartmentTree(nil)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, Response{
@@ -3580,7 +3589,7 @@ func GetOrgDepartmentTree(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	tree, err := orgService.GetDepartmentTree(scope)
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
@@ -3606,6 +3615,10 @@ func GetOrgDepartmentTree(c *gin.Context) {
 }
 
 func GetOrgDepartmentHistory(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	scope, err := resolveOrgScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3617,7 +3630,7 @@ func GetOrgDepartmentHistory(c *gin.Context) {
 	}
 
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	logs, err := orgService.GetDepartmentHistory(scope, c.Param("id"), limit)
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
@@ -3643,6 +3656,10 @@ func GetOrgDepartmentHistory(c *gin.Context) {
 }
 
 func GetOrgEmployees(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 
@@ -3656,15 +3673,20 @@ func GetOrgEmployees(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	users, total, err := orgService.ListEmployees(scope, page, pageSize, service.OrgEmployeeFilters{
 		DepartmentID: c.Query("department_id"),
 		Search:       c.Query("search"),
 		Status:       c.Query("status"),
+		FilterType:   c.Query("filter_type"),
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
 			respondOrgAccessDenied(c)
+			return
+		}
+		if errors.Is(err, service.ErrInvalidOrgEmployeeFilter) {
+			c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "员工筛选类型无效"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3687,6 +3709,10 @@ func GetOrgEmployees(c *gin.Context) {
 }
 
 func GetOrgEmployeeDetail(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	scope, err := resolveOrgScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3697,7 +3723,7 @@ func GetOrgEmployeeDetail(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	detail, err := orgService.GetEmployeeAggregate(scope, c.Param("id"))
 	if err != nil {
 		switch {

@@ -118,36 +118,38 @@ func safeDingTalkErrorForLog(err error) string {
 }
 
 type AppConfig struct {
-	OrgID         string              `json:"org_id"`
-	Name          string              `json:"name"`
-	CorpID        string              `json:"corp_id"`
-	AppKey        string              `json:"app_key"`
-	AppSecret     string              `json:"app_secret"`
-	AgentID       string              `json:"agent_id"`
-	AdminUserID   string              `json:"-"`
-	RobotCode     string              `json:"-"`
-	AppHomeURL    string              `json:"app_home_url"`
-	RedirectURI   string              `json:"redirect_uri"`
-	Status        string              `json:"status"`
-	HRMFieldCodes map[string][]string `json:"-"`
-	HRMFieldNames map[string][]string `json:"-"`
+	OrgID           string                       `json:"org_id"`
+	Name            string                       `json:"name"`
+	CorpID          string                       `json:"corp_id"`
+	AppKey          string                       `json:"app_key"`
+	AppSecret       string                       `json:"app_secret"`
+	AgentID         string                       `json:"agent_id"`
+	AdminUserID     string                       `json:"-"`
+	RobotCode       string                       `json:"-"`
+	AppHomeURL      string                       `json:"app_home_url"`
+	RedirectURI     string                       `json:"redirect_uri"`
+	Status          string                       `json:"status"`
+	HRMFieldCodes   map[string][]string          `json:"-"`
+	HRMFieldNames   map[string][]string          `json:"-"`
+	HRMFieldOptions map[string]map[string]string `json:"-"`
 }
 
 var ErrUserNotNotifiable = errors.New("dingtalk user is not active/notifiable")
 
 type Config struct {
-	OrgID         string
-	AppKey        string
-	AppSecret     string
-	CorpID        string
-	AgentID       string
-	AdminUserID   string
-	RobotCode     string
-	AppHomeURL    string
-	RedirectURI   string
-	ProcessCodes  map[string]string
-	HRMFieldCodes map[string][]string
-	HRMFieldNames map[string][]string
+	OrgID           string
+	AppKey          string
+	AppSecret       string
+	CorpID          string
+	AgentID         string
+	AdminUserID     string
+	RobotCode       string
+	AppHomeURL      string
+	RedirectURI     string
+	ProcessCodes    map[string]string
+	HRMFieldCodes   map[string][]string
+	HRMFieldNames   map[string][]string
+	HRMFieldOptions map[string]map[string]string
 }
 
 type accessTokenCacheEntry struct {
@@ -245,18 +247,19 @@ func ConfigForOrgID(orgID string) (Config, error) {
 
 func ConfigFromOrganization(org database.Organization) Config {
 	cfg := Config{
-		OrgID:         database.NormalizeOrganizationID(org.OrgID),
-		AppKey:        strings.TrimSpace(org.DingTalkAppKey),
-		AppSecret:     strings.TrimSpace(org.DingTalkSecret),
-		CorpID:        strings.TrimSpace(org.CorpID),
-		AgentID:       strings.TrimSpace(org.DingTalkAgentID),
-		AdminUserID:   strings.TrimSpace(org.DingTalkAdminUserID),
-		RobotCode:     firstNonEmpty(organizationExtensionString(org.Extension, "dingtalk_robot_code"), org.DingTalkAppKey),
-		AppHomeURL:    strings.TrimRight(strings.TrimSpace(org.AppHomeURL), "/"),
-		RedirectURI:   strings.TrimSpace(org.RedirectURI),
-		ProcessCodes:  processCodesFromOrganizationExtension(org.Extension),
-		HRMFieldCodes: hrmFieldMapFromOrganizationExtension(org.Extension, "dingtalk_hrm_field_codes"),
-		HRMFieldNames: hrmFieldMapFromOrganizationExtension(org.Extension, "dingtalk_hrm_field_names"),
+		OrgID:           database.NormalizeOrganizationID(org.OrgID),
+		AppKey:          strings.TrimSpace(org.DingTalkAppKey),
+		AppSecret:       strings.TrimSpace(org.DingTalkSecret),
+		CorpID:          strings.TrimSpace(org.CorpID),
+		AgentID:         strings.TrimSpace(org.DingTalkAgentID),
+		AdminUserID:     strings.TrimSpace(org.DingTalkAdminUserID),
+		RobotCode:       firstNonEmpty(organizationExtensionString(org.Extension, "dingtalk_robot_code"), org.DingTalkAppKey),
+		AppHomeURL:      strings.TrimRight(strings.TrimSpace(org.AppHomeURL), "/"),
+		RedirectURI:     strings.TrimSpace(org.RedirectURI),
+		ProcessCodes:    processCodesFromOrganizationExtension(org.Extension),
+		HRMFieldCodes:   hrmFieldMapFromOrganizationExtension(org.Extension, "dingtalk_hrm_field_codes"),
+		HRMFieldNames:   hrmFieldMapFromOrganizationExtension(org.Extension, "dingtalk_hrm_field_names"),
+		HRMFieldOptions: hrmFieldOptionsFromOrganizationExtension(org.Extension),
 	}
 	// default org: env fallback for admin is encapsulated here.
 	if cfg.OrgID == database.DefaultOrganizationID && cfg.AdminUserID == "" {
@@ -282,6 +285,7 @@ func (cfg Config) normalized() Config {
 	cfg.ProcessCodes = normalizeProcessCodes(cfg.ProcessCodes)
 	cfg.HRMFieldCodes = normalizeHRMFieldMap(cfg.HRMFieldCodes)
 	cfg.HRMFieldNames = normalizeHRMFieldMap(cfg.HRMFieldNames)
+	cfg.HRMFieldOptions = normalizeHRMFieldOptions(cfg.HRMFieldOptions)
 	return cfg
 }
 
@@ -322,17 +326,18 @@ func InitWithConfig(cfg AppConfig) error {
 
 func configFromAppConfig(cfg AppConfig) Config {
 	result := Config{
-		OrgID:         cfg.OrgID,
-		AppKey:        cfg.AppKey,
-		AppSecret:     cfg.AppSecret,
-		CorpID:        cfg.CorpID,
-		AgentID:       cfg.AgentID,
-		AdminUserID:   cfg.AdminUserID,
-		RobotCode:     cfg.RobotCode,
-		AppHomeURL:    cfg.AppHomeURL,
-		RedirectURI:   cfg.RedirectURI,
-		HRMFieldCodes: cfg.HRMFieldCodes,
-		HRMFieldNames: cfg.HRMFieldNames,
+		OrgID:           cfg.OrgID,
+		AppKey:          cfg.AppKey,
+		AppSecret:       cfg.AppSecret,
+		CorpID:          cfg.CorpID,
+		AgentID:         cfg.AgentID,
+		AdminUserID:     cfg.AdminUserID,
+		RobotCode:       cfg.RobotCode,
+		AppHomeURL:      cfg.AppHomeURL,
+		RedirectURI:     cfg.RedirectURI,
+		HRMFieldCodes:   cfg.HRMFieldCodes,
+		HRMFieldNames:   cfg.HRMFieldNames,
+		HRMFieldOptions: cfg.HRMFieldOptions,
 	}.normalized()
 	if result.OrgID == database.DefaultOrganizationID {
 		result.HRMFieldCodes = mergeHRMFieldMaps(result.HRMFieldCodes, hrmFieldCodesFromEnv())
@@ -344,18 +349,19 @@ func configFromAppConfig(cfg AppConfig) Config {
 func appConfigFromConfig(cfg Config) AppConfig {
 	cfg = cfg.normalized()
 	return AppConfig{
-		OrgID:         cfg.OrgID,
-		CorpID:        cfg.CorpID,
-		AppKey:        cfg.AppKey,
-		AppSecret:     cfg.AppSecret,
-		AgentID:       cfg.AgentID,
-		AdminUserID:   cfg.AdminUserID,
-		RobotCode:     cfg.RobotCode,
-		AppHomeURL:    cfg.AppHomeURL,
-		RedirectURI:   cfg.RedirectURI,
-		Status:        "active",
-		HRMFieldCodes: cfg.HRMFieldCodes,
-		HRMFieldNames: cfg.HRMFieldNames,
+		OrgID:           cfg.OrgID,
+		CorpID:          cfg.CorpID,
+		AppKey:          cfg.AppKey,
+		AppSecret:       cfg.AppSecret,
+		AgentID:         cfg.AgentID,
+		AdminUserID:     cfg.AdminUserID,
+		RobotCode:       cfg.RobotCode,
+		AppHomeURL:      cfg.AppHomeURL,
+		RedirectURI:     cfg.RedirectURI,
+		Status:          "active",
+		HRMFieldCodes:   cfg.HRMFieldCodes,
+		HRMFieldNames:   cfg.HRMFieldNames,
+		HRMFieldOptions: cfg.HRMFieldOptions,
 	}
 }
 
@@ -638,6 +644,62 @@ func hrmFieldMapFromOrganizationExtension(extension map[string]interface{}, exte
 		}
 	}
 	return normalizeHRMFieldMap(result)
+}
+
+func hrmFieldOptionsFromOrganizationExtension(extension map[string]interface{}) map[string]map[string]string {
+	if extension == nil {
+		return nil
+	}
+	raw, ok := extension["dingtalk_hrm_field_options"]
+	if !ok || raw == nil {
+		return nil
+	}
+	result := map[string]map[string]string{}
+	fields, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	for fieldKey, rawOptions := range fields {
+		options, ok := rawOptions.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for code, rawLabel := range options {
+			label, ok := rawLabel.(string)
+			if !ok {
+				continue
+			}
+			if result[fieldKey] == nil {
+				result[fieldKey] = map[string]string{}
+			}
+			result[fieldKey][code] = label
+		}
+	}
+	return normalizeHRMFieldOptions(result)
+}
+
+func normalizeHRMFieldOptions(values map[string]map[string]string) map[string]map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]map[string]string)
+	for _, fieldKey := range supportedHRMFieldKeys {
+		for code, label := range values[fieldKey] {
+			code = strings.TrimSpace(code)
+			label = strings.TrimSpace(label)
+			if code == "" || label == "" {
+				continue
+			}
+			if result[fieldKey] == nil {
+				result[fieldKey] = make(map[string]string)
+			}
+			result[fieldKey][code] = label
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func stringListFromConfigValue(value interface{}) []string {
@@ -1246,6 +1308,7 @@ type UserInfo struct {
 	ActualRegularDate      string                 `json:"actual_regular_date"`
 	ProbationEndDate       string                 `json:"probation_end_date"`
 	EmploymentType         string                 `json:"employment_type"`
+	EmploymentTypeCode     string                 `json:"employment_type_code"`
 	JobLevel               string                 `json:"job_level"`
 	JobFamily              string                 `json:"job_family"`
 	HRMFieldSyncStatus     string                 `json:"hrm_field_sync_status"`
@@ -1671,14 +1734,15 @@ func prefixedDingTalkSource(apiName, source string) string {
 }
 
 type hrmRegularDates struct {
-	Planned          string
-	Actual           string
-	ProbationEndDate string
-	EmploymentType   string
-	JobLevel         string
-	JobFamily        string
-	Position         string
-	PositionSource   string
+	Planned            string
+	Actual             string
+	ProbationEndDate   string
+	EmploymentType     string
+	EmploymentTypeCode string
+	JobLevel           string
+	JobFamily          string
+	Position           string
+	PositionSource     string
 }
 
 func enrichUsersWithHRMFields(accessToken string, users map[string]UserInfo) error {
@@ -1715,6 +1779,7 @@ func enrichUsersWithHRMFieldsForOrg(accessToken string, users map[string]UserInf
 			user.ActualRegularDate = regularDates.Actual
 			user.ProbationEndDate = regularDates.ProbationEndDate
 			user.EmploymentType = regularDates.EmploymentType
+			user.EmploymentTypeCode = regularDates.EmploymentTypeCode
 			user.JobLevel = regularDates.JobLevel
 			user.JobFamily = regularDates.JobFamily
 			if strings.TrimSpace(user.Position) == "" && strings.TrimSpace(regularDates.Position) != "" {
@@ -1818,7 +1883,7 @@ func parseHRMEmployeeFields(fields []interface{}, cfg Config) hrmRegularDates {
 			result.ProbationEndDate = value
 		}
 		if result.EmploymentType == "" && matchesConfiguredHRMField(fieldMap, cfg, hrmFieldEmploymentType) {
-			result.EmploymentType = extractHRMTextFieldValue(fieldMap)
+			result.EmploymentTypeCode, result.EmploymentType = resolveHRMEmploymentType(fieldMap, cfg)
 		}
 		if result.JobLevel == "" && matchesConfiguredHRMField(fieldMap, cfg, hrmFieldJobLevel) {
 			result.JobLevel = extractHRMTextFieldValue(fieldMap)
@@ -3213,6 +3278,147 @@ func extractHRMTextFieldValue(field map[string]interface{}) string {
 		}
 	}
 	return firstNonEmptyStringValue(field["value"], field["label"], field["text"], field["name"])
+}
+
+func resolveHRMEmploymentType(field map[string]interface{}, cfg Config) (string, string) {
+	rawValue, responseLabel := extractHRMOptionValue(field)
+	if rawValue == "" && responseLabel == "" {
+		return "", ""
+	}
+	if responseLabel != "" && responseLabel != rawValue {
+		return rawValue, responseLabel
+	}
+	if rawValue != "" {
+		if label := strings.TrimSpace(cfg.normalized().HRMFieldOptions[hrmFieldEmploymentType][rawValue]); label != "" {
+			return rawValue, label
+		}
+		if containsHanText(rawValue) {
+			return "", rawValue
+		}
+		return rawValue, fmt.Sprintf("未知类型（代码：%s）", rawValue)
+	}
+	return "", responseLabel
+}
+
+func extractHRMOptionValue(field map[string]interface{}) (string, string) {
+	values, ok := field["field_value_list"].([]interface{})
+	if !ok {
+		values, _ = field["fieldValueList"].([]interface{})
+	}
+	for _, item := range values {
+		valueMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		rawValue := scalarStringPreserveZero(valueMap["value"])
+		if rawValue == "" {
+			rawValue = scalarStringPreserveZero(valueMap["code"])
+		}
+		label := firstNonEmptyStringValue(
+			valueMap["label"], valueMap["text"], valueMap["name"],
+			valueMap["field_name"], valueMap["fieldName"],
+			valueMap["option_name"], valueMap["optionName"],
+		)
+		if label == "" && rawValue != "" {
+			label = findHRMOptionLabel(field, rawValue)
+		}
+		if rawValue != "" || label != "" {
+			return rawValue, label
+		}
+	}
+	rawValue := scalarStringPreserveZero(field["value"])
+	label := firstNonEmptyStringValue(field["label"], field["text"], field["option_name"], field["optionName"])
+	if label == "" && rawValue != "" {
+		label = findHRMOptionLabel(field, rawValue)
+	}
+	return rawValue, label
+}
+
+func findHRMOptionLabel(field map[string]interface{}, code string) string {
+	for _, key := range []string{
+		"options", "option_list", "optionList", "field_options", "fieldOptions",
+		"option_data_list", "optionDataList", "field_value_options", "fieldValueOptions",
+	} {
+		switch options := field[key].(type) {
+		case map[string]interface{}:
+			switch option := options[code].(type) {
+			case map[string]interface{}:
+				if label := firstNonEmptyStringValue(option["label"], option["text"], option["name"], option["field_name"], option["fieldName"]); label != "" {
+					return label
+				}
+			default:
+				if label := firstNonEmptyStringValue(option); label != "" {
+					return label
+				}
+			}
+		case []interface{}:
+			for _, option := range options {
+				optionMap, ok := option.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				optionCode := firstNonEmptyPreserveZero(optionMap["value"], optionMap["code"], optionMap["id"], optionMap["key"])
+				if optionCode != code {
+					continue
+				}
+				if label := firstNonEmptyStringValue(optionMap["label"], optionMap["text"], optionMap["name"], optionMap["field_name"], optionMap["fieldName"]); label != "" {
+					return label
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyPreserveZero(values ...interface{}) string {
+	for _, value := range values {
+		if text := scalarStringPreserveZero(value); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func scalarStringPreserveZero(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+	case int:
+		return strconv.Itoa(typed)
+	case int8:
+		return strconv.FormatInt(int64(typed), 10)
+	case int16:
+		return strconv.FormatInt(int64(typed), 10)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	default:
+		return ""
+	}
+}
+
+func containsHanText(value string) bool {
+	for _, r := range value {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveManagerNames(users map[string]UserInfo) {

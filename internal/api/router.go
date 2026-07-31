@@ -135,7 +135,6 @@ func SetupRouter() *gin.Engine {
 				org.GET("/departments/tree", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage", "permission_manage"}, orgReadMenus), GetOrgDepartmentTree)
 				org.GET("/departments/:id/history", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgDepartmentHistory)
 				org.GET("/overview", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgOverview)
-
 				org.GET("/employees", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployees)
 				org.GET("/employees/:id", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployeeDetail)
 				org.GET("/employees/:id/position-sync-diagnostic", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployeePositionSyncDiagnostic)

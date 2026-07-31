@@ -30,6 +30,7 @@ interface DepartmentTreeNode {
   inactive_count: number
   direct_headcount: number
   direct_active_count: number
+  virtual_kind?: 'organization' | 'unassigned'
   children?: DepartmentTreeNode[]
 }
 
@@ -129,8 +130,8 @@ const DepartmentTree: React.FC = () => {
     void loadTree()
   }, [])
 
-  const loadDepartmentMembers = async (departmentID: string, pageNumber: number) => {
-    if (!departmentID) {
+  const loadDepartmentMembers = async (node: DepartmentTreeNode, pageNumber: number) => {
+    if (!node.id || node.virtual_kind === 'unassigned') {
       setDepartmentEmployees([])
       setDepartmentEmployeeTotal(0)
       return
@@ -141,7 +142,7 @@ const DepartmentTree: React.FC = () => {
       const response = await orgAPI.getEmployees({
         page: pageNumber,
         page_size: departmentEmployeePageSize,
-        department_id: departmentID,
+        department_id: node.virtual_kind === 'organization' ? undefined : node.id,
       })
       setDepartmentEmployees(response.data.items || [])
       setDepartmentEmployeeTotal(response.data.total || 0)
@@ -159,8 +160,8 @@ const DepartmentTree: React.FC = () => {
       return
     }
 
-    void loadDepartmentMembers(selectedNode.id, departmentEmployeePage)
-  }, [selectedNode?.id, departmentEmployeePage])
+    void loadDepartmentMembers(selectedNode, departmentEmployeePage)
+  }, [selectedNode, departmentEmployeePage])
 
   const loadDepartmentHistory = async (departmentID: string) => {
     if (!departmentID) {
@@ -180,23 +181,23 @@ const DepartmentTree: React.FC = () => {
   }
 
   useEffect(() => {
-    if (!selectedNode?.id) {
+    if (!selectedNode?.id || selectedNode.virtual_kind) {
       setDepartmentHistory([])
       return
     }
 
     void loadDepartmentHistory(selectedNode.id)
-  }, [selectedNode?.id])
+  }, [selectedNode])
 
-  const loadDepartmentOverview = async (departmentID: string) => {
-    if (!departmentID) {
+  const loadDepartmentOverview = async (node: DepartmentTreeNode) => {
+    if (!node.id || node.virtual_kind === 'unassigned') {
       setDepartmentOverview(null)
       return
     }
 
     setOverviewLoading(true)
     try {
-      const response = await orgAPI.getOverview({ department_id: departmentID })
+      const response = await orgAPI.getOverview(node.virtual_kind === 'organization' ? undefined : { department_id: node.id })
       setDepartmentOverview(response.data.overview || null)
     } catch (error) {
       message.error('获取部门统计失败')
@@ -212,8 +213,8 @@ const DepartmentTree: React.FC = () => {
       return
     }
 
-    void loadDepartmentOverview(selectedNode.id)
-  }, [selectedNode?.id])
+    void loadDepartmentOverview(selectedNode)
+  }, [selectedNode])
 
   const scopeLabel = useMemo(() => {
     if (!scope) {
@@ -232,6 +233,7 @@ const DepartmentTree: React.FC = () => {
     const mapNodes = (nodes: DepartmentTreeNode[]): DataNode[] =>
       nodes.map((node) => ({
         key: node.id,
+        selectable: node.virtual_kind !== 'unassigned',
         title: (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, width: '100%', padding: '4px 0' }}>
             <span style={{ fontWeight: node.children?.length ? 500 : 400 }}>{node.name}</span>
@@ -374,7 +376,7 @@ const DepartmentTree: React.FC = () => {
             </PageCard>
           </Col>
           <Col xs={24} lg={10}>
-            <PageCard title="部门基础统计">
+            <PageCard title={selectedNode?.virtual_kind === 'organization' ? '组织基础统计' : '部门基础统计'}>
               {selectedNode ? (
                 <>
                   <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid var(--color-border-light)' }}>
@@ -382,10 +384,15 @@ const DepartmentTree: React.FC = () => {
                       {selectedNode.name}
                     </Title>
                     <Space size={16}>
-                      <Text type="secondary">
-                        <TeamOutlined style={{ marginRight: 4 }} />
-                        总人数 {selectedNode.headcount}
-                      </Text>
+                      <Tooltip title={selectedNode.virtual_kind === 'organization' || !selectedNode.parent_id || selectedNode.parent_id === '0' || selectedNode.parent_id === '1'
+                        ? '根部门人数 = 全组织去重员工总数（含在职+停用，已排除软删除和管理员）'
+                        : '含下级部门去重汇总人数（在职+停用）'
+                      }>
+                        <Text type="secondary">
+                          <TeamOutlined style={{ marginRight: 4 }} />
+                          总人数 {selectedNode.headcount}
+                        </Text>
+                      </Tooltip>
                       <Text type="secondary">
                         直属 {selectedNode.direct_headcount}
                       </Text>

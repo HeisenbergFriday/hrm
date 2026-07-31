@@ -209,7 +209,7 @@ export const orgAPI = {
   getOverview: (params?: { department_id?: string }) => api.get('/org/overview', { params }),
   getDepartmentTree: (params?: { all?: boolean }) => api.get('/org/departments/tree', { params }),
   getDepartmentHistory: (id: string, params?: { limit?: number }) => api.get(`/org/departments/${id}/history`, { params }),
-  getEmployees: (params: { page?: number; page_size?: number; department_id?: string; search?: string; status?: string }) =>
+  getEmployees: (params: { page?: number; page_size?: number; department_id?: string; search?: string; status?: string; filter_type?: string }) =>
     api.get('/org/employees', { params }),
   getEmployee: (id: string) => api.get(`/org/employees/${id}`),
   getEmployeePositionDiagnostic: (id: string) => api.get(`/org/employees/${id}/position-sync-diagnostic`),

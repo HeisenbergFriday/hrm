@@ -283,14 +283,14 @@ func (r *EmployeeRepository) buildLifecycleLedgerQuery(filters map[string]string
 	if v, ok := filters["keyword"]; ok && v != "" {
 		like := "%" + v + "%"
 		query = query.Where(
-			`(
-				users.user_id LIKE ?
-				OR users.name LIKE ?
-				OR users.email LIKE ?
-				OR users.mobile LIKE ?
-				OR users.position LIKE ?
-				OR employee_profiles.employee_id LIKE ?
-			)`,
+			"("+
+				"users.user_id LIKE ?"+
+				" OR users.name"+colCollate(r.db)+" LIKE ?"+
+				" OR users.email LIKE ?"+
+				" OR users.mobile LIKE ?"+
+				" OR users.position"+colCollate(r.db)+" LIKE ?"+
+				" OR employee_profiles.employee_id LIKE ?"+
+				")",
 			like, like, like, like, like, like,
 		)
 	}
