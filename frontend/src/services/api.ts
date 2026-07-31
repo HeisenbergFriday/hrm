@@ -519,7 +519,7 @@ export const jobAPI = {
 }
 
 export const employeeAPI = {
-  getProfiles: (params?: { page?: number; page_size?: number; department_id?: string; status?: string }) =>
+  getProfiles: (params?: { page?: number; page_size?: number; keyword?: string; department_id?: string; status?: string }) =>
     api.get('/employee/profiles', { params }),
   getProfile: (id: string) => api.get(`/employee/profiles/${id}`),
   createProfile: (data: any) => api.post('/employee/profiles', data),
@@ -581,8 +581,10 @@ export const weekScheduleAPI = {
       timeout: 120000,
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
-  /** 查询当前组织已绑定的群聊；响应不包含 openConversationId 或钉钉凭据。 */
+  /** 查询当前组织群聊绑定记录；响应不包含 openConversationId 或钉钉凭据。 */
   getGroupTargets: () => api.get('/week-schedule/group-targets'),
+  /** 手动解绑当前组织的本地群目标。 */
+  unbindGroupTarget: (id: number | string) => api.delete(`/week-schedule/group-targets/${id}`),
   /** 作息表群聊推送：前端仅提交本地 group_target_id。 */
   pushGroupSchedule: (formData: FormData) =>
     api.post('/week-schedule/push/group', formData, {

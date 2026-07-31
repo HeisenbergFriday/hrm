@@ -114,11 +114,11 @@ func (r *EmployeeRepository) usersDepartmentSubquery(singleDepartmentID string, 
 		return "", nil, err
 	}
 	if singleDepartmentID != "" {
-		return "user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id = ? AND deleted_at IS NULL)",
+		return "employee_profiles.user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id = ? AND deleted_at IS NULL)",
 			[]interface{}{orgID, singleDepartmentID}, nil
 	}
 	if len(departmentIDs) > 0 {
-		return "user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)",
+		return "employee_profiles.user_id IN (SELECT user_id FROM users WHERE org_id = ? AND department_id IN ? AND deleted_at IS NULL)",
 			[]interface{}{orgID, departmentIDs}, nil
 	}
 	return "", nil, nil
@@ -186,7 +186,8 @@ func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[str
 	var profiles []database.EmployeeProfile
 	var total int64
 
-	query := r.db.Model(&database.EmployeeProfile{})
+	query := r.db.Model(&database.EmployeeProfile{}).
+		Joins("JOIN users ON users.org_id = employee_profiles.org_id AND users.user_id = employee_profiles.user_id AND users.deleted_at IS NULL")
 	query = r.applyProfileOrgFilter(query)
 
 	if v, ok := filters["department_id"]; ok && v != "" {
@@ -208,18 +209,32 @@ func (r *EmployeeRepository) FindAllProfiles(page, pageSize int, filters map[str
 		}
 	}
 	if v, ok := filters["user_id"]; ok && v != "" {
-		query = query.Where("user_id = ?", v)
+		query = query.Where("employee_profiles.user_id = ?", v)
 	}
 	if v, ok := filters["status"]; ok && v != "" {
-		query = query.Where("profile_status = ?", v)
+		query = query.Where("employee_profiles.profile_status = ?", v)
+	}
+	if keyword := strings.TrimSpace(filters["keyword"]); keyword != "" {
+		like := "%" + keyword + "%"
+		query = query.Where(
+			"("+
+				"users.name"+colCollate(r.db)+" LIKE ?"+
+				" OR users.user_id LIKE ?"+
+				" OR users.email LIKE ?"+
+				" OR users.mobile LIKE ?"+
+				" OR users.position"+colCollate(r.db)+" LIKE ?"+
+				" OR employee_profiles.employee_id LIKE ?"+
+				")",
+			like, like, like, like, like, like,
+		)
 	}
 
-	if err := query.Count(&total).Error; err != nil {
+	if err := query.Distinct("employee_profiles.id").Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
 	offset := (page - 1) * pageSize
-	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&profiles).Error; err != nil {
+	if err := query.Select("employee_profiles.*").Order("employee_profiles.created_at DESC").Offset(offset).Limit(pageSize).Find(&profiles).Error; err != nil {
 		return nil, 0, err
 	}
 

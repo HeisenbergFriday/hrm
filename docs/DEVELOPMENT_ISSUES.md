@@ -1,6 +1,6 @@
 ---
 purpose: 开发问题复盘日志——沉淀已定位根因且有复用价值的缺陷与防复发约束，供开发前查阅、开发后更新
-last_updated: 2026-07-30
+last_updated: 2026-07-31
 source_of_truth:
   - 本文件（问题条目与防复发索引）
   - AGENTS.md（开发前必读 / 开发后必记流程）
@@ -55,6 +55,7 @@ update_when:
 
 | 标签 | 约束摘要 | 条目 |
 |---|---|---|
+| `employee-profile` `search` `api-contract` `test` | 员工档案搜索必须走 `/employee/profiles` 的 handler → EmployeeService → EmployeeRepository 真实链路；禁止用 `/org/employees` 花名册测试代替；关键词、分页和 URL 状态需做前后端契约回归 | [2026-07-31 员工档案搜索错测花名册链路](#2026-07-31-p1-员工档案搜索错测花名册链路导致页面无法搜索) |
 | `org-sync` `frontend` `timeout` `api-contract` `multi-tenant` `security` | 用户/部门/全量组织同步共享同组织门闩；JWT `org_id` 唯一可信；超过网关时限的全量同步必须短请求启动+轮询；执行上下文脱离客户端取消，终态用独立短上下文持久化；HTTP 207 必须刷新已成功数据；响应/状态不得回显原始错误 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
 | `org-sync` `department` `stable-id` `transaction` `release` | 钉钉同步必须按租户内稳定外部 ID 匹配历史部门/员工，保留既有本地 ID 与引用；部门写入失败整事务回滚并跳过员工；发布镜像必须来自可追溯干净 Commit | [2026-07-28 组织同步历史 ID 冲突](#2026-07-28-p1-组织同步历史本地-id-与租户前缀-id-冲突导致部门落库失败) |
 | `org-sync` `department-membership` `counting` `multi-tenant` | 完整部门归属写租户隔离关系表；查询仅在无关系时回退主部门；直属人数按完整关系，父级汇总按员工集合去重；**部署 membership 特性后所有已有组织必须重新同步，否则 0 条 membership 导致多部门员工被遗漏** | [2026-07-28 组织同步仅保存主部门导致部门人数偏少](#2026-07-28-p1-组织同步仅保存主部门导致部门人数偏少) |
@@ -152,6 +153,21 @@ update_when:
 ---
 
 ## 问题条目
+
+### 2026-07-31 P1 员工档案搜索错测花名册链路导致页面无法搜索
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-31 |
+| 级别 | P1 |
+| 模块/标签 | `employee-profile` `search` `api-contract` `frontend` `repository` `multi-tenant` `test` |
+| 范围 | 员工档案页面、API handler、EmployeeService、EmployeeRepository、MySQL/前端回归测试 |
+| 现象 | “组织管理—员工档案”没有搜索框，页面固定一次请求 1000 条档案且没有服务端分页；既有中文搜索验证只覆盖组织花名册 `OrgService.ListEmployees`，不能证明员工档案接口可搜索。 |
+| 根因 | 前端 `EmployeeProfile.tsx` 未建立 keyword/分页/URL 状态；`GetEmployeeProfiles` 只传递部门和状态；`FindAllProfiles` 未关联 users 搜索姓名等主数据。测试边界按相似页面选错入口，没有验证页面实际调用的 handler → EmployeeService → EmployeeRepository 链路。 |
+| 修复 | 员工档案页面增加 antd Search、URL 驱动的 keyword/page/page_size、服务端分页、空结果与失败重试；前端 API 与 handler 增加同名 `keyword`；service/repository 规范化关键词，以当前组织的未删除档案和未删除用户一对一关联，并对姓名、user_id、邮箱、手机号、岗位、工号执行参数化 LIKE；原有本人/部门数据范围继续叠加。 |
+| 验证 | 本地 Go repository/service/API 定向及全包测试通过，go vet 与 golangci-lint 通过；前端员工档案 8 个定向用例及全量 337 个用例通过，lint/build 与 git diff --check 通过。本地 MySQL 专用用例因未配置 TEST_MYSQL_DATABASE_URL 按约束跳过；测试服真实 MySQL 与页面验收待部署后补充。 |
+| 防复发 | 1. 页面搜索回归必须从页面实际 API 路由追踪到对应 handler/service/repository，禁止用相似花名册接口代替。<br>2. 搜索关键词前后端均 TrimSpace，SQL 只使用占位参数。<br>3. employee_profiles JOIN users 必须同时带 org_id、双方 deleted_at；搜索条件必须与现有数据范围做 AND，禁止放宽权限。<br>4. total 按档案主键准确计数，前端禁止通过大 page_size 加载全量再过滤。<br>5. 搜索、页码、每页数量进入 URL，并覆盖刷新、复制链接、前进/返回、清空、无结果、失败重试。 |
+| 状态 | open（代码和本地验证完成；测试服 MySQL 与真实页面验收待完成） |
 
 ### 2026-07-30 P2 考勤工具箱 E2E 重复日期占位符导致 strict mode 失败
 

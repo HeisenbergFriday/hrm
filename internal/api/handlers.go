@@ -5581,7 +5581,16 @@ func RunJob(c *gin.Context) {
 // GetEmployeeProfiles 获取员工档案列表
 func GetEmployeeProfiles(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
 
 	employeeService, _, ok := employeeServiceForRequest(c)
 	if !ok {
@@ -5591,6 +5600,7 @@ func GetEmployeeProfiles(c *gin.Context) {
 	filters := map[string]string{
 		"department_id": c.Query("department_id"),
 		"status":        c.Query("status"),
+		"keyword":       strings.TrimSpace(c.Query("keyword")),
 	}
 	if !currentUserHasAnyPermission(c, "user_manage") {
 		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {
