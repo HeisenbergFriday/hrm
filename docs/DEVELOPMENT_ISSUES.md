@@ -165,9 +165,9 @@ update_when:
 | 现象 | “组织管理—员工档案”没有搜索框，页面固定一次请求 1000 条档案且没有服务端分页；既有中文搜索验证只覆盖组织花名册 `OrgService.ListEmployees`，不能证明员工档案接口可搜索。 |
 | 根因 | 前端 `EmployeeProfile.tsx` 未建立 keyword/分页/URL 状态；`GetEmployeeProfiles` 只传递部门和状态；`FindAllProfiles` 未关联 users 搜索姓名等主数据。测试边界按相似页面选错入口，没有验证页面实际调用的 handler → EmployeeService → EmployeeRepository 链路。 |
 | 修复 | 员工档案页面增加 antd Search、URL 驱动的 keyword/page/page_size、服务端分页、空结果与失败重试；前端 API 与 handler 增加同名 `keyword`；service/repository 规范化关键词，以当前组织的未删除档案和未删除用户一对一关联，并对姓名、user_id、邮箱、手机号、岗位、工号执行参数化 LIKE；原有本人/部门数据范围继续叠加。 |
-| 验证 | 本地 Go repository/service/API 定向及全包测试通过，go vet 与 golangci-lint 通过；前端员工档案 8 个定向用例及全量 337 个用例通过，lint/build 与 git diff --check 通过。本地 MySQL 专用用例因未配置 TEST_MYSQL_DATABASE_URL 按约束跳过；测试服真实 MySQL 与页面验收待部署后补充。 |
+| 验证 | 本地 Go repository/service/API 定向及全包测试通过，go vet 与 golangci-lint 通过；前端员工档案 8 个定向用例及全量 337 个用例通过，lint/build 与 git diff --check 通过。本地 MySQL 专用用例因未配置 TEST_MYSQL_DATABASE_URL 按约束跳过。测试服真实 MySQL 已通过应用容器内的 `EmployeeService.GetProfiles` 真实 repository/service 路径验证完整/部分中文姓名、前后空格、工号、user_id、手机号、邮箱和岗位搜索，使用匿名临时组织数据并按 org_id 清理。部署前镜像 `sha256:e947a7c8e626f6a824fbba732116e40b35c1fba625811b48b8fbd409e4929c34`，部署后镜像 `sha256:83c660e437c8f47f5978ee9fa0d6551447f3681057e24bb77874d4a74a3276b6`；`peopleops-hr-test` running/healthy，`/health` 返回 200。已登录真实页面验收以脱敏账号完成：搜索框文案、完整/部分中文姓名、TrimSpace、关键词变更回第一页、清空恢复、total/分页、URL、刷新、返回/前进和无结果 12 项全部通过；短期验收会话已删除。 |
 | 防复发 | 1. 页面搜索回归必须从页面实际 API 路由追踪到对应 handler/service/repository，禁止用相似花名册接口代替。<br>2. 搜索关键词前后端均 TrimSpace，SQL 只使用占位参数。<br>3. employee_profiles JOIN users 必须同时带 org_id、双方 deleted_at；搜索条件必须与现有数据范围做 AND，禁止放宽权限。<br>4. total 按档案主键准确计数，前端禁止通过大 page_size 加载全量再过滤。<br>5. 搜索、页码、每页数量进入 URL，并覆盖刷新、复制链接、前进/返回、清空、无结果、失败重试。 |
-| 状态 | open（代码和本地验证完成；测试服 MySQL 与真实页面验收待完成） |
+| 状态 | fixed（代码、测试服 MySQL、部署与真实页面验收均完成） |
 
 ### 2026-07-30 P2 考勤工具箱 E2E 重复日期占位符导致 strict mode 失败
 
