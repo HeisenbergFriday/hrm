@@ -611,7 +611,7 @@ type WeekScheduleGroupTarget struct {
 	OrgID              string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_week_schedule_group_target_org_conversation,priority:1;index" json:"-"`
 	OpenConversationID string     `gorm:"type:varchar(256);not null;uniqueIndex:idx_week_schedule_group_target_org_conversation,priority:2" json:"-"`
 	GroupName          string     `gorm:"type:varchar(256);not null" json:"group_name"`
-	Status             string     `gorm:"type:varchar(32);not null;default:'active';index" json:"status"` // active / unbound
+	Status             string     `gorm:"type:varchar(32);not null;default:'active';index" json:"status"` // active / inactive / unbound
 	BoundByUserID      string     `gorm:"type:varchar(64);not null;index" json:"bound_by_user_id"`
 	BoundByUserName    string     `gorm:"type:varchar(128);not null" json:"bound_by_user_name"`
 	BoundAt            time.Time  `gorm:"not null" json:"bound_at"`

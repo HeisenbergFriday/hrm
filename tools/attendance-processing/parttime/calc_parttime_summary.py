@@ -600,8 +600,13 @@ def _parse_daily_text_value(
     is_missing_punch = "缺卡" in text
     is_outing = "外出" in text
     is_business_trip = "出差" in text
+    has_offsite_approval = is_outing or is_business_trip
 
-    if (is_outing or is_business_trip) and count_outing_as_present and not is_absent:
+    # 同一日外出/出差与事假并存时，事假优先，不计出勤。
+    if has_offsite_approval and "事假" in text:
+        return None
+
+    if has_offsite_approval and count_outing_as_present and not is_absent:
         offsite_label = "外出" if is_outing else "出差"
         return _make_daily_entry(
             1.0,

@@ -38,15 +38,20 @@ type AttendanceToolboxResult struct {
 	RowCount    int
 }
 
+type attendanceToolboxRunnerOutput struct {
+	Path     string `json:"path"`
+	FileName string `json:"file_name"`
+	Kind     string `json:"kind"`
+	FlowKey  string `json:"flow_key"`
+	RowCount int    `json:"row_count"`
+}
+
 type attendanceToolboxRunnerResult struct {
-	OK      bool `json:"ok"`
-	Outputs []struct {
-		Path     string `json:"path"`
-		FileName string `json:"file_name"`
-	} `json:"outputs"`
-	Log       string `json:"log"`
-	Error     string `json:"error"`
-	Traceback string `json:"traceback"`
+	OK        bool                            `json:"ok"`
+	Outputs   []attendanceToolboxRunnerOutput `json:"outputs"`
+	Log       string                          `json:"log"`
+	Error     string                          `json:"error"`
+	Traceback string                          `json:"traceback"`
 }
 
 type attendanceToolboxDefaultsResult struct {
@@ -200,6 +205,9 @@ func (s *AttendanceToolboxService) Run(ctx context.Context, module string, form 
 			FileName:    fileName,
 			ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 			Data:        data,
+			Kind:        output.Kind,
+			FlowKey:     output.FlowKey,
+			RowCount:    output.RowCount,
 		}, nil
 	}
 
@@ -229,6 +237,18 @@ type DingtalkSyncRequest struct {
 type DingtalkSyncResult struct {
 	Outputs []AttendanceToolboxResult
 	ZipData []byte
+}
+
+// BusinessExports returns only kind=export outputs (the actual business tables).
+// Audit / meta files are diagnostic and must never be treated as auto-fill inputs.
+func (r *DingtalkSyncResult) BusinessExports() []AttendanceToolboxResult {
+	var exports []AttendanceToolboxResult
+	for _, output := range r.Outputs {
+		if strings.EqualFold(output.Kind, "export") {
+			exports = append(exports, output)
+		}
+	}
+	return exports
 }
 
 func firstNonEmptyTrim(values ...string) string {
@@ -352,10 +372,15 @@ func (s *AttendanceToolboxService) RunDingtalkSync(ctx context.Context, req *Din
 			FileName:    fileName,
 			ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 			Data:        data,
+			Kind:        output.Kind,
+			FlowKey:     output.FlowKey,
+			RowCount:    output.RowCount,
 		})
 	}
 
-	if len(result.Outputs) > 1 {
+	// 只有当存在多个业务 export 时才需要 ZIP；单个业务表直接返回 Excel。
+	// audit/meta 只是诊断文件，不得计入“多文件”从而让旧接口误回 ZIP。
+	if len(result.BusinessExports()) > 1 {
 		archive, zipErr := zipAttendanceToolboxOutputs(workdir, runner.Outputs)
 		if zipErr != nil {
 			return nil, zipErr
@@ -519,10 +544,7 @@ func readAttendanceToolboxOutput(workdir, outputPath string) ([]byte, error) {
 	return os.ReadFile(outputPath)
 }
 
-func zipAttendanceToolboxOutputs(workdir string, outputs []struct {
-	Path     string `json:"path"`
-	FileName string `json:"file_name"`
-}) ([]byte, error) {
+func zipAttendanceToolboxOutputs(workdir string, outputs []attendanceToolboxRunnerOutput) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	for idx, output := range outputs {

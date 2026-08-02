@@ -941,6 +941,15 @@ def action_audit(config: dict, output_dir: Path) -> list[dict]:
     return [{"path": str(audit_path), "file_name": audit_path.name}]
 
 
+def action_parttime_monthly_punch(config: dict, output_dir: Path) -> list[dict]:
+    """Render the part-time monthly punch grid + audit sheet (req: 兼职月度打卡记录)."""
+    from parttime_monthly_punch import render as render_parttime_monthly_punch
+    # render() writes to workdir/outputs/<file>; runner already passes that path
+    # as output_dir, so pass it through directly.
+    result = render_parttime_monthly_punch(output_dir, config)
+    return [result]
+
+
 ACTIONS = {
     "export-rules": action_export_rules,
     "import-rules-preview": action_import_rules_preview,
@@ -949,6 +958,7 @@ ACTIONS = {
     "preview-existing": action_preview_existing,
     "audit": action_audit,
     "export-templates": action_export_templates,
+    "parttime-monthly-punch": action_parttime_monthly_punch,
 }
 
 

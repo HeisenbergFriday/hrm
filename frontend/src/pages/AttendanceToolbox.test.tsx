@@ -6,6 +6,7 @@ import dayjs from 'dayjs'
 import AttendanceToolbox, {
   buildAttendanceToolboxWorkflowOptionFields,
   getAttendanceToolboxDownloadableFiles,
+  getDingtalkSyncExportFile,
   getPreviousCalendarMonthRange,
   getSubsidyAuditMeta,
   resolveErrorMessage,
@@ -25,6 +26,7 @@ const mockExportRules = vi.fn()
 const mockPreviewRun = vi.fn()
 const mockAuditUploads = vi.fn()
 const mockExportTemplates = vi.fn()
+const mockParttimeMonthlyPunch = vi.fn()
 
 let mockPermissions: string[] = [
   'attendance_toolbox_operate',
@@ -53,6 +55,7 @@ vi.mock('../services/api', () => ({
     previewRun: (...args: unknown[]) => mockPreviewRun(...args),
     auditUploads: (...args: unknown[]) => mockAuditUploads(...args),
     exportTemplates: (...args: unknown[]) => mockExportTemplates(...args),
+    parttimeMonthlyPunch: (...args: unknown[]) => mockParttimeMonthlyPunch(...args),
   },
 }))
 
@@ -99,6 +102,38 @@ function makeRunResponse(module = 'leave') {
           content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
           size: 12,
           kind: 'export',
+          row_count: 2,
+        },
+      ],
+      expires_at: '2099-01-01T00:00:00Z',
+    },
+  }
+}
+
+function makeDingtalkSyncRunResponse(flowKey: string) {
+  return {
+    data: {
+      run_id: `run-${flowKey}`,
+      module: 'dingtalk_sync',
+      log: 'sync-ok',
+      stats: { rows: 2 },
+      meta: {},
+      files: [
+        {
+          file_key: `${flowKey}_export.xlsx`,
+          file_name: `${flowKey}_export.xlsx`,
+          content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          size: 12,
+          kind: 'export',
+          flow_key: flowKey,
+          row_count: 2,
+        },
+        {
+          file_key: 'sync_audit.xlsx',
+          file_name: '钉钉同步审计.xlsx',
+          content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          size: 8,
+          kind: 'audit',
           row_count: 2,
         },
       ],
@@ -168,6 +203,13 @@ describe('getAttendanceToolboxDownloadableFiles', () => {
     })
 
     expect(getAttendanceToolboxDownloadableFiles(run).map((file) => file.file_key)).toEqual(['1_result.xlsx'])
+  })
+
+  it('selects the matching business export instead of the audit workbook', () => {
+    const run = makeDingtalkSyncRunResponse('position_transfer').data
+
+    expect(getDingtalkSyncExportFile(run, 'position_transfer')?.file_key)
+      .toBe('position_transfer_export.xlsx')
   })
 })
 
@@ -263,12 +305,18 @@ describe('AttendanceToolbox', () => {
     mockRunDingtalkSync.mockResolvedValue(new Blob(['excel'], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     }))
+    mockRunDingtalkSyncStructured.mockImplementation((request: { flow_keys?: string[] }) => (
+      Promise.resolve(makeDingtalkSyncRunResponse(request.flow_keys?.[0] || 'leave'))
+    ))
     mockRunWorkflow.mockResolvedValue(makeRunResponse('leave'))
     mockDownloadRunFile.mockResolvedValue(new Blob(['xlsx']))
     mockDownloadRunZip.mockResolvedValue(new Blob(['zip'], { type: 'application/zip' }))
     mockPreviewRun.mockResolvedValue({ data: { rows: [{ 姓名: '甲', 工号: 'E01' }] } })
     mockAuditUploads.mockResolvedValue({ data: { warnings: [] } })
     mockExportTemplates.mockResolvedValue(new Blob(['tpl']))
+    mockParttimeMonthlyPunch.mockResolvedValue(new Blob(['xlsx'], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }))
 
     vi.stubGlobal('URL', {
       createObjectURL: () => 'blob:mock',
@@ -363,7 +411,7 @@ describe('AttendanceToolbox', () => {
 
     await waitFor(() => {
       const previousMonth = dayjs().subtract(1, 'month')
-      expect(mockRunDingtalkSync).toHaveBeenCalledWith(expect.objectContaining({
+      expect(mockRunDingtalkSyncStructured).toHaveBeenCalledWith(expect.objectContaining({
         start_date: previousMonth.startOf('month').format('YYYY-MM-DD'),
         end_date: previousMonth.endOf('month').format('YYYY-MM-DD'),
         flow_keys: ['leave'],
@@ -372,16 +420,15 @@ describe('AttendanceToolbox', () => {
     })
     expect(await screen.findByText('请假系统导出_钉钉同步.xlsx')).toBeInTheDocument()
     expect(messageApi.success).toHaveBeenCalledWith('请假数据拉取完成，已自动回填到请假系统导出表')
+    expect(mockDownloadRunFile).toHaveBeenCalledWith('run-leave', 'leave_export.xlsx')
   })
 
   it('keeps manual upload available when pulling leave data fails', async () => {
-    mockRunDingtalkSync.mockImplementation((request: { flow_keys?: string[] }) => {
+    mockRunDingtalkSyncStructured.mockImplementation((request: { flow_keys?: string[] }) => {
       if (request.flow_keys?.includes('leave')) {
         return Promise.reject({ response: { status: 400, data: { message: '请假流程未配置' } } })
       }
-      return Promise.resolve(new Blob(['excel'], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      }))
+      return Promise.resolve(makeDingtalkSyncRunResponse(request.flow_keys?.[0] || 'position_transfer'))
     })
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
@@ -394,11 +441,67 @@ describe('AttendanceToolbox', () => {
     expect(screen.getAllByText('点击或拖拽 Excel 到这里').length).toBeGreaterThan(0)
   })
 
+  it('falls back once to the legacy blob endpoint when structured sync is unavailable', async () => {
+    mockRunDingtalkSyncStructured.mockImplementation((request: { flow_keys?: string[] }) => {
+      if (request.flow_keys?.includes('leave')) {
+        return Promise.reject({ response: { status: 404 } })
+      }
+      return Promise.resolve(makeDingtalkSyncRunResponse(request.flow_keys?.[0] || 'position_transfer'))
+    })
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await user.click(screen.getByRole('button', { name: '从钉钉拉取请假表' }))
+
+    await waitFor(() => expect(mockRunDingtalkSync).toHaveBeenCalledWith(expect.objectContaining({
+      flow_keys: ['leave'],
+    })))
+    expect(await screen.findByText('请假系统导出_钉钉同步.xlsx')).toBeInTheDocument()
+  })
+
+  it('legacy fallback that returns ZIP surfaces the upgrade error instead of filling', async () => {
+    mockRunDingtalkSyncStructured.mockImplementation((request: { flow_keys?: string[] }) => {
+      if (request.flow_keys?.includes('leave')) {
+        return Promise.reject({ response: { status: 404 } })
+      }
+      return Promise.resolve(makeDingtalkSyncRunResponse(request.flow_keys?.[0] || 'position_transfer'))
+    })
+    mockRunDingtalkSync.mockResolvedValue(new Blob(['zip-bytes'], { type: 'application/zip' }))
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await user.click(screen.getByRole('button', { name: '从钉钉拉取请假表' }))
+
+    await waitFor(() => expect(mockRunDingtalkSync).toHaveBeenCalledTimes(1))
+    await waitFor(() => {
+      expect(messageApi.error).toHaveBeenCalled()
+      const args = messageApi.error.mock.calls.map((c) => String(c[0])).join(' ')
+      expect(args).toMatch(/服务器版本暂不支持/)
+    })
+    // 升级提示：不得把 ZIP 当业务表回填。
+    expect(screen.queryByText('请假系统导出_钉钉同步.xlsx')).not.toBeInTheDocument()
+  })
+
+  it('structured success but single-file download failure never re-runs dingtalk sync', async () => {
+    mockRunDingtalkSyncStructured.mockResolvedValue(makeDingtalkSyncRunResponse('position_transfer'))
+    mockDownloadRunFile.mockRejectedValue({ response: { status: 500, data: { message: 'download failed' } } })
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    // 自动回填（花名册 + 异动）走 structured；download 失败禁止重跑钉钉同步。
+    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(mockRunDingtalkSync).not.toHaveBeenCalled())
+    expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(2)
+  })
+
   it('auto syncs roster and transfer files while keeping manual upload flows available', async () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await waitFor(() => expect(mockRunDingtalkSync).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(2))
     // Must not surface the modern-browser File getter error:
     // "Cannot set property lastModifiedDate of #<File> which has only a getter"
     expect(messageApi.error).not.toHaveBeenCalled()
@@ -407,6 +510,8 @@ describe('AttendanceToolbox', () => {
     expect(await screen.findByText('花名册_钉钉自动同步.xlsx')).toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: /最终汇总/ }))
     expect(await screen.findByText('异动流程_钉钉自动同步.xlsx')).toBeInTheDocument()
+    expect(mockRunDingtalkSync).not.toHaveBeenCalled()
+    expect(mockDownloadRunFile).toHaveBeenCalledTimes(2)
   })
 
   it('disables calculate button without operate permission', async () => {
@@ -478,9 +583,16 @@ describe('AttendanceToolbox', () => {
 
   it('410 expired download shows explicit message', async () => {
     mockRunWorkflow.mockResolvedValue(makeRunResponse('leave'))
-    mockDownloadRunFile
-      .mockResolvedValueOnce(new Blob(['xlsx']))
-      .mockRejectedValueOnce({ response: { status: 410, data: { message: '结果已过期，请重新计算' } } })
+    let resultDownloadCount = 0
+    mockDownloadRunFile.mockImplementation((_runId: string, fileKey: string) => {
+      if (fileKey !== '1_result.xlsx') {
+        return Promise.resolve(new Blob(['auto-sync-xlsx']))
+      }
+      resultDownloadCount += 1
+      return resultDownloadCount === 1
+        ? Promise.resolve(new Blob(['xlsx']))
+        : Promise.reject({ response: { status: 410, data: { message: '结果已过期，请重新计算' } } })
+    })
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
@@ -571,5 +683,60 @@ describe('AttendanceToolbox', () => {
     expect(await screen.findByText('有 2 人缺少考勤记录')).toBeInTheDocument()
     expect(screen.getByText(/丁俊、任澳辉/)).toBeInTheDocument()
     expect(messageApi.warning).toHaveBeenCalledWith(expect.stringContaining('2 人缺少考勤记录'))
+  })
+
+  // ── 兼职月度打卡记录卡片（req 1-7） ────────────────────────────────────────
+
+  it('默认月份为上一个自然月（req 1）', async () => {
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    // 卡片在未展开时不渲染月份选择器；展开固定配置区域。
+    // 这里只验证 getPreviousCalendarMonthRange 的契约（组件内部使用同样的函数）。
+    const [start, end] = getPreviousCalendarMonthRange(dayjs('2026-08-02'))
+    expect(start.format('YYYY-MM-DD')).toBe('2026-07-01')
+    expect(end.format('YYYY-MM-DD')).toBe('2026-07-31')
+  })
+
+  it('页面加载时不会自动抓取（req 2）：挂载后 parttimeMonthlyPunch 未被调用', async () => {
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    expect(mockParttimeMonthlyPunch).not.toHaveBeenCalled()
+  })
+
+  it('无钉钉同步权限时按钮禁用并显示缺少权限提示（req 3）', async () => {
+    mockPermissions = ['attendance_toolbox_operate']
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    const fetchBtn = await screen.findByRole('button', { name: /从钉钉抓取/ })
+    expect(fetchBtn).toBeDisabled()
+    // 卡片内的提示文案明确告知缺少权限（Tooltip 标题也在 DOM 中，故用 getAllByText）。
+    expect(screen.getAllByText(/当前账号无钉钉同步权限/).length).toBeGreaterThan(0)
+  })
+
+  it('点击抓取后请求月份参数正确（req 4）并回填兼职模块上传位（req 5）', async () => {
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(await screen.findByRole('button', { name: /从钉钉抓取/ }))
+    await waitFor(() => expect(mockParttimeMonthlyPunch).toHaveBeenCalledTimes(1))
+    expect(mockParttimeMonthlyPunch).toHaveBeenCalledWith({ month: '2026-07' })
+    // 回填到兼职汇总的「考勤明细」上传位。
+    await user.click(screen.getByRole('tab', { name: /兼职汇总/ }))
+    expect(await screen.findByText(/兼职月度打卡记录_202607\.xlsx/)).toBeInTheDocument()
+  })
+
+  it('抓取失败后显示错误并允许重试（req 6），手动上传仍可用（req 7）', async () => {
+    mockParttimeMonthlyPunch.mockRejectedValue({ response: { status: 400, data: { message: '未配置钉钉管理员' } } })
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(await screen.findByRole('button', { name: /从钉钉抓取/ }))
+    await waitFor(() => expect(messageApi.error).toHaveBeenCalledWith(expect.stringContaining('抓取失败')))
+    // 失败后按钮文案变为「重试抓取」，仍可再次点击（req 6）。
+    expect(await screen.findByRole('button', { name: /重试抓取/ })).toBeEnabled()
   })
 })

@@ -462,6 +462,11 @@ export const attendanceToolboxAPI = {
       'Content-Type': 'multipart/form-data',
     },
   }),
+  /** Fetch the DingTalk monthly punch records and return a blob for the part-time module. */
+  parttimeMonthlyPunch: (data: { month: string }) => api.post('/attendance/toolbox/parttime-monthly-punch', data, {
+    responseType: 'blob',
+    timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
+  }),
 }
 
 export const approvalAPI = {

@@ -103,17 +103,37 @@ func RunDingtalkSync(c *gin.Context) {
 		return
 	}
 
-	if len(result.Outputs) == 1 {
-		output := result.Outputs[0]
+	// 只把 kind=export 的业务表当作可回填结果；audit/meta 是诊断文件。
+	exports := result.BusinessExports()
+	if len(exports) == 0 {
+		// 无业务表时必须返回明确 4xx，禁止返回 JSON 200 后被旧前端当成 Excel 回填。
+		c.JSON(http.StatusUnprocessableEntity, Response{
+			Code:    http.StatusUnprocessableEntity,
+			Message: "本次同步未生成业务表，请检查钉钉流程码配置或同步日志后重试",
+		})
+		return
+	}
+	if len(exports) == 1 {
+		output := exports[0]
 		c.Header("Content-Disposition", service.ContentDispositionAttachment(output.FileName))
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", output.Data)
 		return
 	}
 
-	c.Header("Content-Disposition", service.ContentDispositionAttachment("钉钉同步结果.zip"))
-	c.Header("X-Content-Type-Options", "nosniff")
-	c.Data(http.StatusOK, "application/zip", result.ZipData)
+	// 多个业务 export 才返回 ZIP。
+	if len(result.ZipData) > 0 {
+		c.Header("Content-Disposition", service.ContentDispositionAttachment("钉钉同步结果.zip"))
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Data(http.StatusOK, "application/zip", result.ZipData)
+		return
+	}
+
+	// 防御：存在多个业务 export 但未生成 ZIP，不应发生。
+	c.JSON(http.StatusInternalServerError, Response{
+		Code:    http.StatusInternalServerError,
+		Message: "同步结果打包失败，请重新同步",
+	})
 }
 
 // RunAttendanceToolboxWorkflow handles standard modules only (leave/overtime/...).
@@ -147,6 +167,59 @@ func RunAttendanceToolboxQuickWorkflow(c *gin.Context) {
 // RunAttendanceToolboxDingtalkSyncWorkflow is the structured dingtalk sync endpoint.
 func RunAttendanceToolboxDingtalkSyncWorkflow(c *gin.Context) {
 	runToolboxWorkflow(c, "dingtalk_sync")
+}
+
+// newParttimeMonthlyPunchService is the production service factory. Tests
+// replace it with a version backed by a fake data source (config/roster/attendance).
+var newParttimeMonthlyPunchService = func() *service.ParttimeMonthlyPunchService {
+	return service.NewParttimeMonthlyPunchService()
+}
+
+// RunParttimeMonthlyPunch fetches the DingTalk "月度打卡记录" for the requested
+// month, matches it against the org part-time roster, and streams back an Excel
+// ready to be dropped into the part-time summary module's attendance-detail
+// upload position. It never auto-runs; the user must click "从钉钉抓取".
+func RunParttimeMonthlyPunch(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+
+	var req service.ParttimeMonthlyPunchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    http.StatusBadRequest,
+			Message: "请求参数解析失败",
+		})
+		return
+	}
+
+	excel, audit, err := newParttimeMonthlyPunchService().RenderParttimeMonthlyPunch(
+		c.Request.Context(), orgID, req,
+	)
+	if err != nil {
+		status := http.StatusBadRequest
+		// 未配置/权限类问题返回 4xx，避免前端把错误体当 Excel。
+		c.JSON(status, Response{Code: status, Message: err.Error()})
+		return
+	}
+
+	fileName := parttimeMonthlyPunchFileName(req.Month)
+	c.Header("Content-Disposition", service.ContentDispositionAttachment(fileName))
+	c.Header("X-Content-Type-Options", "nosniff")
+	// audit 只记日志，不回传敏感信息。
+	if audit != "" {
+		_ = audit
+	}
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excel)
+}
+
+func parttimeMonthlyPunchFileName(month string) string {
+	normalized := strings.ReplaceAll(strings.TrimSpace(month), "-", "")
+	if normalized == "" {
+		normalized = "YYYYMM"
+	}
+	return "兼职月度打卡记录_" + normalized + ".xlsx"
 }
 
 func runToolboxWorkflow(c *gin.Context, module string) {
@@ -264,6 +337,27 @@ func ensureQuickFlowKeys(form *multipart.Form) {
 	}
 }
 
+// attendanceToolboxRunStore backs structured run metadata and downloads.
+// Tests replace it with an isolated store; production uses the process-global store.
+var attendanceToolboxRunStore = service.DefaultAttendanceToolboxRunStore()
+
+// toolboxCanManageOrOperate reports whether the user holds the broad toolbox
+// manage/operate capability that authorizes reading any owned run.
+func toolboxCanManageOrOperate(c *gin.Context) bool {
+	ok, err := middleware.HasAnyPermission(c, "attendance_manage", "attendance_toolbox_operate")
+	return err == nil && ok
+}
+
+// toolboxRunModuleAccessible gates read/download of a structured run by module.
+// Users holding only attendance_toolbox_dingtalk_sync may read their own same-org
+// dingtalk_sync runs only; they must never gain access to other modules' results.
+func toolboxRunModuleAccessible(c *gin.Context, module string) bool {
+	if toolboxCanManageOrOperate(c) {
+		return true
+	}
+	return strings.EqualFold(module, "dingtalk_sync")
+}
+
 func GetAttendanceToolboxRun(c *gin.Context) {
 	orgID, ok := currentOrgIDOrAbort(c)
 	if !ok {
@@ -271,9 +365,13 @@ func GetAttendanceToolboxRun(c *gin.Context) {
 	}
 	userID := strings.TrimSpace(c.GetString("userID"))
 	runID := strings.TrimSpace(c.Param("run_id"))
-	run, err := service.DefaultAttendanceToolboxRunStore().Get(runID, userID, orgID)
+	run, err := attendanceToolboxRunStore.Get(runID, userID, orgID)
 	if err != nil {
 		writeToolboxRunError(c, err)
+		return
+	}
+	if !toolboxRunModuleAccessible(c, run.Module) {
+		writeToolboxRunError(c, service.ErrToolboxRunDenied)
 		return
 	}
 	c.JSON(http.StatusOK, Response{
@@ -299,7 +397,16 @@ func DownloadAttendanceToolboxRunFile(c *gin.Context) {
 	userID := strings.TrimSpace(c.GetString("userID"))
 	runID := strings.TrimSpace(c.Param("run_id"))
 	fileKey := strings.TrimSpace(c.Param("file_key"))
-	fileName, contentType, data, err := service.DefaultAttendanceToolboxRunStore().ReadFile(runID, fileKey, userID, orgID)
+	run, err := attendanceToolboxRunStore.Get(runID, userID, orgID)
+	if err != nil {
+		writeToolboxRunError(c, err)
+		return
+	}
+	if !toolboxRunModuleAccessible(c, run.Module) {
+		writeToolboxRunError(c, service.ErrToolboxRunDenied)
+		return
+	}
+	fileName, contentType, data, err := attendanceToolboxRunStore.ReadFile(runID, fileKey, userID, orgID)
 	if err != nil {
 		writeToolboxRunError(c, err)
 		return
@@ -316,7 +423,16 @@ func DownloadAttendanceToolboxRunZip(c *gin.Context) {
 	}
 	userID := strings.TrimSpace(c.GetString("userID"))
 	runID := strings.TrimSpace(c.Param("run_id"))
-	files, err := service.DefaultAttendanceToolboxRunStore().ReadAllDownloadable(runID, userID, orgID)
+	run, err := attendanceToolboxRunStore.Get(runID, userID, orgID)
+	if err != nil {
+		writeToolboxRunError(c, err)
+		return
+	}
+	if !toolboxRunModuleAccessible(c, run.Module) {
+		writeToolboxRunError(c, service.ErrToolboxRunDenied)
+		return
+	}
+	files, err := attendanceToolboxRunStore.ReadAllDownloadable(runID, userID, orgID)
 	if err != nil {
 		writeToolboxRunError(c, err)
 		return
@@ -340,6 +456,15 @@ func PreviewAttendanceToolboxRun(c *gin.Context) {
 	userID := strings.TrimSpace(c.GetString("userID"))
 	runID := strings.TrimSpace(c.Param("run_id"))
 	fileKey := strings.TrimSpace(c.Query("file_key"))
+	run, err := attendanceToolboxRunStore.Get(runID, userID, orgID)
+	if err != nil {
+		writeToolboxRunError(c, err)
+		return
+	}
+	if !toolboxRunModuleAccessible(c, run.Module) {
+		writeToolboxRunError(c, service.ErrToolboxRunDenied)
+		return
+	}
 	preview, err := service.NewAttendanceToolboxService().PreviewStoredRun(c.Request.Context(), runID, fileKey, userID, orgID)
 	if err != nil {
 		writeToolboxRunError(c, err)

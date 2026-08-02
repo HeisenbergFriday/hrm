@@ -3569,7 +3569,12 @@ func mergeDingTalkDepartmentIDs(groups ...[]int64) []int64 {
 type AttendanceRecord struct {
 	UserID            string `json:"userId"`
 	CheckType         string `json:"checkType"` // OnDuty / OffDuty
+	WorkDate          string `json:"workDate"`
 	UserCheckTime     string `json:"userCheckTime"`
+	BaseCheckTime     string `json:"baseCheckTime"`
+	PlanCheckTime     string `json:"planCheckTime"`
+	GroupID           int64  `json:"groupId"`
+	PlanID            int64  `json:"planId"`
 	LocationResult    string `json:"locationResult"` // Normal / Outside
 	TimeResult        string `json:"timeResult"`     // Normal / Late / Early
 	SourceType        string `json:"sourceType"`
@@ -3652,7 +3657,12 @@ func GetAttendanceForOrg(orgID string, userIDs []string, startDate, endDate stri
 				record := AttendanceRecord{
 					UserID:            userID,
 					CheckType:         getString(m, "checkType"),
+					WorkDate:          formatDingTalkDateTime(m["workDate"]),
 					UserCheckTime:     formatDingTalkDateTime(m["userCheckTime"]),
+					BaseCheckTime:     formatDingTalkDateTime(m["baseCheckTime"]),
+					PlanCheckTime:     formatDingTalkDateTime(m["planCheckTime"]),
+					GroupID:           int64(getFloat(m, "groupId")),
+					PlanID:            int64(getFloat(m, "planId")),
 					LocationResult:    getString(m, "locationResult"),
 					TimeResult:        getString(m, "timeResult"),
 					SourceType:        getString(m, "sourceType"),

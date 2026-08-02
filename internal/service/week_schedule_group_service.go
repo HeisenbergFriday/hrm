@@ -34,6 +34,7 @@ var (
 	ErrWeekScheduleGroupDuplicate  = errors.New("week schedule group: duplicate push blocked")
 	ErrWeekScheduleGroupForbidden  = errors.New("week schedule group: permission denied")
 	ErrWeekScheduleGroupImageURL   = errors.New("week schedule group: HTTPS app home URL is required")
+	ErrWeekScheduleGroupCallback   = errors.New("week schedule group: invalid chatbot callback")
 )
 
 type WeekScheduleGroupSender func(orgID, openConversationID, title, content, imageURL string) (*dingtalk.GroupMessageAcceptance, error)
@@ -110,56 +111,50 @@ func (s *WeekScheduleGroupService) requireOrgID() (string, error) {
 // HandleChatbotMessage processes DingTalk chatbot messages for week schedule group binding.
 //
 // Binding flow:
-//   - Private chat (ConversationType == "1"): ignored, returns empty result.
+//   - Only group chat (ConversationType == "2") with a non-empty @message is handled.
 //   - Not @robot (!IsInAtList): ignored, returns empty result.
-//   - Already bound group + command "绑定作息表": idempotent re-bind, returns "已绑定".
-//   - Already bound group + other content: returns "本群已绑定，无需重复操作".
-//   - Not bound group + any @message: auto-bind if user has permission.
+//   - Already active group: idempotent response, no duplicate row.
+//   - Inactive/unbound group: restore the existing row after authorization.
+//   - New group: auto-bind after sender mapping and authorization.
 //
-// Commands recognized: "绑定作息表", "查询", "解绑 <id>".
+// Commands recognized: "绑定作息表", "查询绑定" and "解绑作息表". Legacy
+// aliases "查询" and "解绑 <id>" remain supported.
 func (s *WeekScheduleGroupService) HandleChatbotMessage(data *chatbot.BotCallbackDataModel) (ChatbotBindResult, error) {
-	if data == nil || !data.IsInAtList {
+	if data == nil || !data.IsInAtList || strings.TrimSpace(data.ConversationType) != "2" {
 		return ChatbotBindResult{}, nil
 	}
 
 	content := strings.TrimSpace(data.Text.Content)
-
-	// 私聊消息不处理群聊绑定
-	if strings.TrimSpace(data.ConversationType) == "1" {
-		return ChatbotBindResult{}, nil
-	}
-
-	// 非群聊场景（conversationID 或 groupName 为空）不处理
-	conversationID := strings.TrimSpace(data.ConversationId)
-	groupName := strings.TrimSpace(data.ConversationTitle)
-	if conversationID == "" || groupName == "" {
+	if content == "" {
 		return ChatbotBindResult{}, nil
 	}
 
 	result := ChatbotBindResult{Handled: true}
+	conversationID := strings.TrimSpace(data.ConversationId)
+	groupName := strings.TrimSpace(data.ConversationTitle)
+	if conversationID == "" || groupName == "" {
+		result.Reply = "无法识别当前群聊，未执行作息表群聊绑定。"
+		return result, ErrWeekScheduleGroupCallback
+	}
+
 	orgID, err := s.requireOrgID()
 	if err != nil {
 		result.Reply = "绑定失败：未识别当前组织，请联系管理员检查机器人配置。"
 		return result, err
 	}
 
-	// 检查是否已绑定
 	var existing database.WeekScheduleGroupTarget
-	err = s.db.Where(
-		"org_id = ? AND open_conversation_id = ? AND status = ?",
-		orgID, conversationID, "active",
-	).First(&existing).Error
-	alreadyBound := err == nil
+	err = s.db.Where("org_id = ? AND open_conversation_id = ?", orgID, conversationID).First(&existing).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		result.Reply = "查询群聊绑定状态失败，请稍后重试。"
+		return result, err
+	}
+	found := err == nil
+	alreadyBound := found && existing.Status == "active"
+	isQueryCommand := content == "查询绑定" || content == "查询"
+	isUnbindCommand := content == "解绑作息表" || content == "解绑" || strings.HasPrefix(content, "解绑 ")
 
-	// 处理显式命令
-	switch content {
-	case "绑定作息表":
-		if alreadyBound {
-			result.Reply = fmt.Sprintf("已绑定作息表群聊：%s。今后可在系统中选择该群推送月作息表。", existing.GroupName)
-			return result, nil
-		}
-		// 未绑定则继续走自动绑定流程
-	case "查询":
+	if isQueryCommand {
 		if alreadyBound {
 			result.Reply = fmt.Sprintf("本群已绑定：操作人 %s，绑定时间 %s。",
 				existing.BoundByUserName, existing.BoundAt.Format("2006-01-02 15:04"))
@@ -167,72 +162,39 @@ func (s *WeekScheduleGroupService) HandleChatbotMessage(data *chatbot.BotCallbac
 			result.Reply = "本群尚未绑定作息表推送。"
 		}
 		return result, nil
-	default:
-		// 解绑命令
-		if strings.HasPrefix(content, "解绑 ") {
-			if !alreadyBound {
-				result.Reply = "本群尚未绑定，无需解绑。"
-				return result, nil
-			}
-			senderStaffID := strings.TrimSpace(data.SenderStaffId)
-			if senderStaffID == "" {
-				result.Reply = "解绑失败：无法识别操作人。"
-				return result, ErrWeekScheduleGroupForbidden
-			}
-			var user database.User
-			err = s.db.Where(
-				"org_id = ? AND status = ? AND deleted_at IS NULL AND (user_id = ? OR ding_talk_user_id = ?)",
-				orgID, "active", senderStaffID, senderStaffID,
-			).First(&user).Error
-			if err != nil {
-				result.Reply = "解绑失败：当前钉钉账号未映射到本组织的在职员工。"
-				return result, ErrWeekScheduleGroupForbidden
-			}
-			if err := s.UnbindTarget(existing.ID, user.UserID, user.Name); err != nil {
-				result.Reply = "解绑失败：" + err.Error()
-				return result, err
-			}
-			result.Reply = "已解绑本群作息表推送。"
+	}
+
+	if isUnbindCommand {
+		if !alreadyBound {
+			result.Reply = "本群尚未绑定，无需解绑。"
 			return result, nil
 		}
-
-		// 已绑定群的非命令消息：提示已绑定，不重复创建
-		if alreadyBound {
-			result.Reply = "本群已绑定，无需重复操作。"
-			return result, nil
+		user, resolveErr := s.resolveAuthorizedBindingUser(orgID, data.SenderStaffId)
+		if resolveErr != nil {
+			result.Reply = bindingAuthorizationReply(resolveErr)
+			return result, resolveErr
 		}
+		if err := s.UnbindTarget(existing.ID, user.UserID, user.Name); err != nil {
+			result.Reply = "解绑失败，请稍后重试。"
+			return result, err
+		}
+		result.Reply = "已解绑本群作息表推送。"
+		return result, nil
 	}
 
-	// ---- 自动绑定流程（未绑定群 + 任意有效 @ 消息） ----
-
-	senderStaffID := strings.TrimSpace(data.SenderStaffId)
-	if senderStaffID == "" {
-		result.Reply = "绑定失败：无法识别操作人，请确认钉钉账号已同步到系统。"
-		return result, ErrWeekScheduleGroupForbidden
+	if alreadyBound {
+		result.Reply = "本群已绑定作息表推送，无需重复操作。"
+		return result, nil
 	}
 
-	var user database.User
-	err = s.db.Where(
-		"org_id = ? AND status = ? AND deleted_at IS NULL AND (user_id = ? OR ding_talk_user_id = ?)",
-		orgID, "active", senderStaffID, senderStaffID,
-	).First(&user).Error
+	user, err := s.resolveAuthorizedBindingUser(orgID, data.SenderStaffId)
 	if err != nil {
-		result.Reply = "绑定失败：当前钉钉账号未映射到本组织的在职员工。"
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return result, ErrWeekScheduleGroupForbidden
-		}
+		result.Reply = bindingAuthorizationReply(err)
 		return result, err
 	}
-	allowed, err := s.authorizeBind(user.UserID)
-	if err != nil {
-		result.Reply = "绑定失败：权限校验异常，请稍后重试。"
-		return result, err
-	}
-	if !allowed {
-		result.Reply = "绑定失败：你缺少作息表群聊推送权限，请联系管理员添加。"
-		return result, ErrWeekScheduleGroupForbidden
-	}
 
+	// Upsert on the tenant-scoped unique key restores inactive/unbound rows
+	// without creating a second record.
 	now := s.now()
 	target := database.WeekScheduleGroupTarget{
 		OrgID:              orgID,
@@ -261,8 +223,41 @@ func (s *WeekScheduleGroupService) HandleChatbotMessage(data *chatbot.BotCallbac
 		result.Reply = "绑定失败：保存群聊信息失败，请稍后重试。"
 		return result, err
 	}
-	result.Reply = fmt.Sprintf("已绑定作息表群聊：%s。今后可在系统中选择该群推送月作息表。", groupName)
+	result.Reply = "本群已成功绑定作息表推送。后续可在人事系统中选择本群进行推送。"
 	return result, nil
+}
+
+func (s *WeekScheduleGroupService) resolveAuthorizedBindingUser(orgID, senderStaffID string) (*database.User, error) {
+	senderStaffID = strings.TrimSpace(senderStaffID)
+	if senderStaffID == "" {
+		return nil, ErrWeekScheduleGroupForbidden
+	}
+	var user database.User
+	err := s.db.Where(
+		"org_id = ? AND status = ? AND deleted_at IS NULL AND (user_id = ? OR ding_talk_user_id = ?)",
+		orgID, "active", senderStaffID, senderStaffID,
+	).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrWeekScheduleGroupForbidden
+		}
+		return nil, err
+	}
+	allowed, err := s.authorizeBind(user.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, ErrWeekScheduleGroupForbidden
+	}
+	return &user, nil
+}
+
+func bindingAuthorizationReply(err error) string {
+	if errors.Is(err, ErrWeekScheduleGroupForbidden) {
+		return "你没有作息表群聊绑定权限，请联系管理员处理。"
+	}
+	return "群聊绑定权限校验失败，请稍后重试。"
 }
 
 func (s *WeekScheduleGroupService) ListTargets() ([]database.WeekScheduleGroupTarget, error) {
@@ -271,7 +266,9 @@ func (s *WeekScheduleGroupService) ListTargets() ([]database.WeekScheduleGroupTa
 		return nil, err
 	}
 	var targets []database.WeekScheduleGroupTarget
-	err = s.db.Where("org_id = ? AND status = ?", orgID, "active").Order("group_name ASC, id ASC").Find(&targets).Error
+	err = s.db.Where("org_id = ?", orgID).
+		Order("CASE WHEN status = 'active' THEN 0 ELSE 1 END, group_name ASC, id ASC").
+		Find(&targets).Error
 	return targets, err
 }
 
@@ -384,7 +381,16 @@ func (s *WeekScheduleGroupService) Push(input WeekScheduleGroupPushInput) (*Week
 		if code == dingtalk.ErrorCodeGroupUnavailable || code == dingtalk.ErrorCodeGroupRejected {
 			status = "rejected"
 		}
-		_ = s.finishPushLog(&pushLog, status, "", code, summary)
+		finishErr := s.finishPushLog(&pushLog, status, "", code, summary)
+		if code == dingtalk.ErrorCodeGroupUnavailable {
+			inactiveErr := s.markTargetInactive(target.ID)
+			if finishErr != nil || inactiveErr != nil {
+				return nil, errors.Join(err, finishErr, inactiveErr)
+			}
+		}
+		if finishErr != nil {
+			return nil, errors.Join(err, finishErr)
+		}
 		return nil, err
 	}
 	requestID := ""
@@ -403,6 +409,22 @@ func (s *WeekScheduleGroupService) Push(input WeekScheduleGroupPushInput) (*Week
 		DingTalkRequestID: requestID,
 		ImageExpiresAt:    expiresAt,
 	}, nil
+}
+
+func (s *WeekScheduleGroupService) markTargetInactive(targetID uint) error {
+	result := s.db.Model(&database.WeekScheduleGroupTarget{}).
+		Where("org_id = ? AND id = ? AND status = ?", s.orgID, targetID, "active").
+		Updates(map[string]interface{}{
+			"status":     "inactive",
+			"updated_at": s.now(),
+		})
+	if result.Error != nil {
+		return fmt.Errorf("mark week schedule group target inactive: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("mark week schedule group target inactive: target not found")
+	}
+	return nil
 }
 
 func (s *WeekScheduleGroupService) temporaryImageURL(token string) (string, error) {

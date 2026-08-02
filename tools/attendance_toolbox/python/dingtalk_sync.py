@@ -23,6 +23,8 @@ _CN_TZ = timezone(timedelta(hours=8))
 _HEADER_FILL = PatternFill("solid", fgColor="FFE2E8F0")
 _OAPI_RATE_LIMIT_PER_SECOND = 20
 _OAPI_MAX_RETRIES = 8
+_OAPI_PROCESS_INSTANCE_QUERY_MAX_DAYS = 120
+_OAPI_QUERY_CLOCK_SKEW_SECONDS = 60
 _DINGTALK_API_HOSTS = {"api.dingtalk.com", "oapi.dingtalk.com"}
 _RATE_LIMIT_END_RE = re.compile(r"限制将在\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*结束")
 _FLOW_LABELS = {
@@ -253,54 +255,62 @@ class DingTalkClient:
         query_end_exclusive: datetime,
         max_instances: int | None = None,
     ) -> DingTalkFetchResult:
-        start_ms = int(query_start.timestamp() * 1000)
-        end_ms = int(query_end_exclusive.timestamp() * 1000) - 1
+        query_windows = _process_instance_query_windows(query_start, query_end_exclusive)
         ids: list[str] = []
         seen_instance_ids: set[str] = set()
         raw_instance_id_count = 0
         duplicate_instance_id_count = 0
-        cursor: int | str | None = 0
-        seen_cursors: set[str] = set()
         page_count = 0
         truncated = False
         repeated_cursor_stopped = False
+        stop_fetching = False
 
-        while True:
-            payload = {
-                "process_code": process_code,
-                "start_time": start_ms,
-                "end_time": end_ms,
-                "size": 20,
-                "cursor": cursor or 0,
-            }
-            data = self.oapi_post("topapi/processinstance/listids", payload)
-            page_count += 1
-            result = data.get("result") or {}
-            page_ids = result.get("list") or result.get("process_instance_ids") or []
-            for item in page_ids:
-                if not item:
-                    continue
-                raw_instance_id_count += 1
-                instance_id = str(item)
-                if instance_id in seen_instance_ids:
-                    duplicate_instance_id_count += 1
-                    continue
-                seen_instance_ids.add(instance_id)
-                ids.append(instance_id)
-            next_cursor = result.get("next_cursor")
-            has_next_page = bool(next_cursor and len(page_ids) >= 20)
-            if max_instances is not None and len(ids) >= max_instances:
-                truncated = len(ids) > max_instances or has_next_page
-                ids = ids[:max_instances]
+        for window_index, (window_start, window_end_exclusive) in enumerate(query_windows):
+            cursor: int | str | None = 0
+            seen_cursors: set[str] = set()
+            start_ms = int(window_start.timestamp() * 1000)
+            end_ms = int(window_end_exclusive.timestamp() * 1000) - 1
+
+            while True:
+                payload = {
+                    "process_code": process_code,
+                    "start_time": start_ms,
+                    "end_time": end_ms,
+                    "size": 20,
+                    "cursor": cursor or 0,
+                }
+                data = self.oapi_post("topapi/processinstance/listids", payload)
+                page_count += 1
+                result = data.get("result") or {}
+                page_ids = result.get("list") or result.get("process_instance_ids") or []
+                for item in page_ids:
+                    if not item:
+                        continue
+                    raw_instance_id_count += 1
+                    instance_id = str(item)
+                    if instance_id in seen_instance_ids:
+                        duplicate_instance_id_count += 1
+                        continue
+                    seen_instance_ids.add(instance_id)
+                    ids.append(instance_id)
+                next_cursor = result.get("next_cursor")
+                has_next_page = bool(next_cursor and len(page_ids) >= 20)
+                if max_instances is not None and len(ids) >= max_instances:
+                    has_more_windows = window_index < len(query_windows) - 1
+                    truncated = len(ids) > max_instances or has_next_page or has_more_windows
+                    ids = ids[:max_instances]
+                    stop_fetching = True
+                    break
+                if not next_cursor or len(page_ids) < 20:
+                    break
+                cursor_key = str(next_cursor)
+                if cursor_key in seen_cursors:
+                    repeated_cursor_stopped = True
+                    break
+                seen_cursors.add(cursor_key)
+                cursor = next_cursor
+            if stop_fetching:
                 break
-            if not next_cursor or len(page_ids) < 20:
-                break
-            cursor_key = str(next_cursor)
-            if cursor_key in seen_cursors:
-                repeated_cursor_stopped = True
-                break
-            seen_cursors.add(cursor_key)
-            cursor = next_cursor
 
         def load_detail(instance_id: str) -> dict[str, Any]:
             detail = self.oapi_post(
@@ -328,6 +338,8 @@ class DingTalkClient:
                     if instance:
                         by_id[instance_id] = instance
                 instances = [by_id[instance_id] for instance_id in ids if instance_id in by_id]
+        effective_query_start = query_windows[0][0] if query_windows else query_start
+        effective_query_end_exclusive = query_windows[-1][1] if query_windows else query_start
         return DingTalkFetchResult(
             process_code=process_code,
             instances=instances,
@@ -335,8 +347,8 @@ class DingTalkClient:
             raw_instance_id_count=raw_instance_id_count,
             duplicate_instance_id_count=duplicate_instance_id_count,
             page_count=page_count,
-            query_start=query_start.strftime("%Y-%m-%d %H:%M:%S"),
-            query_end=(query_end_exclusive - timedelta(milliseconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
+            query_start=effective_query_start.strftime("%Y-%m-%d %H:%M:%S"),
+            query_end=(effective_query_end_exclusive - timedelta(milliseconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
             max_instances=max_instances,
             truncated=truncated,
             repeated_cursor_stopped=repeated_cursor_stopped,
@@ -1141,6 +1153,37 @@ def _date_datetime_range(start_date: date, end_date: date, padding_days: int = 0
     start = datetime(query_start_date.year, query_start_date.month, query_start_date.day, tzinfo=_CN_TZ)
     end = datetime(query_end_date.year, query_end_date.month, query_end_date.day, tzinfo=_CN_TZ)
     return start, end
+
+
+def _now_cn() -> datetime:
+    return datetime.now(tz=_CN_TZ)
+
+
+def _process_instance_query_windows(
+    query_start: datetime,
+    query_end_exclusive: datetime,
+) -> list[tuple[datetime, datetime]]:
+    """Return DingTalk-compatible [start, end) windows.
+
+    listids rejects oversized ranges and end timestamps ahead of DingTalk's
+    clock. Keep a small skew buffer, split long ranges, and let the caller
+    de-duplicate instances across adjacent windows.
+    """
+    start = query_start if query_start.tzinfo else query_start.replace(tzinfo=_CN_TZ)
+    end = query_end_exclusive if query_end_exclusive.tzinfo else query_end_exclusive.replace(tzinfo=_CN_TZ)
+    latest_end = _now_cn() - timedelta(seconds=_OAPI_QUERY_CLOCK_SKEW_SECONDS)
+    effective_end = min(end, latest_end)
+    if start >= effective_end:
+        return []
+
+    windows: list[tuple[datetime, datetime]] = []
+    window_start = start
+    max_window = timedelta(days=_OAPI_PROCESS_INSTANCE_QUERY_MAX_DAYS)
+    while window_start < effective_end:
+        window_end = min(window_start + max_window, effective_end)
+        windows.append((window_start, window_end))
+        window_start = window_end
+    return windows
 
 
 def _month_ms_range(year: int, month: int, padding_months: int = 0) -> tuple[int, int]:

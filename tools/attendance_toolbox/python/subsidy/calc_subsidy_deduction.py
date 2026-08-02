@@ -516,6 +516,12 @@ def _find_col(ws, *keywords) -> int | None:
     return None
 
 
+def _is_all_people_monthly_summary(ws) -> bool:
+    """识别工具箱生成的全员补贴扣款月度汇总表。"""
+    title = _field_key(ws.cell(1, 1).value)
+    return "月度汇总表（补贴及扣款）" in title and _find_col(ws, "UserId") is not None
+
+
 def _find_source_detail_col(ws, *keywords) -> int | None:
     """
     源表有两层表头：第3行常有"4月需补回晚走补贴/5月共计..."等汇总列，
@@ -552,6 +558,14 @@ def _find_data_start(ws, col_name: int) -> int | None:
     for row in range(1, min(6, ws.max_row + 1)):
         val = ws.cell(row, col_name).value
         if val and isinstance(val, str) and _field_key(val) not in (name_key, ""):
+            return row
+    return None
+
+
+def _find_header_row(ws, col: int, title: str) -> int | None:
+    title_key = _field_key(title)
+    for row in range(1, min(10, ws.max_row) + 1):
+        if _field_key(ws.cell(row, col).value) == title_key:
             return row
     return None
 
@@ -1024,13 +1038,14 @@ def parse_source_table(
         ws = wb_values[sheet] if sheet else wb_values.active
         ws_formula = wb_formulas[ws.title]
         rd_keywords = _normalize_keywords(rd_dept_keywords or RD_DEPT_KEYWORDS)
+        is_all_people_summary = _is_all_people_monthly_summary(ws)
 
         col_name   = _find_col(ws, '姓名')   or 1
         col_emp_no = _find_col(ws, '工号', '员工工号', '员工编号')
         col_group  = _find_col(ws, '考勤组') or 2
-        col_dept1  = _find_col(ws, '一级部门') or 3
-        col_dept2  = _find_col(ws, '二级部门') or 4
-        col_dept3  = _find_col(ws, '三级部门') or 5
+        col_dept1  = (_find_col(ws, '部门') or 3) if is_all_people_summary else (_find_col(ws, '一级部门') or 3)
+        col_dept2  = None if is_all_people_summary else (_find_col(ws, '二级部门') or 4)
+        col_dept3  = None if is_all_people_summary else (_find_col(ws, '三级部门') or 5)
         col_pos    = _find_col(ws, '职位')   or 6
         col_map = {
             'deduct_late': _find_source_detail_col(ws, '15-30分钟迟到扣款', '迟到扣款'),
@@ -1056,7 +1071,8 @@ def parse_source_table(
             ] if not col]
             raise ValueError(f"源表中未找到以下列，请检查表头: {missing}")
 
-        data_start = _find_data_start(ws, col_name)
+        header_row = _find_header_row(ws, col_name, "姓名") if is_all_people_summary else None
+        data_start = (header_row + 1) if header_row else _find_data_start(ws, col_name)
         if data_start is None:
             return []
 
@@ -1069,11 +1085,11 @@ def parse_source_table(
             if name in ('姓名', '合计', ''):
                 continue
             emp_no = _normalize_emp_no(ws.cell(r, col_emp_no).value) if col_emp_no else None
-            if not emp_no or not emp_no.startswith(VALID_EMP_NO_PREFIXES):
+            if not is_all_people_summary and (not emp_no or not emp_no.startswith(VALID_EMP_NO_PREFIXES)):
                 continue
             dept1_val = ws.cell(r, col_dept1).value
-            dept2_val = ws.cell(r, col_dept2).value
-            dept3_val = ws.cell(r, col_dept3).value
+            dept2_val = ws.cell(r, col_dept2).value if col_dept2 else None
+            dept3_val = ws.cell(r, col_dept3).value if col_dept3 else None
             position = ws.cell(r, col_pos).value
             is_rd = _is_rd_dept(dept1_val, dept2_val, dept3_val, keywords=rd_keywords)
             row = {
@@ -1666,7 +1682,10 @@ def parse_attendance(
 
     wb = openpyxl.load_workbook(filepath, data_only=True)
     ws = wb.active  # 月度汇总
+    is_all_people_summary = _is_all_people_monthly_summary(ws)
     col_emp_no = _find_col(ws, '工号', '员工工号', '员工编号')
+    col_department = _find_col(ws, '部门') if is_all_people_summary else None
+    col_position = _find_col(ws, '职位') if is_all_people_summary else None
     rd_keywords = _normalize_keywords(rd_dept_keywords or RD_DEPT_KEYWORDS)
 
     # 自动检测日期行：在前10行中查找连续的日期/周末标记列。
@@ -1756,14 +1775,14 @@ def parse_attendance(
             continue
         emp_name = _clean_name(emp_name.strip())
         emp_no = _normalize_emp_no(ws.cell(row_idx, col_emp_no).value) if col_emp_no else None
-        if not emp_no or not emp_no.startswith(VALID_EMP_NO_PREFIXES):
+        if not is_all_people_summary and (not emp_no or not emp_no.startswith(VALID_EMP_NO_PREFIXES)):
             continue
 
         # 从源表获取部门信息（考勤表可能没有部门列）
         # 先尝试从列3/4/5读取，再拼接路径做产研关键字匹配
-        dept_raw = ws.cell(row_idx, 3).value
-        dept2_raw = ws.cell(row_idx, 4).value if ws.max_column > 3 else None
-        dept3_raw = ws.cell(row_idx, 5).value if ws.max_column > 4 else None
+        dept_raw = ws.cell(row_idx, col_department or 3).value
+        dept2_raw = None if is_all_people_summary else (ws.cell(row_idx, 4).value if ws.max_column > 3 else None)
+        dept3_raw = None if is_all_people_summary else (ws.cell(row_idx, 5).value if ws.max_column > 4 else None)
         is_rd = _is_rd_dept(dept_raw, dept2_raw, dept3_raw, keywords=rd_keywords)
 
         info = {
@@ -1773,7 +1792,7 @@ def parse_attendance(
             'dept1': dept_raw,
             'dept2': dept2_raw,
             'dept3': dept3_raw,
-            'pos':   ws.cell(row_idx, 6).value if ws.max_column > 5 else None,
+            'pos':   ws.cell(row_idx, col_position).value if col_position else (ws.cell(row_idx, 6).value if ws.max_column > 5 else None),
         }
 
         # 按日期读取考勤格

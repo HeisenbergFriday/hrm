@@ -1,6 +1,6 @@
 ---
 purpose: 考勤模块业务规则说明
-last_updated: 2026-07-23
+last_updated: 2026-08-01
 source_of_truth:
   - internal/api/handlers.go（考勤相关 handler）
   - internal/api/attendance_toolbox_handlers.go（考勤工具箱上传计算 handler）
@@ -272,6 +272,7 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - AppKey/AppSecret 与审批流程码只能由服务端按 JWT `org_id` 注入；blob/structured 请求不允许通过 body 或 multipart 字段覆盖组织钉钉配置。
 - If none of the selected flows has a configured process code, the API must fail with an actionable configuration error instead of storing a meta-only run.
 - Meta-only runs are not downloadable results; the frontend must not show success or ZIP download for them.
+- `topapi/processinstance/listids` 的单次查询窗口最多 120 天，结束时间不得晚于钉钉当前时间；前端可继续传业务所需 padding，Python 客户端必须自动截断未来结束时间、按连续窗口分片，并对跨片实例 ID 去重。`max_instances` 是所有分片共享的全局上限，禁止每片重新计数。
 - `build-and-deploy.ps1 -SkipConfigUpload` keeps the existing server env file, so new/changed process-code values require a deployment without this switch (or an explicit config upload/restart).
 结构化工作流：返回 `run_id` + 文件元数据/统计/日志；结果绑定 `user_id + org_id`，磁盘目录仅 `rootDir/<runID>`。
 
@@ -283,11 +284,20 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
   - `GET /api/v1/attendance/toolbox/runs/:run_id/preview?file_key=`（前 200 行，不重跑计算）
 - 过期 410 / 不存在 404 / 越权 403；服务重启后内存元数据清空，启动清理孤儿 run 目录
 - 环境变量：`ATTENDANCE_TOOLBOX_RUN_TTL_SECONDS`（默认 2h，夹在 5m–24h）、`ATTENDANCE_TOOLBOX_RUN_MAX_BYTES`（默认 512MB）
+- run 读取/下载权限按模块收紧：`attendance_manage` / `attendance_toolbox_operate` 可读任意模块结果；仅持 `attendance_toolbox_dingtalk_sync` 的用户只可读/下载**自己同 org** 的 `dingtalk_sync` 结果，禁止借此访问 leave/overtime 等其他模块结果。路由中间件放行三种权限，模块边界由 handler `toolboxRunModuleAccessible` 判断。
+
+请假、花名册和异动流程的页面自动回填必须走 structured workflow，按 `kind=export + flow_key` 下载唯一业务文件；`kind=audit` / `kind=meta` 只用于诊断或手动下载，禁止作为上传输入，也不得因审计文件存在而把结果误判为不可回填的 ZIP。手动“钉钉同步”仍可下载包含业务表和审计表的完整 ZIP。
 
 前端回退策略：`shouldFallbackToLegacyToolboxAPI` 仅在结构化接口 **404/405/501** 时回退旧 blob；403/400/410/5xx/超时/网络不得回退，钉钉同步成功后不得重跑。
 
 ### POST /api/v1/attendance/toolbox/dingtalk-sync
 旧 blob 钉钉同步；推荐 structured workflows。权限同 `attendance_toolbox_dingtalk_sync`。
+
+- 响应规则（按业务 export 数量）：
+  - 仅 audit/meta、无业务 export：返回 **422**（`未生成业务表`），禁止 JSON 200 被旧前端当 Excel。
+  - 恰好 1 个业务 export（可含 audit/meta）：直接返回该业务 Excel（`Content-Disposition` 为业务文件名）。
+  - 多个业务 export：返回 ZIP。
+- 说明：`BusinessExports()` 分支是本实现新增的兼容逻辑，用于保证 audit 不计入“多文件”。
 
 ### GET /api/v1/attendance/toolbox/defaults
 只读默认名单；`menu` 或 `operate` 即可。
@@ -395,6 +405,7 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - 加班、补贴页签支持可选的 `YYYY-MM` 月份锁定；默认自动识别，锁定月份与作息表月份冲突时停止计算并提示。
 - 补贴模块与加班规则共享法定节假日配置：自定义规则含 `legal_holidays_override` 时优先使用，否则回退作息表；两者日期差异写入补贴结果“异常审计”工作表。
 - 补贴结果“异常审计”工作表记录考勤缺失人员、实习生剔除人员和节假日口径差异；考勤缺失人员的补贴字段保持空值，不按 0 计算。结构化运行响应在 `meta.subsidy_audit` 返回缺失人数及名单，前端显示警告。
+- 兼职汇总中，同一日同时包含外出/出差与事假时，事假优先且该日不计出勤；组合状态判断必须早于外出/出差计出勤的提前返回。纯外出/出差仍按原规则处理。
 - 大文件上传时显示警告提示
 - 运行日志可折叠查看（需后端支持返回 log 字段）
 

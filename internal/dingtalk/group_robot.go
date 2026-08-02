@@ -11,7 +11,14 @@ import (
 const (
 	ErrorCodeGroupUnavailable = "DINGTALK_GROUP_UNAVAILABLE"
 	ErrorCodeGroupRejected    = "DINGTALK_GROUP_REJECTED"
+	groupUnavailableMessage   = "机器人已不在该群，请重新添加机器人并在群内 @机器人完成绑定。"
 )
+
+// confirmedGroupUnavailableCodes is intentionally empty. Add a raw DingTalk
+// error code only after it has been observed in a real group-message response
+// and verified to mean the robot is absent, lacks group access, or the group no
+// longer exists. Message-text heuristics must never be used for this decision.
+var confirmedGroupUnavailableCodes = map[string]struct{}{}
 
 // GroupMessageAcceptance means DingTalk accepted the asynchronous group-message
 // request. It is deliberately not named "success" because delivery is not yet
@@ -30,7 +37,7 @@ func SendGroupScheduleMarkdownForOrg(orgID, openConversationID, title, content, 
 		return nil, newSyncError(ErrorCodeConfigMissing, "钉钉组织配置缺失", errors.New("orgID is empty"))
 	}
 	if openConversationID == "" {
-		return nil, newSyncError(ErrorCodeGroupUnavailable, "群聊无效或机器人未加入该群", errors.New("openConversationId is empty"))
+		return nil, newSyncError(ErrorCodeResponseInvalid, "群聊标识无效", errors.New("openConversationId is empty"))
 	}
 	parsedURL, err := url.Parse(strings.TrimSpace(imageURL))
 	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" || parsedURL.User != nil {
@@ -105,13 +112,15 @@ func groupMessageResponseError(resp map[string]interface{}) error {
 
 func classifyGroupMessageRejection(code, message string) error {
 	detail := strings.TrimSpace(code + " " + message)
-	lower := strings.ToLower(detail)
-	if strings.Contains(lower, "conversation") || strings.Contains(lower, "robot") ||
-		strings.Contains(lower, "not in") || strings.Contains(lower, "not exist") ||
-		strings.Contains(message, "不在群") || strings.Contains(message, "群不存在") || strings.Contains(message, "群聊") {
-		return newSyncError(ErrorCodeGroupUnavailable, "群聊无效或机器人未加入该群", errors.New(detail))
+	if isConfirmedGroupUnavailableCode(code) {
+		return newSyncError(ErrorCodeGroupUnavailable, groupUnavailableMessage, errors.New(detail))
 	}
 	return newSyncError(ErrorCodeGroupRejected, "钉钉拒绝了群消息请求", errors.New(detail))
+}
+
+func isConfirmedGroupUnavailableCode(code string) bool {
+	_, ok := confirmedGroupUnavailableCodes[strings.TrimSpace(code)]
+	return ok
 }
 
 // SafeErrorSummary returns a bounded, redacted diagnostic suitable for local
