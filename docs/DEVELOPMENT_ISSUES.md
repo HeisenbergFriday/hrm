@@ -52,7 +52,10 @@ update_when:
 | `attendance-toolbox` `parttime` `leave-priority` | 兼职汇总同一日同时含外出/出差与事假时，必须先按事假处理并停止出勤计算；组合状态判断必须早于外出计出勤的提前返回 | [2026-08-01 外出/出差与事假并存误计出勤](#2026-08-01-p1-外出出差与事假并存误计出勤) |
 | `attendance-toolbox` `dingtalk` `approval` `time-window` | `processinstance/listids` 禁止直接提交超长或未来时间范围；客户端必须按最多 120 天连续分片、结束时间预留时钟偏差，并跨片去重、全局执行条数上限 | [2026-08-01 钉钉审批查询时间范围非法](#2026-08-01-p1-钉钉审批查询时间范围非法导致工具箱同步失败) |
 | `attendance-toolbox` `structured-result` `auto-fill` | 自动回填必须从 structured run 按 `kind=export + flow_key` 下载业务表；审计/元数据不得上传，也不得因多文件而改走 ZIP 或重跑同步 | [2026-08-01 自动回填误判多文件](#2026-08-01-p1-自动回填将审计文件计入结果导致同步成功后仍报错) |
+| `attendance-toolbox` `roster` `data-contract` `multi-tenant` | 自动回填到加班入口的组织花名册必须使用当前 org 的 `EmployeeProfile.EmployeeID` 与真实部门路径；缺工号/路径整体 400；仅姓名文件不得自动回填加班；重名姓名禁用回退；禁止审批字段/position_transfer 充当花名册 | [2026-08-01 花名册选错文件与运维组规则](#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
 | `attendance-toolbox` `playwright` `locator` | 页面存在重复 placeholder/文案时，E2E 必须先用 tabpanel、form 或可访问名称缩小作用域；禁止使用全页面模糊定位 | [2026-07-30 考勤工具箱 E2E 重复日期占位符](#2026-07-30-p2-考勤工具箱-e2e-重复日期占位符导致-strict-mode-失败) |
+| `attendance-toolbox` `date-boundary` `probation` | 日期区间条件必须使用闭区间语义，覆盖月初、月末、节假日和闰年边界；禁止对工作日使用严格大于/小于导致边界漏算 | [2026-08-02 当月转正天数少算一天](#2026-08-02-p1-当月转正天数少算一天) |
+| `attendance-toolbox` `subsidy` `data-source` `column-alias` | 补贴扣款真实数据来源是"考勤统计→报表管理→月度汇总表（补贴及扣款）"人工导出 Excel，不是钉钉审批流程；列名必须精确匹配，禁止使用"迟到""早退"等宽泛别名；A1 日期强校验仅作用于 `_is_all_people_monthly_summary` 已识别的钉钉原始报表，且统计范围必须精确覆盖处理月份的完整自然月，系统模板和历史兼容格式不要求 A1 日期 | [2026-08-03 补贴扣款数据来源纠正](#2026-08-03-p2-补贴扣款数据来源纠正) |
 
 ### API / 路由契约
 
@@ -158,6 +161,36 @@ update_when:
 
 ## 问题条目
 
+### 2026-08-03 P2 补贴扣款数据来源纠正
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-03 |
+| 级别 | P2 |
+| 模块/标签 | `attendance-toolbox` `subsidy` `data-source` `column-alias` |
+| 范围 | 前端 + Python |
+| 现象 | 补贴扣款模块描述模糊，未明确数据来源为"钉钉考勤月度汇总表（补贴及扣款）"人工导出；列名匹配存在宽泛别名（如"迟到"可误匹配"15-30分钟迟到次数"）；报表统计日期未校验。 |
+| 根因 | 系统此前将补贴扣款数据来源默认为钉钉导出表，但未明确说明具体报表路径；列名匹配关键字过于宽泛，可能将次数/分钟数列误当作扣款金额列。 |
+| 修复 | 1. 前端模块 description 显示完整导出路径（钉钉考勤打卡→考勤统计→报表管理→月度汇总表（补贴及扣款））。2. 上传字段 label 改为"钉钉月度汇总表（补贴及扣款）"。3. 模板说明改为"请上传从钉钉考勤后台导出的「月度汇总表（补贴及扣款）」Excel 文件"。4. 列名匹配恢复为精确关键字，删除宽泛别名。5. 添加 A1 统计日期校验（fail-closed：无法解析时报错，起止日期必须属于目标月份）。6. 添加防误匹配测试（缺少扣款列时报错而非误匹配）。7. `.ai/MODULES/attendance.md` 记录长期数据源规则。8. 系统模板和旧格式补贴扣款表兼容（A1 无统计日期时不触发日期校验）。9. 修复 `_DATE_PATTERN` 正则表达式日期替代项顺序（`3[01]|[12]\d|0?[1-9]`），避免 `31` 被匹配为 `3`。10. 钉钉原始月度汇总表必须覆盖完整自然月（使用 `calendar.monthrange` 校验），部分范围如 7月10日至7月20日 不再通过。 |
+| 验证 | 2026-08-04 续修实测：Python 补贴扣款测试 18/18 通过，覆盖系统模板兼容、旧格式无 A1 日期、完整自然月 28/29/30/31 天、同月部分范围拒绝、跨月/月份不一致及扣款列防误匹配；`AttendanceToolbox.test.tsx` 42/42、前端全量 352/352 通过；`npm run lint`、`npm run build` 通过。 |
+| 防复发 | 1. 补贴扣款数据来源必须是"考勤统计→报表管理→月度汇总表（补贴及扣款）"人工导出，不是钉钉审批流程。2. `getattcolumns`/`getcolumnval` 当前企业实测不返回目标金额列，不依赖这些接口自动获取补贴扣款数据。3. 列名必须精确匹配（如"15-30分钟迟到扣款"），禁止用"迟到""早退"等宽泛别名。4. A1 必须同时解析完整有效的统计开始日期和统计结束日期，两个日期都必须属于处理月份；无日期、任一日期无法解析或跨月时均 fail-closed。5. 日期强校验只能作用于已识别的钉钉原始月度汇总表（`_is_all_people_monthly_summary` 返回 True），系统模板和旧格式表不受影响。6. 钉钉原始月度汇总表必须覆盖完整自然月（起止日期精确等于 `date(year, month, 1)` 至 `date(year, month, calendar.monthrange(year, month)[1])`），同月内部分范围不通过。7. 日期正则替代项必须按长度降序排列（`3[01]` 先于 `[12]\d` 先于 `0?[1-9]`），避免 `31` 被匹配为 `3`。 |
+| 状态 | fixed |
+
+### 2026-08-02 P1 当月转正天数少算一天（日期区间左边界漏算）
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-02 |
+| 级别 | P1 |
+| 模块/标签 | `attendance-toolbox` `date-boundary` `probation` `python` |
+| 范围 | 考勤工具箱最终表"当月转正天数"字段计算 |
+| 现象 | 员工考勤汇总表中【当月转正天数】少计算一天：转正当天未被包含在统计区间内。示例：2026 年 7 月、转正日期 2026-07-01，当前结果 24 天，正确结果应为 25 天。 |
+| 根因 | `calc_probation_days` 函数的工作日分支使用了严格大于 `confirm_date < day`，排除了转正当天；法定节假日分支已正确使用 `confirm_date <= day`。两份 `calc_finally.py`（`attendance_toolbox` 与 `attendance-processing`）存在同样问题。 |
+| 修复 | 将工作日分支的日期条件从 `confirm_date < day` 改为 `confirm_date <= day`，统一使用闭区间 [转正日期, 当月最后一天]；法定节假日分支保持不变。两个处理入口均已同步修复，页面计算及 Excel 导出均覆盖。 |
+| 验证 | 新增 9 个回归用例（`ProbationClosedIntervalTests`），覆盖月初整月、月中含当天、月末为工作日计 1、转正日期不在当月返回 None、休息日非节假日不计入、法定节假日计入、2 月非闰年、2 月闰年、用户示例。全部 52 个测试通过，无回归。 |
+| 防复发 | 1. 日期范围条件需统一使用闭区间语义，并覆盖月初、月末、节假日和闰年边界。<br>2. 涉及"从某日到某日"的统计，必须明确包含/排除边界，优先使用闭区间 `[start, end]`。<br>3. 修改日期边界条件后，必须补充月初、月末、节假日、闰年（含 2 月）边界测试。<br>4. 同一业务逻辑的多份实现（如 `attendance_toolbox` 与 `attendance-processing`）必须同步修复。 |
+| 状态 | fixed（代码与测试完成） |
+
 ### 2026-08-01 P1 外出/出差与事假并存误计出勤
 
 | 字段 | 内容 |
@@ -184,8 +217,8 @@ update_when:
 | 现象 | 钉钉同步已成功生成业务表，但页面显示“自动同步返回了多个文件，请改用手动上传”，花名册和异动流程均无法自动回填。 |
 | 根因 | Python runner 会同时生成 `kind=export` 的业务表和 `kind=audit` 的同步审计表。自动回填仍调用旧 blob 接口；该接口发现两个输出后返回 ZIP，前端只按 MIME 判断并主动报错，没有利用 structured run 已提供的 `kind`、`flow_key` 和单文件下载能力。**本次修复新增了 legacy handler 的 `BusinessExports()` 分支（单业务表+audit 返回 Excel、多业务表才回 ZIP、无业务表回 422），该分支不是原有实现。** |
 | 修复 | 三个自动回填入口统一调用 structured workflow，从返回文件中优先选择 `kind=export && flow_key=目标流程`，再通过 run file API 下载该业务表并回填；审计表保留在 run 中供手动下载。只有 structured 接口返回 404/405/501 时才单次回退旧 blob，结构化同步成功后下载失败禁止重跑。structured run 的读取/下载新增模块级权限闭环：`attendance_toolbox_dingtalk_sync` 仅可读自己同 org 的 `dingtalk_sync` 结果，`attendance_manage`/`attendance_toolbox_operate` 才可读其他模块。 |
-| 验证 | **已取证**：`RunDingtalkSyncForOrg` 真实引擎测试断言单 export+audit 时 `ZipData` 为空、多 export 时生成 ZIP、仅 audit/meta 时无业务表；legacy HTTP handler 真实引擎测试断言单业务表返回 200+xlsx+Content-Disposition、多业务表返回 ZIP、仅 audit 返回 422；模块权限闭环测试断言 dingtalk_sync-only 可下载自己同 org 的同步业务文件、不可读 leave 等其他模块、跨用户仍 403。前端 `AttendanceToolbox.test.tsx` 定向通过，覆盖业务表+审计表选择、请假/花名册/异动回填、旧接口 404 兼容回退。**未取证**：尚未取得生产响应或日志，因此不将故障断言为“一定是 404 或旧镜像”，只记录代码路径事实；待部署后真实页面验收自动回填与权限表现。 |
-| 防复发 | 1. 自动回填禁止按输出数量或 ZIP MIME 猜测业务文件，必须读取 structured `kind`/`flow_key`。<br>2. `audit`/`meta` 只能用于诊断和下载，禁止作为后续计算的上传输入。<br>3. structured 同步成功后，单文件下载失败只能提示或重试下载，禁止重新发起钉钉同步。<br>4. 只有 404/405/501 可回退旧接口，且旧接口返回 ZIP 时必须明确提示服务器需升级。<br>5. legacy `RunDingtalkSync` 无业务 export 时必须返回明确 4xx，禁止 JSON 200 被旧前端当 Excel。<br>6. `attendance_toolbox_dingtalk_sync` 的 run 读取/下载必须按模块收紧为 `dingtalk_sync`，不得借此放开其他模块。 |
+| 验证 | **已取证**：`RunDingtalkSyncForOrg` 真实引擎测试断言单 export+audit 时 `ZipData` 为空、多 export 时生成 ZIP、仅 audit/meta 时无业务表；legacy HTTP handler 真实引擎测试断言单业务表返回 200+xlsx+Content-Disposition、多业务表返回 ZIP、仅 audit 返回 422；模块权限闭环测试断言 dingtalk_sync-only 可下载自己同 org 的同步业务文件、不可读 leave 等其他模块、跨用户仍 403。前端 `AttendanceToolbox.test.tsx` 定向通过，覆盖业务表+审计表选择、请假/花名册/异动回填、旧接口 404 兼容回退。**未取证**：尚未取得生产响应或日志，因此不将故障断言为“一定是 404 或旧镜像”，只记录代码路径事实；旧 `dist` 来源为“来源未确认”，禁止推断其来自未提交开发尝试；待部署后真实页面验收自动回填与权限表现。 |
+| 防复发 | 1. 自动回填禁止按输出数量或 ZIP MIME 猜测业务文件，必须读取 structured `kind`/`flow_key`。<br>2. `audit`/`meta` 只能用于诊断和下载，禁止作为后续计算的上传输入。<br>3. structured 同步成功后，单文件下载失败只能提示或重试下载，禁止重新发起钉钉同步。<br>4. 只有 404/405/501 可回退旧接口，且旧接口返回 ZIP 时必须明确提示服务器需升级。<br>5. legacy `RunDingtalkSync` 无业务 export 时必须返回明确 4xx，禁止 JSON 200 被旧前端当 Excel。<br>6. `attendance_toolbox_dingtalk_sync` 的 run 读取/下载必须按模块收紧为 `dingtalk_sync`，不得借此放开其他模块。<br>7. 前端单测必须按真实客户端契约构造 mock（axios blob 响应使用 `{ data: Blob }`），重复文件名/文案必须先限定当前激活 tabpanel 再断言。 |
 | 状态 | fixed（代码与自动化验证完成，待部署后真实页面验收） |
 
 ### 2026-08-01 P1 钉钉审批查询时间范围非法导致工具箱同步失败
@@ -563,6 +596,24 @@ update_when:
 | 状态 | fixed |
 
 ---
+
+### 2026-08-01 P1 花名册选错文件 + 运维组未强制标记未加
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-01 |
+| 级别 | P1 |
+| 模块/标签 | `attendance-toolbox` `roster` `overtime` `dingtalk-sync` `OPS_GROUP` |
+| 范围 | 全栈（Python 花名册解析 + Go 花名册生成 + 前端文件选择 + 运维组规则） |
+| 现象 | 1. 运营支撑部/智慧寄存运维组员工的加班记录未被强制标记为"未加"，仍显示"调休"和加班时长。<br>2. 花名册自动同步时，前端选择的是岗位异动流程表而非真正的花名册，导致部门映射错误。<br>3. `getDingtalkSyncExportFile` 在 flow_key 不匹配时回退到第一个 export，导致选错文件。 |
+| 根因 | 1. `fill_overtime_fields.py` 缺少 OPS_GROUP_DEPT_NAMES 允许名单和 `_is_ops_group_by_depts` 函数，无法识别"智慧寄存运维组"。<br>2. `parse_employee_department_map` 的花名册字段别名包含"发起人工号/发起人姓名/发起人部门"，导致岗位异动流程表被误识别为花名册。<br>3. `getDingtalkSyncExportFile` 在找不到目标 flow_key 时回退到第一个 export，导致选错文件。<br>4. 前端花名册同步使用 `position_transfer` 而非独立的 `generateOrgRoster` API。<br>5. Go service 测试曾复制员工构造逻辑并断言旧的姓名兜底行为，未调用生产实现；HTTP 新接口和 runner CLI 缺少直接自动化覆盖。<br>6. Go 将四级路径的 `path[2:]` 合并到三级部门，导致 `运营支撑部/智慧寄存运维组` 的连续层级契约失效。<br>7. 为花名册收紧身份列时一度改变全局 `_find_header_row` 匹配口径，会破坏请假、加班历史表头的子串兼容。<br>8. 2026-08-04 同根因复发：组织生成文件被收缩为姓名单列，但前端仍把同一文件回填到 `overtime_roster`；`run_overtime` 必须通过工号和部门判断运维组，因此解析得到空映射并直接报错。暂存区与工作区分别维护富花名册和姓名单列两套冲突契约，既有测试又分别绕过真实生成→解析→加班入口，未暴露断链。<br>9. 部门解析曾给每个姓名保留首条回退映射，重名时可能把缺工号加班行静默映射到错误员工部门。 |
+| 修复 | 1. 在 `fill_overtime_fields.py` 新增精确允许名单和运维组优先覆盖。<br>2. 收紧花名册表头识别并禁止 structured export 回退。<br>3. 花名册改用本地数据库 `GenerateOrgRosterExcel` / `/toolbox/roster/generate`，与 `position_transfer` 分离。<br>4. 2026-08-04 将自动生成契约统一为富花名册：工号只取当前 org 的 `EmployeeProfile.EmployeeID`，部门只取当前 org 主部门真实父子路径；固定输出工号、姓名、一级/二级/三级部门等 12 列。缺工号或部门路径整体返回含人数的 400，禁止姓名/UserID/DingTalkUserID 兜底。<br>5. 前端仍可将同一富花名册回填到 `overtime_roster` 与 `final_active`，但不再生成或自动回填姓名单列；最终 runner 现有钉钉月度表补身份逻辑保留，手工姓名名单只作为最终汇总兼容输入。<br>6. Python 部门映射保持审批/异动表头拒绝；工号为主键，姓名仅在全文件唯一时建立回退键，重名禁用姓名回退。<br>7. 新增生产生成器 xlsx → `parse_employee_department_map` → 真实 `run_overtime` 完整入口，覆盖 `MT9999 / 运营支撑部 / 智慧寄存运维组 / 其他部门 / 双边打卡` 及所有清空字段；Go 真实服务测试覆盖权威工号、路径完整性与双组织隔离；HTTP/前端保留权限、JWT org 和共享回填回归。<br>8. 共享 `_find_header_row` 继续保留请假/加班历史子串兼容；花名册精确匹配只在局部实现。 |
+| 验证 | 1. `python tools/attendance_toolbox/python/roster_and_ops_group_test.py`：19/19 通过。<br>2. `python tools/attendance_toolbox/python/runner_test.py`：14/14 通过；新增 `test_generate_roster_cli_creates_valid_workbook`、`test_generate_roster_cli_rejects_non_list_employees`、`test_generate_roster_cli_rejects_missing_employee_ids_fail_closed`、`test_runner_cli_rejects_unregistered_action`。<br>3. 花名册/表头定向 Python 回归 13/13 通过，覆盖请假“员工工号/员工姓名/请假类型名称”、加班“员工工号/员工姓名/2倍加班（小时）”及岗位异动真实 7 列拒绝。Go 花名册定向测试通过，双组织用例调用 `loadRosterEmployeesForOrg` 生产 helper，并验证用户、档案、部门 org 隔离与缺 EmployeeID 时空 `emp_no`。<br>4. `go test ./internal/api -run 'TestGenerateOrgRosterRoute' -count=1` 通过；测试通过 `registerAttendanceToolboxRoutes` 复用生产注册逻辑，覆盖权限矩阵、精确 POST 路由、缺 org、请求不可覆盖 org、错误映射和 openpyxl 可读成功响应；`go test ./internal/api/... -count=1` 通过。<br>5. `cd frontend && npm run test -- --run src/pages/AttendanceToolbox.test.tsx`：42/42 通过；成功用例进入加班明细与最终汇总，失败用例先上传本地花名册再触发 API 失败并确认原文件保留；前端全量 27 files / 352 tests、lint、build 均通过。<br>6. `go fmt ./...` 首次因现有 ACL 目录阻塞，获准在沙箱外重跑后通过；`go vet ./...` 与 `golangci-lint run`（0 issues）通过；`git diff --check` 通过。<br>7. 全量 `go test ./internal/service/... -v` 被本任务外工作区改动阻塞：`subsidy/calc_subsidy_deduction.py` hash drift、补贴资格 5 个断言失败、仓库排班请假 3 个参数契约错误；本次新增花名册、请假、加班回归在统一 155 项 Python 套件中均通过。因此暂不能确认具备部署条件。 |
+| 2026-08-04 复验 | Python `runner_test.py` 17/17（含真实 `run_final` 五类 Excel 端到端）、`final_table_bugfix_test.py` 67/67、`roster_and_ops_group_test.py` 19/19 通过；Go 花名册 service 定向与 API 全包通过；前端定向 42/42、全量 352/352、lint、build 通过；`go vet ./...`、`golangci-lint run`（0 issues）、`git diff --check` 通过。`go test ./internal/service/...` 仍被两类问题阻塞：本任务相关的 `D:\app\finally\calc_finally.py` 外部业务真源尚未同步，导致 final golden parity 仍为旧 52 列；本任务外仍有 subsidy hash/资格断言和 warehouse 参数契约失败。 |
+| 2026-08-04 本轮复验 | 新增旧工号姓名回退、精确工号优先、旧工号重名拒绝、完全未命中清空、旧扩展字段隔离等 6 个回归；身份契约类与真实反例通过。`D:\app\finally\calc_finally.py` 已按 adapter 规范同步，真源清单将 final 分类为 `adapter_only`，final Golden fingerprint 1/1 通过，app/toolbox 均输出 53 列且真实反例得到 `NEW001/标准考勤组/总部/工程师`。用户指定的 Python runner 17/17、运维组 19/19、前端定向 42/42通过，前端全量 352/352、lint、build 通过。当前工作区仍有既存阻塞：Go 花名册测试/handler 与 service 的返回值及 sentinel error 契约不一致导致定向、全量、vet/typecheck 失败；Python 全量另有 subsidy hash/资格、warehouse 参数契约、runner 姓名单列契约及一个测试导入路径失败，本轮未修改这些无关/既存代码。 |
+| 2026-08-04 提交前复验 | 已收口本条目遗留的两个测试契约问题：组织花名册生成回归改用权威工号与真实部门路径；Go openpyxl 检查器改用 ASCII 安全 JSON，避免 Windows stdout 编码将中文表头误判为乱码。`final_table_bugfix_test.py` 73/73、`runner_test.py` 17/17、`roster_and_ops_group_test.py` 22/22、Go 花名册 service/API 定向、前端工具箱 42/42、前端 lint/build、`go vet ./...`、`golangci-lint run`（0 issues）、`git diff --check` 全部通过；临时真实 `run_final` 输入 2 名在职 + 1 名当月离职，输出 3/3 人。 |
+| 防复发 | 1. 花名册字段别名不得包含审批/异动流程特有表头（"发起人"/"申请人"前缀字段）。<br>2. 强制不计加班的业务规则必须在普通加班判定之前执行，且只允许二级部门精确等于“运营支撑部”且三级部门精确命中 `OPS_GROUP_DEPT_NAMES`。<br>3. structured run 选择文件必须使用稳定元数据（kind + flow_key），不得回退；花名册禁止使用 structured workflow/`position_transfer`。<br>4. 自动回填 `overtime_roster` 的组织花名册必须同时含权威 EmployeeID 与当前 org 真实部门路径；缺任一项整体 fail-closed，禁止姓名/UserID/DingTalkUserID 兜底。<br>5. `final_active` 可以消费同一富花名册并由钉钉月度表补身份；若保留姓名名单兼容，只能作为独立的手工最终汇总输入，不得改变组织生成接口或自动回填加班的契约。<br>6. 部门映射先工号；姓名仅在全文件唯一时回退，重名必须禁用姓名键，禁止首条覆盖。<br>7. 花名册契约变更必须覆盖“生产生成 xlsx → openpyxl 读取 → 部门解析 → run_overtime 输出”完整链路，手工富花名册和只测最终汇总均不能替代。<br>8. 新 HTTP 路由必须复用生产共享注册函数验证路径、权限和 JWT org；`_find_header_row` 的共享历史兼容不得因花名册局部收紧而改变。 |
+| 状态 | fixed（代码与自动化验证完成，待部署后真实页面验收） |
 
 ### 2026-07-29 P3 dingtalk-stream 复用主镜像继承 HTTP 健康检查导致误报 unhealthy
 

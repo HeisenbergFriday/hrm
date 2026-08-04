@@ -3,6 +3,9 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +22,256 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+type stubOrgRosterGenerator struct {
+	result *service.AttendanceToolboxResult
+	err    error
+	orgIDs []string
+}
+
+const generateOrgRosterRoutePath = "/api/v1/attendance/toolbox/roster/generate"
+
+func (s *stubOrgRosterGenerator) GenerateOrgRosterExcel(_ context.Context, orgID string) (*service.AttendanceToolboxResult, error) {
+	s.orgIDs = append(s.orgIDs, orgID)
+	return s.result, s.err
+}
+
+func runGenerateOrgRosterRoute(
+	t *testing.T,
+	permissions []string,
+	menuKeys []string,
+	orgID string,
+	body string,
+	generator *stubOrgRosterGenerator,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	if generator == nil {
+		generator = &stubOrgRosterGenerator{result: &service.AttendanceToolboxResult{
+			FileName: "花名册.xlsx",
+			Data:     []byte("xlsx"),
+		}}
+	}
+	originalFactory := newOrgRosterGenerator
+	newOrgRosterGenerator = func() orgRosterGenerator { return generator }
+	t.Cleanup(func() { newOrgRosterGenerator = originalFactory })
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("userID", "roster-tester")
+		if orgID != "" {
+			c.Set("orgID", orgID)
+		}
+		auth := &middleware.AuthContext{
+			OrgID:         orgID,
+			UserID:        "roster-tester",
+			RawUserID:     "roster-tester",
+			PermissionSet: permSet(permissions),
+			MenuKeySet:    permSet(menuKeys),
+		}
+		middleware.SetAuthContextForTest(c, auth)
+		c.Next()
+	})
+	v1 := router.Group("/api/v1")
+	attendance := v1.Group("/attendance")
+	registerAttendanceToolboxRoutes(attendance)
+
+	if body == "" {
+		body = `{}`
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, generateOrgRosterRoutePath, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func TestGenerateOrgRosterRoute_PermissionMatrix(t *testing.T) {
+	tests := []struct {
+		name        string
+		permissions []string
+		menuKeys    []string
+		wantStatus  int
+	}{
+		{name: "operate allowed", permissions: []string{"attendance_toolbox_operate"}, wantStatus: http.StatusOK},
+		{name: "attendance manage allowed", permissions: []string{"attendance_manage"}, wantStatus: http.StatusOK},
+		{name: "dingtalk sync only denied", permissions: []string{"attendance_toolbox_dingtalk_sync"}, wantStatus: http.StatusForbidden},
+		{name: "no feature permission denied", wantStatus: http.StatusForbidden},
+		{name: "menu only denied", menuKeys: []string{"menu:attendance-toolbox"}, wantStatus: http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			generator := &stubOrgRosterGenerator{result: &service.AttendanceToolboxResult{FileName: "花名册.xlsx", Data: []byte("xlsx")}}
+			recorder := runGenerateOrgRosterRoute(t, tt.permissions, tt.menuKeys, "org-a", `{}`, generator)
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d, body=%s", recorder.Code, tt.wantStatus, recorder.Body.String())
+			}
+			if tt.wantStatus == http.StatusOK && len(generator.orgIDs) != 1 {
+				t.Fatalf("allowed request should call generator once, got %d", len(generator.orgIDs))
+			}
+			if tt.wantStatus != http.StatusOK && len(generator.orgIDs) != 0 {
+				t.Fatalf("denied request called generator: %#v", generator.orgIDs)
+			}
+		})
+	}
+}
+
+func TestGenerateOrgRosterRoute_RegisteredAtExactPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := SetupRouter()
+	for _, route := range router.Routes() {
+		if route.Method == http.MethodPost && route.Path == generateOrgRosterRoutePath {
+			return
+		}
+	}
+	t.Fatal("POST /api/v1/attendance/toolbox/roster/generate is not registered")
+}
+
+func TestGenerateOrgRosterRoute_MissingOrgIDFailsClosed(t *testing.T) {
+	generator := &stubOrgRosterGenerator{result: &service.AttendanceToolboxResult{FileName: "花名册.xlsx", Data: []byte("xlsx")}}
+	recorder := runGenerateOrgRosterRoute(t, []string{"attendance_toolbox_operate"}, nil, "", `{}`, generator)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(generator.orgIDs) != 0 {
+		t.Fatalf("missing-org request reached generator: %#v", generator.orgIDs)
+	}
+}
+
+func TestGenerateOrgRosterRoute_RequestCannotOverrideJWTOrgID(t *testing.T) {
+	generator := &stubOrgRosterGenerator{result: &service.AttendanceToolboxResult{FileName: "花名册.xlsx", Data: []byte("xlsx")}}
+	recorder := runGenerateOrgRosterRoute(
+		t,
+		[]string{"attendance_toolbox_operate"},
+		nil,
+		"jwt-org",
+		`{"org_id":"body-org","organization_id":"other-org"}`,
+		generator,
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(generator.orgIDs) != 1 || generator.orgIDs[0] != "jwt-org" {
+		t.Fatalf("generator orgIDs = %#v, want only jwt-org", generator.orgIDs)
+	}
+}
+
+func TestGenerateOrgRosterRoute_ErrorMapping(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantText   string
+	}{
+		{name: "no active employees", err: service.ErrRosterNoEmployees, wantStatus: http.StatusBadRequest, wantText: "在职员工"},
+		{name: "missing employee ids", err: fmt.Errorf("%w：3 名在职员工缺少业务工号", service.ErrRosterMissingEmpNo), wantStatus: http.StatusBadRequest, wantText: "3 名"},
+		{name: "missing department path", err: fmt.Errorf("%w：2 名在职员工无法生成部门路径", service.ErrRosterMissingDeptPath), wantStatus: http.StatusBadRequest, wantText: "2 名"},
+		{name: "database query failed", err: fmt.Errorf("%w：database unavailable", service.ErrRosterUserQueryFailed), wantStatus: http.StatusInternalServerError, wantText: "读取在职用户失败"},
+		{name: "runner failed", err: fmt.Errorf("%w：exit status 1", service.ErrRosterRunnerFailed), wantStatus: http.StatusInternalServerError, wantText: "花名册生成失败"},
+		{name: "runner returned no output", err: service.ErrRosterNoOutput, wantStatus: http.StatusInternalServerError, wantText: "未产出结果文件"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			generator := &stubOrgRosterGenerator{err: tt.err}
+			recorder := runGenerateOrgRosterRoute(t, []string{"attendance_toolbox_operate"}, nil, "org-a", `{}`, generator)
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d, body=%s", recorder.Code, tt.wantStatus, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), tt.wantText) {
+				t.Fatalf("body %q does not contain %q", recorder.Body.String(), tt.wantText)
+			}
+		})
+	}
+}
+
+func TestGenerateOrgRosterRoute_SuccessReturnsInspectableXLSX(t *testing.T) {
+	workbook := makeRosterWorkbookWithOpenpyxl(t)
+	generator := &stubOrgRosterGenerator{result: &service.AttendanceToolboxResult{
+		FileName: "花名册_测试组织.xlsx",
+		Data:     workbook,
+		Kind:     "export",
+		RowCount: 1,
+	}}
+	recorder := runGenerateOrgRosterRoute(t, []string{"attendance_toolbox_operate"}, nil, "org-a", `{}`, generator)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if contentType := recorder.Header().Get("Content-Type"); !strings.HasPrefix(contentType, toolboxXlsxContentType) {
+		t.Fatalf("Content-Type = %q", contentType)
+	}
+	if recorder.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q", recorder.Header().Get("X-Content-Type-Options"))
+	}
+	wantDisposition := service.ContentDispositionAttachment("花名册_测试组织.xlsx")
+	if recorder.Header().Get("Content-Disposition") != wantDisposition {
+		t.Fatalf("Content-Disposition = %q, want %q", recorder.Header().Get("Content-Disposition"), wantDisposition)
+	}
+	inspectRosterWorkbookWithOpenpyxl(t, recorder.Body.Bytes())
+}
+
+func makeRosterWorkbookWithOpenpyxl(t *testing.T) []byte {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "roster.xlsx")
+	script := `
+import sys
+from openpyxl import Workbook
+headers = ["工号", "姓名", "合同主体", "一级部门", "二级部门", "三级部门", "岗位", "员工类型", "人员分类", "入职日期", "离职日期", "转正日期"]
+row = ["MT9999", "测试运维", "", "运营管理中心", "运营支撑部", "智慧寄存运维组", "运维工程师", "正式", "", "2026-01-02", "", "2026-04-02"]
+wb = Workbook()
+ws = wb.active
+ws.title = "在职花名册"
+ws.append(headers)
+ws.append(row)
+wb.save(sys.argv[1])
+wb.close()
+`
+	if output, err := exec.Command(apiTestPython(t), "-c", script, path).CombinedOutput(); err != nil {
+		t.Fatalf("create xlsx with openpyxl: %v\n%s", err, output)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read generated xlsx: %v", err)
+	}
+	return data
+}
+
+func inspectRosterWorkbookWithOpenpyxl(t *testing.T, data []byte) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "response.xlsx")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write response xlsx: %v", err)
+	}
+	script := `
+import json
+import sys
+from openpyxl import load_workbook
+wb = load_workbook(sys.argv[1], data_only=True)
+ws = wb["在职花名册"]
+print(json.dumps({"sheet": ws.title, "headers": [c.value for c in ws[1]], "row": [ws.cell(2, i).value for i in range(1, 13)]}))
+wb.close()
+`
+	output, err := exec.Command(apiTestPython(t), "-c", script, path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("open response xlsx with openpyxl: %v\n%s", err, output)
+	}
+	var inspected struct {
+		Sheet   string        `json:"sheet"`
+		Headers []string      `json:"headers"`
+		Row     []interface{} `json:"row"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(output), &inspected); err != nil {
+		t.Fatalf("decode openpyxl inspection: %v, output=%s", err, output)
+	}
+	if inspected.Sheet != "在职花名册" || len(inspected.Headers) != 12 {
+		t.Fatalf("unexpected workbook metadata: %#v", inspected)
+	}
+	if inspected.Headers[0] != "工号" || inspected.Headers[11] != "转正日期" {
+		t.Fatalf("unexpected headers: %#v", inspected.Headers)
+	}
+	if len(inspected.Row) != 12 || inspected.Row[0] != "MT9999" || inspected.Row[1] != "测试运维" || inspected.Row[4] != "运营支撑部" || inspected.Row[5] != "智慧寄存运维组" {
+		t.Fatalf("unexpected workbook row: %#v", inspected.Row)
+	}
+}
 
 // fakeToolboxRunnerPy honors runner.py's CLI contract (--module/--workdir/--config-json)
 // and emits outputs selected by FAKE_TOOLBOX_SCENARIO so handler tests exercise the real
@@ -696,14 +949,14 @@ func TestRunParttimeMonthlyPunch_InvalidMonth_Rejected(t *testing.T) {
 
 // fakeParttimePunchDS is a test double for service.ParttimePunchDataSource.
 type fakeParttimePunchDS struct {
-	cfg       dingtalk.Config
-	adminID   string
-	roster    []service.ParttimeEmployee
+	cfg        dingtalk.Config
+	adminID    string
+	roster     []service.ParttimeEmployee
 	attendance []dingtalk.AttendanceRecord
-	cfgErr    error
-	adminErr  error
-	rosterErr error
-	attendErr error
+	cfgErr     error
+	adminErr   error
+	rosterErr  error
+	attendErr  error
 }
 
 func (f fakeParttimePunchDS) Config(orgID string) (dingtalk.Config, error) {

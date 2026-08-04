@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen, waitFor, cleanup, within } from '@testing-library/react'
+import { act, render, screen, waitFor, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import dayjs from 'dayjs'
@@ -27,6 +27,8 @@ const mockPreviewRun = vi.fn()
 const mockAuditUploads = vi.fn()
 const mockExportTemplates = vi.fn()
 const mockParttimeMonthlyPunch = vi.fn()
+// 必须在 vi.mock('../services/api') 之前定义，因为 vi.mock 会被 hoisted 到文件顶部。
+const mockGenerateOrgRoster = vi.fn()
 
 let mockPermissions: string[] = [
   'attendance_toolbox_operate',
@@ -56,6 +58,7 @@ vi.mock('../services/api', () => ({
     auditUploads: (...args: unknown[]) => mockAuditUploads(...args),
     exportTemplates: (...args: unknown[]) => mockExportTemplates(...args),
     parttimeMonthlyPunch: (...args: unknown[]) => mockParttimeMonthlyPunch(...args),
+    generateOrgRoster: (...args: unknown[]) => mockGenerateOrgRoster(...args),
   },
 }))
 
@@ -275,7 +278,7 @@ describe('AttendanceToolbox', () => {
       'attendance_toolbox_dingtalk_sync',
       'attendance_toolbox_rules_edit',
     ]
-    window.localStorage.clear()
+    if (typeof window !== 'undefined') window.localStorage.clear()
     Object.values(messageApi).forEach((fn) => fn.mockReset())
     mockRun.mockReset()
     mockGetDefaults.mockReset()
@@ -291,6 +294,7 @@ describe('AttendanceToolbox', () => {
     mockPreviewRun.mockReset()
     mockAuditUploads.mockReset()
     mockExportTemplates.mockReset()
+    mockGenerateOrgRoster.mockReset()
 
     mockGetDefaults.mockResolvedValue({
       data: {
@@ -317,6 +321,13 @@ describe('AttendanceToolbox', () => {
     mockParttimeMonthlyPunch.mockResolvedValue(new Blob(['xlsx'], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     }))
+    mockGenerateOrgRoster.mockReset()
+    // 与 axios responseType=blob 的真实响应契约保持一致：Blob 位于 response.data。
+    mockGenerateOrgRoster.mockResolvedValue({
+      data: new Blob(['roster-xlsx'], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      }),
+    })
 
     vi.stubGlobal('URL', {
       createObjectURL: () => 'blob:mock',
@@ -333,6 +344,23 @@ describe('AttendanceToolbox', () => {
   async function waitForToolboxReady() {
     await waitFor(() => expect(mockGetDefaults).toHaveBeenCalled())
     expect((await screen.findAllByText('请假系统导出表')).length).toBeGreaterThan(0)
+  }
+
+  async function openRosterAndTransferControls(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    const rosterCards = (await screen.findAllByText('花名册'))
+      .map((node) => node.closest('.ant-card'))
+      .filter((node): node is HTMLElement => Boolean(node))
+    const transferCards = (await screen.findAllByText('异动流程'))
+      .map((node) => node.closest('.ant-card'))
+      .filter((node): node is HTMLElement => Boolean(node))
+    const rosterCard = rosterCards.find((card) => within(card).queryByRole('button', { name: /组织数据生成/ }))
+    const transferCard = transferCards.find((card) => within(card).queryByRole('button', { name: /钉钉同步/ }))
+    if (!rosterCard || !transferCard) throw new Error('未找到花名册/异动流程权限控件')
+    return {
+      rosterButton: within(rosterCard).getByRole('button', { name: /组织数据生成/ }),
+      transferButton: within(transferCard).getByRole('button', { name: /钉钉同步/ }),
+    }
   }
 
   it('renders hero, toolbar, tabs, and default text values', async () => {
@@ -491,27 +519,167 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
 
-    // 自动回填（花名册 + 异动）走 structured；download 失败禁止重跑钉钉同步。
-    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(2))
+    // 花名册走 generateOrgRoster，异动走 structured position_transfer；download 失败禁止重跑钉钉同步。
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(mockRunDingtalkSync).not.toHaveBeenCalled())
-    expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(2)
   })
 
-  it('auto syncs roster and transfer files while keeping manual upload flows available', async () => {
+  it('auto fills the generated rich roster into overtime and final while keeping transfer independent', async () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(2))
-    // Must not surface the modern-browser File getter error:
-    // "Cannot set property lastModifiedDate of #<File> which has only a getter"
+
+    // 花名册同步必须调用新 roster API
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+    // position_transfer 仅用于异动流程同步（1 次），不再用于花名册
+    const ptCalls = mockRunDingtalkSyncStructured.mock.calls.filter((c) => {
+      const req = c[0] as { flow_keys?: string[] } | undefined
+      return req?.flow_keys?.includes('position_transfer')
+    })
+    expect(ptCalls.length).toBe(1)
+
+    // Must not surface the modern-browser File getter error
     expect(messageApi.error).not.toHaveBeenCalled()
     expect(screen.queryByText(/lastModifiedDate/)).not.toBeInTheDocument()
+
+    // 进入加班明细 tab，断言花名册_组织生成.xlsx 出现
     await user.click(screen.getByRole('tab', { name: /加班明细/ }))
-    expect(await screen.findByText('花名册_钉钉自动同步.xlsx')).toBeInTheDocument()
+    const overtimePanel = document.querySelector('.ant-tabs-tabpane-active') as HTMLElement
+    expect(await within(overtimePanel).findByText('花名册_组织生成.xlsx')).toBeInTheDocument()
+
+    // 进入最终汇总 tab，断言花名册_组织生成.xlsx 出现
     await user.click(screen.getByRole('tab', { name: /最终汇总/ }))
-    expect(await screen.findByText('异动流程_钉钉自动同步.xlsx')).toBeInTheDocument()
+    const finalPanel = document.querySelector('.ant-tabs-tabpane-active') as HTMLElement
+    expect(await within(finalPanel).findByText('花名册_组织生成.xlsx')).toBeInTheDocument()
+
+    // 异动流程仍独立使用 position_transfer
+    expect(screen.getAllByText('异动流程_钉钉自动同步.xlsx').length).toBeGreaterThan(0)
     expect(mockRunDingtalkSync).not.toHaveBeenCalled()
-    expect(mockDownloadRunFile).toHaveBeenCalledTimes(2)
+  })
+
+  it('roster sync failure does not overwrite existing uploads and keeps transfer independent', async () => {
+    const user = userEvent.setup()
+    let rejectRosterGeneration: ((reason?: unknown) => void) | undefined
+    mockGenerateOrgRoster.mockImplementation(() => new Promise((_resolve, reject) => {
+      rejectRosterGeneration = reject
+    }))
+    mockRunDingtalkSyncStructured.mockResolvedValue(makeDingtalkSyncRunResponse('position_transfer'))
+
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+
+    // 先手动上传一个本地花名册，再让已经发起的生成请求失败。
+    const finalTab = screen.getByRole('tab', { name: /最终汇总/ })
+    await user.click(finalTab)
+    const activePanel = document.querySelector('.ant-tabs-tabpane-active') as HTMLElement
+    const activeLabels = await within(activePanel).findAllByText('在职花名册')
+    const activeCard = activeLabels
+      .map((item) => item.closest('.ant-card'))
+      .find((item) => item?.querySelector('input[type="file"]'))
+    const activeInput = (activeCard as HTMLElement).querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(activeInput, new File(['local-roster'], '本地花名册.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }))
+    expect(await screen.findByText('本地花名册.xlsx')).toBeInTheDocument()
+
+    await act(async () => {
+      rejectRosterGeneration?.({
+        response: { status: 400, data: { message: '花名册生成服务未配置' } },
+      })
+      await Promise.resolve()
+    })
+
+    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    expect(await screen.findByText(/生成失败：花名册生成服务未配置/)).toBeInTheDocument()
+
+    // 生成失败完成后不得产生自动文件，也不得覆盖已经上传的本地文件。
+    expect(screen.queryByText('花名册_组织生成.xlsx')).not.toBeInTheDocument()
+
+    // 原文件仍保留（未被失败的同步覆盖）
+    expect(screen.getByText('本地花名册.xlsx')).toBeInTheDocument()
+
+    // 异动流程同步仍独立运行（自动同步已完成）
+    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalled())
+
+    // 花名册同步未使用 position_transfer（只有异动用了）
+    const ptCalls = mockRunDingtalkSyncStructured.mock.calls.filter((c) => {
+      const req = c[0] as { flow_keys?: string[] } | undefined
+      return req?.flow_keys?.includes('position_transfer')
+    })
+    expect(ptCalls.length).toBe(1)
+  })
+
+  it('permission matrix: operate-only generates roster and disables transfer sync', async () => {
+    mockPermissions = ['attendance_toolbox_operate']
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+    expect(mockRunDingtalkSyncStructured).not.toHaveBeenCalled()
+    const { rosterButton, transferButton } = await openRosterAndTransferControls(user)
+    expect(rosterButton).toBeEnabled()
+    expect(transferButton).toBeDisabled()
+  })
+
+  it('permission matrix: dingtalk-sync-only syncs transfer and blocks roster with operation hint', async () => {
+    mockPermissions = ['attendance_toolbox_dingtalk_sync']
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    expect(mockGenerateOrgRoster).not.toHaveBeenCalled()
+    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(1))
+    const { rosterButton, transferButton } = await openRosterAndTransferControls(user)
+    expect(rosterButton).toBeDisabled()
+    expect(transferButton).toBeEnabled()
+    expect(screen.getByText(/当前账号无操作权限/)).toBeInTheDocument()
+    await user.hover(rosterButton.parentElement as HTMLElement)
+    expect(await screen.findByText('你缺少考勤工具箱操作权限，需要联系管理员添加')).toBeInTheDocument()
+  })
+
+  it('permission matrix: operate and dingtalk sync each automatic action exactly once', async () => {
+    mockPermissions = ['attendance_toolbox_operate', 'attendance_toolbox_dingtalk_sync']
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(1))
+    expect(mockRunDingtalkSyncStructured).toHaveBeenCalledWith(expect.objectContaining({
+      flow_keys: ['position_transfer'],
+    }))
+    const { rosterButton, transferButton } = await openRosterAndTransferControls(user)
+    expect(rosterButton).toBeEnabled()
+    expect(transferButton).toBeEnabled()
+  })
+
+  it('permission matrix: attendance_manage enables roster and transfer', async () => {
+    mockPermissions = ['attendance_manage']
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(1))
+    const { rosterButton, transferButton } = await openRosterAndTransferControls(user)
+    expect(rosterButton).toBeEnabled()
+    expect(transferButton).toBeEnabled()
+  })
+
+  it('permission matrix: no permission runs neither action and disables both buttons', async () => {
+    mockPermissions = []
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    expect(mockGenerateOrgRoster).not.toHaveBeenCalled()
+    expect(mockRunDingtalkSyncStructured).not.toHaveBeenCalled()
+    const { rosterButton, transferButton } = await openRosterAndTransferControls(user)
+    expect(rosterButton).toBeDisabled()
+    expect(transferButton).toBeDisabled()
   })
 
   it('disables calculate button without operate permission', async () => {
@@ -533,11 +701,14 @@ describe('AttendanceToolbox', () => {
     expect(await screen.findByRole('button', { name: /从钉钉同步并生成中间表/ })).toBeDisabled()
   })
 
-  it('skips auto roster/transfer sync without dingtalk permission', async () => {
+  it('skips auto transfer sync without dingtalk permission but generates roster with operate', async () => {
     mockPermissions = ['attendance_toolbox_operate']
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await waitFor(() => expect(mockGetDefaults).toHaveBeenCalled())
+    // roster generation should happen (canOperate = true)
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalled())
+    // position_transfer sync should NOT happen (canDingtalkSync = false)
     expect(mockRunDingtalkSync).not.toHaveBeenCalled()
     expect(messageApi.error).not.toHaveBeenCalled()
   })
@@ -676,7 +847,7 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await user.click(screen.getByRole('tab', { name: /补贴扣款/ }))
-    await uploadRequiredFileByLabel(user, '补贴扣款表', 'subsidy.xlsx')
+    await uploadRequiredFileByLabel(user, '钉钉月度汇总表（补贴及扣款）', 'subsidy.xlsx')
     await uploadRequiredFileByLabel(user, '签到表', 'checkin.xlsx')
     await uploadRequiredFileByLabel(user, '作息表', 'schedule.xlsx')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))

@@ -17,6 +17,22 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"peopleops/internal/database"
+)
+
+// Sentinel errors for roster generation, used to distinguish business vs internal errors.
+var (
+	ErrRosterNoEmployees     = errors.New("当前组织没有可生成的在职员工")
+	ErrRosterMissingEmpNo    = errors.New("部分在职员工缺少业务工号")
+	ErrRosterMissingDeptPath = errors.New("部分在职员工无法生成部门路径")
+	ErrRosterRunnerFailed    = errors.New("花名册生成失败")
+	ErrRosterNoOutput        = errors.New("花名册生成未产出结果文件")
+	ErrRosterEngineDir       = errors.New("未找到考勤工具箱 Python 引擎目录")
+	ErrRosterRunnerNotFound  = errors.New("未找到考勤工具箱 runner")
+	ErrRosterDeptDataFailed  = errors.New("读取部门数据失败")
+	ErrRosterUserQueryFailed = errors.New("读取在职用户失败")
+	ErrRosterProfileFailed   = errors.New("读取员工档案失败")
 )
 
 const (
@@ -1067,6 +1083,251 @@ func (s *AttendanceToolboxService) Validate(ctx context.Context, module string, 
 		return nil, fmt.Errorf("校验结果格式异常：%w", jsonErr)
 	}
 	return validation, nil
+}
+
+// ── Action: GenerateOrgRoster ─────────────────────────────────────────────────
+
+// rosterEmployee 字段与 Python 花名册生成器及最终表解析契约保持一致。
+// 工号只允许来自 EmployeeProfile.EmployeeID；无权威来源的字段保持为空。
+type rosterEmployee struct {
+	EmpNo          string `json:"emp_no"`
+	Name           string `json:"name"`
+	ContractEntity string `json:"contract_entity,omitempty"`
+	Dept1          string `json:"dept1,omitempty"`
+	Dept2          string `json:"dept2,omitempty"`
+	Dept3          string `json:"dept3,omitempty"`
+	Position       string `json:"position,omitempty"`
+	EmpType        string `json:"emp_type,omitempty"`
+	Category       string `json:"category,omitempty"`
+	HireDate       string `json:"hire_date,omitempty"`
+	ResignDate     string `json:"resign_date,omitempty"`
+	ConfirmDate    string `json:"confirm_date,omitempty"`
+}
+
+// rosterDepartmentLevels 保留距离叶子最近的三级业务部门，避免企业虚拟根节点
+// 挤占一级部门。三层及以内保持当前组织中的真实顺序。
+func rosterDepartmentLevels(path []string) (dept1, dept2, dept3 string) {
+	cleaned := make([]string, 0, len(path))
+	for _, name := range path {
+		if name = strings.TrimSpace(name); name != "" {
+			cleaned = append(cleaned, name)
+		}
+	}
+	if len(cleaned) > 3 {
+		cleaned = cleaned[len(cleaned)-3:]
+	}
+	if len(cleaned) > 0 {
+		dept1 = cleaned[0]
+	}
+	if len(cleaned) > 1 {
+		dept2 = cleaned[1]
+	}
+	if len(cleaned) > 2 {
+		dept3 = cleaned[2]
+	}
+	return dept1, dept2, dept3
+}
+
+// buildRosterEmployees 构造组织花名册，并返回缺业务工号、缺部门路径的人数。
+// 姓名、UserID 和 DingTalkUserID 均不得作为业务工号兜底。
+func buildRosterEmployees(
+	users []database.User,
+	profiles map[string]database.EmployeeProfile,
+	deptPathMap map[string][]string,
+) ([]rosterEmployee, int, int) {
+	employees := make([]rosterEmployee, 0, len(users))
+	missingEmpNo := 0
+	missingDeptPath := 0
+	for _, user := range users {
+		profile, hasProfile := profiles[user.UserID]
+		empNo := ""
+		if hasProfile {
+			empNo = strings.TrimSpace(profile.EmployeeID)
+		}
+		if empNo == "" {
+			missingEmpNo++
+		}
+
+		name := strings.TrimSpace(user.Name)
+		if name == "" {
+			continue
+		}
+
+		path, hasPath := deptPathMap[strings.TrimSpace(user.DepartmentID)]
+		dept1, dept2, dept3 := rosterDepartmentLevels(path)
+		if !hasPath || dept1 == "" {
+			missingDeptPath++
+		}
+
+		record := rosterEmployee{
+			EmpNo:    empNo,
+			Name:     name,
+			Dept1:    dept1,
+			Dept2:    dept2,
+			Dept3:    dept3,
+			Position: strings.TrimSpace(user.Position),
+		}
+		if hasProfile {
+			record.EmpType = strings.TrimSpace(profile.EmploymentType)
+			record.HireDate = strings.TrimSpace(profile.EntryDate)
+			record.ConfirmDate = strings.TrimSpace(profile.ActualRegularDate)
+		}
+		employees = append(employees, record)
+	}
+	return employees, missingEmpNo, missingDeptPath
+}
+
+// loadRosterEmployeesForOrg 查询指定组织的 active 用户、档案与主部门路径。
+func (s *AttendanceToolboxService) loadRosterEmployeesForOrg(orgID string) ([]rosterEmployee, int, int, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, 0, 0, errors.New("生成花名册需要提供组织 ID（org_id）")
+	}
+	orgID = database.NormalizeOrganizationID(orgID)
+
+	deptPathMap, err := s.buildDepartmentPathMap(orgID)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("%w：%w", ErrRosterDeptDataFailed, err)
+	}
+
+	var users []database.User
+	if err := database.DB.
+		Where("org_id = ? AND status = ? AND deleted_at IS NULL", orgID, "active").
+		Order("created_at ASC").Find(&users).Error; err != nil {
+		return nil, 0, 0, fmt.Errorf("%w：%w", ErrRosterUserQueryFailed, err)
+	}
+
+	profiles := make(map[string]database.EmployeeProfile, len(users))
+	if len(users) > 0 {
+		userIDs := make([]string, 0, len(users))
+		for _, user := range users {
+			userIDs = append(userIDs, user.UserID)
+		}
+		var rows []database.EmployeeProfile
+		if err := database.DB.
+			Where("org_id = ? AND user_id IN ? AND deleted_at IS NULL", orgID, userIDs).
+			Find(&rows).Error; err != nil {
+			return nil, 0, 0, fmt.Errorf("%w：%w", ErrRosterProfileFailed, err)
+		}
+		for _, profile := range rows {
+			if _, exists := profiles[profile.UserID]; !exists {
+				profiles[profile.UserID] = profile
+			}
+		}
+	}
+
+	employees, missingEmpNo, missingDeptPath := buildRosterEmployees(users, profiles, deptPathMap)
+	return employees, missingEmpNo, missingDeptPath, nil
+}
+
+// GenerateOrgRosterExcel 按 org_id 生成可直接供加班入口解析的在职花名册。
+func (s *AttendanceToolboxService) GenerateOrgRosterExcel(ctx context.Context, orgID string) (*AttendanceToolboxResult, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, errors.New("生成花名册需要提供组织 ID（org_id）")
+	}
+	orgID = database.NormalizeOrganizationID(orgID)
+
+	if s.engineDir == "" {
+		return nil, ErrRosterEngineDir
+	}
+	runnerPath := filepath.Join(s.engineDir, "runner.py")
+	if _, err := os.Stat(runnerPath); err != nil {
+		return nil, fmt.Errorf("%w：%w", ErrRosterRunnerNotFound, err)
+	}
+
+	// 1) 组织名称（仅用于文件名/日志，不写入合同主体列）
+	orgName := orgID
+	if org, err := database.GetOrganizationByOrgID(orgID); err == nil && strings.TrimSpace(org.Name) != "" {
+		orgName = strings.TrimSpace(org.Name)
+	}
+
+	// 2) 按组织加载部门、在职用户与员工档案。
+	employees, missingEmpNo, missingDeptPath, err := s.loadRosterEmployeesForOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3) 数据不完整时整体拒绝生成，避免产出无法供加班模块使用的文件。
+	if missingEmpNo > 0 {
+		return nil, fmt.Errorf("%w：%d 名在职员工缺少业务工号（EmployeeID），请先在员工档案中补充", ErrRosterMissingEmpNo, missingEmpNo)
+	}
+	if missingDeptPath > 0 {
+		return nil, fmt.Errorf("%w：%d 名在职员工缺少有效主部门或部门层级无法解析，请先修复组织数据", ErrRosterMissingDeptPath, missingDeptPath)
+	}
+
+	// 4) 当前组织没有可生成的在职员工时直接返回错误，不生成只有表头的文件。
+	if len(employees) == 0 {
+		return nil, ErrRosterNoEmployees
+	}
+
+	// 5) 调 Python 生成 xlsx。
+	config := map[string]interface{}{
+		"org_name":  orgName,
+		"employees": employees,
+	}
+
+	result, err := s.runAction(ctx, "generate-roster", config)
+	if err != nil {
+		return nil, fmt.Errorf("%w：%w", ErrRosterRunnerFailed, err)
+	}
+	if len(result.Outputs) == 0 {
+		return nil, ErrRosterNoOutput
+	}
+	output := result.Outputs[0]
+	output.FileName = strings.TrimSpace(output.FileName)
+	if output.FileName == "" {
+		output.FileName = "花名册.xlsx"
+	}
+	return &AttendanceToolboxResult{
+		FileName:    output.FileName,
+		ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		Data:        output.Data,
+		Kind:        output.Kind,
+		RowCount:    output.RowCount,
+	}, nil
+}
+
+// buildDepartmentPathMap 返回 department_id → 从根到叶的真实部门名称路径。
+// 缺父节点、循环、空名称或过深路径均不写入结果，交由上层明确 fail-closed。
+func (s *AttendanceToolboxService) buildDepartmentPathMap(orgID string) (map[string][]string, error) {
+	var depts []database.Department
+	if err := database.DB.Where("org_id = ? AND deleted_at IS NULL", orgID).Find(&depts).Error; err != nil {
+		return nil, err
+	}
+	byID := make(map[string]database.Department, len(depts))
+	for _, d := range depts {
+		byID[d.DepartmentID] = d
+	}
+	var resolve func(id string, depth int, visiting map[string]bool) ([]string, bool)
+	resolve = func(id string, depth int, visiting map[string]bool) ([]string, bool) {
+		id = strings.TrimSpace(id)
+		if id == "" || id == "0" {
+			return []string{}, true
+		}
+		if depth > 16 || visiting[id] {
+			return nil, false
+		}
+		d, ok := byID[id]
+		if !ok || strings.TrimSpace(d.Name) == "" {
+			return nil, false
+		}
+		visiting[id] = true
+		defer delete(visiting, id)
+		parentID := strings.TrimSpace(d.ParentID)
+		parent, valid := resolve(parentID, depth+1, visiting)
+		if !valid {
+			return nil, false
+		}
+		return append(parent, strings.TrimSpace(d.Name)), true
+	}
+	result := make(map[string][]string, len(depts))
+	for _, d := range depts {
+		if path, valid := resolve(d.DepartmentID, 0, make(map[string]bool)); valid && len(path) > 0 {
+			result[d.DepartmentID] = path
+		}
+	}
+	return result, nil
 }
 
 // ── Action: Preview ──────────────────────────────────────────────────────────

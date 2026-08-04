@@ -467,6 +467,11 @@ export const attendanceToolboxAPI = {
     responseType: 'blob',
     timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
   }),
+  /** 按当前组织生成标准在职花名册 xlsx（后端读取本组织 active 用户与档案）。 */
+  generateOrgRoster: () => api.post('/attendance/toolbox/roster/generate', {}, {
+    responseType: 'blob',
+    timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
+  }),
 }
 
 export const approvalAPI = {

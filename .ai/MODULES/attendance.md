@@ -1,6 +1,6 @@
 ---
 purpose: 考勤模块业务规则说明
-last_updated: 2026-08-01
+last_updated: 2026-08-04
 source_of_truth:
   - internal/api/handlers.go（考勤相关 handler）
   - internal/api/attendance_toolbox_handlers.go（考勤工具箱上传计算 handler）
@@ -236,6 +236,7 @@ Response：
 |---|---|---|
 | 页面可见 / 读 defaults | `menu:attendance-toolbox` 或 `attendance_toolbox_operate` | `attendance_manage` |
 | 普通计算 / 校验 / 审计 / 模板 / 结果查询下载 / 预览 | `attendance_toolbox_operate` | `attendance_manage` |
+| 从本地组织数据生成花名册 | `attendance_toolbox_operate` | `attendance_manage` |
 | 钉钉同步（blob 与 structured） | `attendance_toolbox_dingtalk_sync` | `attendance_manage` |
 | 一键联动 quick | **同时** `operate` + `dingtalk_sync`（AND） | `attendance_manage` 可兼容两项 |
 | 规则导入/应用/导出 / 请求含 `rules_json`/`rules_file` | `attendance_toolbox_rules_edit` | `attendance_manage` |
@@ -286,9 +287,25 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - 环境变量：`ATTENDANCE_TOOLBOX_RUN_TTL_SECONDS`（默认 2h，夹在 5m–24h）、`ATTENDANCE_TOOLBOX_RUN_MAX_BYTES`（默认 512MB）
 - run 读取/下载权限按模块收紧：`attendance_manage` / `attendance_toolbox_operate` 可读任意模块结果；仅持 `attendance_toolbox_dingtalk_sync` 的用户只可读/下载**自己同 org** 的 `dingtalk_sync` 结果，禁止借此访问 leave/overtime 等其他模块结果。路由中间件放行三种权限，模块边界由 handler `toolboxRunModuleAccessible` 判断。
 
-请假、花名册和异动流程的页面自动回填必须走 structured workflow，按 `kind=export + flow_key` 下载唯一业务文件；`kind=audit` / `kind=meta` 只用于诊断或手动下载，禁止作为上传输入，也不得因审计文件存在而把结果误判为不可回填的 ZIP。手动“钉钉同步”仍可下载包含业务表和审计表的完整 ZIP。
+请假、异动等钉钉审批数据的页面自动回填必须走 structured workflow，按 `kind=export + flow_key` 下载唯一业务文件；`kind=audit` / `kind=meta` 只用于诊断或手动下载，禁止作为上传输入，也不得因审计文件存在而把结果误判为不可回填的 ZIP。手动“钉钉同步”仍可下载包含业务表和审计表的完整 ZIP。
+
+花名册不属于钉钉审批流程：必须调用本地组织数据接口 `/api/v1/attendance/toolbox/roster/generate`，禁止再次使用 `position_transfer` 或其他 structured workflow 导出表充当花名册。花名册与异动流程的权限、数据来源和自动回填状态必须相互独立。
 
 前端回退策略：`shouldFallbackToLegacyToolboxAPI` 仅在结构化接口 **404/405/501** 时回退旧 blob；403/400/410/5xx/超时/网络不得回退，钉钉同步成功后不得重跑。
+
+### POST /api/v1/attendance/toolbox/roster/generate
+
+从当前 JWT `org_id` 的本地组织数据库生成标准在职花名册 xlsx。
+
+- 权限：`attendance_toolbox_operate` 或兼容的 `attendance_manage`；`attendance_toolbox_dingtalk_sync`、menu-only 均不得调用。
+- 组织：JWT `org_id` 是唯一可信来源；缺失时 fail-closed，请求 body/query 不得覆盖；用户查询必须按 `org_id` 隔离并排除软删除数据。
+- 员工范围：仅当前组织 `status=active` 且未软删除的用户；业务工号必须取 `EmployeeProfile.EmployeeID`，部门路径必须取该用户当前主部门在本组织中的真实父子层级。所有用户、档案、部门查询均显式绑定 JWT `org_id`。
+- 完整性：任一待输出员工缺少 `EmployeeID`，或主部门缺失、跨组织、父级断裂、循环、空名称导致路径不可解析时，接口整体返回包含缺失人数的 400；禁止跳过后静默生成不完整文件。姓名、`UserID`、`DingTalkUserID` 均不得兜底业务工号。
+- 输出：xlsx 固定 12 列：工号、姓名、合同主体、一级部门、二级部门、三级部门、岗位、员工类型、人员分类、入职日期、离职日期、转正日期；其中工号、姓名和真实部门路径是加班入口契约，其他无权威来源字段保持空。超过三级的组织路径保留距离叶子最近的三级业务部门，顺序不得重排或猜测。
+- 回填：前端自动生成后可将同一份富花名册回填到 `overtime_roster` 与 `final_active`；不得把仅姓名文件自动回填到 `overtime_roster`。最终汇总仍可从用户上传的钉钉月度汇总表补充/纠正身份字段，手工仅姓名花名册只作为最终汇总兼容输入，不是组织生成接口的输出契约。
+- 重名：生成文件以权威工号区分同名员工；Python 部门映射只有在姓名全文件唯一时才建立姓名回退键，重名时只允许按工号命中，禁止首条覆盖或按姓名误映射。
+- 成功：返回 xlsx、`Content-Disposition`、`X-Content-Type-Options: nosniff`；无有效在职员工、缺业务工号或缺部门路径返回 400，数据查询、runner 失败或无输出返回 500。
+- 路由测试：必须调用生产使用的 `registerAttendanceToolboxRoutes` 共享注册逻辑验证 `POST` 路径和权限矩阵；禁止在测试中重复注册路径、中间件与 handler。
 
 ### POST /api/v1/attendance/toolbox/dingtalk-sync
 旧 blob 钉钉同步；推荐 structured workflows。权限同 `attendance_toolbox_dingtalk_sync`。
@@ -332,7 +349,8 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 
 ### 考勤工具箱文件兼容与校验口径
 
-- 花名册/员工信息表兼容 `.xlsx` / `.xls`（`excel_compat` + `xlrd>=2.0,<3`）。
+- 花名册/员工信息表兼容 `.xlsx` / `.xls`（`excel_compat` + `xlrd>=2.0,<3`）。最终汇总兼容仅姓名名单；加班 `overtime_roster` 必须包含可用工号与部门列，否则 `run_overtime` 返回包含实际表头的明确错误。
+- 共享 `_find_header_row` 保持子串匹配，以兼容请假“员工工号/员工姓名/请假类型名称”和加班“2倍加班（小时）”等历史表头；花名册身份列局部精确匹配：姓名仅接受“姓名/员工姓名”，工号仅接受“工号/员工工号/员工编号”，禁止识别发起人、申请人等审批流程字段。部门映射优先工号；姓名仅在全文件唯一时允许回退，重名不得生成姓名映射键。
 - 节假日年份按目标月过滤后再校验。
 - 业务真源比对：`tools/attendance_toolbox/python/scripts/compare_app_source.py` 全量生成 `SOURCE_MANIFEST.json`（含 `difference_kind=equal|adapter_only`）；禁止手改 manifest。允许 adapter 差异：`sys.path` 注入、`excel_compat`、`load_workbook_compat`。无 `D:\app` 时本地比对 skip；CI 仍跑仓库内 fixture/hash 测试。 Local golden tests use synthetic Excel inputs to compare leave/overtime/subsidy/final/parttime output fingerprints against `D:\app`; when `D:\app` exists, these parity tests must run with 0 skip.
 
@@ -405,6 +423,12 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - 加班、补贴页签支持可选的 `YYYY-MM` 月份锁定；默认自动识别，锁定月份与作息表月份冲突时停止计算并提示。
 - 补贴模块与加班规则共享法定节假日配置：自定义规则含 `legal_holidays_override` 时优先使用，否则回退作息表；两者日期差异写入补贴结果“异常审计”工作表。
 - 补贴结果“异常审计”工作表记录考勤缺失人员、实习生剔除人员和节假日口径差异；考勤缺失人员的补贴字段保持空值，不按 0 计算。结构化运行响应在 `meta.subsidy_audit` 返回缺失人数及名单，前端显示警告。
+- **补贴扣款数据来源**：必须来自钉钉考勤后台“考勤统计 → 报表管理 → 月度汇总表（补贴及扣款）”的人工导出 Excel。不是钉钉审批流程实例，也不通过 `getattcolumns`/`getcolumnval` 接口自动获取金额列（当前企业实测未返回目标补贴扣款金额列，现阶段不依赖这些接口自动获取补贴扣款数据）。
+- **补贴扣款输入格式与月份校验**：补贴扣款支持两种输入，校验口径不同：
+  - **钉钉原始月度汇总表**（A1 包含“月度汇总表（补贴及扣款）”且有 UserId 列）：A1 必须同时包含统计开始日期和统计结束日期，且两个日期必须完整覆盖处理月份的自然月（如 7 月必须为 2026-07-01 至 2026-07-31）；任一日期缺失、无法解析、部分范围或跨月时均 fail-closed，停止计算并提示。使用 `calendar.monthrange` 处理 28/29/30/31 天月份和闰年。
+  - **系统模板 / 历史兼容格式**（A1 不含“月度汇总表（补贴及扣款）”或无 UserId 列）：不要求 A1 包含统计日期，月份以页面选择的处理月份和作息表月份校验为准，可正常传入 year/month 参数。
+  - 列名匹配使用精确关键字（如“15-30分钟迟到扣款”、“旷工天数”），禁止使用宽泛别名（如“迟到”、“早退”）以免误匹配次数/分钟数列。
+- **补贴扣款无自动拉取功能**：不新增 `/attendance/toolbox/subsidy/sync` 接口，不新增数据库表或字段。重复上传同一月份时，新文件替换旧文件，不累计。
 - 兼职汇总中，同一日同时包含外出/出差与事假时，事假优先且该日不计出勤；组合状态判断必须早于外出/出差计出勤的提前返回。纯外出/出差仍按原规则处理。
 - 大文件上传时显示警告提示
 - 运行日志可折叠查看（需后端支持返回 log 字段）

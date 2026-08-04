@@ -777,19 +777,25 @@ def _department_name_key(name: str | None) -> str:
     return f"name:{normalize_name(name)}"
 
 
-def parse_employee_department_map(roster_path: str | None) -> dict[str, dict[str, str]]:
-    """从花名册/最终表类文件中提取工号到部门的映射，用于加班部门组判定。"""
+def parse_employee_department_map(roster_path: str | None) -> tuple[dict[str, dict[str, str]], dict | None]:
+    """从花名册/最终表类文件中提取工号到部门的映射，用于加班部门组判定。
+
+    返回 (员工部门映射, 诊断信息)。诊断信息仅在解析失败时非空，供上层给出明确错误。
+    兼容钉钉自动同步花名册的常见字段名，遍历全部工作表并优先选择同时包含员工编号/姓名与部门字段的表头行。
+    """
     path = normalize_name(roster_path)
     if not path:
-        return {}
+        return {}, None
     if not os.path.exists(path):
         print(f"[员工部门] 未找到花名册/员工信息表：{path}，沿用加班导出部门")
-        return {}
+        return {}, None
 
     wb = load_workbook_compat(path, data_only=True)
     result: dict[str, dict[str, str]] = {}
+    name_candidates: dict[str, list[dict[str, str]]] = {}
     matched_sheets = 0
     matched_rows = 0
+    sheet_diagnostics: list[dict] = []
 
     for ws in wb.worksheets:
         rows = list(ws.iter_rows(values_only=True))
@@ -798,16 +804,18 @@ def parse_employee_department_map(roster_path: str | None) -> dict[str, dict[str
 
         header_row_idx = None
         header_vals = None
+        # 注意：不包含"发起人工号""发起人姓名""发起人部门"等审批/异动流程表头，
+        # 否则岗位异动流程导出会被误识别为花名册，导致部门映射错误。
         for idx, row in enumerate(rows[:20]):
             normalized = {normalize_header_name(value) for value in row}
-            has_emp = bool(normalized & {normalize_header_name("工号"), normalize_header_name("员工工号"), normalize_header_name("发起人工号")})
-            has_name = bool(normalized & {normalize_header_name("姓名"), normalize_header_name("员工姓名"), normalize_header_name("发起人姓名")})
+            has_emp = bool(normalized & {normalize_header_name("工号"), normalize_header_name("员工工号"), normalize_header_name("员工编号")})
+            has_name = bool(normalized & {normalize_header_name("姓名"), normalize_header_name("员工姓名")})
             has_dept = bool(normalized & {
                 normalize_header_name("一级部门"), normalize_header_name("1级部门"),
                 normalize_header_name("二级部门"), normalize_header_name("2级部门"),
                 normalize_header_name("三级部门"), normalize_header_name("3级部门"),
                 normalize_header_name("部门路径"), normalize_header_name("所属部门"),
-                normalize_header_name("发起人部门"), normalize_header_name("部门"),
+                normalize_header_name("部门名称"), normalize_header_name("部门"),
             })
             if (has_emp or has_name) and has_dept:
                 header_row_idx = idx
@@ -815,16 +823,27 @@ def parse_employee_department_map(roster_path: str | None) -> dict[str, dict[str
                 break
 
         if header_row_idx is None or header_vals is None:
+            sheet_diagnostics.append({
+                "sheet": ws.title,
+                "matched": False,
+                "headers": [str(v) if v is not None else "" for v in rows[0]],
+            })
             continue
 
+        sheet_diagnostics.append({
+            "sheet": ws.title,
+            "matched": True,
+            "header_row_idx": header_row_idx,
+            "headers": [str(v) if v is not None else "" for v in header_vals],
+        })
         matched_sheets += 1
-        col_emp = _find_col_in_headers(header_vals, "工号", "员工工号", "发起人工号")
-        col_name = _find_col_in_headers(header_vals, "姓名", "员工姓名", "发起人姓名")
+        col_emp = _find_col_in_headers(header_vals, "工号", "员工工号", "员工编号")
+        col_name = _find_col_in_headers(header_vals, "姓名", "员工姓名")
         col_contract = _find_col_in_headers(header_vals, "合同主体", "所属公司", "公司主体", "主体")
         col_dept1 = _find_col_in_headers(header_vals, "一级部门", "1级部门", "一级组织", "1级组织")
         col_dept2 = _find_col_in_headers(header_vals, "二级部门", "2级部门", "二级组织", "2级组织")
         col_dept3 = _find_col_in_headers(header_vals, "三级部门", "3级部门", "三级组织", "3级组织")
-        col_dept_path = _find_col_in_headers(header_vals, "部门路径", "完整部门", "主部门", "所属部门", "发起人部门", "部门")
+        col_dept_path = _find_col_in_headers(header_vals, "部门路径", "完整部门", "主部门", "所属部门", "部门名称", "部门")
         if col_dept_path in {col_dept1, col_dept2, col_dept3}:
             col_dept_path = None
         col_att_group = _find_col_in_headers(header_vals, "考勤组", "考勤组名称")
@@ -861,17 +880,50 @@ def parse_employee_department_map(roster_path: str | None) -> dict[str, dict[str
             }
             if emp_no:
                 result[emp_no] = info
-            if name and _department_name_key(name) not in result:
-                result[_department_name_key(name)] = info
+            if name:
+                name_candidates.setdefault(_department_name_key(name), []).append(info)
             matched_rows += 1
 
     wb.close()
     if matched_sheets:
+        # 姓名只在全文件唯一时允许作为旧表兼容回退。重名时不建立 name: 键，
+        # 防止缺工号的加班行被静默映射到同名员工的错误部门。
+        duplicate_names = 0
+        for name_key, candidates in name_candidates.items():
+            if len(candidates) == 1:
+                result[name_key] = candidates[0]
+            else:
+                duplicate_names += 1
         unique_codes = sum(1 for key in result if not key.startswith("name:"))
-        print(f"[员工部门] 已从花名册/员工信息表读取 {unique_codes} 个工号部门映射（{matched_sheets} 个 sheet）")
+        print(
+            f"[员工部门] 已从花名册/员工信息表读取 {unique_codes} 个工号部门映射"
+            f"（{matched_sheets} 个 sheet，{duplicate_names} 个重名姓名已禁用回退）"
+        )
+        return result, None
     else:
+        diagnostic = _build_roster_department_diagnostic(sheet_diagnostics)
         print("[员工部门] 花名册/员工信息表未识别到可用部门列，沿用加班导出部门")
-    return result
+        return result, diagnostic
+
+
+def _build_roster_department_diagnostic(sheet_diagnostics: list[dict]) -> dict:
+    """汇总实际识别到的工作表、表头与缺失字段，供错误信息使用。"""
+    matched = [d for d in sheet_diagnostics if d.get("matched")]
+    unmatched = [d for d in sheet_diagnostics if not d.get("matched")]
+    missing = "员工标识字段（工号/员工编号/姓名）与部门字段（一级/二级/三级部门或部门路径/部门名称）"
+    if sheet_diagnostics and not matched:
+        missing = "未识别到包含员工标识和部门字段的表头行"
+        return {
+            "matched_sheets": [],
+            "unmatched_sheets": [d.get("sheet") for d in unmatched],
+            "headers_preview": sheet_diagnostics[:5],
+            "missing": missing,
+        }
+    return {
+        "matched_sheets": [d.get("sheet") for d in matched],
+        "headers_preview": sheet_diagnostics[:5],
+        "missing": missing,
+    }
 
 
 def _lookup_employee_department(
@@ -2101,6 +2153,51 @@ def _general_context_group_key(item: dict) -> tuple:
     return ("row", item["row_idx"])
 
 
+# ── 运营支撑部运维组强制「未加」规则 ──────────────────────────────────────
+# 命中条件（先清洗首尾空格/不可见字符）：
+#   1. 二级部门精确等于「运营支撑部」
+#   2. 三级/叶子部门精确命中 OPS_GROUP_DEPT_NAMES
+# 命中后：系统操作=未加、备注写明业务规则、清空所有加班计算列。
+# 该规则优先级高于普通打卡时长/系统总时长/通用加班分支。
+# 新增允许名单前必须与业务方确认真实部门层级，不得自行扩大。
+
+OPS_GROUP_DEPT_REMARK = "运营支撑部运维组按业务规则不计加班，即使存在打卡记录也判定为未加。"
+
+OPS_GROUP_DEPT_NAMES = {
+    "运维组",
+    "智慧寄存运维组",
+}
+
+
+def _is_ops_group_by_depts(dept1: str | None, dept2: str | None, dept3: str | None) -> bool:
+    """判定员工是否属于运营支撑部运维组。
+
+    仅当二级部门精确等于「运营支撑部」且三级部门精确命中 OPS_GROUP_DEPT_NAMES 时才命中；
+    不做全局「包含运维组」匹配。二级不是运营支撑部或三级不在名单内均不命中。
+    """
+    d2 = normalize_name(dept2)
+    d3 = normalize_name(dept3)
+    if d2 != "运营支撑部":
+        return False
+    return d3 in OPS_GROUP_DEPT_NAMES
+
+
+def _apply_ops_group_unadded_override(ws, row_idx: int, header_map: dict[str, int]) -> str | None:
+    """对运营支撑部运维组员工强制标记为「未加」，清空加班计算列、写入规则备注。"""
+    if "备注" in header_map:
+        ws.cell(row_idx, header_map["备注"]).value = OPS_GROUP_DEPT_REMARK
+    system_col = header_map.get(normalize_header_name("系统操作"))
+    if system_col is None:
+        system_col = header_map.get("系统操作")
+    if system_col is not None:
+        ws.cell(row_idx, system_col).value = "未加"
+    for col_name in ("最终加班时长（小时）", "加班类型", "2倍加班小时", "3倍加班小时", "2倍加班天数", "3倍加班天数"):
+        col_key = normalize_header_name(col_name)
+        if col_key in header_map:
+            ws.cell(row_idx, header_map[col_key]).value = None
+    return "未加"
+
+
 def _build_general_overtime_contexts(
     ws,
     header_map: dict[str, int],
@@ -2412,6 +2509,10 @@ def fill_row(
         employee_department_map,
     )
     employee_groups = classify_employee(rules_config, dept_d1, dept_d2, dept_d3, att_group)
+
+    # 运营支撑部运维组强制判定为「未加」，优先级高于普通加班判定与通用加班分支。
+    if _is_ops_group_by_depts(dept_d1, dept_d2, dept_d3):
+        return _apply_ops_group_unadded_override(ws, row_idx, header_map)
 
     general_context = (general_overtime_contexts or {}).get(row_idx)
     if general_context is not None:

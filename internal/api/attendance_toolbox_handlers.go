@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"io"
 	"mime/multipart"
@@ -15,6 +16,14 @@ import (
 )
 
 const attendanceToolboxMultipartMemory = 64 << 20
+
+type orgRosterGenerator interface {
+	GenerateOrgRosterExcel(context.Context, string) (*service.AttendanceToolboxResult, error)
+}
+
+var newOrgRosterGenerator = func() orgRosterGenerator {
+	return service.NewAttendanceToolboxService()
+}
 
 func GetAttendanceToolboxDefaults(c *gin.Context) {
 	defaults, err := service.NewAttendanceToolboxService().Defaults(c.Request.Context())
@@ -294,6 +303,54 @@ func formHasCustomRules(c *gin.Context) bool {
 func toolboxHasPermission(c *gin.Context, code string) bool {
 	ok, err := middleware.HasAnyPermission(c, code, "attendance_manage")
 	return err == nil && ok
+}
+
+// GenerateOrgRoster 按当前 JWT org_id 生成标准在职花名册 xlsx。
+// 只读取本组织 active 用户、EmployeeProfile 权威工号与真实部门路径。
+// 权限：attendance_toolbox_operate（工具箱写操作）或 attendance_manage。
+// 不使用 dingtalk_sync 权限，因为数据来自本地数据库而非钉钉同步。
+func GenerateOrgRoster(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	result, err := newOrgRosterGenerator().GenerateOrgRosterExcel(c.Request.Context(), orgID)
+	if err != nil {
+		// 使用 sentinel error 稳定分类：业务错误 400，内部错误 500
+		status := http.StatusInternalServerError
+		message := "生成花名册失败"
+		if errors.Is(err, service.ErrRosterNoEmployees) ||
+			errors.Is(err, service.ErrRosterMissingEmpNo) ||
+			errors.Is(err, service.ErrRosterMissingDeptPath) {
+			status = http.StatusBadRequest
+			message = err.Error()
+		} else {
+			switch {
+			case errors.Is(err, service.ErrRosterDeptDataFailed):
+				message = service.ErrRosterDeptDataFailed.Error()
+			case errors.Is(err, service.ErrRosterUserQueryFailed):
+				message = service.ErrRosterUserQueryFailed.Error()
+			case errors.Is(err, service.ErrRosterProfileFailed):
+				message = service.ErrRosterProfileFailed.Error()
+			case errors.Is(err, service.ErrRosterRunnerFailed):
+				message = service.ErrRosterRunnerFailed.Error()
+			case errors.Is(err, service.ErrRosterNoOutput):
+				message = service.ErrRosterNoOutput.Error()
+			case errors.Is(err, service.ErrRosterEngineDir):
+				message = service.ErrRosterEngineDir.Error()
+			case errors.Is(err, service.ErrRosterRunnerNotFound):
+				message = service.ErrRosterRunnerNotFound.Error()
+			}
+		}
+		c.JSON(status, Response{
+			Code:    status,
+			Message: message,
+		})
+		return
+	}
+	c.Header("Content-Disposition", service.ContentDispositionAttachment(result.FileName))
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.Data)
 }
 
 func ensureQuickFlowKeys(form *multipart.Form) {
