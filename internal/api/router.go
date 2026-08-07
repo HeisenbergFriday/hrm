@@ -37,6 +37,39 @@ func userDetailReadMenuKeys() []string {
 	return append(orgReadMenuKeys(), "menu:permission")
 }
 
+func registerAttendanceToolboxRoutes(attendance *gin.RouterGroup) {
+	// 工具箱写操作与前端细权限对齐：attendance_manage 或 attendance_toolbox_operate；
+	// 禁止仅凭 menu:attendance-toolbox 绕过 feature 权限。只读 defaults 仍允许菜单或管理权限。
+	attendance.GET("/toolbox/defaults", middleware.RequirePermissionOrMenu([]string{"attendance_manage", "attendance_toolbox_operate"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxDefaults)
+	attendance.POST("/toolbox/:module/run", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), RunAttendanceToolbox)
+	attendance.POST("/toolbox/dingtalk-sync", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunDingtalkSync)
+	// 从本地数据库生成组织花名册 xlsx（active 用户 + 部门路径），供加班模块自动回填。
+	// 权限：attendance_toolbox_operate 或 attendance_manage；不使用 dingtalk_sync，因为数据来自本地数据库。
+	attendance.POST("/toolbox/roster/generate", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), GenerateOrgRoster)
+	// 兼职月度打卡记录：从钉钉拉取指定月份打卡记录，匹配组织兼职花名册后生成 Excel。
+	// 权限与钉钉同步一致（attendance_toolbox_dingtalk_sync 或 attendance_manage）。
+	attendance.POST("/toolbox/parttime-monthly-punch", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunParttimeMonthlyPunch)
+	attendance.POST("/toolbox/rules/export", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ExportOvertimeRules)
+	attendance.POST("/toolbox/rules/import-preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ImportOvertimeRulesPreview)
+	attendance.POST("/toolbox/:module/validate", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ValidateAttendanceToolbox)
+	attendance.POST("/toolbox/templates", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ExportAttendanceToolboxTemplates)
+	attendance.POST("/toolbox/audit", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), AuditAttendanceToolbox)
+
+	// 结构化 workflow：返回 run_id + 文件元数据，供前端按 kind=export + flow_key 精确选择业务表。
+	// quick 与 dingtalk_sync 必须用固定静态路由（禁用 /toolbox/workflows/:module 通配），
+	// 权限矩阵见 .ai/MODULES/attendance.md：quick 需 operate+dingtalk_sync（AND），attendance_manage 可兼容。
+	attendance.POST("/toolbox/workflows/:module", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), RunAttendanceToolboxWorkflow)
+	attendance.POST("/toolbox/workflows/quick", middleware.RequireAllPermissions("attendance_toolbox_operate", "attendance_toolbox_dingtalk_sync"), RunAttendanceToolboxQuickWorkflow)
+	attendance.POST("/toolbox/workflows/dingtalk_sync", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunAttendanceToolboxDingtalkSyncWorkflow)
+	// 结构化结果查询 / 下载 / 预览：
+	// - attendance_manage / attendance_toolbox_operate 可读可下载任意模块结果；
+	// - attendance_toolbox_dingtalk_sync 只放行中间件，模块范围由 handler 收紧为 dingtalk_sync。
+	attendance.GET("/toolbox/runs/:run_id", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_dingtalk_sync"), GetAttendanceToolboxRun)
+	attendance.GET("/toolbox/runs/:run_id/files/:file_key", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_dingtalk_sync"), DownloadAttendanceToolboxRunFile)
+	attendance.GET("/toolbox/runs/:run_id/zip", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_dingtalk_sync"), DownloadAttendanceToolboxRunZip)
+	attendance.GET("/toolbox/runs/:run_id/preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_dingtalk_sync"), PreviewAttendanceToolboxRun)
+}
+
 func SetupRouter() *gin.Engine {
 	router := gin.New()
 	router.Use(querySafeGinLogger(), gin.Recovery())
@@ -135,7 +168,6 @@ func SetupRouter() *gin.Engine {
 				org.GET("/departments/tree", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage", "permission_manage"}, orgReadMenus), GetOrgDepartmentTree)
 				org.GET("/departments/:id/history", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgDepartmentHistory)
 				org.GET("/overview", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgOverview)
-
 				org.GET("/employees", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployees)
 				org.GET("/employees/:id", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployeeDetail)
 				org.GET("/employees/:id/position-sync-diagnostic", middleware.RequirePermissionOrMenu([]string{"org:read", "user_manage"}, orgReadMenus), GetOrgEmployeePositionSyncDiagnostic)
@@ -174,16 +206,7 @@ func SetupRouter() *gin.Engine {
 					processing.POST("/final", ProcessFinalTable)
 					processing.POST("/parttime", ProcessParttimeSummary)
 				}
-				// 工具箱写操作与前端细权限对齐：attendance_manage 或 attendance_toolbox_operate；
-				// 禁止仅凭 menu:attendance-toolbox 绕过 feature 权限。只读 defaults 仍允许菜单或管理权限。
-				attendance.GET("/toolbox/defaults", middleware.RequirePermissionOrMenu([]string{"attendance_manage", "attendance_toolbox_operate"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxDefaults)
-				attendance.POST("/toolbox/:module/run", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), RunAttendanceToolbox)
-				attendance.POST("/toolbox/dingtalk-sync", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunDingtalkSync)
-				attendance.POST("/toolbox/rules/export", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ExportOvertimeRules)
-				attendance.POST("/toolbox/rules/import-preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ImportOvertimeRulesPreview)
-				attendance.POST("/toolbox/:module/validate", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ValidateAttendanceToolbox)
-				attendance.POST("/toolbox/templates", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ExportAttendanceToolboxTemplates)
-				attendance.POST("/toolbox/audit", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), AuditAttendanceToolbox)
+				registerAttendanceToolboxRoutes(attendance)
 			}
 
 			// 閻庡厜鍓濇竟鎺懳熼垾铏仴
@@ -191,11 +214,14 @@ func SetupRouter() *gin.Engine {
 			approvals := authRequired.Group("/approvals")
 			{
 				approvals.POST("/sync", middleware.RequirePermission("approval:sync"), SyncApproval)
+				approvals.POST("/sync/start", middleware.RequirePermission("approval:sync"), StartApprovalSync)
+				approvals.GET("/sync/:request_id", middleware.RequirePermission("approval:sync"), GetApprovalSyncResult)
 				approvals.GET("/oa-data", middleware.RequirePermissionOrMenu(
 					[]string{"approval_manage"},
 					[]string{"menu:oa-approval-data"},
 				), ExternalApprovalDetails)
 				approvals.GET("/templates", middleware.RequireMenuPermission("menu:approval-templates", "menu:approval-stats"), GetApprovalTemplates)
+				approvals.GET("/stats", middleware.RequireMenuPermission("menu:approval-stats"), GetApprovalStats)
 				approvals.GET("/instances", middleware.RequireMenuPermission("menu:approval-instances"), GetApprovalInstances)
 				approvals.GET("/:id", middleware.RequireMenuPermission("menu:approval-instances"), GetApproval)
 			}

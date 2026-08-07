@@ -8,6 +8,7 @@ import {
   Spin,
   Statistic,
   Tabs,
+  Tooltip,
   Typography,
 } from 'antd'
 import {
@@ -159,7 +160,9 @@ const Organization: React.FC = () => {
                 <Row gutter={[16, 16]}>
                   <Col xs={24} sm={12} xl={4}>
                     <PageCard>
-                      <Statistic title="员工总数" value={overview?.summary.total_employees ?? 0} prefix={<UserOutlined />} />
+                      <Tooltip title="当前组织内有效在职+停用员工的唯一人数（已排除软删除和管理员）">
+                        <Statistic title="员工总数" value={overview?.summary.total_employees ?? 0} prefix={<UserOutlined />} suffix={<span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)' }}>含停用</span>} />
+                      </Tooltip>
                     </PageCard>
                   </Col>
                   <Col xs={24} sm={12} xl={4}>

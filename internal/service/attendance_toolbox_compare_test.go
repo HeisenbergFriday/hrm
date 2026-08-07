@@ -1,21 +1,22 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
 
 // TestCompareAppSourceScript_Live runs the source compare against D:\app when present.
 //
-// Current intentional state (HR toolbox upgrades over D:\app):
-//
-//	equal=3 — overtime/rules_engine.py, parttime/calc_parttime_summary.py, dingtalk_sync.py
-//	business_divergence=4 — leave / overtime fill / subsidy / finally carry intentional
-//	  payroll fixes (not adapter-only import shims). See session analysis for details.
+// Current intentional state is pinned per file below. The three identical files have
+// byte-equivalent normalized business source. finally/calc_finally.py differs only by
+// the allowlisted toolbox path/excel_compat adapter. Leave, overtime fill, and subsidy
+// contain HR business behavior that does not canonicalize to the D:\app source.
 //
 // compare_app_source.py exits 1 when any business_divergence remains; that is expected
 // until D:\app is back-ported or divergences are deliberately reclassified.
@@ -32,50 +33,102 @@ func TestCompareAppSourceScript_Live(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		py = "python3"
 	}
-	cmd := exec.Command(py, script)
+	repoManifestPath := filepath.Join(root, "tools", "attendance_toolbox", "python", "SOURCE_MANIFEST.json")
+	repoManifestBefore, err := os.ReadFile(repoManifestPath)
+	if err != nil {
+		t.Fatalf("read repository manifest before compare: %v", err)
+	}
+	gitDiffBefore := gitDiffForCompareTest(t, root)
+	t.Cleanup(func() {
+		repoManifestAfter, readErr := os.ReadFile(repoManifestPath)
+		if readErr != nil {
+			t.Errorf("read repository manifest after compare: %v", readErr)
+		} else if !bytes.Equal(repoManifestBefore, repoManifestAfter) {
+			t.Error("live compare modified repository SOURCE_MANIFEST.json")
+		}
+		if gitDiffAfter := gitDiffForCompareTest(t, root); !bytes.Equal(gitDiffBefore, gitDiffAfter) {
+			t.Error("live compare changed the repository git diff")
+		}
+	})
+
+	outputDir := t.TempDir()
+	cmd := exec.Command(py, script, "--output-dir", outputDir)
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	text := string(out)
 	t.Log(text)
 
-	// Stdout only prints aggregate counters; per-file kinds live in SOURCE_MANIFEST.json.
-	// Exit code is non-zero while business_divergence>0 — that is expected.
-	if !strings.Contains(text, "equal=3") ||
-		!strings.Contains(text, "business_divergence=4") {
-		t.Fatalf("unexpected summary (want equal=3 business_divergence=4): %s\nerr=%v", text, err)
+	// Exit code 1 is the compare tool's documented result while business divergence exists.
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("compare exit code = %v, want 1 for known business divergence\n%s", err, text)
 	}
-	manifestPath := filepath.Join(root, "tools", "attendance_toolbox", "python", "SOURCE_MANIFEST.json")
+
+	manifestPath := filepath.Join(outputDir, "SOURCE_MANIFEST.json")
 	raw, readErr := os.ReadFile(manifestPath)
 	if readErr != nil {
-		t.Fatalf("read manifest: %v", readErr)
+		t.Fatalf("read temporary manifest: %v", readErr)
 	}
-	body := string(raw)
-	for _, path := range []string{
-		"leave/calc_leave.py",
-		"overtime/fill_overtime_fields.py",
-		"subsidy/calc_subsidy_deduction.py",
-		"finally/calc_finally.py",
-	} {
-		// Cheap structural pin: path entry exists and marked business_divergence nearby.
-		if !strings.Contains(body, `"path": "`+path+`"`) ||
-			!strings.Contains(body, `"difference_kind": "business_divergence"`) {
-			t.Fatalf("manifest missing divergence for %s\n%s", path, body)
+	var manifest struct {
+		PairCount               int `json:"pair_count"`
+		EqualCount              int `json:"equal_count"`
+		AdapterOnlyCount        int `json:"adapter_only_count"`
+		BusinessDivergenceCount int `json:"business_divergence_count"`
+		Files                   []struct {
+			Path           string `json:"path"`
+			DifferenceKind string `json:"difference_kind"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("parse temporary manifest: %v", err)
+	}
+	if manifest.PairCount != 7 || manifest.EqualCount != 3 || manifest.AdapterOnlyCount != 1 || manifest.BusinessDivergenceCount != 3 {
+		t.Fatalf("manifest counts = total %d, equal %d, adapter_only %d, business_divergence %d; want 7/3/1/3",
+			manifest.PairCount, manifest.EqualCount, manifest.AdapterOnlyCount, manifest.BusinessDivergenceCount)
+	}
+
+	actualKinds := make(map[string]string, len(manifest.Files))
+	for _, file := range manifest.Files {
+		actualKinds[file.Path] = file.DifferenceKind
+	}
+	expectedKinds := map[string]struct {
+		kind   string
+		reason string
+	}{
+		"leave/calc_leave.py":               {"business_divergence", "toolbox contains HR leave-calculation behavior absent from D:\\app"},
+		"overtime/fill_overtime_fields.py":  {"business_divergence", "toolbox contains HR overtime field and operations-group business rules"},
+		"overtime/rules_engine.py":          {"equal", "normalized business source is identical"},
+		"subsidy/calc_subsidy_deduction.py": {"business_divergence", "toolbox contains HR subsidy eligibility and source-validation rules"},
+		"finally/calc_finally.py":           {"adapter_only", "canonical source differs only by allowlisted path and excel_compat adapters"},
+		"parttime/calc_parttime_summary.py": {"equal", "normalized business source is identical"},
+		"dingtalk_sync.py":                  {"equal", "normalized business source is identical"},
+	}
+	for path, expected := range expectedKinds {
+		if actualKinds[path] != expected.kind {
+			t.Errorf("%s difference_kind = %q, want %q (%s)", path, actualKinds[path], expected.kind, expected.reason)
+		}
+		t.Logf("%s: %s (%s)", path, expected.kind, expected.reason)
+	}
+	if len(actualKinds) != len(expectedKinds) {
+		t.Errorf("manifest contains %d file entries, want %d", len(actualKinds), len(expectedKinds))
+	}
+
+	for _, name := range []string{"_diff_report.txt", "compare_app_source.last_run.txt"} {
+		if _, err := os.Stat(filepath.Join(outputDir, name)); err != nil {
+			t.Errorf("temporary output %s missing: %v", name, err)
 		}
 	}
-	for _, path := range []string{
-		"overtime/rules_engine.py",
-		"parttime/calc_parttime_summary.py",
-		"dingtalk_sync.py",
-	} {
-		if !strings.Contains(body, `"path": "`+path+`"`) {
-			t.Fatalf("manifest missing equal core %s", path)
-		}
+}
+
+func gitDiffForCompareTest(t *testing.T, root string) []byte {
+	t.Helper()
+	cmd := exec.Command("git", "diff", "--binary")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("capture git diff: %v", err)
 	}
-	// Explicit counts from generated manifest (authoritative over stdout).
-	if !strings.Contains(body, `"equal_count": 3`) ||
-		!strings.Contains(body, `"business_divergence_count": 4`) {
-		t.Fatalf("manifest counts unexpected:\n%s", body)
-	}
+	return out
 }
 
 // TestCompareAppSourceUnitTests runs compare_app_source_test.py via unittest.

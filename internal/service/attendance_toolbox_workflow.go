@@ -98,7 +98,10 @@ func (s *AttendanceToolboxService) RunDingtalkSyncForOrg(ctx context.Context, or
 			RowCount:    output.RowCount,
 		})
 	}
-	if len(result.Outputs) > 1 {
+	// 只有当存在多个业务 export 时才需要 ZIP；单个业务表直接返回 Excel。
+	// audit/meta 只是诊断文件，不得计入"多文件"从而让旧接口误回 ZIP。
+	// 手动完整结果下载通过 GET /runs/:run_id/zip 独立提供。
+	if len(result.BusinessExports()) > 1 {
 		result.ZipData, err = zipAttendanceToolboxResults(result.Outputs)
 		if err != nil {
 			return nil, err

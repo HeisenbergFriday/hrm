@@ -59,7 +59,7 @@ update_when:
 1. **组织架构同步**：钉钉部门/用户 → 本地 `departments` / `users` 表
 2. **考勤同步（钉钉 API）**：钉钉打卡记录 → 本地 `attendances` 表
 3. **考勤同步（外部 Doris，一期）**：Doris 只读表 → `external_*` staging → `attendances` / `user_department_relations`（按 JWT org 隔离，未知 corp 拒绝）
-4. **审批同步**：钉钉审批实例 → 本地 `approvals` 表
+4. **审批同步**：短请求启动 → 持久化 `SyncStatus` → 按当前企业流程代码逐流程拉取钉钉审批实例 → `approvals` 幂等 upsert → 前端轮询完整终态
 5. **年假发放**：本地计算 → 写入 `annual_leave_grants` → 同步到钉钉假期配置
 6. **加班匹配**：钉钉审批 + 本地打卡 → 计算有效加班时长 → 写入 `overtime_match_results` → 生成调休余额 → 同步到钉钉
 7. **大小周排班与通知**：本地配置 `week_schedule_rules` → 计算每周班次 → 同步到钉钉考勤组；或生成月作息表 → 个人消息 / 已绑定企业内部机器人群消息
@@ -75,6 +75,15 @@ update_when:
 3. **落业务表**：映射本地用户后 upsert `attendances` / `user_department_relations`
 4. **推进 cursor**：成功完成后写入 `(cursor_time, cursor_tie_key)`；之后 cron 用 cursor + lookback 增量
 5. **串行锁**：同一 org 下 attendance/department/all 共用 `scope_key=external-attendance`
+
+### 审批异步同步
+
+1. **租户与计划**：Handler 只使用 JWT `org_id`；空 `process_code` 从 `ConfigForOrgID(orgID).ProcessCodes` 生成去空、去重、稳定排序的全量计划，非空只生成单流程计划。非默认企业缺配置直接失败，不回退默认企业。
+2. **短启动与持久化**：`POST /approvals/sync/start` 在返回 `202 + request_id` 前写入 `SyncStatus(type=approvals,status=running)`；前端用 `GET /approvals/sync/:request_id` 短轮询，查询同时绑定 `org_id + type + request_id`。
+3. **后台执行**：执行上下文通过 `context.WithoutCancel` 脱离客户端断开并受 15 分钟上限约束；终态写入使用独立 5 秒上下文。同企业进程内 `TryLock` 防重，不同企业并行；多实例部署需要分布式互斥或任务队列。
+4. **分流程容错**：`listids` 每次只查询一个流程代码，日期按最多 120 天连续分片、结束时间不超过安全当前时间，并按实例 ID 去重。流程之间独立拉取和写入，一个流程失败不阻断后续流程。
+5. **终态与安全**：逐流程汇总拉取、详情拉取失败、写入成功和写入失败；聚合为 `success` / `partial` / `failed`。响应与 `SyncStatus.details` 只保存稳定错误码和安全文案，不保存原始第三方错误、Token、Secret 或 URL 参数。
+6. **业务幂等**：审批按 `org_id + process_id` upsert，保留 `extension.result/process_code/source`。下游年假消费按审批实例引用防重，加班匹配/调休入账按现有业务唯一键防重；非通过或非对应类型审批不得触发下游业务。
 
 ---
 
@@ -187,7 +196,7 @@ type Response struct {
 ## 关键业务流程
 
 ### 加班→调休流程
-1. 从钉钉同步加班审批（`SyncApproval`）
+1. 从钉钉同步加班审批（异步审批同步；单模板或当前企业全量流程）
 2. 运行匹配（`RunOvertimeMatch`）：审批记录↔打卡记录，计算 `effective_overtime_minutes`
 3. 写入 `CompensatoryLeaveLedger`（credit）
 4. 同步到钉钉假期余额（`ResyncOvertimeToDingTalk`）

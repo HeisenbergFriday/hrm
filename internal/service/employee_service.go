@@ -1,6 +1,8 @@
 package service
 
 import (
+	"strings"
+
 	"peopleops/internal/database"
 	"peopleops/internal/repository"
 
@@ -32,7 +34,12 @@ func NewEmployeeServiceWithOrgID(db *gorm.DB, orgID string) *EmployeeService {
 // Profile
 
 func (s *EmployeeService) GetProfiles(page, pageSize int, filters map[string]string) ([]database.EmployeeProfile, int64, error) {
-	return s.employeeRepo.FindAllProfiles(page, pageSize, filters)
+	normalizedFilters := make(map[string]string, len(filters))
+	for key, value := range filters {
+		normalizedFilters[key] = value
+	}
+	normalizedFilters["keyword"] = strings.TrimSpace(normalizedFilters["keyword"])
+	return s.employeeRepo.FindAllProfiles(page, pageSize, normalizedFilters)
 }
 
 func (s *EmployeeService) GetLifecycleLedger(page, pageSize int, filters map[string]string) ([]repository.EmployeeLifecycleLedgerItem, int64, error) {

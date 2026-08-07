@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-07-30T01:10:32.030059+00:00",
+  "generated_at": "2026-08-05T02:46:11.776599+00:00",
   "app_root_label": "app",
   "toolbox_root_relpath": "tools/attendance_toolbox/python",
   "normalization": "CRLF/CR -> LF; allowlist adapter strip for fill_overtime/finally",
   "pair_count": 7,
   "equal_count": 3,
-  "adapter_only_count": 0,
-  "business_divergence_count": 4,
+  "adapter_only_count": 1,
+  "business_divergence_count": 3,
   "unequal_count": 4,
   "files": [
     {
@@ -30,11 +30,11 @@
       "app_exists": true,
       "toolbox_exists": true,
       "app_sha256": "2e0da19106c518e84c538ace3e06bba6940ffdbe104aa0bb5ea19e3dad1fd586",
-      "toolbox_sha256": "11a1fd1cbd98df7f24fcacd867abe49bfe108afb4452c1114243834627ca79f6",
+      "toolbox_sha256": "78051ca99286631bee7154f141900afabaa15035b70418d3315b5e1e664d6165",
       "equal": false,
       "difference_kind": "business_divergence",
       "app_size": 109996,
-      "toolbox_size": 111232,
+      "toolbox_size": 116276,
       "error": null
     },
     {
@@ -57,12 +57,12 @@
       "toolbox_relpath": "subsidy/calc_subsidy_deduction.py",
       "app_exists": true,
       "toolbox_exists": true,
-      "app_sha256": "5189699074223a39d58935b1a47f4262716f212bdd90273159a20c2d3713a0f9",
-      "toolbox_sha256": "ab066a02e411a046e7f6097af854f2f310dff859c012a24e22fa4eda8ffd920b",
+      "app_sha256": "9807cde167e48b4443fa2168065bd9ed2b26ba7bbd7f58646fad07154239e580",
+      "toolbox_sha256": "15415d58d4172aa1cd1dd76fc38f7d61f8855c15ab027c8add3406e8f3d5a63f",
       "equal": false,
       "difference_kind": "business_divergence",
-      "app_size": 86974,
-      "toolbox_size": 93397,
+      "app_size": 88306,
+      "toolbox_size": 97903,
       "error": null
     },
     {
@@ -71,12 +71,12 @@
       "toolbox_relpath": "finally/calc_finally.py",
       "app_exists": true,
       "toolbox_exists": true,
-      "app_sha256": "471e30ffb3e22a33d5211c8a0c2cce8a56bdefd6d26be423126175c1d474a991",
-      "toolbox_sha256": "074038a5a5ad6b3879efba419fe2ea0017a17b3b39b81475fac792cf89eb56f1",
+      "app_sha256": "d47f631d17e841c62b78cbc6873a4398cc9746b5463222e1f5624f4002782fdf",
+      "toolbox_sha256": "f65c2dfd93da0f7b8e70e8229f67ca9dbf1041f591388aacf00249e2afab4a8c",
       "equal": false,
-      "difference_kind": "business_divergence",
-      "app_size": 82780,
-      "toolbox_size": 86745,
+      "difference_kind": "adapter_only",
+      "app_size": 97857,
+      "toolbox_size": 97969,
       "error": null
     },
     {
@@ -85,12 +85,12 @@
       "toolbox_relpath": "parttime/calc_parttime_summary.py",
       "app_exists": true,
       "toolbox_exists": true,
-      "app_sha256": "a7ee9a8fdfa4940af17a65e5e8159c6beee6466b5bfb367115eab1e05db04e83",
-      "toolbox_sha256": "a7ee9a8fdfa4940af17a65e5e8159c6beee6466b5bfb367115eab1e05db04e83",
+      "app_sha256": "13bd8e8025182110c20395d7bb6392d077fb8d7d63ddff1cfed3efb306a54cd8",
+      "toolbox_sha256": "13bd8e8025182110c20395d7bb6392d077fb8d7d63ddff1cfed3efb306a54cd8",
       "equal": true,
       "difference_kind": "equal",
-      "app_size": 59241,
-      "toolbox_size": 59241,
+      "app_size": 59438,
+      "toolbox_size": 59438,
       "error": null
     },
     {
@@ -99,12 +99,12 @@
       "toolbox_relpath": "dingtalk_sync.py",
       "app_exists": true,
       "toolbox_exists": true,
-      "app_sha256": "15b7e6cd5520222db6ea4eec94074669ddf1a0a9d07ae9647a632e6ecd2bc25c",
-      "toolbox_sha256": "15b7e6cd5520222db6ea4eec94074669ddf1a0a9d07ae9647a632e6ecd2bc25c",
+      "app_sha256": "283347770cb51f4b6b7c4048f9fca293f49b2377d7200e484d57beccda515ef3",
+      "toolbox_sha256": "283347770cb51f4b6b7c4048f9fca293f49b2377d7200e484d57beccda515ef3",
       "equal": true,
       "difference_kind": "equal",
-      "app_size": 50646,
-      "toolbox_size": 50646,
+      "app_size": 52684,
+      "toolbox_size": 52684,
       "error": null
     }
   ]

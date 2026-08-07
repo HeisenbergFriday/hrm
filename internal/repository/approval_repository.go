@@ -2,6 +2,7 @@ package repository
 
 import (
 	"peopleops/internal/database"
+	"peopleops/internal/dingtalk"
 	"strings"
 	"time"
 
@@ -94,8 +95,13 @@ func (r *ApprovalRepository) UpsertByOrgProcessID(approval *database.Approval) e
 	if approval.ApplicantID != "" {
 		existing.ApplicantID = approval.ApplicantID
 	}
-	if approval.ApplicantName != "" {
-		existing.ApplicantName = approval.ApplicantName
+	if incomingName := strings.TrimSpace(approval.ApplicantName); incomingName != "" {
+		existingName := strings.TrimSpace(existing.ApplicantName)
+		incomingIsFallback := incomingName == strings.TrimSpace(approval.ApplicantID)
+		existingIsFallback := existingName == "" || existingName == strings.TrimSpace(existing.ApplicantID)
+		if !incomingIsFallback || existingIsFallback {
+			existing.ApplicantName = incomingName
+		}
 	}
 	if !approval.CreateTime.IsZero() {
 		existing.CreateTime = approval.CreateTime
@@ -189,13 +195,13 @@ func (r *ApprovalRepository) FindAll(page, pageSize int, filters map[string]stri
 		query = query.Where("title LIKE ?", "%"+v+"%")
 	}
 	if v, ok := filters["start_date"]; ok && v != "" {
-		t, err := time.Parse("2006-01-02", v)
+		t, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(v), dingtalk.ApprovalBusinessLocation())
 		if err == nil {
 			query = query.Where("create_time >= ?", t)
 		}
 	}
 	if v, ok := filters["end_date"]; ok && v != "" {
-		t, err := time.Parse("2006-01-02", v)
+		t, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(v), dingtalk.ApprovalBusinessLocation())
 		if err == nil {
 			query = query.Where("create_time < ?", t.AddDate(0, 0, 1))
 		}
@@ -211,6 +217,37 @@ func (r *ApprovalRepository) FindAll(page, pageSize int, filters map[string]stri
 	}
 
 	return approvals, total, nil
+}
+
+// FindAllForStats returns the complete, narrow projection required for server-side
+// aggregation. It intentionally has no page limit, so totals cannot truncate at 10,000.
+func (r *ApprovalRepository) FindAllForStats(filters map[string]string, location *time.Location) ([]database.Approval, error) {
+	if _, err := r.requireOrgID(); err != nil {
+		return nil, err
+	}
+	query := r.scoped().Model(&database.Approval{}).Select("status", "extension")
+	if v := strings.TrimSpace(filters["template_id"]); v != "" {
+		query = query.Where("extension->>'$.process_code' = ? OR extension->>'$.template_id' = ? OR extension LIKE ?", v, v, "%"+v+"%")
+	}
+	if v := strings.TrimSpace(filters["start_date"]); v != "" {
+		start, err := time.ParseInLocation("2006-01-02", v, location)
+		if err != nil {
+			return nil, err
+		}
+		query = query.Where("create_time >= ?", start)
+	}
+	if v := strings.TrimSpace(filters["end_date"]); v != "" {
+		end, err := time.ParseInLocation("2006-01-02", v, location)
+		if err != nil {
+			return nil, err
+		}
+		query = query.Where("create_time < ?", end.AddDate(0, 0, 1))
+	}
+	var approvals []database.Approval
+	if err := query.Find(&approvals).Error; err != nil {
+		return nil, err
+	}
+	return approvals, nil
 }
 
 // FindAllByTitleKeywords 与 FindAll 逻辑一致，只是先按标题关键字命中/排除过滤。
@@ -259,13 +296,13 @@ func (r *ApprovalRepository) FindAllByTitleKeywords(page, pageSize int, keywords
 		query = query.Where("title LIKE ?", "%"+v+"%")
 	}
 	if v, ok := filters["start_date"]; ok && v != "" {
-		t, err := time.Parse("2006-01-02", v)
+		t, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(v), dingtalk.ApprovalBusinessLocation())
 		if err == nil {
 			query = query.Where("create_time >= ?", t)
 		}
 	}
 	if v, ok := filters["end_date"]; ok && v != "" {
-		t, err := time.Parse("2006-01-02", v)
+		t, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(v), dingtalk.ApprovalBusinessLocation())
 		if err == nil {
 			query = query.Where("create_time < ?", t.AddDate(0, 0, 1))
 		}

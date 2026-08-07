@@ -1908,6 +1908,454 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-07-27T09:47:45.192Z"
+    },
+    {
+      "id": "bug-118",
+      "timestamp": "2026-07-31T01:31:36.346Z",
+      "error_message": "Type error",
+      "file": "frontend/src/pages/EmployeeList.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-31T01:31:36.346Z"
+    },
+    {
+      "id": "bug-119",
+      "timestamp": "2026-07-31T01:31:48.750Z",
+      "error_message": "CSS fix: items",
+      "file": "frontend/src/pages/EmployeeList.tsx",
+      "root_cause": "items: DistributionItem[], loading?: boolean) => { → DistributionItem[], loading?: boolean, isEmploymentType?: boolean) => {",
+      "fix": "Changed items: DistributionItem[], loading?: boolean) => { → DistributionItem[], loading?: boolean, isEmploymentType?: boolean) => {",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-31T01:32:15.849Z"
+    },
+    {
+      "id": "bug-120",
+      "timestamp": "2026-07-31T01:57:30.644Z",
+      "error_message": "Incorrect value in code",
+      "file": "internal/repository/user_repository_isolation_test.go",
+      "root_cause": "Had \"users.name LIKE ?\"",
+      "fix": "Changed to \"users.name\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-31T01:57:30.644Z"
+    },
+    {
+      "id": "bug-121",
+      "timestamp": "2026-07-31T03:01:58.655Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/org_service_membership_test.go",
+      "root_cause": "9 lines replaced/restructured",
+      "fix": "Rewrote 14→25 lines (9 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-31T03:01:58.655Z"
+    },
+    {
+      "id": "bug-122",
+      "timestamp": "2026-07-31T03:08:19.838Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/EmployeeList.tsx",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 15→26 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-31T03:08:19.838Z"
+    },
+    {
+      "id": "bug-123",
+      "timestamp": "2026-07-31T03:08:29.303Z",
+      "error_message": "Type error",
+      "file": "frontend/src/pages/EmployeeList.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-31T03:08:29.303Z"
+    },
+    {
+      "id": "bug-124",
+      "timestamp": "2026-07-31T03:09:05.498Z",
+      "error_message": "CSS fix: key",
+      "file": "frontend/src/pages/EmployeeList.tsx",
+      "root_cause": "key: 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: 'var(--color-warning-dark)', bg: '#fef3c7' → 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: 'var(--color-warning-dark)', bg: '#fef3c7', filterType: 'regularization_warning'",
+      "fix": "Changed key: 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: 'var(--color-warning-dark)', bg: '#fef3c7' → 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: 'var(--color-warning-dark)', bg: '#fef3c7', filterType: 'regularization_warning'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-31T03:09:49.655Z"
+    },
+    {
+      "id": "bug-125",
+      "timestamp": "2026-07-31T03:09:22.846Z",
+      "error_message": "Missing guard clause",
+      "file": "frontend/src/pages/EmployeeList.tsx",
+      "root_cause": "No early return/throw for edge case: !isClickable",
+      "fix": "Added guard clause: if (!isClickable)",
+      "tags": [
+        "auto-detected",
+        "guard-clause",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-31T03:09:22.846Z"
+    },
+    {
+      "id": "bug-126",
+      "timestamp": "2026-07-31T03:49:58.057Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/week_schedule_group_service.go",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 75→157 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-31T03:49:58.057Z"
+    },
+    {
+      "id": "bug-127",
+      "timestamp": "2026-08-01T07:38:30.006Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/attendance_toolbox_service.go",
+      "root_cause": "6 lines replaced/restructured",
+      "fix": "Rewrote 13→15 lines (6 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T07:38:30.006Z"
+    },
+    {
+      "id": "bug-128",
+      "timestamp": "2026-08-01T07:40:18.659Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "frontend/src/pages/AttendanceToolbox.tsx",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T07:40:18.659Z"
+    },
+    {
+      "id": "bug-129",
+      "timestamp": "2026-08-01T07:43:10.277Z",
+      "error_message": "CSS fix: response",
+      "file": "frontend/src/pages/AttendanceToolbox.test.tsx",
+      "root_cause": "response: { status: 404 → { status: 500, data: { message: 'download failed'",
+      "fix": "Changed response: { status: 404 → { status: 500, data: { message: 'download failed'",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T07:43:10.277Z"
+    },
+    {
+      "id": "bug-130",
+      "timestamp": "2026-08-01T09:54:03.684Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/attendance_toolbox_handlers.go",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 22→16 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T09:54:03.684Z"
+    },
+    {
+      "id": "bug-131",
+      "timestamp": "2026-08-01T10:51:31.504Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/attendance_toolbox_handlers.go",
+      "root_cause": "24 lines replaced/restructured",
+      "fix": "Rewrote 56→32 lines (24 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T10:51:31.504Z"
+    },
+    {
+      "id": "bug-132",
+      "timestamp": "2026-08-01T10:58:14.941Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/router.go",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 5→7 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T10:58:14.942Z"
+    },
+    {
+      "id": "bug-133",
+      "timestamp": "2026-08-01T11:03:30.620Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/AttendanceToolbox.tsx",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 7→3 lines (4 removed) | Also: const syncMonthlySummaryFromDingtalk = useCallback; if (runningModule) { | Also: <Col xs={24} md={8}>; <Card size=\"small\" style={{ background: 'var(--col",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-08-01T11:07:30.827Z"
+    },
+    {
+      "id": "bug-134",
+      "timestamp": "2026-08-01T11:09:05.075Z",
+      "error_message": "Wrong reference: mockSyncMonthlySummary should be mockRunWorkflow",
+      "file": "frontend/src/pages/AttendanceToolbox.test.tsx",
+      "root_cause": "Used \"mockSyncMonthlySummary\" instead of \"mockRunWorkflow\"",
+      "fix": "Changed mockSyncMonthlySummary → mockRunWorkflow",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-08-01T11:11:05.313Z"
+    },
+    {
+      "id": "bug-135",
+      "timestamp": "2026-08-01T11:14:00.493Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/AttendanceToolbox.test.tsx",
+      "root_cause": "17 lines replaced/restructured",
+      "fix": "Rewrote 27→6 lines (17 removed) | Also: await user.click(screen.getByText('固定配置（名单 / 同步源）'; expect(await screen.findByRole('button', { name: /",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-08-01T11:14:59.792Z"
+    },
+    {
+      "id": "bug-136",
+      "timestamp": "2026-08-01T11:44:44.955Z",
+      "error_message": "Significant refactor of ",
+      "file": "docs/DEVELOPMENT_ISSUES.md",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 7→7 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T11:44:44.955Z"
+    },
+    {
+      "id": "bug-137",
+      "timestamp": "2026-08-01T12:00:00.000Z",
+      "error_message": "钉钉同步成功但自动回填报“自动同步返回了多个文件，请改用手动上传”；仅持 attendance_toolbox_dingtalk_sync 的用户无法下载自己的 dingtalk_sync 业务文件；legacy 接口无业务表时回 JSON 200 被前端当 Excel",
+      "file": "internal/api/attendance_toolbox_handlers.go; internal/api/router.go; frontend/src/pages/AttendanceToolbox.tsx",
+      "root_cause": "audit 被旧 blob 接口计为“多文件”返回 ZIP，前端只按 MIME 判断并主动报错；run 读取/下载中间件只放行 manage/operate，dingtalk_sync-only 无下载权限，未按模块收紧；legacy RunDingtalkSync 在 BusinessExports()==0 时仍回 JSON 200",
+      "fix": "自动回填统一走 structured workflow 按 kind=export+flow_key 下载唯一业务表；legacy handler 新增 BusinessExports() 分支（单业务表返回 Excel、多业务表 ZIP、无业务表 422）；run 读取/下载按模块收紧，attendance_toolbox_dingtalk_sync 仅可读自己同 org 的 dingtalk_sync 结果；新增真实引擎与权限闭环测试",
+      "tags": [
+        "attendance-toolbox",
+        "dingtalk",
+        "permission",
+        "auto-fill",
+        "audit",
+        "legacy-api"
+      ]
+    },
+    {
+      "id": "bug-138",
+      "timestamp": "2026-08-01T17:19:29.055Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/parttime_monthly_punch_service.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 11→17 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T17:19:29.055Z"
+    },
+    {
+      "id": "bug-139",
+      "timestamp": "2026-08-01T17:19:48.176Z",
+      "error_message": "Wrong reference: ParttimeMonthlyPunch should be ParttimeMonthlyMatch",
+      "file": "internal/service/parttime_monthly_punch_service.go",
+      "root_cause": "Used \"ParttimeMonthlyPunch\" instead of \"ParttimeMonthlyMatch\"",
+      "fix": "Changed ParttimeMonthlyPunch → ParttimeMonthlyMatch",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T17:19:48.176Z"
+    },
+    {
+      "id": "bug-140",
+      "timestamp": "2026-08-01T17:29:24.211Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/parttime_monthly_punch_service.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 30→35 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T17:29:24.211Z"
+    },
+    {
+      "id": "bug-141",
+      "timestamp": "2026-08-01T17:37:18.957Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "frontend/src/pages/AttendanceToolbox.tsx",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T17:37:18.957Z"
+    },
+    {
+      "id": "bug-142",
+      "timestamp": "2026-08-01T17:43:09.183Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/parttime_monthly_punch_service.go",
+      "root_cause": "7 lines replaced/restructured",
+      "fix": "Rewrote 80→127 lines (7 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T17:43:09.183Z"
+    },
+    {
+      "id": "bug-143",
+      "timestamp": "2026-08-01T17:46:22.598Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/api/attendance_toolbox_handlers_test.go",
+      "root_cause": "15 lines replaced/restructured",
+      "fix": "Rewrote 22→32 lines (15 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T17:46:22.598Z"
+    },
+    {
+      "id": "bug-144",
+      "timestamp": "2026-08-01T17:48:35.968Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/parttime_monthly_punch_service_test.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 4→8 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T17:48:35.968Z"
+    },
+    {
+      "id": "bug-145",
+      "timestamp": "2026-08-01T17:51:08.373Z",
+      "error_message": "CSS fix: name",
+      "file": "frontend/src/pages/AttendanceToolbox.test.tsx",
+      "root_cause": "name: /开始计算/ → /重试抓取/",
+      "fix": "Changed name: /开始计算/ → /重试抓取/",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T17:51:08.373Z"
     }
   ]
 }

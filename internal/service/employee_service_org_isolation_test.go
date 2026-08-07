@@ -92,3 +92,38 @@ func TestEmployeeService_LegacyEmptyOrgFailClosed(t *testing.T) {
 		t.Fatalf("legacy GetProfileByUserID err=%v, want ErrMissingOrgID", err)
 	}
 }
+
+func TestEmployeeService_GetProfilesTrimsAndSearchesChineseName(t *testing.T) {
+	db := openEmployeeServiceIsolationDB(t)
+	if err := db.Create(&database.User{
+		OrgID:          "org-a",
+		UserID:         "anonymous-search-user",
+		DingTalkUserID: "anonymous-search-dt",
+		Name:           "匿名中文姓名甲",
+		Email:          "anonymous-search@example.invalid",
+		Mobile:         "13900000009",
+		DepartmentID:   "search-dept",
+		Position:       "测试工程师",
+		Status:         "active",
+	}).Error; err != nil {
+		t.Fatalf("seed service search user: %v", err)
+	}
+	profile := &database.EmployeeProfile{
+		OrgID:         "org-a",
+		UserID:        "anonymous-search-user",
+		EmployeeID:    "ANON-SVC-001",
+		ProfileStatus: "active",
+	}
+	if err := db.Create(profile).Error; err != nil {
+		t.Fatalf("seed service search profile: %v", err)
+	}
+
+	svc := NewEmployeeServiceWithOrgID(db, "org-a")
+	items, total, err := svc.GetProfiles(1, 20, map[string]string{"keyword": "  中文姓名甲  "})
+	if err != nil {
+		t.Fatalf("GetProfiles keyword: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].ID != profile.ID {
+		t.Fatalf("trimmed Chinese search total=%d items=%d", total, len(items))
+	}
+}

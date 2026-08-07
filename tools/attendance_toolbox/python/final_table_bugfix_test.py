@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+
+import openpyxl
 
 BASE = Path(__file__).resolve().parent
 for sub in ("leave", "overtime", "subsidy", "finally"):
@@ -425,6 +428,713 @@ class MaternityStatutoryHolidayTests(unittest.TestCase):
             date(2026, 6, 30),
         )
         self.assertEqual(overlap, 0)
+
+
+# ── 在职花名册字段契约回归测试 ──────────────────────────────────────────────
+
+
+def _write_roster(rows, sheet_name: str = "在职花名册") -> str:
+    """把 rows（rows[0] 为表头）写入临时 xlsx，返回路径。"""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = sheet_name
+    for row in rows:
+        ws.append(list(row))
+    fd, path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+    wb.save(path)
+    return path
+
+
+class RosterFieldContractTests(unittest.TestCase):
+    """在职花名册字段契约：姓名必填、旧格式兼容、零在职保护和歧义拒绝。"""
+
+    def test_name_only_roster_parses(self):
+        path = _write_roster([["姓名"], [" 张三 "], ["李四"]])
+        try:
+            employees = fin.parse_roster(path)
+        finally:
+            os.remove(path)
+        self.assertEqual([(row["emp_no"], row["name"]) for row in employees], [("", "张三"), ("", "李四")])
+
+    def test_employee_name_only_roster_parses(self):
+        path = _write_roster([["员工姓名"], ["王五"]])
+        try:
+            employees = fin.parse_roster(path)
+        finally:
+            os.remove(path)
+        self.assertEqual(len(employees), 1)
+        self.assertEqual(employees[0]["name"], "王五")
+
+    def test_approval_identity_headers_are_not_roster_headers(self):
+        for header in ("发起人姓名", "申请人姓名", "实际申请人"):
+            with self.subTest(header=header):
+                path = _write_roster([[header], ["张三"]], "审批流程")
+                try:
+                    with self.assertRaisesRegex(ValueError, "未找到可用表头"):
+                        fin.parse_roster(path)
+                finally:
+                    os.remove(path)
+
+    def test_name_only_duplicate_is_rejected(self):
+        path = _write_roster([["姓名"], ["张 三"], ["张三"]])
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                fin.parse_roster(path)
+            self.assertIn("重复姓名“张三”", str(ctx.exception))
+            self.assertIn("2 条", str(ctx.exception))
+        finally:
+            os.remove(path)
+
+    def test_legacy_multicolumn_roster_without_contract_entity_parses(self):
+        """旧版多列表花名册缺少合同主体时仍须兼容解析。"""
+        rows = [
+            ["员工编号", "员工姓名", "一级部门", "二级部门", "三级部门"],
+            ["MT0001", "张三", "总部", "产品技术部", "后端组"],
+            ["MT0002", "李四", "总部", "运营管理中心", "客服组"],
+            ["MT0003", "王五", "成都分公司", "研发中心", "算法组"],
+        ]
+        path = _write_roster(rows)
+        try:
+            employees = fin.parse_roster(path)
+        finally:
+            os.remove(path)
+        self.assertEqual(len(employees), 3)
+        emp_nos = [e["emp_no"] for e in employees]
+        self.assertIn("MT0001", emp_nos)
+        self.assertIn("MT0002", emp_nos)
+        self.assertIn("MT0003", emp_nos)
+        self.assertTrue(all(not e["contract_entity"] for e in employees))
+
+    def test_position_transfer_headers_as_active_path_raises(self):
+        """岗位异动流程表头作为在职花名册 → 必须抛错（零在职保护），禁止返回只有离职人员的结果。"""
+        pt_rows = [
+            ["实际申请人工号", "实际申请人", "发起人工号", "发起人姓名",
+             "异动日期", "异动类型", "生效日期"],
+            ["MT0001", "张三", "MT0001", "张三", "2026-06-15", "岗位异动", "2026-06-15"],
+        ]
+        resign_rows = [
+            ["工号", "姓名", "一级部门", "离职日期"],
+            ["MT9999", "远古离职", "总部", "2024-01-01"],
+        ]
+        pt_path = _write_roster(pt_rows, "岗位异动流程表")
+        resign_path = _write_roster(resign_rows, "离职")
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                fin.parse_roster(pt_path, resign_path)
+            err_msg = str(ctx.exception)
+            # 必须是零在职保护错误（无可用表头或解析为 0 人），不能返回只有离职人员的结果
+            self.assertTrue(
+                "未找到可用表头" in err_msg or "解析为 0 人" in err_msg,
+                f"expected zero-active protection error, got: {err_msg}",
+            )
+        finally:
+            os.remove(pt_path)
+            os.remove(resign_path)
+
+    def test_non_roster_file_as_active_path_raises(self):
+        """非花名册文件（无工号/姓名列）作为在职花名册 → 必须抛错（零在职保护），禁止返回只有离职人员的结果。"""
+        # 使用真正无匹配表头的文件（列名不包含"工号"或"姓名"子串）
+        non_roster_rows = [
+            ["流程编号", "申请人名称", "审批状态", "审批结果"],
+            ["FLOW-001", "张三", "已完成", "同意"],
+        ]
+        # 有效离职花名册
+        resign_rows = [
+            ["工号", "姓名", "一级部门", "离职日期"],
+            ["MT9999", "远古离职", "总部", "2024-01-01"],
+        ]
+        non_roster_path = _write_roster(non_roster_rows, "审批流程表")
+        resign_path = _write_roster(resign_rows, "离职")
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                fin.parse_roster(non_roster_path, resign_path)
+            self.assertIn("未找到可用表头", str(ctx.exception))
+        finally:
+            os.remove(non_roster_path)
+            os.remove(resign_path)
+
+    def test_active_resigned_both_appear(self):
+        """在职多人 + 离职少量 → 最终结果同时包含。"""
+        active_rows = [
+            ["工号", "姓名", "一级部门", "二级部门", "三级部门"],
+            ["MT0001", "张三", "总部", "产品技术部", "后端组"],
+            ["MT0002", "李四", "总部", "运营管理中心", "客服组"],
+        ]
+        resign_rows = [
+            ["工号", "姓名", "一级部门", "二级部门", "三级部门", "离职日期"],
+            ["MT0004", "赵六", "总部", "销售部", "华东组", "2026-06-15"],
+        ]
+        active_path = _write_roster(active_rows, "在职")
+        resign_path = _write_roster(resign_rows, "离职")
+        try:
+            employees = fin.parse_roster(active_path, resign_path)
+        finally:
+            os.remove(active_path)
+            os.remove(resign_path)
+        emp_nos = [e["emp_no"] for e in employees]
+        self.assertIn("MT0001", emp_nos)
+        self.assertIn("MT0002", emp_nos)
+        self.assertIn("MT0004", emp_nos)
+        mt0004 = next(e for e in employees if e["emp_no"] == "MT0004")
+        self.assertEqual(mt0004["resign_date"], date(2026, 6, 15))
+
+    def test_duplicate_emp_no_merges_resign_date(self):
+        """同一工号同时存在于在职和离职花名册 → 只输出一行，正确合并离职日期。"""
+        active_rows = [
+            ["工号", "姓名", "一级部门"],
+            ["MT0001", "张三", "总部"],
+        ]
+        resign_rows = [
+            ["工号", "姓名", "一级部门", "离职日期"],
+            ["MT0001", "张三", "总部", "2026-06-20"],
+        ]
+        active_path = _write_roster(active_rows, "在职")
+        resign_path = _write_roster(resign_rows, "离职")
+        try:
+            employees = fin.parse_roster(active_path, resign_path)
+        finally:
+            os.remove(active_path)
+            os.remove(resign_path)
+        mt0001 = [e for e in employees if e["emp_no"] == "MT0001"]
+        self.assertEqual(len(mt0001), 1)
+        self.assertEqual(mt0001[0]["resign_date"], date(2026, 6, 20))
+        self.assertEqual(len(employees), 1)
+
+    def test_contract_entity_missing_keeps_employee(self):
+        """合同主体缺失 → 员工不被删除。"""
+        rows = [
+            ["工号", "姓名", "合同主体", "一级部门"],
+            ["MT0001", "张三", "", "总部"],
+        ]
+        path = _write_roster(rows)
+        try:
+            employees = fin.parse_roster(path)
+        finally:
+            os.remove(path)
+        self.assertEqual(len(employees), 1)
+        self.assertFalse(employees[0]["contract_entity"])
+
+    def test_zero_active_protection_no_header(self):
+        """在职源无可用表头 → 抛明确错误。"""
+        rows = [
+            ["异动日期", "异动类型", "生效日期"],
+            ["2026-06-15", "岗位异动", "2026-06-15"],
+        ]
+        path = _write_roster(rows, "岗位异动")
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                fin.parse_roster(path)
+            self.assertIn("未找到可用表头", str(ctx.exception))
+        finally:
+            os.remove(path)
+
+    def test_zero_active_protection_all_rows_filtered(self):
+        """在职源数据行全部没有姓名时抛明确错误。"""
+        # 表头有效但姓名全部为空 → source_rows=0, valid=0
+        rows = [
+            ["工号", "姓名", "一级部门"],
+            [None, None, None],
+            ["", "", ""],
+        ]
+        path = _write_roster(rows)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                fin.parse_roster(path)
+            self.assertIn("解析为 0 人", str(ctx.exception))
+        finally:
+            os.remove(path)
+
+    def test_parttime_intern_exclusion_rule_preserved(self):
+        """兼职、实习、劳务外包排除规则继续生效。"""
+        intern = {"emp_no": "MT0001", "name": "实习生甲", "position": "实习开发", "emp_type": "实习",
+                  "category": "", "dept1": "", "dept2": "", "dept3": "",
+                  "contract_entity": "", "hire_date": None, "resign_date": None, "confirm_date": None}
+        parttime = {"emp_no": "MT0002", "name": "兼职乙", "emp_type": "兼职", "position": "",
+                    "category": "", "dept1": "", "dept2": "", "dept3": "",
+                    "contract_entity": "", "hire_date": None, "resign_date": None, "confirm_date": None}
+        normal = {"emp_no": "MT0003", "name": "正式丙", "emp_type": "正式员工", "position": "工程师",
+                  "category": "", "dept1": "总部", "dept2": "", "dept3": "",
+                  "contract_entity": "", "hire_date": None, "resign_date": None, "confirm_date": None}
+        self.assertTrue(fin._is_final_table_excluded_employee(intern))
+        self.assertTrue(fin._is_final_table_excluded_employee(parttime))
+        self.assertFalse(fin._is_final_table_excluded_employee(normal))
+
+    def test_emp_no_alias_员工编号(self):
+        """工号列识别必须支持'员工编号'别名，且 emp_no 正确保留。"""
+        rows = [
+            ["员工编号", "员工姓名", "部门名称"],
+            ["MT0001", "张三", "总部-产品技术部-后端组"],
+        ]
+        path = _write_roster(rows)
+        try:
+            employees = fin.parse_roster(path)
+        finally:
+            os.remove(path)
+        self.assertEqual(len(employees), 1)
+        self.assertEqual(employees[0]["emp_no"], "MT0001")
+        self.assertEqual(employees[0]["dept1"], "总部")
+        self.assertEqual(employees[0]["dept2"], "产品技术部")
+        self.assertEqual(employees[0]["dept3"], "后端组")
+
+
+class AttendanceIdentityContractTests(unittest.TestCase):
+    def _write_attendance(self, rows: list[list]) -> str:
+        fd, path = tempfile.mkstemp(suffix=".xlsx")
+        os.close(fd)
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "月度汇总"
+        for row in rows:
+            ws.append(row)
+        wb.save(path)
+        wb.close()
+        return path
+
+    def test_attendance_fields_override_legacy_roster_fields(self):
+        roster_path = _write_roster([
+            ["工号", "姓名", "合同主体", "一级部门", "二级部门", "三级部门", "岗位", "员工类型", "入职日期"],
+            ["OLD001", "张三", "本地公司", "旧一级", "旧二级", "旧三级", "旧岗位", "旧类型", "2020-01-01"],
+        ])
+        attendance_path = self._write_attendance([
+            ["姓名", "工号", "考勤组", "一级部门", "二级部门", "三级部门", "职位"],
+            ["张三", "OLD001", "总部考勤组", "总部", "研发中心", "平台部", "后端工程师"],
+        ])
+        try:
+            roster = fin.parse_roster(roster_path)
+            records = fin.parse_attendance_identity(attendance_path)
+            employees = fin.apply_attendance_identity(roster, records)
+        finally:
+            os.remove(roster_path)
+            os.remove(attendance_path)
+        employee = employees[0]
+        self.assertEqual(employee["emp_no"], "OLD001")
+        self.assertEqual((employee["dept1"], employee["dept2"], employee["dept3"]), ("总部", "研发中心", "平台部"))
+        self.assertEqual(employee["position"], "后端工程师")
+        self.assertEqual(employee["attendance_group"], "总部考勤组")
+        self.assertIsNone(employee["contract_entity"])
+        self.assertIsNone(employee["emp_type"])
+        self.assertIsNone(employee["hire_date"])
+
+    def test_stale_roster_emp_no_uses_new_dingtalk_identity_by_name(self):
+        employees = [{"emp_no": "OLD001", "name": "张三"}]
+        records = [{
+            "emp_no": "NEW001",
+            "name": "张三",
+            "attendance_group": "标准考勤组",
+            "dept1": "总部",
+            "position": "工程师",
+        }]
+
+        enriched = fin.apply_attendance_identity(employees, records)
+
+        self.assertEqual(enriched[0]["emp_no"], "NEW001")
+        self.assertEqual(enriched[0]["attendance_group"], "标准考勤组")
+        self.assertEqual(enriched[0]["dept1"], "总部")
+        self.assertEqual(enriched[0]["position"], "工程师")
+
+    def test_exact_emp_no_wins_when_another_identity_has_same_name(self):
+        employees = [{"emp_no": "E001", "name": "张三"}]
+        records = [
+            {"emp_no": "E001", "name": "张三", "dept1": "精确工号部门"},
+            {"emp_no": "E002", "name": "张三", "dept1": "同名其他部门"},
+        ]
+
+        enriched = fin.apply_attendance_identity(employees, records)
+
+        self.assertEqual(enriched[0]["emp_no"], "E001")
+        self.assertEqual(enriched[0]["dept1"], "精确工号部门")
+
+    def test_unmatched_emp_no_falls_back_to_unique_normalized_name(self):
+        employees = [{"emp_no": "LEGACY001", "name": "张 三"}]
+        records = [{"emp_no": "CURRENT001", "name": "张三", "dept1": "总部"}]
+
+        enriched = fin.apply_attendance_identity(employees, records)
+
+        self.assertEqual(enriched[0]["emp_no"], "CURRENT001")
+        self.assertEqual(enriched[0]["name"], "张三")
+        self.assertEqual(enriched[0]["dept1"], "总部")
+
+    def test_unmatched_emp_no_rejects_ambiguous_name_identities(self):
+        employees = [{"emp_no": "LEGACY001", "name": "张三"}]
+        records = [
+            {"emp_no": "CURRENT001", "name": "张三"},
+            {"emp_no": "CURRENT002", "name": "张三"},
+        ]
+
+        with self.assertRaises(ValueError) as ctx:
+            fin.apply_attendance_identity(employees, records)
+
+        self.assertIn("张三", str(ctx.exception))
+        self.assertIn("2 个员工身份", str(ctx.exception))
+
+    def test_unmatched_employee_is_retained_with_empty_identity_fields(self):
+        employees = [{
+            "emp_no": "OLD001",
+            "name": "张三",
+            "attendance_group": "旧考勤组",
+            "dept1": "旧部门",
+            "dept2": "旧二级部门",
+            "dept3": "旧三级部门",
+            "position": "旧岗位",
+        }]
+
+        enriched = fin.apply_attendance_identity(
+            employees,
+            [{"emp_no": "NEW002", "name": "李四", "dept1": "其他部门"}],
+        )
+
+        self.assertEqual(len(enriched), 1)
+        self.assertEqual(enriched[0]["name"], "张三")
+        for field in ("emp_no", "attendance_group", "dept1", "dept2", "dept3", "position"):
+            self.assertFalse(enriched[0][field], field)
+
+    def test_legacy_roster_profile_fields_never_enter_enriched_result(self):
+        employees = [{
+            "emp_no": "OLD001",
+            "name": "张三",
+            "contract_entity": "旧合同主体",
+            "emp_type": "旧员工类型",
+            "category": "旧人员分类",
+            "hire_date": date(2020, 1, 1),
+            "resign_date": date(2026, 1, 1),
+            "confirm_date": date(2020, 4, 1),
+        }]
+
+        enriched = fin.apply_attendance_identity(
+            employees,
+            [{"emp_no": "NEW001", "name": "张三"}],
+        )
+
+        for field in (
+            "contract_entity", "emp_type", "category",
+            "hire_date", "resign_date", "confirm_date",
+        ):
+            self.assertIsNone(enriched[0][field], field)
+
+    def test_name_only_roster_rejects_ambiguous_attendance_match(self):
+        employees = [{"emp_no": "", "name": "张三"}]
+        records = [
+            {"emp_no": "E001", "name": "张三"},
+            {"emp_no": "E002", "name": "张三"},
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            fin.apply_attendance_identity(employees, records)
+        self.assertIn("张三", str(ctx.exception))
+        self.assertIn("2 个员工身份", str(ctx.exception))
+
+    def test_repeated_punch_rows_for_same_employee_are_merged(self):
+        employees = [{"emp_no": "", "name": "张三"}]
+        records = [
+            {"emp_no": "E001", "name": "张三", "dept1": "总部"},
+            {"emp_no": "E001", "name": "张三", "position": "工程师"},
+        ]
+        enriched = fin.apply_attendance_identity(employees, records)
+        self.assertEqual(len(enriched), 1)
+        self.assertEqual(enriched[0]["emp_no"], "E001")
+        self.assertEqual(enriched[0]["dept1"], "总部")
+        self.assertEqual(enriched[0]["position"], "工程师")
+
+    def test_name_roster_and_dingtalk_monthly_record_generate_final_table(self):
+        roster_path = _write_roster([["姓名"], ["张三"]])
+        attendance_path = self._write_attendance([
+            ["姓名", "工号", "考勤组", "部门", "职位", "旷工天数"],
+            ["张三", "MT1001", "标准考勤组", "总部-产品技术部-后端组", "高级工程师", 0],
+        ])
+        output_path = tempfile.mktemp(suffix=".xlsx")
+        workdays = {date(2026, 7, day) for day in range(1, 32) if date(2026, 7, day).weekday() < 5}
+        schedule_ctx = {
+            "year": 2026,
+            "month": 7,
+            "month_start": date(2026, 7, 1),
+            "month_end": date(2026, 7, 31),
+            "main_working_days": workdays,
+            "chengdu_working_days": workdays,
+            "main_attendance_days": len(workdays),
+            "chengdu_attendance_days": len(workdays),
+            "main_payable_days": workdays,
+            "chengdu_payable_days": workdays,
+            "main_company_welfare_days": set(),
+            "chengdu_company_welfare_days": set(),
+            "main_statutory_holidays": set(),
+            "chengdu_statutory_holidays": set(),
+            "main_holiday_adjust_rest_days": set(),
+            "chengdu_holiday_adjust_rest_days": set(),
+        }
+        try:
+            employees = fin.apply_attendance_identity(
+                fin.parse_roster(roster_path),
+                fin.parse_attendance_identity(attendance_path),
+            )
+            fin.generate(employees, {}, schedule_ctx, {}, {}, {}, {}, output_path)
+            wb = openpyxl.load_workbook(output_path, data_only=False)
+            ws = wb.active
+            headers = [cell.value for cell in ws[2]]
+            values = {header: ws.cell(3, index + 1).value for index, header in enumerate(headers)}
+            wb.close()
+        finally:
+            for path in (roster_path, attendance_path, output_path):
+                if os.path.exists(path):
+                    os.remove(path)
+        self.assertEqual(values["姓名"], "张三")
+        self.assertEqual(values["工号"], "MT1001")
+        self.assertEqual(values["考勤组"], "标准考勤组")
+        self.assertEqual((values["一级部门"], values["二级部门"], values["三级部门"]), ("总部", "产品技术部", "后端组"))
+        self.assertEqual(values["岗位"], "高级工程师")
+        for field in ("合同主体", "员工类型", "人员分类", "入职日期", "离职日期", "转正日期"):
+            self.assertIsNone(values[field], field)
+
+    def test_missing_department_levels_stay_empty(self):
+        roster_path = _write_roster([["姓名"], ["张三"]])
+        attendance_path = self._write_attendance([
+            ["姓名", "工号", "一级部门"],
+            ["张三", "MT1001", "总部"],
+        ])
+        output_path = tempfile.mktemp(suffix=".xlsx")
+        workdays = {date(2026, 7, 1)}
+        schedule_ctx = {
+            "year": 2026,
+            "month": 7,
+            "month_start": date(2026, 7, 1),
+            "month_end": date(2026, 7, 31),
+            "main_working_days": workdays,
+            "chengdu_working_days": workdays,
+            "main_attendance_days": 1,
+            "chengdu_attendance_days": 1,
+            "main_payable_days": workdays,
+            "chengdu_payable_days": workdays,
+            "main_company_welfare_days": set(),
+            "chengdu_company_welfare_days": set(),
+            "main_statutory_holidays": set(),
+            "chengdu_statutory_holidays": set(),
+            "main_holiday_adjust_rest_days": set(),
+            "chengdu_holiday_adjust_rest_days": set(),
+        }
+        try:
+            employees = fin.apply_attendance_identity(
+                fin.parse_roster(roster_path),
+                fin.parse_attendance_identity(attendance_path),
+            )
+            fin.generate(employees, {}, schedule_ctx, {}, {}, {}, {}, output_path)
+            wb = openpyxl.load_workbook(output_path, data_only=False)
+            ws = wb.active
+            headers = [cell.value for cell in ws[2]]
+            values = {header: ws.cell(3, index + 1).value for index, header in enumerate(headers)}
+            wb.close()
+        finally:
+            for path in (roster_path, attendance_path, output_path):
+                if os.path.exists(path):
+                    os.remove(path)
+        self.assertEqual(values["一级部门"], "总部")
+        self.assertIsNone(values["二级部门"])
+        self.assertIsNone(values["三级部门"])
+
+
+class LeaveOvertimeHeaderCompatTests(unittest.TestCase):
+    """确保花名册精确匹配不影响请假/加班等模块的子串匹配兼容性。"""
+
+    def test_leave_parser_accepts_historical_employee_headers(self):
+        """请假表历史表头：员工工号、员工姓名、请假类型名称。"""
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "请假明细"
+        ws.append(["员工工号", "员工姓名", "一级部门", "请假类型名称", "开始时间", "结束时间",
+                    "系统时长", "最终请假时长", "最终请假天数", "审批状态", "审批结果"])
+        ws.append(["MT0001", "张三", "总部", "事假", "2026-06-15 09:00", "2026-06-15 18:00",
+                    8.0, 8.0, 1.0, "完成", "同意"])
+        fd, path = tempfile.mkstemp(suffix=".xlsx")
+        os.close(fd)
+        wb.save(path)
+        wb.close()
+        try:
+            rows = fin._collect_deduped_leave_rows(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["emp_no"], "MT0001")
+            self.assertEqual(rows[0]["name"], "张三")
+            self.assertEqual(rows[0]["leave_type"], "事假")
+        finally:
+            os.remove(path)
+
+    def test_leave_summary_parsing_unaffected_by_exact_match(self):
+        """请假明细解析不受 _find_col_exact 影响（仍使用 _find_col 子串匹配）。"""
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "请假明细"
+        ws.append(["发起人工号", "发起人姓名", "一级部门", "二级部门", "三级部门",
+                    "请假类型", "开始时间", "结束时间", "系统时长", "最终请假时长", "最终请假天数",
+                    "备注", "审批编号", "审批状态", "审批结果", "是否实习生", "源文件行号"])
+        ws.append(["MT0001", "张三", "总部", "产品技术部", "后端组",
+                    "事假", "2026-06-15 09:00", "2026-06-15 18:00", 8.0, 8.0, 1.0,
+                    "", "DING-001", "完成", "同意", False, 2])
+        fd, path = tempfile.mkstemp(suffix=".xlsx")
+        os.close(fd)
+        wb.save(path)
+        wb.close()
+        try:
+            # parse_leave_summary 应能正常解析（使用 _find_col 子串匹配）
+            schedule_ctx = {
+                "year": 2026, "month": 6,
+                "month_start": date(2026, 6, 1), "month_end": date(2026, 6, 30),
+                "main_working_days": set(), "chengdu_working_days": set(),
+                "main_expected_attendance_days": set(), "chengdu_expected_attendance_days": set(),
+            }
+            leave_map = fin.parse_leave_summary(path, schedule_ctx)
+            # 应解析出 MT0001 的事假
+            self.assertIn("MT0001", leave_map)
+            self.assertIn("事假", leave_map["MT0001"])
+        finally:
+            os.remove(path)
+
+    def test_overtime_parser_accepts_historical_employee_headers(self):
+        """加班表历史表头：员工工号、员工姓名、2倍加班（小时）。"""
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "加班明细"
+        ws.append(["员工工号", "员工姓名", "一级部门", "二级部门", "三级部门",
+                    "开始时间", "结束时间", "2倍加班（小时）", "3倍加班（小时）"])
+        ws.append(["MT0001", "张三", "总部", "产品技术部", "后端组",
+                    "2026-06-15 09:00", "2026-06-15 21:00", 4.0, 0.0])
+        fd, path = tempfile.mkstemp(suffix=".xlsx")
+        os.close(fd)
+        wb.save(path)
+        wb.close()
+        try:
+            overtime = fin.parse_overtime_summary(path)
+            self.assertIn("MT0001", overtime)
+            self.assertEqual(overtime["MT0001"]["2x_hours"], 4.0)
+        finally:
+            os.remove(path)
+
+
+class GenerateRosterActionTests(unittest.TestCase):
+    """组织生成的富花名册必须可被最终表、部门映射与真实加班入口消费。"""
+
+    @staticmethod
+    def _write_overtime_export(path: Path) -> None:
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "加班导出"
+        sheet.append([
+            "审批编号", "审批状态", "审批结果", "发起人工号", "发起人姓名", "发起人部门",
+            "开始时间", "结束时间", "明细", "时长",
+        ])
+        sheet.append([
+            "OT-001", "完成", "同意", "MT0001", "张三", "其他部门-其他部门-其他部门",
+            datetime(2026, 6, 15, 9, 0), datetime(2026, 6, 15, 18, 0), date(2026, 6, 15), 8,
+        ])
+        workbook.save(path)
+        workbook.close()
+
+    @staticmethod
+    def _write_attendance(path: Path) -> None:
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "考勤明细"
+        sheet.append(["考勤时间：2026-06-01 至 2026-06-30"])
+        sheet.append(["姓名", "工号", "考勤组", "考勤结果"])
+        sheet.append([None, None, None, 15])
+        sheet.append(["张三", "MT0001", "默认考勤组", "正常 (09:00, 18:30)"])
+        workbook.save(path)
+        workbook.close()
+
+    def test_action_output_parsable_by_parse_roster(self):
+        from runner import action_generate_roster, run_overtime
+        out_dir = tempfile.mkdtemp(prefix="roster-action-")
+        try:
+            config = {
+                "org_name": "测试组织",
+                "employees": [
+                    {
+                        "emp_no": "MT0001", "name": "张三",
+                        "dept1": "运营管理中心", "dept2": "运营支撑部", "dept3": "智慧寄存运维组",
+                    },
+                    {"emp_no": "MT0002", "name": "李四", "dept1": "总部"},
+                    {"emp_no": "MT0003", "name": "王五", "dept1": "总部"},
+                ],
+            }
+            outputs = action_generate_roster(config, Path(out_dir))
+            self.assertEqual(len(outputs), 1)
+            out_path = outputs[0]["path"]
+            employees = fin.parse_roster(out_path)
+            self.assertEqual(len(employees), 3)
+            self.assertEqual([e["name"] for e in employees], ["张三", "李四", "王五"])
+            self.assertEqual([e["emp_no"] for e in employees], ["MT0001", "MT0002", "MT0003"])
+
+            department_map, diagnostic = ot.parse_employee_department_map(out_path)
+            self.assertIsNone(diagnostic)
+            self.assertEqual(department_map["MT0001"]["dept1"], "运营管理中心")
+            self.assertEqual(department_map["MT0001"]["dept2"], "运营支撑部")
+            self.assertEqual(department_map["MT0001"]["dept3"], "智慧寄存运维组")
+
+            root = Path(out_dir)
+            overtime_path = root / "overtime.xlsx"
+            attendance_path = root / "attendance.xlsx"
+            overtime_output = root / "overtime-output"
+            overtime_output.mkdir()
+            self._write_overtime_export(overtime_path)
+            self._write_attendance(attendance_path)
+            overtime_outputs = run_overtime({
+                "overtime_src": str(overtime_path),
+                "overtime_roster": out_path,
+                "overtime_attendance": str(attendance_path),
+                "overtime_target_month": "2026-06",
+            }, overtime_output)
+            result_path = next(Path(item["path"]) for item in overtime_outputs if item.get("path", "").endswith(".xlsx"))
+            result_workbook = openpyxl.load_workbook(result_path, data_only=True)
+            try:
+                result_sheet = result_workbook.active
+                header_row = ot.find_header_row(result_sheet)
+                header_map = ot.build_header_map(result_sheet, header_row)
+                values = {
+                    name: result_sheet.cell(header_row + 1, column).value
+                    for name, column in header_map.items()
+                }
+            finally:
+                result_workbook.close()
+            self.assertEqual(values["系统操作"], "未加")
+            self.assertIn("运维组", values["备注"])
+            for field in (
+                "加班类型", "最终加班时长（小时）", "2倍加班小时", "3倍加班小时",
+                "2倍加班天数", "3倍加班天数",
+            ):
+                self.assertIsNone(values[field], field)
+        finally:
+            import shutil
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+    def test_action_empty_employees_is_rejected(self):
+        from runner import action_generate_roster
+        out_dir = tempfile.mkdtemp(prefix="roster-empty-")
+        try:
+            config = {"org_name": "空组织", "employees": []}
+            with self.assertRaisesRegex(ValueError, "没有在职员工"):
+                action_generate_roster(config, Path(out_dir))
+        finally:
+            import shutil
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+    def test_action_mixed_valid_and_missing_names_is_rejected(self):
+        from runner import action_generate_roster
+        out_dir = tempfile.mkdtemp(prefix="roster-missing-name-")
+        try:
+            config = {
+                "org_name": "测试组织",
+                "employees": [
+                    {"emp_no": "MT0001", "name": "有效员工", "dept1": "总部"},
+                    {"emp_no": "MT0002", "name": "", "dept1": "总部"},
+                    {"emp_no": "MT0003", "name": "  ", "dept1": "总部"},
+                ],
+            }
+            with self.assertRaisesRegex(ValueError, "2 名在职员工缺少姓名"):
+                action_generate_roster(config, Path(out_dir))
+            self.assertEqual(list(Path(out_dir).glob("*.xlsx")), [])
+        finally:
+            import shutil
+            shutil.rmtree(out_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

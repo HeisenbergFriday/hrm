@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"peopleops/internal/database"
 
@@ -414,5 +415,191 @@ func TestOrgServiceDepartmentTreeLegacyFallbackOnlyNoMembership(t *testing.T) {
 	child := root.Children[0]
 	if child.DirectActiveCount != 2 {
 		t.Fatalf("child direct active = %d, want 2 (user-1 + user-2)", child.DirectActiveCount)
+	}
+}
+
+// TestGetDepartmentTreeMergesOrphanedUsers verifies that employees whose
+// DepartmentID points to a non-existent (deleted) department are still counted
+// in the root node's headcount after the rollup. This ensures the root
+// headcount equals the overview's total_employees.
+func TestGetDepartmentTreeMergesOrphanedUsers(t *testing.T) {
+	db := openOrgServiceMembershipDB(t)
+	departments := []database.Department{
+		{OrgID: "org-o", DepartmentID: "root", DingTalkDepartmentID: "o-root", Name: "总部"},
+		{OrgID: "org-o", DepartmentID: "child", DingTalkDepartmentID: "o-child", Name: "子部门", ParentID: "root"},
+	}
+	if err := db.Create(&departments).Error; err != nil {
+		t.Fatalf("seed departments: %v", err)
+	}
+
+	// Normal employee in "child" department
+	seedOrgServiceMembershipEmployee(t, db, "org-o", "normal-user", "child")
+	// Orphan employee: DepartmentID points to a department that doesn't exist in the departments table
+	seedOrgServiceMembershipEmployee(t, db, "org-o", "orphan-user", "deleted-dept")
+	// Another orphan: empty DepartmentID
+	seedOrgServiceMembershipEmployeeWithStatus(t, db, "org-o", "empty-dept-user", "", "active")
+
+	memberships := []database.UserDepartmentMembership{
+		{OrgID: "org-o", UserID: "normal-user", DepartmentID: "child", IsPrimary: true},
+		// orphan-user and empty-dept-user have NO memberships
+	}
+	if err := db.Create(&memberships).Error; err != nil {
+		t.Fatalf("seed memberships: %v", err)
+	}
+
+	svc := NewOrgServiceWithOrgID(db, "org-o")
+	tree, err := svc.GetDepartmentTree(nil)
+	if err != nil {
+		t.Fatalf("get department tree: %v", err)
+	}
+	if len(tree) != 1 {
+		t.Fatalf("tree roots = %d, want 1", len(tree))
+	}
+	root := tree[0]
+	if root.VirtualKind != "organization" || root.ID != organizationTreeRootID {
+		t.Fatalf("root = %#v, want explicit organization root", root)
+	}
+
+	// Root headcount must include all 3 employees (normal + 2 orphans)
+	if root.Headcount != 3 {
+		t.Fatalf("root headcount = %d, want 3 (normal + orphan + empty-dept)", root.Headcount)
+	}
+	if root.ActiveCount != 3 {
+		t.Fatalf("root active = %d, want 3", root.ActiveCount)
+	}
+
+	// The invalid/empty department users are represented explicitly instead of
+	// being assigned to the first real root.
+	if len(root.Children) != 2 {
+		t.Fatalf("root children = %d, want real root + unassigned", len(root.Children))
+	}
+	var realRoot, unassigned *OrgDepartmentTreeNode
+	for _, node := range root.Children {
+		if node.VirtualKind == "unassigned" {
+			unassigned = node
+		} else if node.ID == "root" {
+			realRoot = node
+		}
+	}
+	if realRoot == nil || unassigned == nil || unassigned.Headcount != 2 {
+		t.Fatalf("organization children = %#v", root.Children)
+	}
+	if len(realRoot.Children) != 1 {
+		t.Fatalf("real root children = %d, want 1", len(realRoot.Children))
+	}
+	child := realRoot.Children[0]
+	if child.DirectActiveCount != 1 {
+		t.Fatalf("child direct active = %d, want 1 (normal-user only)", child.DirectActiveCount)
+	}
+
+	// Verify consistency: listEmployeeSnapshots (used by both overview and tree)
+	// must return the same unique count as the tree root headcount.
+	snapshots, err := svc.listEmployeeSnapshots(nil)
+	if err != nil {
+		t.Fatalf("list snapshots: %v", err)
+	}
+	snapshotSeen := make(map[string]struct{}, len(snapshots))
+	snapshotActive := 0
+	for _, snap := range snapshots {
+		if _, dup := snapshotSeen[snap.UserID]; !dup {
+			snapshotSeen[snap.UserID] = struct{}{}
+			if snap.Status == "active" {
+				snapshotActive++
+			}
+		}
+	}
+	if len(snapshotSeen) != root.Headcount {
+		t.Fatalf("unique snapshot users = %d, tree root headcount = %d, want them equal",
+			len(snapshotSeen), root.Headcount)
+	}
+	if snapshotActive != root.ActiveCount {
+		t.Fatalf("unique snapshot active = %d, tree root active = %d, want them equal",
+			snapshotActive, root.ActiveCount)
+	}
+}
+
+// TestBuildOverviewSummaryDeduplicatesUserIDs verifies that the overview
+// summary deduplicates snapshots by user_id, even if somehow duplicates appear.
+func TestBuildOverviewSummaryDeduplicatesUserIDs(t *testing.T) {
+	svc := &OrgService{nowFn: func() time.Time { return time.Date(2026, 7, 31, 0, 0, 0, 0, time.Local) }}
+	snapshots := []orgEmployeeSnapshot{
+		{UserID: "user-1", Status: "active"},
+		{UserID: "user-2", Status: "active"},
+		{UserID: "user-1", Status: "active"}, // duplicate
+		{UserID: "user-3", Status: "inactive"},
+	}
+	summary, _ := svc.buildOverviewSummary(snapshots, nil)
+	if summary.TotalEmployees != 3 {
+		t.Fatalf("total = %d, want 3 (deduplicated)", summary.TotalEmployees)
+	}
+	if summary.ActiveEmployees != 2 {
+		t.Fatalf("active = %d, want 2", summary.ActiveEmployees)
+	}
+	if summary.InactiveEmployees != 1 {
+		t.Fatalf("inactive = %d, want 1", summary.InactiveEmployees)
+	}
+}
+
+func TestDepartmentTreeOrganizationRootUsesUnifiedEmployeePopulation(t *testing.T) {
+	db := openOrgServiceMembershipDB(t)
+	departments := []database.Department{
+		{OrgID: "org-count", DepartmentID: "root-a", DingTalkDepartmentID: "1", Name: "第一根"},
+		{OrgID: "org-count", DepartmentID: "root-b", DingTalkDepartmentID: "2", Name: "第二根"},
+	}
+	if err := db.Create(&departments).Error; err != nil {
+		t.Fatalf("seed departments: %v", err)
+	}
+	seedOrgServiceMembershipEmployee(t, db, "org-count", "multi", "root-a")
+	seedOrgServiceMembershipEmployeeWithStatus(t, db, "org-count", "inactive", "root-a", "inactive")
+	seedOrgServiceMembershipEmployee(t, db, "org-count", "normal", "root-b")
+	seedOrgServiceMembershipEmployee(t, db, "org-count", "no-department", "")
+	seedOrgServiceMembershipEmployee(t, db, "org-count", "orphan-membership", "missing-department")
+	seedOrgServiceMembershipEmployee(t, db, "org-count", "admin", "root-a")
+	seedOrgServiceMembershipEmployee(t, db, "org-count", "soft-deleted", "root-a")
+	if err := db.Where("org_id = ? AND user_id = ?", "org-count", "soft-deleted").Delete(&database.User{}).Error; err != nil {
+		t.Fatalf("soft delete fixture: %v", err)
+	}
+	memberships := []database.UserDepartmentMembership{
+		{OrgID: "org-count", UserID: "multi", DepartmentID: "root-a", IsPrimary: true},
+		{OrgID: "org-count", UserID: "multi", DepartmentID: "root-b"},
+		{OrgID: "org-count", UserID: "inactive", DepartmentID: "root-a", IsPrimary: true},
+		{OrgID: "org-count", UserID: "normal", DepartmentID: "root-b", IsPrimary: true},
+		{OrgID: "org-count", UserID: "orphan-membership", DepartmentID: "missing-department", IsPrimary: true},
+		{OrgID: "org-count", UserID: "admin", DepartmentID: "root-a", IsPrimary: true},
+		{OrgID: "org-count", UserID: "soft-deleted", DepartmentID: "root-a", IsPrimary: true},
+	}
+	if err := db.Create(&memberships).Error; err != nil {
+		t.Fatalf("seed memberships: %v", err)
+	}
+
+	svc := NewOrgServiceWithOrgID(db, "org-count")
+	tree, err := svc.GetDepartmentTree(nil)
+	if err != nil {
+		t.Fatalf("get tree: %v", err)
+	}
+	snapshots, err := svc.listEmployeeSnapshots(nil)
+	if err != nil {
+		t.Fatalf("list snapshots: %v", err)
+	}
+	summary, _ := svc.buildOverviewSummary(snapshots, nil)
+	if len(tree) != 1 || tree[0].VirtualKind != "organization" {
+		t.Fatalf("tree = %#v, want explicit organization root", tree)
+	}
+	root := tree[0]
+	if root.Headcount != 5 || root.ActiveCount != 4 || root.InactiveCount != 1 {
+		t.Fatalf("organization counts total=%d active=%d inactive=%d", root.Headcount, root.ActiveCount, root.InactiveCount)
+	}
+	if root.Headcount != summary.TotalEmployees || root.ActiveCount != summary.ActiveEmployees {
+		t.Fatalf("tree total/active = %d/%d overview = %d/%d", root.Headcount, root.ActiveCount, summary.TotalEmployees, summary.ActiveEmployees)
+	}
+	children := make(map[string]*OrgDepartmentTreeNode)
+	for _, child := range root.Children {
+		children[child.ID] = child
+	}
+	if children["root-a"].Headcount != 2 || children["root-b"].Headcount != 2 {
+		t.Fatalf("real root counts a=%d b=%d", children["root-a"].Headcount, children["root-b"].Headcount)
+	}
+	if children[unassignedEmployeesID].Headcount != 2 {
+		t.Fatalf("unassigned = %d, want no-department + orphan relation", children[unassignedEmployeesID].Headcount)
 	}
 }

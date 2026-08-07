@@ -60,12 +60,12 @@ func main() {
 	streamClient.RegisterChatBotCallbackRouter(func(ctx context.Context, data *chatbot.BotCallbackDataModel) ([]byte, error) {
 		if data != nil {
 			log.Printf(
-				"收到钉钉机器人回调: org_id=%s conversation_type=%s msg_type=%s at_robot=%t command_match=%t",
+				"收到钉钉机器人回调: org_id=%s conversation_type=%s msg_type=%s at_robot=%t binding_candidate=%t",
 				orgID,
 				strings.TrimSpace(data.ConversationType),
 				strings.TrimSpace(data.Msgtype),
 				data.IsInAtList,
-				strings.TrimSpace(data.Text.Content) == "绑定作息表",
+				strings.TrimSpace(data.Text.Content) != "",
 			)
 		}
 		result, bindErr := groupService.HandleChatbotMessage(data)
@@ -87,7 +87,7 @@ func main() {
 	}
 	defer streamClient.Close()
 
-	log.Printf("钉钉 Stream 已连接。审批事件将增量同步，群聊可通过 @机器人发送“绑定作息表”完成绑定。")
+	log.Printf("钉钉 Stream 已连接。审批事件将增量同步，未绑定群聊首次 @机器人发送任意非空内容即可绑定。")
 	<-ctx.Done()
 	log.Printf("收到退出信号，正在关闭钉钉 Stream 连接")
 }

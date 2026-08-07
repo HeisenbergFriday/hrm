@@ -59,6 +59,9 @@ func TestConfigFromOrganizationUsesTenantHRMFieldsWithoutEnvLeak(t *testing.T) {
 				"job_level":  []interface{}{"org-a-job-level"},
 				"job_family": "org-a-job-family",
 			},
+			"dingtalk_hrm_field_options": map[string]interface{}{
+				"employment_type": map[string]interface{}{"1": "组织 A 正式员工"},
+			},
 		},
 	}).normalized()
 	if !slices.Equal(orgCfg.HRMFieldCodes[hrmFieldJobLevel], []string{"org-a-job-level"}) {
@@ -69,6 +72,9 @@ func TestConfigFromOrganizationUsesTenantHRMFieldsWithoutEnvLeak(t *testing.T) {
 	}
 	if slices.Contains(configuredHRMFieldCodes(orgCfg), "default-job-level") {
 		t.Fatal("non-default organization must not inherit default HRM field codes")
+	}
+	if got := orgCfg.HRMFieldOptions[hrmFieldEmploymentType]["1"]; got != "组织 A 正式员工" {
+		t.Fatalf("employment type option = %q", got)
 	}
 }
 
@@ -203,5 +209,101 @@ func TestHasAnyHRMTargetField(t *testing.T) {
 
 	if hasAnyHRMTargetField(map[string]UserInfo{}) {
 		t.Fatal("expected false for empty user map")
+	}
+}
+
+func TestResolveHRMEmploymentTypeUsesReliableSources(t *testing.T) {
+	tests := []struct {
+		name      string
+		field     map[string]interface{}
+		cfg       Config
+		wantCode  string
+		wantLabel string
+	}{
+		{
+			name: "response label wins",
+			field: map[string]interface{}{
+				"field_code":       "sys01-employeeType",
+				"field_value_list": []interface{}{map[string]interface{}{"value": "1", "label": "正式员工"}},
+			},
+			cfg:       Config{HRMFieldOptions: map[string]map[string]string{hrmFieldEmploymentType: {"1": "配置名称"}}},
+			wantCode:  "1",
+			wantLabel: "正式员工",
+		},
+		{
+			name: "value item field name",
+			field: map[string]interface{}{
+				"field_code":       "sys01-employeeType",
+				"field_value_list": []interface{}{map[string]interface{}{"value": "A", "field_name": "顾问"}},
+			},
+			wantCode:  "A",
+			wantLabel: "顾问",
+		},
+		{
+			name: "response metadata",
+			field: map[string]interface{}{
+				"field_code":       "sys01-employeeType",
+				"field_value_list": []interface{}{map[string]interface{}{"value": "B"}},
+				"options":          []interface{}{map[string]interface{}{"value": "B", "name": "实习生"}},
+			},
+			wantCode:  "B",
+			wantLabel: "实习生",
+		},
+		{
+			name: "response option object metadata",
+			field: map[string]interface{}{
+				"field_code":       "sys01-employeeType",
+				"field_value_list": []interface{}{map[string]interface{}{"value": "1"}},
+				"options": map[string]interface{}{
+					"1": map[string]interface{}{"label": "对象元数据名称"},
+				},
+			},
+			wantCode:  "1",
+			wantLabel: "对象元数据名称",
+		},
+		{
+			name:  "organization mapping",
+			field: hrmTestField("sys01-employeeType", "员工类型", "1"),
+			cfg: Config{HRMFieldOptions: map[string]map[string]string{
+				hrmFieldEmploymentType: {"1": "组织配置名称"},
+			}},
+			wantCode:  "1",
+			wantLabel: "组织配置名称",
+		},
+		{
+			name:      "unknown code is explicit",
+			field:     hrmTestField("sys01-employeeType", "员工类型", "99"),
+			wantCode:  "99",
+			wantLabel: "未知类型（代码：99）",
+		},
+		{
+			name: "numeric zero remains code",
+			field: map[string]interface{}{
+				"field_code":       "sys01-employeeType",
+				"field_value_list": []interface{}{map[string]interface{}{"value": float64(0)}},
+			},
+			wantCode:  "0",
+			wantLabel: "未知类型（代码：0）",
+		},
+		{
+			name:      "string zero remains code",
+			field:     hrmTestField("sys01-employeeType", "员工类型", "0"),
+			wantCode:  "0",
+			wantLabel: "未知类型（代码：0）",
+		},
+		{
+			name:      "empty remains empty",
+			field:     hrmTestField("sys01-employeeType", "员工类型", ""),
+			wantCode:  "",
+			wantLabel: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseHRMEmployeeFields([]interface{}{tt.field}, tt.cfg)
+			if got.EmploymentTypeCode != tt.wantCode || got.EmploymentType != tt.wantLabel {
+				t.Fatalf("employment type = (%q, %q), want (%q, %q)", got.EmploymentTypeCode, got.EmploymentType, tt.wantCode, tt.wantLabel)
+			}
+		})
 	}
 }

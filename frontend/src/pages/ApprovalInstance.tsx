@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react'
-import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input, message } from 'antd'
+import React, { useState, useEffect, useRef } from 'react'
+import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input, Tooltip } from 'antd'
 import { FileTextOutlined, SyncOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { approvalAPI } from '../services/api'
+import { approvalAPI, getPendingApprovalSyncRequestID, type ApprovalSyncAPIResponse } from '../services/api'
 import { hasPermission } from '../utils/permission'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -12,6 +12,13 @@ import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
 import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { formatDateTime } from '../utils/format'
+import {
+  approvalSyncErrorNotice,
+  approvalSyncResultNotice,
+  approvalSyncRunningNotice,
+  missingApprovalSyncPermissionTip,
+  type ApprovalSyncNotice,
+} from '../utils/approvalSync'
 
 dayjs.locale('zh-cn')
 
@@ -42,6 +49,8 @@ const ApprovalInstance: React.FC = () => {
   const [searchText, setSearchText] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+  const [syncNotice, setSyncNotice] = useState<ApprovalSyncNotice | null>(null)
+  const syncInFlightRef = useRef(false)
 
   const CATEGORY_OPTIONS: { value: string; label: string }[] = [
     { value: 'leave', label: '请假' },
@@ -84,27 +93,47 @@ const ApprovalInstance: React.FC = () => {
     queryFn: () => approvalAPI.getTemplates(),
   })
 
-  const syncMutation = useMutation({
-    mutationFn: () => approvalAPI.sync({
-      process_code: templateID,
-      start_date: dateRange[0]?.format('YYYY-MM-DD'),
-      end_date: dateRange[1]?.format('YYYY-MM-DD'),
-    }),
-    onSuccess: () => {
-      refetch()
+  const syncMutation = useMutation<ApprovalSyncAPIResponse, Error, boolean>({
+    mutationFn: (resume) => resume
+      ? approvalAPI.resumeSync()
+      : approvalAPI.sync({
+        process_code: templateID || undefined,
+        start_date: dateRange[0]?.format('YYYY-MM-DD'),
+        end_date: dateRange[1]?.format('YYYY-MM-DD'),
+      }),
+    onSuccess: (response) => {
+      setSyncNotice(approvalSyncResultNotice(response.data))
+      if (response.data.status === 'success' || response.data.status === 'partial') {
+        refetch()
+      }
+    },
+    onError: (error) => {
+      setSyncNotice(approvalSyncErrorNotice(error))
+    },
+    onSettled: () => {
+      syncInFlightRef.current = false
     },
   })
+
+  const resumeSync = syncMutation.mutate
+  useEffect(() => {
+    if (!hasPermission('approval:sync') || !getPendingApprovalSyncRequestID() || syncInFlightRef.current) return
+    syncInFlightRef.current = true
+    setSyncNotice(approvalSyncRunningNotice())
+    resumeSync(true)
+  }, [resumeSync])
 
   const handleViewDetail = (id: string) => {
     navigate(`/approval-detail/${id}`)
   }
 
   const handleSync = () => {
-    if (!templateID) {
-      message.warning('请先选择审批模板/流程代码')
+    if (syncInFlightRef.current) {
       return
     }
-    syncMutation.mutate()
+    syncInFlightRef.current = true
+    setSyncNotice(approvalSyncRunningNotice(templateID))
+    syncMutation.mutate(false)
   }
 
   const getStatusTag = (status: string) => {
@@ -245,16 +274,30 @@ const ApprovalInstance: React.FC = () => {
             <Button type="primary" onClick={() => refetch()}>
               查询
             </Button>
-            <Button
-              icon={<SyncOutlined />}
-              onClick={handleSync}
-              loading={syncMutation.isPending}
-              disabled={!hasPermission('approval:sync')}
-            >
-              同步数据
-            </Button>
+            <Tooltip title={hasPermission('approval:sync') ? undefined : missingApprovalSyncPermissionTip}>
+              <span>
+                <Button
+                  icon={<SyncOutlined />}
+                  onClick={handleSync}
+                  loading={syncMutation.isPending}
+                  disabled={!hasPermission('approval:sync') || syncMutation.isPending}
+                >
+                  {syncMutation.isPending ? '同步中' : (templateID ? '同步当前模板' : '同步全部')}
+                </Button>
+              </span>
+            </Tooltip>
           </Space>
         </div>
+
+        {syncNotice && (
+          <Alert
+            style={{ marginBottom: 'var(--space-4)' }}
+            type={syncNotice.type}
+            message={syncNotice.message}
+            description={syncNotice.description}
+            showIcon
+          />
+        )}
 
         {isLoading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>

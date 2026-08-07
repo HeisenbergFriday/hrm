@@ -1,6 +1,6 @@
 ---
 purpose: 开发问题复盘日志——沉淀已定位根因且有复用价值的缺陷与防复发约束，供开发前查阅、开发后更新
-last_updated: 2026-07-30
+last_updated: 2026-08-05
 source_of_truth:
   - 本文件（问题条目与防复发索引）
   - AGENTS.md（开发前必读 / 开发后必记流程）
@@ -49,13 +49,21 @@ update_when:
 |---|---|---|
 | `attendance-toolbox` `run-store` | 结果绑定 `user_id+org_id`；磁盘仅 `rootDir/<runID>`；禁止返回服务器绝对路径 | `.ai/MODULES/attendance.md` |
 | `attendance-toolbox` `permission` | 计算/审计/模板需 `attendance_toolbox_operate`；钉钉同步需 `attendance_toolbox_dingtalk_sync`；一键联动 AND | `.ai/MODULES/attendance.md` 权限矩阵 |
+| `attendance-toolbox` `parttime` `leave-priority` | 兼职汇总同一日同时含外出/出差与事假时，必须先按事假处理并停止出勤计算；组合状态判断必须早于外出计出勤的提前返回 | [2026-08-01 外出/出差与事假并存误计出勤](#2026-08-01-p1-外出出差与事假并存误计出勤) |
+| `attendance-toolbox` `dingtalk` `approval` `time-window` | `processinstance/listids` 禁止直接提交超长或未来时间范围；客户端必须按最多 120 天连续分片、结束时间预留时钟偏差，并跨片去重、全局执行条数上限 | [2026-08-01 钉钉审批查询时间范围非法](#2026-08-01-p1-钉钉审批查询时间范围非法导致工具箱同步失败) |
+| `attendance-toolbox` `structured-result` `auto-fill` | 自动回填必须从 structured run 按 `kind=export + flow_key` 下载业务表；审计/元数据不得上传，也不得因多文件而改走 ZIP 或重跑同步 | [2026-08-01 自动回填误判多文件](#2026-08-01-p1-自动回填将审计文件计入结果导致同步成功后仍报错) |
+| `attendance-toolbox` `roster` `data-contract` `multi-tenant` | 自动回填到加班入口的组织花名册必须使用当前 org 的 `EmployeeProfile.EmployeeID`、真实姓名与有效部门路径；当前 org 的 `<org>:0` 是兼容历史数据的根哨兵，外组织同形值仍属悬空；缺工号/姓名/路径整体 400；仅姓名文件不得自动回填加班；自动响应不得覆盖请求期间的用户选择/删除/替换；禁止审批字段/position_transfer 充当花名册 | [2026-08-01 花名册选错文件与运维组规则](#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
 | `attendance-toolbox` `playwright` `locator` | 页面存在重复 placeholder/文案时，E2E 必须先用 tabpanel、form 或可访问名称缩小作用域；禁止使用全页面模糊定位 | [2026-07-30 考勤工具箱 E2E 重复日期占位符](#2026-07-30-p2-考勤工具箱-e2e-重复日期占位符导致-strict-mode-失败) |
+| `attendance-toolbox` `date-boundary` `probation` | 日期区间条件必须使用闭区间语义，覆盖月初、月末、节假日和闰年边界；禁止对工作日使用严格大于/小于导致边界漏算 | [2026-08-02 当月转正天数少算一天](#2026-08-02-p1-当月转正天数少算一天) |
+| `attendance-toolbox` `subsidy` `data-source` `column-alias` | 补贴扣款真实数据来源是"考勤统计→报表管理→月度汇总表（补贴及扣款）"人工导出 Excel，不是钉钉审批流程；列名必须精确匹配，禁止使用"迟到""早退"等宽泛别名；A1 日期强校验仅作用于 `_is_all_people_monthly_summary` 已识别的钉钉原始报表，且统计范围必须精确覆盖处理月份的完整自然月，系统模板和历史兼容格式不要求 A1 日期 | [2026-08-03 补贴扣款数据来源纠正](#2026-08-03-p2-补贴扣款数据来源纠正) |
 
 ### API / 路由契约
 
 | 标签 | 约束摘要 | 条目 |
 |---|---|---|
+| `employee-profile` `search` `api-contract` `test` | 员工档案搜索必须走 `/employee/profiles` 的 handler → EmployeeService → EmployeeRepository 真实链路；禁止用 `/org/employees` 花名册测试代替；关键词、分页和 URL 状态需做前后端契约回归 | [2026-07-31 员工档案搜索错测花名册链路](#2026-07-31-p1-员工档案搜索错测花名册链路导致页面无法搜索) |
 | `org-sync` `frontend` `timeout` `api-contract` `multi-tenant` `security` | 用户/部门/全量组织同步共享同组织门闩；JWT `org_id` 唯一可信；超过网关时限的全量同步必须短请求启动+轮询；执行上下文脱离客户端取消，终态用独立短上下文持久化；HTTP 207 必须刷新已成功数据；响应/状态不得回显原始错误 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
+| `approval-sync` `frontend` `timeout` `partial` `multi-tenant` `idempotency` | 审批全量同步必须按 JWT 企业配置编排多个流程，使用短启动+持久化状态轮询；逐流程失败隔离并汇总 `success/partial/failed`；审批、年假消费和加班/调休入账均须幂等 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
 | `org-sync` `department` `stable-id` `transaction` `release` | 钉钉同步必须按租户内稳定外部 ID 匹配历史部门/员工，保留既有本地 ID 与引用；部门写入失败整事务回滚并跳过员工；发布镜像必须来自可追溯干净 Commit | [2026-07-28 组织同步历史 ID 冲突](#2026-07-28-p1-组织同步历史本地-id-与租户前缀-id-冲突导致部门落库失败) |
 | `org-sync` `department-membership` `counting` `multi-tenant` | 完整部门归属写租户隔离关系表；查询仅在无关系时回退主部门；直属人数按完整关系，父级汇总按员工集合去重；**部署 membership 特性后所有已有组织必须重新同步，否则 0 条 membership 导致多部门员工被遗漏** | [2026-07-28 组织同步仅保存主部门导致部门人数偏少](#2026-07-28-p1-组织同步仅保存主部门导致部门人数偏少) |
 | `org-sync` `dingtalk` `mobile` `unique-index` `null` | 钉钉空手机号不得转换为共享占位值；新员工空手机号写 `NULL`，已有真实手机号不得被空值或占位值覆盖 | [2026-07-28 组织同步共享手机号占位值冲突](#2026-07-28-p1-组织同步共享手机号占位值触发唯一索引冲突) |
@@ -64,6 +72,7 @@ update_when:
 | `org-sync` `dingtalk` `deactivation` `fail-closed` `multi-tenant` `session` | 只有部门+员工完整拉取成功后才收口历史员工；钉钉源为空、请求失败、权限失败或同步被取消时禁止批量停用；停用仅作用于本组织 active 且有稳定 DingTalkUserID 的同步用户，admin/手工账号/无稳定 ID 账号不动；用户与档案状态同事务更新，会话撤销只针对实际被停用员工 | [2026-07-28 组织同步历史员工状态收口](#2026-07-28-p1-组织同步未收口历史员工状态导致离职员工仍为-active) |
 | `api-contract` `router` `attendance` | 前端已调用且后端已有 Handler 的接口必须同时注册到 Router；新增 API 必须有路由清单回归测试，避免运行时 404 | [2026-07-23 考勤查询外部结果路由漏注册](#2026-07-23-p1-考勤查询外部结果路由漏注册导致进入页面-404) |
 | `gorm` `update-columns` `terminal-status` `dingtalk` | `Updates/UpdateColumns(map)` 的 key 必须使用真实数据库列名；缩写字段优先显式 `column:` 或查 schema；终态日志写入错误不得忽略，更不得继续返回受理/成功 | [2026-07-29 群推送日志终态未落库](#2026-07-29-p2-gorm-缩写字段列名不一致导致群推送日志停留-processing) |
+| `dingtalk-stream` `week-schedule` `chatbot` `group-binding` `fail-closed` | 当前接入不能靠机器人进群事件取得 `openConversationId`，禁止编造事件；首次群内任意非空 @从真实 ChatBot 回调绑定；退群不可实时感知；只有真实验证并显式登记的原始错误码可停用，禁止按错误文案猜测 | [2026-07-31 Stream 无进群事件与群失效误判风险](#2026-07-31-p1-stream-无进群事件与群失效误判风险) |
 | `attendance` `data-contract` `metrics` `frontend` | 同一业务指标必须明确数据源、计数单位和分母；禁止首页和业务页面各自维护不同统计口径 | [2026-07-23 P2 考勤统计口径分裂](#2026-07-23-p2-考勤统计口径分裂导致数字不可比) |
 
 ### 前端 / 时间展示
@@ -152,6 +161,111 @@ update_when:
 ---
 
 ## 问题条目
+
+### 2026-08-03 P2 补贴扣款数据来源纠正
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-03 |
+| 级别 | P2 |
+| 模块/标签 | `attendance-toolbox` `subsidy` `data-source` `column-alias` |
+| 范围 | 前端 + Python |
+| 现象 | 补贴扣款模块描述模糊，未明确数据来源为"钉钉考勤月度汇总表（补贴及扣款）"人工导出；列名匹配存在宽泛别名（如"迟到"可误匹配"15-30分钟迟到次数"）；报表统计日期未校验。 |
+| 根因 | 系统此前将补贴扣款数据来源默认为钉钉导出表，但未明确说明具体报表路径；列名匹配关键字过于宽泛，可能将次数/分钟数列误当作扣款金额列。 |
+| 修复 | 1. 前端模块 description 显示完整导出路径（钉钉考勤打卡→考勤统计→报表管理→月度汇总表（补贴及扣款））。2. 上传字段 label 改为"钉钉月度汇总表（补贴及扣款）"。3. 模板说明改为"请上传从钉钉考勤后台导出的「月度汇总表（补贴及扣款）」Excel 文件"。4. 列名匹配恢复为精确关键字，删除宽泛别名。5. 添加 A1 统计日期校验（fail-closed：无法解析时报错，起止日期必须属于目标月份）。6. 添加防误匹配测试（缺少扣款列时报错而非误匹配）。7. `.ai/MODULES/attendance.md` 记录长期数据源规则。8. 系统模板和旧格式补贴扣款表兼容（A1 无统计日期时不触发日期校验）。9. 修复 `_DATE_PATTERN` 正则表达式日期替代项顺序（`3[01]|[12]\d|0?[1-9]`），避免 `31` 被匹配为 `3`。10. 钉钉原始月度汇总表必须覆盖完整自然月（使用 `calendar.monthrange` 校验），部分范围如 7月10日至7月20日 不再通过。 |
+| 验证 | 2026-08-04 续修实测：Python 补贴扣款测试 18/18 通过，覆盖系统模板兼容、旧格式无 A1 日期、完整自然月 28/29/30/31 天、同月部分范围拒绝、跨月/月份不一致及扣款列防误匹配；`AttendanceToolbox.test.tsx` 42/42、前端全量 352/352 通过；`npm run lint`、`npm run build` 通过。 |
+| 防复发 | 1. 补贴扣款数据来源必须是"考勤统计→报表管理→月度汇总表（补贴及扣款）"人工导出，不是钉钉审批流程。2. `getattcolumns`/`getcolumnval` 当前企业实测不返回目标金额列，不依赖这些接口自动获取补贴扣款数据。3. 列名必须精确匹配（如"15-30分钟迟到扣款"），禁止用"迟到""早退"等宽泛别名。4. A1 必须同时解析完整有效的统计开始日期和统计结束日期，两个日期都必须属于处理月份；无日期、任一日期无法解析或跨月时均 fail-closed。5. 日期强校验只能作用于已识别的钉钉原始月度汇总表（`_is_all_people_monthly_summary` 返回 True），系统模板和旧格式表不受影响。6. 钉钉原始月度汇总表必须覆盖完整自然月（起止日期精确等于 `date(year, month, 1)` 至 `date(year, month, calendar.monthrange(year, month)[1])`），同月内部分范围不通过。7. 日期正则替代项必须按长度降序排列（`3[01]` 先于 `[12]\d` 先于 `0?[1-9]`），避免 `31` 被匹配为 `3`。 |
+| 状态 | fixed |
+
+### 2026-08-02 P1 当月转正天数少算一天（日期区间左边界漏算）
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-02 |
+| 级别 | P1 |
+| 模块/标签 | `attendance-toolbox` `date-boundary` `probation` `python` |
+| 范围 | 考勤工具箱最终表"当月转正天数"字段计算 |
+| 现象 | 员工考勤汇总表中【当月转正天数】少计算一天：转正当天未被包含在统计区间内。示例：2026 年 7 月、转正日期 2026-07-01，当前结果 24 天，正确结果应为 25 天。 |
+| 根因 | `calc_probation_days` 函数的工作日分支使用了严格大于 `confirm_date < day`，排除了转正当天；法定节假日分支已正确使用 `confirm_date <= day`。两份 `calc_finally.py`（`attendance_toolbox` 与 `attendance-processing`）存在同样问题。 |
+| 修复 | 将工作日分支的日期条件从 `confirm_date < day` 改为 `confirm_date <= day`，统一使用闭区间 [转正日期, 当月最后一天]；法定节假日分支保持不变。两个处理入口均已同步修复，页面计算及 Excel 导出均覆盖。 |
+| 验证 | 新增 9 个回归用例（`ProbationClosedIntervalTests`），覆盖月初整月、月中含当天、月末为工作日计 1、转正日期不在当月返回 None、休息日非节假日不计入、法定节假日计入、2 月非闰年、2 月闰年、用户示例。全部 52 个测试通过，无回归。 |
+| 防复发 | 1. 日期范围条件需统一使用闭区间语义，并覆盖月初、月末、节假日和闰年边界。<br>2. 涉及"从某日到某日"的统计，必须明确包含/排除边界，优先使用闭区间 `[start, end]`。<br>3. 修改日期边界条件后，必须补充月初、月末、节假日、闰年（含 2 月）边界测试。<br>4. 同一业务逻辑的多份实现（如 `attendance_toolbox` 与 `attendance-processing`）必须同步修复。 |
+| 状态 | fixed（代码与测试完成） |
+
+### 2026-08-01 P1 外出/出差与事假并存误计出勤
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-01 |
+| 级别 | P1 |
+| 模块/标签 | `attendance-toolbox` `parttime` `leave-priority` `offsite` `business-trip` |
+| 范围 | 考勤工具箱兼职汇总日明细解析 |
+| 现象 | 同一日考勤文本同时包含外出/出差和事假时，兼职汇总仍将该日计为 1 天出勤；例如全天出差记录与 8 小时事假并存，结果仍进入出勤合计。 |
+| 根因 | `_parse_daily_text_value` 在解析到外出/出差后先执行“外出计出勤”的提前返回，事假时长判断位于其后，导致组合状态中事假规则永远无法生效。 |
+| 修复 | 在外出/出差计出勤分支之前增加组合状态优先级：文本同时含外出/出差和事假时直接按事假处理，不生成当日出勤值；同步工具箱实现、旧兼容副本与 `D:\app` 业务真源，并更新源清单及 CI 哈希。 |
+| 验证 | 新增 3 个回归用例，覆盖“出差+事假”“外出+事假”不计出勤，以及纯外出/出差仍计 1 天；Python 工具箱完整套件 82/82 通过。源一致性检查确认 `parttime/calc_parttime_summary.py` 为 `equal`；全局检查另有 4 项既有业务差异，不在本次范围内。 |
+| 防复发 | 1. 同一日存在互斥审批状态时，先判断业务优先级，再进入可提前返回的单状态分支。<br>2. 外出/出差与事假并存必须按事假处理，不得产生出勤值。<br>3. 组合状态修复至少包含冲突组合与纯单状态对照用例。<br>4. 修改考勤工具业务真源后同步 `D:\app`、兼容副本、`SOURCE_MANIFEST.json` 与 `CI_SOURCE_HASHES.json`。 |
+| 状态 | fixed（代码、业务真源与自动化验证完成） |
+
+### 2026-08-01 P1 自动回填将审计文件计入结果导致同步成功后仍报错
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-01 |
+| 级别 | P1 |
+| 模块/标签 | `attendance-toolbox` `dingtalk` `structured-result` `auto-fill` `audit` |
+| 范围 | 前端请假表拉取、花名册自动同步、异动流程自动同步 |
+| 现象 | 钉钉同步已成功生成业务表，但页面显示“自动同步返回了多个文件，请改用手动上传”，花名册和异动流程均无法自动回填。 |
+| 根因 | Python runner 会同时生成 `kind=export` 的业务表和 `kind=audit` 的同步审计表。自动回填仍调用旧 blob 接口；该接口发现两个输出后返回 ZIP，前端只按 MIME 判断并主动报错，没有利用 structured run 已提供的 `kind`、`flow_key` 和单文件下载能力。**本次修复新增了 legacy handler 的 `BusinessExports()` 分支（单业务表+audit 返回 Excel、多业务表才回 ZIP、无业务表回 422），该分支不是原有实现。** |
+| 修复 | 三个自动回填入口统一调用 structured workflow，从返回文件中优先选择 `kind=export && flow_key=目标流程`，再通过 run file API 下载该业务表并回填；审计表保留在 run 中供手动下载。只有 structured 接口返回 404/405/501 时才单次回退旧 blob，结构化同步成功后下载失败禁止重跑。structured run 的读取/下载新增模块级权限闭环：`attendance_toolbox_dingtalk_sync` 仅可读自己同 org 的 `dingtalk_sync` 结果，`attendance_manage`/`attendance_toolbox_operate` 才可读其他模块。 |
+| 验证 | **已取证**：`RunDingtalkSyncForOrg` 真实引擎测试断言单 export+audit 时 `ZipData` 为空、多 export 时生成 ZIP、仅 audit/meta 时无业务表；legacy HTTP handler 真实引擎测试断言单业务表返回 200+xlsx+Content-Disposition、多业务表返回 ZIP、仅 audit 返回 422；模块权限闭环测试断言 dingtalk_sync-only 可下载自己同 org 的同步业务文件、不可读 leave 等其他模块、跨用户仍 403。前端 `AttendanceToolbox.test.tsx` 定向通过，覆盖业务表+审计表选择、请假/花名册/异动回填、旧接口 404 兼容回退。**未取证**：尚未取得生产响应或日志，因此不将故障断言为“一定是 404 或旧镜像”，只记录代码路径事实；旧 `dist` 来源为“来源未确认”，禁止推断其来自未提交开发尝试；待部署后真实页面验收自动回填与权限表现。 |
+| 防复发 | 1. 自动回填禁止按输出数量或 ZIP MIME 猜测业务文件，必须读取 structured `kind`/`flow_key`。<br>2. `audit`/`meta` 只能用于诊断和下载，禁止作为后续计算的上传输入。<br>3. structured 同步成功后，单文件下载失败只能提示或重试下载，禁止重新发起钉钉同步。<br>4. 只有 404/405/501 可回退旧接口，且旧接口返回 ZIP 时必须明确提示服务器需升级。<br>5. legacy `RunDingtalkSync` 无业务 export 时必须返回明确 4xx，禁止 JSON 200 被旧前端当 Excel。<br>6. `attendance_toolbox_dingtalk_sync` 的 run 读取/下载必须按模块收紧为 `dingtalk_sync`，不得借此放开其他模块。<br>7. 前端单测必须按真实客户端契约构造 mock（axios blob 响应使用 `{ data: Blob }`），重复文件名/文案必须先限定当前激活 tabpanel 再断言。 |
+| 状态 | fixed（代码与自动化验证完成，待部署后真实页面验收） |
+
+### 2026-08-01 P1 钉钉审批查询时间范围非法导致工具箱同步失败
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-01 |
+| 级别 | P1 |
+| 模块/标签 | `attendance-toolbox` `dingtalk` `approval` `processinstance-listids` `time-window` |
+| 范围 | 考勤工具箱花名册、异动流程、请假、加班、补卡等钉钉审批同步 |
+| 现象 | 固定配置区的花名册和异动流程自动/手动同步调用 `topapi/processinstance/listids` 时返回 `400003 时间戳无效`，同步无法生成回填文件。 |
+| 根因 | 页面按业务需要传入 31/90 天 padding；Python 客户端将扩展后的完整范围一次性提交。异动流程的“近三个月 + 前后各 90 天”可超过 200 天，当前月结束日叠加 padding 还会落到未来，违反 `listids` 的时间窗口约束。原实现既未截断未来结束时间，也未对超长范围分片。 |
+| 修复 | `DingTalkClient.fetch_process_instances_by_time` 将有效结束时间限制为当前时间前 60 秒，按最多 120 天的连续窗口分页查询，跨窗口去重审批实例 ID；`max_instances` 改为所有窗口共享的全局上限。同步更新 `D:\app` 业务真源、源清单与 CI 哈希，并新增未来截断、长窗口分片、跨片去重和全局上限测试。 |
+| 验证 | Python 工具箱完整套件 77/77 通过；`go test ./internal/service/... -count=1`、`go test ./internal/api/... -count=1`、`go test ./... -count=1` 通过；`go vet ./...` 通过；`golangci-lint run` 为 0 issues；前端 27 files / 337 tests、lint、build 均通过。后续真实页面重试已不再返回 `400003`，钉钉成功生成业务表和审计表，由此确认时间窗口修复生效；同时暴露并另条记录自动回填多文件选择问题。 |
+| 防复发 | 1. `listids` 单次时间范围最多 120 天，结束时间不得晚于钉钉当前时间；需预留时钟偏差。<br>2. 业务 padding 不得由前端静默裁掉，统一在客户端分片并保持连续无缝。<br>3. 分片结果必须按实例 ID 全局去重，分页 cursor 每片重置，`max_instances` 全局计数。<br>4. 修改业务真源文件后必须同步 `D:\app`，重新生成 `SOURCE_MANIFEST.json` 并更新 `CI_SOURCE_HASHES.json`。<br>5. 回归至少覆盖超长范围、未来结束时间、跨片重复实例与条数上限。 |
+| 状态 | fixed（代码、自动化验证及真实钉钉取数均已验证） |
+
+### 2026-07-31 P1 Stream 无进群事件与群失效误判风险
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-31 |
+| 级别 | P1 |
+| 模块/标签 | `dingtalk-stream` `week-schedule` `chatbot` `group-binding` `group-push` `multi-tenant` `fail-closed` |
+| 范围 | 钉钉 Stream 群绑定 / 群推送错误处理 / 前端群目标管理 |
+| 现象 | 机器人于 2026-07-31 17:51:07 重新加入测试群后，对应观察窗口内 Stream 未收到任何进群事件，无法在加群时取得 `openConversationId`。同时原群推送错误分类会按包含 `conversation`、`robot`、“群聊”等文本猜测机器人不在群，测试还使用未经真实验证的原始码，存在把普通拒绝误判为退群并停用目标的风险。 |
+| 根因 | 当前接入能稳定取得群会话标识的入口是群内真实 ChatBot @回调，而不是机器人加入/移除事件；钉钉也未提供本项目已验证的退群通知。旧实现把不稳定的自然语言错误文本当成状态判定契约，没有建立“真实观测错误码白名单 → 内部群不可用错误”的显式边界。 |
+| 修复 | 未绑定群首次 @机器人发送任意非空内容时，使用回调 `senderStaffId` 在当前 `org_id` 映射在职用户并校验 `week_schedule_group_push`/`attendance_manage`，按 `(org_id, open_conversation_id)` 创建、幂等返回或原行恢复；私聊、空正文、缺会话标识、未知用户、无权限均 fail-closed。前端展示 active/inactive/unbound，inactive 禁选并提供确认后手动解绑。群推送错误分类删除文本猜测，保留空的已验证原始码映射；只有内部确认的群不可用错误才将目标置 inactive，网络、限流和普通拒绝保持 active。 |
+| 验证 | `gofmt` 已执行相关 Go 文件；`go test ./internal/service/... -count=1` 通过（12.778s）；`go test ./internal/api/... -count=1` 最终通过（3.425s）；`go vet ./...` 通过；`golangci-lint run` 为 `0 issues`；`cd frontend && npm run lint` 通过；`npm run test` 为 27 files / 337 tests 通过；`npm run build` 完成 `tsc && vite build`，1467 modules transformed。未部署。 |
+| 防复发 | 1. 未经真实回调验证的 `chat_bot_added` 等事件不得进入代码或文档契约。<br>2. `openConversationId` 只从真实群 ChatBot 回调取得，禁止前端传入；发送人只认回调的 `senderStaffId` 并按 org 映射。<br>3. 群目标幂等键固定为 `(org_id, open_conversation_id)`；inactive/unbound 恢复原行，不新增重复记录。<br>4. 只有真实环境观测并确认语义的钉钉原始错误码才能加入群不可用映射；禁止按 message 关键词或臆造码值停用。<br>5. 退群无法实时感知时必须保留手动解绑；前端 inactive 不可选择。<br>6. 回调与错误日志不得包含消息正文、SessionWebhook、Token、Secret 或完整 AppKey。 |
+| 状态 | fixed（代码与测试完成，待用户确认后部署） |
+
+### 2026-07-31 P1 员工档案搜索错测花名册链路导致页面无法搜索
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-31 |
+| 级别 | P1 |
+| 模块/标签 | `employee-profile` `search` `api-contract` `frontend` `repository` `multi-tenant` `test` |
+| 范围 | 员工档案页面、API handler、EmployeeService、EmployeeRepository、MySQL/前端回归测试 |
+| 现象 | “组织管理—员工档案”没有搜索框，页面固定一次请求 1000 条档案且没有服务端分页；既有中文搜索验证只覆盖组织花名册 `OrgService.ListEmployees`，不能证明员工档案接口可搜索。 |
+| 根因 | 前端 `EmployeeProfile.tsx` 未建立 keyword/分页/URL 状态；`GetEmployeeProfiles` 只传递部门和状态；`FindAllProfiles` 未关联 users 搜索姓名等主数据。测试边界按相似页面选错入口，没有验证页面实际调用的 handler → EmployeeService → EmployeeRepository 链路。 |
+| 修复 | 员工档案页面增加 antd Search、URL 驱动的 keyword/page/page_size、服务端分页、空结果与失败重试；前端 API 与 handler 增加同名 `keyword`；service/repository 规范化关键词，以当前组织的未删除档案和未删除用户一对一关联，并对姓名、user_id、邮箱、手机号、岗位、工号执行参数化 LIKE；原有本人/部门数据范围继续叠加。 |
+| 验证 | 本地 Go repository/service/API 定向及全包测试通过，go vet 与 golangci-lint 通过；前端员工档案 8 个定向用例及全量 337 个用例通过，lint/build 与 git diff --check 通过。本地 MySQL 专用用例因未配置 TEST_MYSQL_DATABASE_URL 按约束跳过。测试服真实 MySQL 已通过应用容器内的 `EmployeeService.GetProfiles` 真实 repository/service 路径验证完整/部分中文姓名、前后空格、工号、user_id、手机号、邮箱和岗位搜索，使用匿名临时组织数据并按 org_id 清理。部署前镜像 `sha256:e947a7c8e626f6a824fbba732116e40b35c1fba625811b48b8fbd409e4929c34`，部署后镜像 `sha256:83c660e437c8f47f5978ee9fa0d6551447f3681057e24bb77874d4a74a3276b6`；`peopleops-hr-test` running/healthy，`/health` 返回 200。已登录真实页面验收以脱敏账号完成：搜索框文案、完整/部分中文姓名、TrimSpace、关键词变更回第一页、清空恢复、total/分页、URL、刷新、返回/前进和无结果 12 项全部通过；短期验收会话已删除。 |
+| 防复发 | 1. 页面搜索回归必须从页面实际 API 路由追踪到对应 handler/service/repository，禁止用相似花名册接口代替。<br>2. 搜索关键词前后端均 TrimSpace，SQL 只使用占位参数。<br>3. employee_profiles JOIN users 必须同时带 org_id、双方 deleted_at；搜索条件必须与现有数据范围做 AND，禁止放宽权限。<br>4. total 按档案主键准确计数，前端禁止通过大 page_size 加载全量再过滤。<br>5. 搜索、页码、每页数量进入 URL，并覆盖刷新、复制链接、前进/返回、清空、无结果、失败重试。 |
+| 状态 | fixed（代码、测试服 MySQL、部署与真实页面验收均完成） |
 
 ### 2026-07-30 P2 考勤工具箱 E2E 重复日期占位符导致 strict mode 失败
 
@@ -270,6 +384,8 @@ update_when:
 | 根因 | 修复范围只覆盖 `/org/sync`，没有把 `/sync/users`、`/sync/departments` 视为同一组织写链路；租户边界、锁、超时和错误契约分别散落在 Handler/页面。全量同步把部门源错误与部门阶段最终错误分开保存，落库错误未传给员工阶段。员工循环在角色、档案分支直接累加全局计数，没有每员工最终状态。前端完成回调与“全部成功”绑定。日志为了避敏只保留 `%T`，又缺少统一脱敏函数。<br>工具箱复发根因是长任务超时只在应用层配置，没有形成“后端最短、网关稍长、客户端最长”的部署契约；Blob 错误解析默认把非 JSON 文本直接透传，未识别 HTML 网关错误页。 |
 | 修复 | **后端**：三个入口统一使用 JWT `org_id`，缺失返回 401，query/body/header 跨组织输入返回 403；共享按组织的进程内 `TryLock`，同组织冲突 409，不同组织并行，`defer` 保证成功、失败和 panic 展开时释放。旧接口升级为 200/207/500、安全文案、计数、`duration_ms`、`request_id` 契约。部门源拉取、校验或事务落库任一失败都会形成部门阶段最终错误并跳过员工接口。抽取员工逐项同步核心，去重后以 `itemFailed` 最终结算，角色失败可继续修复档案但每员工只计一次。响应/同步状态只写固定文案；`safeSyncErrorSummary` 脱敏 access token、Token/Secret/Password/Authorization/Bearer、AppKey/AppSecret、DSN/数据库密码、SQL 和控制字符，日志记录 request_id、脱敏 org、阶段、错误分类、摘要、耗时及计数。<br>**前端**：三个组织同步 API 复用 10 分钟独立超时；任务中心只映射后端实际返回的用户/部门/考勤任务，未知类型明确失败，不再回退全量同步；区分 200、207、500、409、401/403、超时和网络失败。`confirmOrgSync` 新增 `onCompleted(result)`，200/207 均刷新，500/超时/网络失败不盲目刷新，并保留刷新失败提示。考勤工具箱客户端等待统一为 660 秒；502/503/504、Axios 超时和 HTML Blob 错误统一映射为安全中文提示，禁止渲染网关 HTML。<br>**部署边界**：当前锁仅适用于单实例；多实例分布式锁或异步 job_id 任务作为后续方案。Nginx/外层代理对工具箱 `/api/` 使用 630 秒读写超时，形成后端 600 秒 < 网关 630 秒 < 客户端 660 秒；配置与 reload 检查写入 `deploy/README.md`。<br>**2026-07-28 同根因再次收口**：全量组织同步新增 `POST /org/sync/start` 与 `GET /org/sync/:request_id`，页面改为短启动+短轮询；后台复用原核心逻辑，使用脱离客户端取消且最多 15 分钟的执行上下文。同组织重复启动 409，不同组织互不影响；运行中和完整终态均持久化到 `SyncStatus`，查询同时绑定 JWT `org_id`、同步类型和 `request_id`。panic/超时写稳定安全错误码并释放门闩；执行上下文超时后，终态写入改用保留租户值且最多 5 秒的独立收尾上下文，避免记录永久停留在 `running`。原同步长入口继续供服务器内运维工具使用。 |
 | 验证 | 后端异步定向与完整相关包测试通过；实际 Go 包全量 `go test ./internal/... ./cmd/... ./tools/... -count=1` 通过，`go vet ./internal/... ./cmd/... ./tools/...` 通过，`golangci-lint run ./internal/... ./cmd/... ./tools/...` 为 `0 issues`，`go build ./cmd/... ./tools/ops/sync_org_data` 通过。前端组织同步定向 2 files / 18 tests 通过，覆盖短请求启动、多次 running、success、partial_failed、failed、409、404/服务重启、页面轮询超时、网络失败、刷新回调失败与 HRM 原文脱敏；`npm run lint`、`npm run build` 通过。根目录 `go test ./...` 因既有无权限临时目录在包发现阶段阻塞，已改用实际包根执行，不将其记为代码测试失败。`go test -race` 本次未执行，不声称通过。未部署。 |
+| 2026-08-05 审批同步同根因复发 | **现象/根因**：审批实例页和统计页强制选择模板，旧 `/approvals/sync` 也强制 `process_code`；页面依赖 Axios 默认 10 秒长连接，且单次 `listids` 无法编排企业全部流程。只删除前端校验会造成无流程假成功、任一流程失败阻断、长任务误判和下游重复风险。<br>**修复**：新增可测试的 `ApprovalSyncService`，空流程代码以 JWT 企业的 `ConfigForOrgID(orgID).ProcessCodes` 为权威来源并稳定去重排序；新增 `/approvals/sync/start` 与 `/approvals/sync/:request_id`，复用组织同步的持久化 running/终态、脱离客户端取消的 15 分钟执行上下文、独立 5 秒收尾上下文和同企业门闩。每个流程独立拉取/逐条 upsert，详情失败保留已成功实例并汇总安全计数；日期最多 120 天连续分片、未来结束时间截断并跨片去重。审批按 `org_id + process_id` upsert，保留 `result/process_code/source`；年假消费和加班匹配/调休入账补充重复全量同步回归。前端空模板显示“同步全部”，选中后显示“同步当前模板”，短启动后轮询并区分 running/success/partial/failed/配置缺失，success/partial 刷新，传输失败提示任务状态不确定。<br>**验证**：`go test ./internal/api/... ./internal/service/... ./internal/repository/... -count=1` 全部通过；审批/下游定向测试覆盖全量、单流程、缺配置、去重、跨企业、冲突、部分/全部失败、日期分片、upsert、错误脱敏、年假/加班/调休防重。前端 `29/29` 文件、`370/370` 用例、lint、build 通过；审批 Playwright 用例通过。完整 Chromium E2E 为 `11 passed / 5 failed`，失败均来自本任务外考勤工具箱未 mock `POST /attendance/toolbox/roster/generate` 及既有路由预期，不影响审批用例结论。`go vet ./...`、`golangci-lint run`（0 issues）、`git diff --check` 通过。 |
+| 2026-08-05 防复发补充 | 1. 一键全量同步不是“空参数调用单流程接口”，必须有服务端权威流程清单、稳定编排、逐流程隔离和完整汇总。<br>2. 审批长任务沿用短启动+持久化状态轮询；启动响应或轮询传输失败只能标记状态未知，禁止假定任务未执行并自动重试。<br>3. `SyncStatus` 查询必须绑定 JWT `org_id + type + request_id`，流程配置不得跨企业回退；进程内锁只适用单实例。<br>4. 同步实现变更必须同时回归审批 upsert、Stream 重放、年假审批状态与消费引用、加班类型识别、同员工同日匹配和调休台账唯一性。<br>5. `listids` 的 120 天分片、未来时间保护和跨片实例 ID 去重必须在主审批同步与工具箱调用中分别有生产代码测试，禁止只覆盖其中一条链路。 |
 | 防复发 | 1. 所有组织写同步入口必须复用同一租户边界、并发门闩、安全错误契约和长任务超时，禁止只修全量入口。<br>2. JWT `org_id` 是唯一可信组织来源；空组织 fail-closed，禁止 `NormalizeOrganizationID("")` 回退 default。<br>3. 后续阶段是否执行必须依据前置阶段最终结果，包含源拉取、校验和事务落库。<br>4. 批量逐项处理先形成每项最终状态，再汇总成功/失败；禁止在多个子步骤直接累加全局计数。<br>5. HTTP 207 是有效完成结果，刷新已成功写入的数据；传输失败和 HTTP 500 不盲目刷新。<br>6. 响应与用户可见状态禁止原始 `err.Error()`、HTML 网关页或第三方原始错误；诊断日志必须统一脱敏并带 request_id。<br>7. 进程内锁只适用于单实例；多实例上线前必须实现分布式互斥或任务队列。<br>8. 所有预计超过 60 秒的页面操作优先设计为短启动+状态轮询，避免依赖任一层网关长连接；仍使用长请求时必须同时核对后端执行上限、Nginx/负载均衡/CDN 空闲超时和客户端超时。<br>9. 后台任务的运行中状态与完整终态必须持久化；结果查询同时使用当前 JWT `org_id`、任务类型和 `request_id`，禁止只按 request_id 或进程内 map 查询。<br>10. 业务执行上下文过期后不得继续用于终态落库；收尾写入应保留租户/追踪值、脱离已过期取消信号并设置独立短上限。 |
 | 状态 | fixed |
 
@@ -483,6 +599,27 @@ update_when:
 | 状态 | fixed |
 
 ---
+
+### 2026-08-01 P1 花名册选错文件 + 运维组未强制标记未加
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-01 |
+| 级别 | P1 |
+| 模块/标签 | `attendance-toolbox` `roster` `overtime` `dingtalk-sync` `OPS_GROUP` |
+| 范围 | 全栈（Python 花名册解析 + Go 花名册生成 + 前端文件选择 + 运维组规则） |
+| 现象 | 1. 运营支撑部/智慧寄存运维组员工的加班记录未被强制标记为"未加"，仍显示"调休"和加班时长。<br>2. 花名册自动同步时，前端选择的是岗位异动流程表而非真正的花名册，导致部门映射错误。<br>3. `getDingtalkSyncExportFile` 在 flow_key 不匹配时回退到第一个 export，导致选错文件。 |
+| 根因 | 1. `fill_overtime_fields.py` 缺少 OPS_GROUP_DEPT_NAMES 允许名单和 `_is_ops_group_by_depts` 函数，无法识别"智慧寄存运维组"。<br>2. `parse_employee_department_map` 的花名册字段别名包含"发起人工号/发起人姓名/发起人部门"，导致岗位异动流程表被误识别为花名册。<br>3. `getDingtalkSyncExportFile` 在找不到目标 flow_key 时回退到第一个 export，导致选错文件。<br>4. 前端花名册同步使用 `position_transfer` 而非独立的 `generateOrgRoster` API。<br>5. Go service 测试曾复制员工构造逻辑并断言旧的姓名兜底行为，未调用生产实现；HTTP 新接口和 runner CLI 缺少直接自动化覆盖。<br>6. Go 将四级路径的 `path[2:]` 合并到三级部门，导致 `运营支撑部/智慧寄存运维组` 的连续层级契约失效。<br>7. 为花名册收紧身份列时一度改变全局 `_find_header_row` 匹配口径，会破坏请假、加班历史表头的子串兼容。<br>8. 2026-08-04 同根因复发：组织生成文件被收缩为姓名单列，但前端仍把同一文件回填到 `overtime_roster`；`run_overtime` 必须通过工号和部门判断运维组，因此解析得到空映射并直接报错。暂存区与工作区分别维护富花名册和姓名单列两套冲突契约，既有测试又分别绕过真实生成→解析→加班入口，未暴露断链。<br>9. 部门解析曾给每个姓名保留首条回退映射，重名时可能把缺工号加班行静默映射到错误员工部门。<br>10. 2026-08-05 同根因复发：Go `buildRosterEmployees` 遇到空姓名直接 `continue`，跳过该员工后续完整性统计；Python `action_generate_roster` 也只保留姓名非空记录。两层都把缺姓名员工过滤后继续生成，导致其工号和部门即使完整也会从结果中静默消失。 |
+| 修复 | 1. 在 `fill_overtime_fields.py` 新增精确允许名单和运维组优先覆盖。<br>2. 收紧花名册表头识别并禁止 structured export 回退。<br>3. 花名册改用本地数据库 `GenerateOrgRosterExcel` / `/toolbox/roster/generate`，与 `position_transfer` 分离。<br>4. 2026-08-04 将自动生成契约统一为富花名册：工号只取当前 org 的 `EmployeeProfile.EmployeeID`，部门只取当前 org 主部门真实父子路径；固定输出工号、姓名、一级/二级/三级部门等 12 列。缺工号或部门路径整体返回含人数的 400，禁止姓名/UserID/DingTalkUserID 兜底。<br>5. 前端仍可将同一富花名册回填到 `overtime_roster` 与 `final_active`，但不再生成或自动回填姓名单列；最终 runner 现有钉钉月度表补身份逻辑保留，手工姓名名单只作为最终汇总兼容输入。<br>6. Python 部门映射保持审批/异动表头拒绝；工号为主键，姓名仅在全文件唯一时建立回退键，重名禁用姓名回退。<br>7. 新增生产生成器 xlsx → `parse_employee_department_map` → 真实 `run_overtime` 完整入口，覆盖 `MT9999 / 运营支撑部 / 智慧寄存运维组 / 其他部门 / 双边打卡` 及所有清空字段；Go 真实服务测试覆盖权威工号、路径完整性与双组织隔离；HTTP/前端保留权限、JWT org 和共享回填回归。<br>8. 共享 `_find_header_row` 继续保留请假/加班历史子串兼容；花名册精确匹配只在局部实现。 |
+| 验证 | 1. `python tools/attendance_toolbox/python/roster_and_ops_group_test.py`：19/19 通过。<br>2. `python tools/attendance_toolbox/python/runner_test.py`：14/14 通过；新增 `test_generate_roster_cli_creates_valid_workbook`、`test_generate_roster_cli_rejects_non_list_employees`、`test_generate_roster_cli_rejects_missing_employee_ids_fail_closed`、`test_runner_cli_rejects_unregistered_action`。<br>3. 花名册/表头定向 Python 回归 13/13 通过，覆盖请假“员工工号/员工姓名/请假类型名称”、加班“员工工号/员工姓名/2倍加班（小时）”及岗位异动真实 7 列拒绝。Go 花名册定向测试通过，双组织用例调用 `loadRosterEmployeesForOrg` 生产 helper，并验证用户、档案、部门 org 隔离与缺 EmployeeID 时空 `emp_no`。<br>4. `go test ./internal/api -run 'TestGenerateOrgRosterRoute' -count=1` 通过；测试通过 `registerAttendanceToolboxRoutes` 复用生产注册逻辑，覆盖权限矩阵、精确 POST 路由、缺 org、请求不可覆盖 org、错误映射和 openpyxl 可读成功响应；`go test ./internal/api/... -count=1` 通过。<br>5. `cd frontend && npm run test -- --run src/pages/AttendanceToolbox.test.tsx`：42/42 通过；成功用例进入加班明细与最终汇总，失败用例先上传本地花名册再触发 API 失败并确认原文件保留；前端全量 27 files / 352 tests、lint、build 均通过。<br>6. `go fmt ./...` 首次因现有 ACL 目录阻塞，获准在沙箱外重跑后通过；`go vet ./...` 与 `golangci-lint run`（0 issues）通过；`git diff --check` 通过。<br>7. 全量 `go test ./internal/service/... -v` 被本任务外工作区改动阻塞：`subsidy/calc_subsidy_deduction.py` hash drift、补贴资格 5 个断言失败、仓库排班请假 3 个参数契约错误；本次新增花名册、请假、加班回归在统一 155 项 Python 套件中均通过。因此暂不能确认具备部署条件。 |
+| 2026-08-04 复验 | Python `runner_test.py` 17/17（含真实 `run_final` 五类 Excel 端到端）、`final_table_bugfix_test.py` 67/67、`roster_and_ops_group_test.py` 19/19 通过；Go 花名册 service 定向与 API 全包通过；前端定向 42/42、全量 352/352、lint、build 通过；`go vet ./...`、`golangci-lint run`（0 issues）、`git diff --check` 通过。`go test ./internal/service/...` 仍被两类问题阻塞：本任务相关的 `D:\app\finally\calc_finally.py` 外部业务真源尚未同步，导致 final golden parity 仍为旧 52 列；本任务外仍有 subsidy hash/资格断言和 warehouse 参数契约失败。 |
+| 2026-08-04 本轮复验 | 新增旧工号姓名回退、精确工号优先、旧工号重名拒绝、完全未命中清空、旧扩展字段隔离等 6 个回归；身份契约类与真实反例通过。`D:\app\finally\calc_finally.py` 已按 adapter 规范同步，真源清单将 final 分类为 `adapter_only`，final Golden fingerprint 1/1 通过，app/toolbox 均输出 53 列且真实反例得到 `NEW001/标准考勤组/总部/工程师`。用户指定的 Python runner 17/17、运维组 19/19、前端定向 42/42通过，前端全量 352/352、lint、build 通过。当前工作区仍有既存阻塞：Go 花名册测试/handler 与 service 的返回值及 sentinel error 契约不一致导致定向、全量、vet/typecheck 失败；Python 全量另有 subsidy hash/资格、warehouse 参数契约、runner 姓名单列契约及一个测试导入路径失败，本轮未修改这些无关/既存代码。 |
+| 2026-08-04 提交前复验 | 已收口本条目遗留的两个测试契约问题：组织花名册生成回归改用权威工号与真实部门路径；Go openpyxl 检查器改用 ASCII 安全 JSON，避免 Windows stdout 编码将中文表头误判为乱码。`final_table_bugfix_test.py` 73/73、`runner_test.py` 17/17、`roster_and_ops_group_test.py` 22/22、Go 花名册 service/API 定向、前端工具箱 42/42、前端 lint/build、`go vet ./...`、`golangci-lint run`（0 issues）、`git diff --check` 全部通过；临时真实 `run_final` 输入 2 名在职 + 1 名当月离职，输出 3/3 人。 |
+| 2026-08-05 根节点与回填竞态复验 | 定位并修复四个遗留点：1. 非默认组织同步把钉钉根父级 `0` 落为 `<org>:0`，而花名册路径解析只认字面量 `0`；解析器现兼容当前 org 的 scoped 根，外组织 scoped 值、普通悬空与循环仍拒绝。2. 自动生成响应过去无条件覆盖两个上传位；现按上传位记录请求快照和用户修改版本，自动仅填请求开始与响应时均为空且期间未修改的位置，手动生成可替换未变化位置但保留请求期间操作。3. Go openpyxl 检查子进程显式继承环境并设置 `PYTHONIOENCODING=utf-8`、`PYTHONUTF8=1`。4. `GenerateRosterActionTests` 使用含工号与部门的富花名册，并经过 `parse_roster`、`parse_employee_department_map`、真实 `run_overtime`，断言智慧寄存运维组为“未加”且所有加班计算字段为空。真实链路测试覆盖钉钉部门转换 → `SyncDepartmentsWithChangeLog` → 数据库 → `GenerateOrgRosterExcel` 的默认/非默认组织、多级路径和隔离。验证：Go service 花名册 11 个顶层测试、根路径额外测试、真实同步链路、API route 6 个顶层/15 个场景全部通过；Python `roster_and_ops_group_test.py` 22/22、`runner_test.py` 17/17、`final_table_bugfix_test.py` 73/73；前端 46/46、lint、build；`go vet ./...`、`golangci-lint run`（0 issues）、`git diff --check` 通过。全量 service 仍被本任务外的 live 真源摘要、golden hash、补贴资格 5 项与 warehouse 3 项阻塞；跳过两个已知聚合阻塞后其余 service 通过。 |
+| 2026-08-05 姓名完整性复验 | 组织生成契约补齐姓名 fail-closed：Go 对全部待输出 active 用户分别统计缺工号、缺姓名、缺部门路径，空姓名不再提前跳过；`GenerateOrgRosterExcel` 返回可 `errors.Is` 的 `ErrRosterMissingName` 与准确人数且不返回部分文件；HTTP 固定返回含人数的中文 400 并剥离内部包装错误；Python 在写 xlsx 前拒绝任何空/空白姓名。新增或扩展 8 个真实场景（Go service 4、API 1、Python 3）；service 定向 15 个叶子场景、API 定向 17 个叶子场景全部通过，Python 分别 22/22、18/18、74/74，前端 46/46，`go vet ./...`、前端 lint/build、`git diff --check` 通过。`golangci-lint run` 被本任务外审批同步代码 3 项静态检查阻塞。全量 service 中本次姓名用例均通过，仍失败于已知 live 真源摘要、golden 补贴 hash、补贴资格 5 项与 warehouse 3 项。live 测试两次改写 `SOURCE_MANIFEST.json` 后均从工作区外字节备份恢复；最终 SHA-256 与测试前均为 `5B3BE4D12CB697712908975085DB3D973456C0A7AB85FB2E99D532B39DBD7198`，测试前后该文件 git diff 指纹一致。 |
+| 2026-08-05 发布阻塞收口 | live 真源对比新增显式输出目录，Go 测试将 manifest、diff report、last-run 全部写入 `t.TempDir()`，按 JSON 中每个 `path` 精确断言 `equal=3 / adapter_only=1 / business_divergence=3`；`finally/calc_finally.py` 去除白名单 adapter 后与 app 业务源码一致，旧 `3/0/4` 期望因此过期。审批同步仅消除 QF1003、SA4006、unused，不改变状态码、锁、上下文重绑定和 service 创建时机。Python 聚合失败定位为生产规则缺口：外包排除优先级与运营支撑岗位范围错误，以及仓库名单缺少全月自然日排班参数；修复后完整 Python 188/188、golden 11/11、service 全量、审批定向、live 对比、vet、golangci-lint、前端 lint/build 均通过。live/service 测试前后 `SOURCE_MANIFEST.json` SHA-256 均为 `5B3BE4D12CB697712908975085DB3D973456C0A7AB85FB2E99D532B39DBD7198`，tracked diff 指纹一致。 |
+| 防复发 | 1. 花名册字段别名不得包含审批/异动流程特有表头（"发起人"/"申请人"前缀字段）。<br>2. 强制不计加班的业务规则必须在普通加班判定之前执行，且只允许二级部门精确等于“运营支撑部”且三级部门精确命中 `OPS_GROUP_DEPT_NAMES`。<br>3. structured run 选择文件必须使用稳定元数据（kind + flow_key），不得回退；花名册禁止使用 structured workflow/`position_transfer`。<br>4. 自动回填 `overtime_roster` 的组织花名册必须同时含权威 EmployeeID、真实姓名与当前 org 有效部门路径；缺任一项整体 fail-closed，禁止姓名/UserID/DingTalkUserID 兜底工号，也禁止 UserID/DingTalkUserID/工号等字段伪造姓名。<br>5. `final_active` 可以消费同一富花名册并由钉钉月度表补身份；若保留姓名名单兼容，只能作为独立的手工最终汇总输入，不得改变组织生成接口或自动回填加班的契约。<br>6. 部门映射先工号；姓名仅在全文件唯一时回退，重名必须禁用姓名键，禁止首条覆盖。<br>7. 花名册契约变更必须覆盖“生产生成 xlsx → openpyxl 读取 → 部门解析 → run_overtime 输出”完整链路，手工富花名册和只测最终汇总均不能替代。<br>8. 新 HTTP 路由必须复用生产共享注册函数验证路径、权限和 JWT org；`_find_header_row` 的共享历史兼容不得因花名册局部收紧而改变。<br>9. 根父级只能接受空值、字面量 `0` 或当前 org 的 `ScopedExternalID(orgID, "0")`；外组织 scoped 值和其他不存在父级必须继续 fail-closed。<br>10. 异步文件回填必须逐上传位记录请求开始状态与用户修改版本；请求期间的选择、删除、替换使旧响应对该位置失效，失败响应不得改动文件。<br>11. 通过 Python stdout 校验中文的 Go 测试必须由测试自身设置 UTF-8 子进程环境，禁止依赖调用者 shell。<br>12. 工号、姓名、部门路径完整性必须对全部待输出 active 用户分别计数；禁止任一字段为空时提前 `continue`，也禁止过滤无效记录后继续生成部分花名册。<br>13. live/聚合测试的 manifest、diff、last-run 和 Excel 输出必须写入测试临时目录；测试必须按字节比较受版本控制文件和 git diff 前后不变。<br>14. 真源分类必须解析 JSON 并按同一文件条目的 `path + difference_kind` 断言，禁止用两个全局字符串命中拼接结论。<br>15. golden hash 只能在展示具体业务输出变化并证明新结果正确后逐文件更新，禁止批量接受漂移。<br>16. 仓库名单的全月排班按目标月每个自然日计算；名单匹配必须规范化姓名，普通员工仍使用作息表工作日。 |
+| 状态 | fixed（代码与自动化验证完成，待部署后真实页面验收） |
 
 ### 2026-07-29 P3 dingtalk-stream 复用主镜像继承 HTTP 健康检查导致误报 unhealthy
 

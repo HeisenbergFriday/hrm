@@ -20,6 +20,7 @@ func TestApplyDingTalkProfileFieldsMapsHRMValues(t *testing.T) {
 		ActualRegularDate:  "2026-09-02",
 		ProbationEndDate:   "2026-08-31",
 		EmploymentType:     "正式",
+		EmploymentTypeCode: "A1",
 		JobLevel:           "P6",
 		JobFamily:          "技术",
 	}, "active")
@@ -30,24 +31,25 @@ func TestApplyDingTalkProfileFieldsMapsHRMValues(t *testing.T) {
 	if profile.ProbationEndDate != "2026-08-31" {
 		t.Fatalf("probation end date = %q", profile.ProbationEndDate)
 	}
-	if profile.EmploymentType != "正式" || profile.JobLevel != "P6" || profile.JobFamily != "技术" {
+	if profile.EmploymentType != "正式" || profile.EmploymentTypeCode != "A1" || profile.JobLevel != "P6" || profile.JobFamily != "技术" {
 		t.Fatalf("unexpected HRM profile fields: %#v", profile)
 	}
 }
 
 func TestApplyDingTalkProfileFieldsDoesNotOverwriteManualValuesWithEmpty(t *testing.T) {
 	profile := &database.EmployeeProfile{
-		ProbationEndDate: "2026-08-31",
-		EmploymentType:   "正式",
-		JobLevel:         "P6",
-		JobFamily:        "技术",
+		ProbationEndDate:   "2026-08-31",
+		EmploymentType:     "正式",
+		EmploymentTypeCode: "manual-code",
+		JobLevel:           "P6",
+		JobFamily:          "技术",
 	}
 	applyDingTalkProfileFields(profile, dingtalk.UserInfo{ActualRegularDate: "2026-09-02"}, "active")
 
 	if profile.ProbationEndDate != "2026-08-31" {
 		t.Fatalf("actual regular date must not overwrite probation end date: %#v", profile)
 	}
-	if profile.EmploymentType != "正式" || profile.JobLevel != "P6" || profile.JobFamily != "技术" {
+	if profile.EmploymentType != "正式" || profile.EmploymentTypeCode != "manual-code" || profile.JobLevel != "P6" || profile.JobFamily != "技术" {
 		t.Fatalf("empty DingTalk fields overwrote manual values: %#v", profile)
 	}
 }

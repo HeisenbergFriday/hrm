@@ -1,6 +1,6 @@
 ---
 purpose: 大小周排班模块业务规则说明
-last_updated: 2026-07-29
+last_updated: 2026-07-31
 source_of_truth:
   - internal/api/handlers.go（排班相关 handler）
   - internal/service/week_schedule_service.go
@@ -115,7 +115,7 @@ type DingTalkShiftCatalog struct {
 
 ### WeekScheduleGroupTarget / WeekScheduleGroupPushLog
 
-- `WeekScheduleGroupTarget` 保存当前组织绑定的本地群目标 ID、群名称和服务端专用 `openConversationId`；唯一键为 `(org_id, open_conversation_id)`，API JSON 禁止暴露组织 ID 和会话 ID。
+- `WeekScheduleGroupTarget` 保存当前组织绑定的本地群目标 ID、群名称和服务端专用 `openConversationId`；唯一键为 `(org_id, open_conversation_id)`，状态为 `active/inactive/unbound`，API JSON 禁止暴露组织 ID 和会话 ID。
 - `WeekScheduleGroupPushLog` 保存操作人、组织、月份、本地群目标、群名称、`processing/submitted/rejected/failed` 状态、钉钉请求 ID 与安全错误摘要；不得记录 Webhook、凭据、临时图片令牌或原始第三方错误。
 
 ---
@@ -293,7 +293,7 @@ Body：
 
 #### GET /api/v1/week-schedule/group-targets
 
-权限：`week_schedule_group_push`，兼容 `attendance_manage`。只返回 JWT 当前 `org_id` 的 active 群目标，响应不包含 `openConversationId`。
+权限：`week_schedule_group_push`，兼容 `attendance_manage`。返回 JWT 当前 `org_id` 的群目标记录（含 `active/inactive/unbound`，供选择禁用和手动解绑管理），响应不包含 `openConversationId`；只有 `active` 可用于推送。
 
 #### DELETE /api/v1/week-schedule/group-targets/:id
 
@@ -410,12 +410,15 @@ Body：
 ### 群聊绑定与推送流程
 
 1. 每个 Stream 实例显式配置 `DINGTALK_STREAM_ORG_ID` 时，必须从该 active 组织读取配套 AppKey/Secret；未显式配置时才使用全局 AppKey/Secret 唯一匹配 active 组织。组织不存在、凭据缺失、0 条/多条匹配均启动失败，禁止回退 default 或混用其他组织凭据。
-2. 群内 @机器人发送精确文本“绑定作息表”；发送者必须映射为当前组织在职本地用户，并具备 `week_schedule_group_push` 或 `attendance_manage`。
-3. 服务端保存 `openConversationId` 和群名称；前端只查询/提交本地群目标 ID。
-4. 群图片不能复用个人消息 `media_id`：生成 32 字节随机令牌的 HTTPS 临时地址，内存仅保存令牌 SHA-256，默认 10 分钟过期；无效/过期返回 404，禁止日志记录访问令牌。
-5. 通过 `robot/groupMessages/send` 提交 `sampleMarkdown`（文字 + HTTPS 图片）；RobotCode、AppKey、Secret 只从当前组织配置解析。
-6. 只有群推送日志成功落为 `submitted` 后才能向页面返回“已提交”；钉钉拒绝/超时/配置缺失映射为安全错误，原始第三方信息和凭据不回显。
-7. 个人/群聊推送文案以最近周六的实际日历状态为准，首行突出“今天/明天/本周六/下周六需上班或休息”；大周/小周仅作为补充说明，不得代替 `saturday_work` 与节假日调班状态判断。
+2. 当前钉钉接入不支持在机器人加入群聊时取得 `openConversationId`，不得依赖或编造未经验证的进群事件；未绑定群首次在群内 @机器人发送任意非空内容时，从真实 ChatBot 回调读取 `openConversationId`、群名称和 `senderStaffId`。
+3. 回调只处理 `ConversationType == "2"` 的群聊 @消息；私聊、空正文、缺少会话 ID 或群名称均不得绑定。发送者必须映射为当前组织在职本地用户，并具备 `week_schedule_group_push` 或兼容的 `attendance_manage` 权限，否则 fail-closed。
+4. 服务端以 `(org_id, open_conversation_id)` 幂等保存；active 重复 @不新增，`inactive/unbound` 再次普通 @或发送“绑定作息表”时恢复原记录、更新可确认的群名称和绑定人。继续兼容“绑定作息表”“查询绑定/查询”“解绑作息表/解绑”命令，管理命令优先于自动绑定兜底。
+5. 前端只查询/提交本地群目标 ID，不得接受前端传入的 `org_id`、`openConversationId`、绑定人、Webhook 或机器人凭据。
+6. 群图片不能复用个人消息 `media_id`：生成 32 字节随机令牌的 HTTPS 临时地址，内存仅保存令牌 SHA-256，默认 10 分钟过期；无效/过期返回 404，禁止日志记录访问令牌。
+7. 通过 `robot/groupMessages/send` 提交 `sampleMarkdown`（文字 + HTTPS 图片）；RobotCode、AppKey、Secret 只从当前组织配置解析。
+8. 钉钉不下发可用的机器人退群事件，因此不能实时自动解绑。保留页面/群命令手动解绑；只有真实验证并加入显式映射表的“机器人不在群/无群权限/群不存在”原始错误码才可把目标标为 `inactive`。当前没有已验证码，映射表为空；网络超时、限流、普通拒绝或基于错误文案的猜测均不得停用。
+9. 只有群推送日志成功落为 `submitted` 后才能向页面返回“已提交”；明确群不可用时提示“机器人已不在该群，请重新添加机器人并在群内 @机器人完成绑定。”，其余钉钉拒绝/超时/配置缺失映射为安全错误，原始第三方信息和凭据不回显。
+10. 个人/群聊推送文案以最近周六的实际日历状态为准，首行突出“今天/明天/本周六/下周六需上班或休息”；大周/小周仅作为补充说明，不得代替 `saturday_work` 与节假日调班状态判断。
 
 ### 周五自动提醒（可选）
 
@@ -463,7 +466,7 @@ Body：
 - 周历查看
 - 手动覆盖
 - 作息表推送（月历 PNG + 文字到选定员工的个人钉钉；默认不预选）
-- 推送弹窗支持“员工/群聊”切换；两种模式默认均不选择目标，群聊显示已绑定群名称并在提交前二次确认
+- 推送弹窗支持“员工/群聊”切换；两种模式默认均不选择目标，群聊显示全部绑定记录、禁用 inactive/unbound、提供带确认框的手动解绑，并在提交前二次确认
 - 缺少群推送权限时写按钮 disabled + Tooltip；钉钉受理后只显示“已提交”
 - 推送文字按发送日期自适应：周五写“明天”、周六写“今天”、周一至周四写“本周六”、周日写“下周六”，并将“需上班/休息”置于首行
 - 旧「按日期写入考勤排班」接口仍保留为 `/sync/to-dingtalk`，页面主按钮不再调用
@@ -499,7 +502,9 @@ Body：
 - 检查钉钉应用是否具备企业内部消息与媒体上传权限
 - 检查收件人 dingtalk_user_id/user_id 是否可通知
 - 单人失败不影响其他人，查看响应 recipients[]
-- 群聊推送需先在群内 @机器人发送“绑定作息表”，并检查绑定人本地映射与 `week_schedule_group_push`/`attendance_manage`
+- 首次使用时，在群内 @人事系统机器人发送任意非空内容即可绑定；“绑定作息表”继续兼容但不再是唯一触发词
+- 当前接入不支持添加机器人后自动绑定，也无法实时感知机器人退群；退群后使用页面/群命令手动解绑，或等待真实已确认错误码映射触发 inactive
+- 检查绑定人本地映射与 `week_schedule_group_push`/`attendance_manage`；未知发送人或无权限必须 fail-closed
 - 群聊图片要求当前组织配置可公网访问的 HTTPS `AppHomeURL`；临时地址过期后返回 404 属正常安全行为
 - “已提交”仅代表钉钉接口受理，不代表最终送达
 

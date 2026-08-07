@@ -15,8 +15,31 @@ import (
 )
 
 var ErrOrgAccessDenied = errors.New("org access denied")
+var ErrInvalidOrgEmployeeFilter = errors.New("invalid org employee filter")
 
 const scopeEmptyDepartmentMarker = "__scope_empty__"
+
+const (
+	organizationTreeRootID = "__organization__"
+	unassignedEmployeesID  = "__unassigned_employees__"
+)
+
+// colCollate returns a " COLLATE utf8mb4_unicode_ci" fragment for the given
+// column when the underlying database is MySQL/MariaDB.  For other dialects
+// (e.g. SQLite used in unit tests) it returns an empty string so the SQL stays
+// portable.  The returned fragment must be placed immediately after the column
+// name in the SQL string, e.g.:
+//
+//	"users.name" + colCollate(db) + " LIKE ?"
+//
+// becomes "users.name COLLATE utf8mb4_unicode_ci LIKE ?" on MySQL and
+// "users.name LIKE ?" on SQLite.
+func colCollate(db *gorm.DB) string {
+	if db != nil && db.Dialector != nil && db.Name() == "mysql" {
+		return " COLLATE utf8mb4_unicode_ci"
+	}
+	return ""
+}
 
 type OrgDataScope struct {
 	Mode              string   `json:"mode"`
@@ -185,6 +208,7 @@ type OrgDepartmentTreeNode struct {
 	InactiveCount     int                      `json:"inactive_count"`
 	DirectHeadcount   int                      `json:"direct_headcount"`
 	DirectActiveCount int                      `json:"direct_active_count"`
+	VirtualKind       string                   `json:"virtual_kind,omitempty"`
 	Children          []*OrgDepartmentTreeNode `json:"children"`
 }
 
@@ -192,6 +216,7 @@ type OrgEmployeeFilters struct {
 	DepartmentID string
 	Search       string
 	Status       string
+	FilterType   string // probation | regularization_warning
 }
 
 type EmployeeDepartmentPath struct {
@@ -706,6 +731,13 @@ func (s *OrgService) ListEmployees(scope *OrgDataScope, page, pageSize int, filt
 	if err != nil {
 		return nil, 0, err
 	}
+	filterType := strings.TrimSpace(filters.FilterType)
+	if filterType != "" {
+		if filterType != "probation" && filterType != "regularization_warning" {
+			return nil, 0, ErrInvalidOrgEmployeeFilter
+		}
+		return s.listEmployeesByLifecycleFilter(query, page, pageSize, filterType)
+	}
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -749,11 +781,63 @@ func (s *OrgService) buildEmployeeListQuery(scope *OrgDataScope, filters OrgEmpl
 	if search := strings.TrimSpace(filters.Search); search != "" {
 		like := "%" + search + "%"
 		query = query.Where(
-			"(users.user_id LIKE ? OR users.name LIKE ? OR users.email LIKE ? OR users.mobile LIKE ? OR users.position LIKE ?)",
-			like, like, like, like, like,
+			"(users.user_id LIKE ? OR employee_profiles.employee_id LIKE ? OR users.name"+colCollate(s.db)+" LIKE ? OR users.email LIKE ? OR users.mobile LIKE ? OR users.position"+colCollate(s.db)+" LIKE ?)",
+			like, like, like, like, like, like,
 		)
 	}
 	return query, nil
+}
+
+func (s *OrgService) listEmployeesByLifecycleFilter(query *gorm.DB, page, pageSize int, filterType string) ([]database.User, int64, error) {
+	var snapshots []orgEmployeeSnapshot
+	if err := query.Select(`
+		users.id,
+		users.user_id,
+		users.status,
+		employee_profiles.planned_regular_date,
+		employee_profiles.actual_regular_date,
+		employee_profiles.probation_end_date
+	`).Order("users.created_at DESC").Find(&snapshots).Error; err != nil {
+		return nil, 0, err
+	}
+
+	now := beginningOfDay(s.nowFn())
+	filteredIDs := make([]uint, 0, len(snapshots))
+	for _, snapshot := range uniqueEmployeeSnapshots(snapshots) {
+		if matchesLifecycleFilter(snapshot, filterType, now) {
+			filteredIDs = append(filteredIDs, snapshot.ID)
+		}
+	}
+	total := int64(len(filteredIDs))
+	start := (page - 1) * pageSize
+	if start >= len(filteredIDs) {
+		return []database.User{}, total, nil
+	}
+	end := start + pageSize
+	if end > len(filteredIDs) {
+		end = len(filteredIDs)
+	}
+	pageIDs := filteredIDs[start:end]
+
+	orgID, err := resolveServiceOrgID(s.orgID, s.db)
+	if err != nil {
+		return nil, 0, err
+	}
+	var users []database.User
+	if err := s.db.Where("org_id = ? AND id IN ?", orgID, pageIDs).Find(&users).Error; err != nil {
+		return nil, 0, err
+	}
+	byID := make(map[uint]database.User, len(users))
+	for _, user := range users {
+		byID[user.ID] = user
+	}
+	ordered := make([]database.User, 0, len(pageIDs))
+	for _, id := range pageIDs {
+		if user, ok := byID[id]; ok {
+			ordered = append(ordered, user)
+		}
+	}
+	return ordered, total, nil
 }
 
 func (s *OrgService) GetOverview(scope *OrgDataScope, departmentID string) (*OrgOverview, error) {
@@ -906,34 +990,43 @@ func (s *OrgService) GetDepartmentTree(scope *OrgDataScope) ([]*OrgDepartmentTre
 	for _, snapshot := range snapshots {
 		snapshotByUserID[snapshot.UserID] = snapshot
 	}
-	visibleDepartmentIDs := make([]string, 0, len(departments))
+	visibleDepartmentSet := make(map[string]struct{}, len(departments))
 	for _, department := range departments {
-		visibleDepartmentIDs = append(visibleDepartmentIDs, department.DepartmentID)
+		visibleDepartmentSet[department.DepartmentID] = struct{}{}
 	}
 	var memberships []database.UserDepartmentMembership
 	membershipQuery := s.db.Where("org_id = ?", orgID)
-	if len(visibleDepartmentIDs) > 0 {
-		membershipQuery = membershipQuery.Where("department_id IN ?", visibleDepartmentIDs)
-	}
 	if err := membershipQuery.Find(&memberships).Error; err != nil {
 		return nil, err
 	}
 	directUsers := make(map[string]*departmentUserSets, len(departments))
-	usersWithMembership := make(map[string]struct{}, len(memberships))
+	usersWithAnyMembership := make(map[string]struct{}, len(memberships))
+	usersWithVisibleMembership := make(map[string]struct{}, len(memberships))
 	for _, membership := range memberships {
 		snapshot, ok := snapshotByUserID[membership.UserID]
 		if !ok {
 			continue
 		}
-		usersWithMembership[membership.UserID] = struct{}{}
-		ensureDepartmentUserSets(directUsers, membership.DepartmentID).add(snapshot.UserID, snapshot.Status)
-	}
-	// 兼容迁移前或人工创建且尚未生成成员关系的用户，继续按主部门计数。
-	for _, snapshot := range snapshots {
-		if _, ok := usersWithMembership[snapshot.UserID]; ok {
+		usersWithAnyMembership[membership.UserID] = struct{}{}
+		if _, visible := visibleDepartmentSet[membership.DepartmentID]; !visible {
 			continue
 		}
-		ensureDepartmentUserSets(directUsers, snapshot.DepartmentID).add(snapshot.UserID, snapshot.Status)
+		usersWithVisibleMembership[membership.UserID] = struct{}{}
+		ensureDepartmentUserSets(directUsers, membership.DepartmentID).add(snapshot.UserID, snapshot.Status)
+	}
+	unassignedUsers := ensureDepartmentUserSets(directUsers, unassignedEmployeesID)
+	// 只有完全没有关系记录的历史员工才回退主部门；无有效部门的员工单列未归属。
+	for _, snapshot := range snapshots {
+		if _, ok := usersWithVisibleMembership[snapshot.UserID]; ok {
+			continue
+		}
+		_, hasAnyMembership := usersWithAnyMembership[snapshot.UserID]
+		_, mainDepartmentVisible := visibleDepartmentSet[snapshot.DepartmentID]
+		if !hasAnyMembership && mainDepartmentVisible {
+			ensureDepartmentUserSets(directUsers, snapshot.DepartmentID).add(snapshot.UserID, snapshot.Status)
+			continue
+		}
+		unassignedUsers.add(snapshot.UserID, snapshot.Status)
 	}
 
 	nodeMap := make(map[string]*OrgDepartmentTreeNode, len(departments))
@@ -964,10 +1057,32 @@ func (s *OrgService) GetDepartmentTree(scope *OrgDataScope) ([]*OrgDepartmentTre
 	}
 
 	sortDepartmentTree(roots)
-	for _, root := range roots {
-		rollupTreeUniqueCounts(root, directUsers)
+	if len(unassignedUsers.all) == 0 && len(roots) == 1 {
+		rollupTreeUniqueCounts(roots[0], directUsers)
+		return roots, nil
 	}
-	return roots, nil
+	if len(unassignedUsers.all) > 0 {
+		roots = append(roots, &OrgDepartmentTreeNode{
+			ID:                unassignedEmployeesID,
+			Name:              "未归属员工",
+			ParentID:          organizationTreeRootID,
+			Headcount:         len(unassignedUsers.all),
+			ActiveCount:       len(unassignedUsers.active),
+			InactiveCount:     len(unassignedUsers.inactive),
+			DirectHeadcount:   len(unassignedUsers.all),
+			DirectActiveCount: len(unassignedUsers.active),
+			VirtualKind:       "unassigned",
+			Children:          []*OrgDepartmentTreeNode{},
+		})
+	}
+	root := &OrgDepartmentTreeNode{
+		ID:          organizationTreeRootID,
+		Name:        "全组织",
+		VirtualKind: "organization",
+		Children:    roots,
+	}
+	rollupTreeUniqueCounts(root, directUsers)
+	return []*OrgDepartmentTreeNode{root}, nil
 }
 
 func (s *OrgService) GetEmployeeAggregate(scope *OrgDataScope, id string) (*EmployeeAggregate, error) {
@@ -1174,14 +1289,15 @@ func (s *OrgService) loadDepartmentGraph() ([]database.Department, map[string]da
 }
 
 func (s *OrgService) buildOverviewSummary(snapshots []orgEmployeeSnapshot, departmentMap map[string]database.Department) (OrgOverviewSummary, []OrgWarningItem) {
+	unique := uniqueEmployeeSnapshots(snapshots)
 	summary := OrgOverviewSummary{
-		TotalEmployees: len(snapshots),
+		TotalEmployees: len(unique),
 	}
 	warnings := make([]OrgWarningItem, 0)
 	now := beginningOfDay(s.nowFn())
 	windowEnd := now.AddDate(0, 0, 30)
 
-	for _, snapshot := range snapshots {
+	for _, snapshot := range unique {
 		if strings.EqualFold(snapshot.Status, "active") {
 			summary.ActiveEmployees++
 			if isProbationEmployee(snapshot) {
@@ -1217,9 +1333,8 @@ func (s *OrgService) buildEmployeeWarnings(snapshot orgEmployeeSnapshot, departm
 	warnings := make([]OrgWarningItem, 0, 2)
 
 	if strings.EqualFold(snapshot.Status, "active") {
-		regularDate := firstNonEmpty(snapshot.PlannedRegularDate, snapshot.ProbationEndDate)
 		if strings.TrimSpace(snapshot.ActualRegularDate) == "" {
-			if dueDate, ok := parseDateValue(regularDate); ok && !dueDate.Before(now) && !dueDate.After(windowEnd) {
+			if dueDate, ok := preferredRegularizationDate(snapshot); ok && !dueDate.Before(now) && !dueDate.After(windowEnd) {
 				warnings = append(warnings, OrgWarningItem{
 					Type:           "probation_due",
 					Level:          "warning",
@@ -1994,7 +2109,7 @@ func parseDateValue(value string) (time.Time, bool) {
 	if value == "" {
 		return time.Time{}, false
 	}
-	parsed, err := time.Parse("2006-01-02", value)
+	parsed, err := time.ParseInLocation("2006-01-02", value, time.Local)
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -2030,15 +2145,62 @@ func sortWarnings(warnings []OrgWarningItem) {
 }
 
 func isProbationEmployee(snapshot orgEmployeeSnapshot) bool {
+	if !strings.EqualFold(strings.TrimSpace(snapshot.Status), "active") {
+		return false
+	}
 	if strings.TrimSpace(snapshot.ActualRegularDate) != "" {
 		return false
 	}
-	regularDate := firstNonEmpty(snapshot.PlannedRegularDate, snapshot.ProbationEndDate)
-	if regularDate == "" {
+	_, ok := preferredRegularizationDate(snapshot)
+	return ok
+}
+
+func preferredRegularizationDate(snapshot orgEmployeeSnapshot) (time.Time, bool) {
+	value := strings.TrimSpace(snapshot.PlannedRegularDate)
+	if value == "" {
+		value = strings.TrimSpace(snapshot.ProbationEndDate)
+	}
+	return parseDateValue(value)
+}
+
+func isRegularizationWarning(snapshot orgEmployeeSnapshot, now time.Time) bool {
+	if !isProbationEmployee(snapshot) {
 		return false
 	}
-	_, ok := parseDateValue(regularDate)
-	return ok
+	dueDate, ok := preferredRegularizationDate(snapshot)
+	if !ok {
+		return false
+	}
+	now = beginningOfDay(now)
+	return !dueDate.Before(now) && !dueDate.After(now.AddDate(0, 0, 30))
+}
+
+func matchesLifecycleFilter(snapshot orgEmployeeSnapshot, filterType string, now time.Time) bool {
+	switch filterType {
+	case "probation":
+		return isProbationEmployee(snapshot)
+	case "regularization_warning":
+		return isRegularizationWarning(snapshot, now)
+	default:
+		return false
+	}
+}
+
+func uniqueEmployeeSnapshots(snapshots []orgEmployeeSnapshot) []orgEmployeeSnapshot {
+	seen := make(map[string]struct{}, len(snapshots))
+	result := make([]orgEmployeeSnapshot, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		userID := strings.TrimSpace(snapshot.UserID)
+		if userID == "" {
+			continue
+		}
+		if _, exists := seen[userID]; exists {
+			continue
+		}
+		seen[userID] = struct{}{}
+		result = append(result, snapshot)
+	}
+	return result
 }
 
 func snapshotFromEmployee(user *database.User, profile *database.EmployeeProfile) orgEmployeeSnapshot {

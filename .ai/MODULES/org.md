@@ -341,6 +341,22 @@ Response：
 }
 ```
 
+### GET /api/v1/employee/profiles
+获取员工档案列表。该接口与 `GET /api/v1/org/employees` 花名册查询是两条独立链路，员工档案页面和回归测试必须调用本接口。
+
+Query 参数：
+- `page`：页码（默认 1）
+- `page_size`：每页数量（默认 20，最大 100）
+- `keyword`：搜索关键词（可选，支持姓名、`user_id`、邮箱、手机号、岗位、档案工号）
+- `department_id`：部门 ID（可选）
+- `status`：档案状态（可选）
+
+查询约束：
+- `keyword` 在 handler/service/repository 链路去除前后空格，使用参数化 `LIKE`，禁止拼接用户输入。
+- `employee_profiles` 与 `users` 必须按同一 `org_id + user_id` 关联，并排除双方软删除记录。
+- 非 `user_manage` 用户必须继续叠加本人或部门数据范围；搜索不得扩大可见范围。
+- `total` 按档案主键去重，必须与服务端分页一致。
+
 ### POST /api/v1/org/sync/start、GET /api/v1/org/sync/:request_id
 
 页面组织同步使用短请求启动与轮询查询，避免 Nginx 或外层网关在完整同步结束前返回 HTTP 504：
@@ -511,6 +527,15 @@ Response（成功 HTTP 200，部分失败 HTTP 207，全部失败 HTTP 500）：
 - 组织路径、汇报关系、时间轴、预警
 - 直接编辑档案字段；无档案时走 `employeeAPI.createProfile`，有档案时走 `employeeAPI.updateProfile`
 - 重点展示并维护 `employment_type`、`education`、`job_level`、`job_family`、`planned_regular_date`、`actual_regular_date`
+
+### 员工档案页面
+`frontend/src/pages/EmployeeProfile.tsx`
+
+功能：
+- 员工档案分页列表，使用 `employeeAPI.getProfiles` 返回的 `total`
+- 服务端搜索姓名、工号、邮箱、手机号、岗位，不在浏览器加载全量档案后过滤
+- `keyword`、`page`、`page_size` 写入 URL，支持刷新、复制链接及浏览器前进/返回恢复
+- 保留加载、无结果、失败重试和档案创建/编辑能力
 
 ---
 

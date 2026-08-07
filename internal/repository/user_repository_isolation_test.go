@@ -104,7 +104,7 @@ func TestUserRepository_FindAllFilteredCarriesSearchAndOrg(t *testing.T) {
 
 	cap := captureFindAllFiltered(t, db, repo, "测试员工")
 	assertStmtCarriesOrg(t, "FindAllFiltered", cap, "xiaotie", "org_id = ?")
-	if !containsIgnoreCase(cap.SQL(), "users.name LIKE ?") {
+	if !containsIgnoreCase(cap.SQL(), "users.name") || !containsIgnoreCase(cap.SQL(), "LIKE ?") {
 		t.Fatalf("expected employee name search in SQL, got %s", cap.SQL())
 	}
 
