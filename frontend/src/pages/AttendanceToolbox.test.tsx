@@ -181,6 +181,24 @@ async function uploadRequiredFileByLabel(
   }))
 }
 
+async function getUploadInputByTabAndLabel(
+  user: ReturnType<typeof userEvent.setup>,
+  tabName: RegExp,
+  label: string,
+) {
+  await user.click(screen.getByRole('tab', { name: tabName }))
+  const activePanel = document.querySelector('.ant-tabs-tabpane-active') as HTMLElement
+  const labels = await within(activePanel).findAllByText(label)
+  const card = labels
+    .map((item) => item.closest('.ant-card'))
+    .find((item) => item?.querySelector('input[type="file"]'))
+  if (!card) throw new Error(`未找到上传位：${label}`)
+  return {
+    panel: activePanel,
+    input: card.querySelector('input[type="file"]') as HTMLInputElement,
+  }
+}
+
 describe('getAttendanceToolboxDownloadableFiles', () => {
   it('does not treat meta-only files as user-downloadable results', () => {
     const run = makeRunResponse('dingtalk_sync').data
@@ -556,6 +574,117 @@ describe('AttendanceToolbox', () => {
     // 异动流程仍独立使用 position_transfer
     expect(screen.getAllByText('异动流程_钉钉自动同步.xlsx').length).toBeGreaterThan(0)
     expect(mockRunDingtalkSync).not.toHaveBeenCalled()
+  })
+
+  it('auto roster response preserves a user upload made during the request and fills the other empty slot', async () => {
+    const user = userEvent.setup()
+    let resolveRosterGeneration: ((value: { data: Blob }) => void) | undefined
+    mockGenerateOrgRoster.mockImplementation(() => new Promise((resolve) => {
+      resolveRosterGeneration = resolve
+    }))
+
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+
+    const overtime = await getUploadInputByTabAndLabel(user, /加班明细/, '花名册/员工信息表')
+    await user.upload(overtime.input, new File(['manual'], '请求期间上传.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }))
+
+    await act(async () => {
+      resolveRosterGeneration?.({ data: new Blob(['generated']) })
+      await Promise.resolve()
+    })
+
+    expect(await within(overtime.panel).findByText('请求期间上传.xlsx')).toBeInTheDocument()
+    expect(within(overtime.panel).queryByText('花名册_组织生成.xlsx')).not.toBeInTheDocument()
+    const final = await getUploadInputByTabAndLabel(user, /最终汇总/, '在职花名册')
+    expect(await within(final.panel).findByText('花名册_组织生成.xlsx')).toBeInTheDocument()
+  })
+
+  it('auto roster only fills the empty slot when another slot already had a user file at request start', async () => {
+    mockPermissions = []
+    const user = userEvent.setup()
+    const view = render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    expect(mockGenerateOrgRoster).not.toHaveBeenCalled()
+
+    const overtime = await getUploadInputByTabAndLabel(user, /加班明细/, '花名册/员工信息表')
+    await user.upload(overtime.input, new File(['manual'], '预先上传.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }))
+
+    mockPermissions = ['attendance_toolbox_operate']
+    view.rerender(<AttendanceToolbox />)
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+    expect(await within(overtime.panel).findByText('预先上传.xlsx')).toBeInTheDocument()
+    expect(within(overtime.panel).queryByText('花名册_组织生成.xlsx')).not.toBeInTheDocument()
+    const final = await getUploadInputByTabAndLabel(user, /最终汇总/, '在职花名册')
+    expect(await within(final.panel).findByText('花名册_组织生成.xlsx')).toBeInTheDocument()
+  })
+
+  it('auto roster response does not refill a slot the user replaced and deleted during the request', async () => {
+    const user = userEvent.setup()
+    let resolveRosterGeneration: ((value: { data: Blob }) => void) | undefined
+    mockGenerateOrgRoster.mockImplementation(() => new Promise((resolve) => {
+      resolveRosterGeneration = resolve
+    }))
+
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+    const overtime = await getUploadInputByTabAndLabel(user, /加班明细/, '花名册/员工信息表')
+    await user.upload(overtime.input, new File(['first'], '第一次上传.xlsx'))
+    await user.click(within(overtime.panel).getByRole('button', { name: '移除第一次上传.xlsx' }))
+    const replacement = await getUploadInputByTabAndLabel(user, /加班明细/, '花名册/员工信息表')
+    await user.upload(replacement.input, new File(['replacement'], '替换文件.xlsx'))
+    await user.click(within(overtime.panel).getByRole('button', { name: '移除替换文件.xlsx' }))
+
+    await act(async () => {
+      resolveRosterGeneration?.({ data: new Blob(['generated']) })
+      await Promise.resolve()
+    })
+
+    expect(within(overtime.panel).queryByText('第一次上传.xlsx')).not.toBeInTheDocument()
+    expect(within(overtime.panel).queryByText('替换文件.xlsx')).not.toBeInTheDocument()
+    expect(within(overtime.panel).queryByText('花名册_组织生成.xlsx')).not.toBeInTheDocument()
+    const final = await getUploadInputByTabAndLabel(user, /最终汇总/, '在职花名册')
+    expect(await within(final.panel).findByText('花名册_组织生成.xlsx')).toBeInTheDocument()
+  })
+
+  it('manual roster generation replaces unchanged slots but preserves files changed during its request', async () => {
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+
+    const overtime = await getUploadInputByTabAndLabel(user, /加班明细/, '花名册/员工信息表')
+    await user.upload(overtime.input, new File(['manual-before'], '加班手工文件.xlsx'))
+    const final = await getUploadInputByTabAndLabel(user, /最终汇总/, '在职花名册')
+    await user.upload(final.input, new File(['manual-before'], '汇总手工文件.xlsx'))
+
+    let resolveManualGeneration: ((value: { data: Blob }) => void) | undefined
+    mockGenerateOrgRoster.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveManualGeneration = resolve
+    }))
+    const { rosterButton } = await openRosterAndTransferControls(user)
+    await user.click(rosterButton)
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(2))
+
+    const changedOvertime = await getUploadInputByTabAndLabel(user, /加班明细/, '花名册/员工信息表')
+    await user.upload(changedOvertime.input, new File(['manual-after'], '请求后替换.xlsx'))
+    await act(async () => {
+      resolveManualGeneration?.({ data: new Blob(['generated-manual']) })
+      await Promise.resolve()
+    })
+
+    expect(await within(changedOvertime.panel).findByText('请求后替换.xlsx')).toBeInTheDocument()
+    expect(within(changedOvertime.panel).queryByText('花名册_组织生成.xlsx')).not.toBeInTheDocument()
+    const finalAfter = await getUploadInputByTabAndLabel(user, /最终汇总/, '在职花名册')
+    expect(await within(finalAfter.panel).findByText('花名册_组织生成.xlsx')).toBeInTheDocument()
+    expect(within(finalAfter.panel).queryByText('汇总手工文件.xlsx')).not.toBeInTheDocument()
+    expect(messageApi.info).toHaveBeenCalledWith('花名册生成完成，已保留请求期间修改的文件并回填其余上传位')
   })
 
   it('roster sync failure does not overwrite existing uploads and keeps transfer independent', async () => {

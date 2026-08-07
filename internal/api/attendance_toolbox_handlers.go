@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -321,9 +322,19 @@ func GenerateOrgRoster(c *gin.Context) {
 		message := "生成花名册失败"
 		if errors.Is(err, service.ErrRosterNoEmployees) ||
 			errors.Is(err, service.ErrRosterMissingEmpNo) ||
+			errors.Is(err, service.ErrRosterMissingName) ||
 			errors.Is(err, service.ErrRosterMissingDeptPath) {
 			status = http.StatusBadRequest
-			message = err.Error()
+			if errors.Is(err, service.ErrRosterMissingName) {
+				var missingNameErr *service.RosterMissingNameError
+				if errors.As(err, &missingNameErr) {
+					message = fmt.Sprintf("当前组织有 %d 名在职员工缺少姓名，请先补充后重试", missingNameErr.Count)
+				} else {
+					message = service.ErrRosterMissingName.Error()
+				}
+			} else {
+				message = err.Error()
+			}
 		} else {
 			switch {
 			case errors.Is(err, service.ErrRosterDeptDataFailed):

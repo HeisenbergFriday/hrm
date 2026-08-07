@@ -214,11 +214,14 @@ func SetupRouter() *gin.Engine {
 			approvals := authRequired.Group("/approvals")
 			{
 				approvals.POST("/sync", middleware.RequirePermission("approval:sync"), SyncApproval)
+				approvals.POST("/sync/start", middleware.RequirePermission("approval:sync"), StartApprovalSync)
+				approvals.GET("/sync/:request_id", middleware.RequirePermission("approval:sync"), GetApprovalSyncResult)
 				approvals.GET("/oa-data", middleware.RequirePermissionOrMenu(
 					[]string{"approval_manage"},
 					[]string{"menu:oa-approval-data"},
 				), ExternalApprovalDetails)
 				approvals.GET("/templates", middleware.RequireMenuPermission("menu:approval-templates", "menu:approval-stats"), GetApprovalTemplates)
+				approvals.GET("/stats", middleware.RequireMenuPermission("menu:approval-stats"), GetApprovalStats)
 				approvals.GET("/instances", middleware.RequireMenuPermission("menu:approval-instances"), GetApprovalInstances)
 				approvals.GET("/:id", middleware.RequireMenuPermission("menu:approval-instances"), GetApproval)
 			}

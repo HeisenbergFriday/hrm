@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-08-01T17:56:35.901860+00:00",
+  "generated_at": "2026-08-05T02:46:11.776599+00:00",
   "app_root_label": "app",
   "toolbox_root_relpath": "tools/attendance_toolbox/python",
   "normalization": "CRLF/CR -> LF; allowlist adapter strip for fill_overtime/finally",
   "pair_count": 7,
   "equal_count": 3,
-  "adapter_only_count": 0,
-  "business_divergence_count": 4,
+  "adapter_only_count": 1,
+  "business_divergence_count": 3,
   "unequal_count": 4,
   "files": [
     {
@@ -30,11 +30,11 @@
       "app_exists": true,
       "toolbox_exists": true,
       "app_sha256": "2e0da19106c518e84c538ace3e06bba6940ffdbe104aa0bb5ea19e3dad1fd586",
-      "toolbox_sha256": "11a1fd1cbd98df7f24fcacd867abe49bfe108afb4452c1114243834627ca79f6",
+      "toolbox_sha256": "78051ca99286631bee7154f141900afabaa15035b70418d3315b5e1e664d6165",
       "equal": false,
       "difference_kind": "business_divergence",
       "app_size": 109996,
-      "toolbox_size": 111232,
+      "toolbox_size": 116276,
       "error": null
     },
     {
@@ -58,11 +58,11 @@
       "app_exists": true,
       "toolbox_exists": true,
       "app_sha256": "9807cde167e48b4443fa2168065bd9ed2b26ba7bbd7f58646fad07154239e580",
-      "toolbox_sha256": "0e8a19726f5cf75a741662f93245f0452f63d95548c6ec5f3ac0511c93009277",
+      "toolbox_sha256": "15415d58d4172aa1cd1dd76fc38f7d61f8855c15ab027c8add3406e8f3d5a63f",
       "equal": false,
       "difference_kind": "business_divergence",
       "app_size": 88306,
-      "toolbox_size": 94729,
+      "toolbox_size": 97903,
       "error": null
     },
     {
@@ -71,12 +71,12 @@
       "toolbox_relpath": "finally/calc_finally.py",
       "app_exists": true,
       "toolbox_exists": true,
-      "app_sha256": "471e30ffb3e22a33d5211c8a0c2cce8a56bdefd6d26be423126175c1d474a991",
-      "toolbox_sha256": "074038a5a5ad6b3879efba419fe2ea0017a17b3b39b81475fac792cf89eb56f1",
+      "app_sha256": "d47f631d17e841c62b78cbc6873a4398cc9746b5463222e1f5624f4002782fdf",
+      "toolbox_sha256": "f65c2dfd93da0f7b8e70e8229f67ca9dbf1041f591388aacf00249e2afab4a8c",
       "equal": false,
-      "difference_kind": "business_divergence",
-      "app_size": 82780,
-      "toolbox_size": 86745,
+      "difference_kind": "adapter_only",
+      "app_size": 97857,
+      "toolbox_size": 97969,
       "error": null
     },
     {

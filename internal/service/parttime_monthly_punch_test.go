@@ -153,11 +153,11 @@ func TestStatusLabel(t *testing.T) {
 
 func TestNormalizeParttimeName(t *testing.T) {
 	cases := map[string]string{
-		"张三（离职）":    "张三",
-		"李四(已离职)":   "李四",
-		"王  五":      "王五",
-		"  赵六  ":   "赵六",
-		"（离职）孙七": "（离职）孙七",
+		"张三（离职）":  "张三",
+		"李四(已离职)": "李四",
+		"王  五":    "王五",
+		"  赵六  ":  "赵六",
+		"（离职）孙七":  "（离职）孙七",
 	}
 	for in, want := range cases {
 		got := normalizeParttimeName(in)

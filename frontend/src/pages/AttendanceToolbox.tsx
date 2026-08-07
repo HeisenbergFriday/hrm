@@ -552,6 +552,8 @@ const AttendanceToolbox: React.FC = () => {
   const [missingFieldName, setMissingFieldName] = useState<string | null>(null)
   const fieldCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const [fileLists, setFileLists] = useState<Record<string, UploadFile[]>>({})
+  const fileListsRef = useRef<Record<string, UploadFile[]>>({})
+  const userFileChangeVersionsRef = useRef<Record<string, number>>({})
   const [textValues, setTextValues] = useState<Record<string, string>>({})
   const [defaultsLoading, setDefaultsLoading] = useState(false)
   const [runningModule, setRunningModule] = useState<ToolboxModuleKey | 'quick' | null>(null)
@@ -650,10 +652,18 @@ const AttendanceToolbox: React.FC = () => {
   }, [refreshTemplateMeta])
 
   const setFieldFiles = useCallback((fieldName: string, list: UploadFile[]) => {
-    setFileLists((prev) => ({ ...prev, [fieldName]: list }))
+    const next = { ...fileListsRef.current, [fieldName]: list }
+    fileListsRef.current = next
+    userFileChangeVersionsRef.current[fieldName] = (userFileChangeVersionsRef.current[fieldName] || 0) + 1
+    setFileLists(next)
   }, [])
 
-  const applySyncedFile = useCallback((fieldNames: string[], fileName: string, blob: Blob) => {
+  const applySyncedFile = useCallback((
+    fieldNames: string[],
+    fileName: string,
+    blob: Blob,
+    canApply?: (fieldName: string, currentFiles: UploadFile[]) => boolean,
+  ) => {
     const syncedAt = Date.now()
     // lastModifiedDate is a legacy read-only File getter in modern browsers;
     // assigning it via Object.assign throws:
@@ -664,29 +674,35 @@ const AttendanceToolbox: React.FC = () => {
     }) as RcFile
     uploadFile.uid = `auto-sync-file-${syncedAt}`
 
-    setFileLists((prev) => {
-      const next = { ...prev }
-      fieldNames.forEach((fieldName, index) => {
-        next[fieldName] = [{
-          uid: `auto-sync-${fieldName}-${syncedAt}-${index}`,
-          name: uploadFile.name,
-          status: 'done',
-          percent: 100,
-          size: uploadFile.size,
-          type: uploadFile.type,
-          originFileObj: uploadFile,
-        }]
-      })
-      return next
+    const appliedFieldNames: string[] = []
+    const next = { ...fileListsRef.current }
+    fieldNames.forEach((fieldName, index) => {
+      const currentFiles = next[fieldName] || []
+      if (canApply && !canApply(fieldName, currentFiles)) return
+      next[fieldName] = [{
+        uid: `auto-sync-${fieldName}-${syncedAt}-${index}`,
+        name: uploadFile.name,
+        status: 'done',
+        percent: 100,
+        size: uploadFile.size,
+        type: uploadFile.type,
+        originFileObj: uploadFile,
+      }]
+      appliedFieldNames.push(fieldName)
     })
+    fileListsRef.current = next
+    setFileLists(next)
 
-    setUploadWarnings((prev) => {
-      const next = { ...prev }
-      fieldNames.forEach((fieldName) => {
-        delete next[fieldName]
+    if (appliedFieldNames.length > 0) {
+      setUploadWarnings((prev) => {
+        const nextWarnings = { ...prev }
+        appliedFieldNames.forEach((fieldName) => {
+          delete nextWarnings[fieldName]
+        })
+        return nextWarnings
       })
-      return next
-    })
+    }
+    return appliedFieldNames
   }, [])
 
   const fetchDingtalkExport = useCallback(async (
@@ -755,16 +771,39 @@ const AttendanceToolbox: React.FC = () => {
   // 数据来自本地数据库的 active 用户、EmployeeProfile 权威工号与真实部门路径；
   // 同一富花名册可供加班部门映射与最终汇总使用。
   const generateRosterFromOrgData = useCallback(async (mode: SyncMode = 'manual') => {
+    const requestSnapshot = new Map<string, { userChangeVersion: number; wasEmpty: boolean }>(
+      AUTO_SYNC_UPLOADS.roster.map((fieldName) => [fieldName, {
+        userChangeVersion: userFileChangeVersionsRef.current[fieldName] || 0,
+        wasEmpty: (fileListsRef.current[fieldName] || []).length === 0,
+      }]),
+    )
     setRosterSync({ loading: true })
     try {
       // generateOrgRoster 配置了 responseType: 'blob'，axios 返回的 response.data 即为 Blob
       const response = await attendanceToolboxAPI.generateOrgRoster()
       const blob = response.data as Blob
 
-      applySyncedFile([...AUTO_SYNC_UPLOADS.roster], '花名册_组织生成.xlsx', blob)
+      const appliedFieldNames = applySyncedFile(
+        [...AUTO_SYNC_UPLOADS.roster],
+        '花名册_组织生成.xlsx',
+        blob,
+        (fieldName, currentFiles) => {
+          const snapshot = requestSnapshot.get(fieldName)
+          if (!snapshot || (userFileChangeVersionsRef.current[fieldName] || 0) !== snapshot.userChangeVersion) {
+            return false
+          }
+          return mode === 'manual' || (snapshot.wasEmpty && currentFiles.length === 0)
+        },
+      )
       setRosterSync({ loading: false, lastSyncAt: dayjs().format('YYYY-MM-DD HH:mm') })
       if (mode === 'manual') {
-        messageApi.success('花名册生成完成，已自动回填到加班与最终汇总上传位')
+        if (appliedFieldNames.length === AUTO_SYNC_UPLOADS.roster.length) {
+          messageApi.success('花名册生成完成，已自动回填到加班与最终汇总上传位')
+        } else if (appliedFieldNames.length > 0) {
+          messageApi.info('花名册生成完成，已保留请求期间修改的文件并回填其余上传位')
+        } else {
+          messageApi.info('花名册生成完成，已保留请求期间修改的上传文件')
+        }
       }
     } catch (error) {
       const errorMessage = await resolveErrorMessage(error)
@@ -841,10 +880,13 @@ const AttendanceToolbox: React.FC = () => {
   }, [canDingtalkSync, syncTransferFromDingtalk])
 
   const removeFieldFile = (fieldName: string, fileUid: string) => {
-    setFileLists((prev) => ({
-      ...prev,
-      [fieldName]: (prev[fieldName] || []).filter((file) => file.uid !== fileUid),
-    }))
+    const next = {
+      ...fileListsRef.current,
+      [fieldName]: (fileListsRef.current[fieldName] || []).filter((file) => file.uid !== fileUid),
+    }
+    fileListsRef.current = next
+    userFileChangeVersionsRef.current[fieldName] = (userFileChangeVersionsRef.current[fieldName] || 0) + 1
+    setFileLists(next)
     setUploadWarnings((prev) => {
       const next = { ...prev }
       delete next[fieldName]

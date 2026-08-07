@@ -20,6 +20,7 @@ calc_subsidy_deduction.py
 
 import argparse
 import ast
+import calendar
 import math
 import os
 import re
@@ -71,7 +72,7 @@ _SCHEDULE_COLOR_NORMALIZE_DISTANCE = 32
 # 22点补贴排除规则：
 # 1. 客服/售后部门（部门包含"客服"或"售后"）
 # 2. 不坐班业务/销售人员：部门路径含「销售」、或岗位含「销售」
-# 3. 排班到22点部门：运营管理中心-运营支撑部
+# 3. 运营管理中心-运营支撑部仅排除运维工程师和客服岗位
 LATE22_EXCLUDED_DEPT_KEYWORDS = (
     "客服",
     "售后",
@@ -79,7 +80,6 @@ LATE22_EXCLUDED_DEPT_KEYWORDS = (
 )
 LATE22_EXCLUDED_DEPT_FULL = (
     "AI智慧文创事业部-销售组",        # 不坐班业务（保留精确前缀，兼容历史）
-    "运营管理中心-运营支撑部",        # 排班到22点
 )
 # 岗位关键字：销售类岗位不享受晚走补贴（即使部门名不含销售）
 LATE22_EXCLUDED_POSITION_KEYWORDS = (
@@ -916,11 +916,16 @@ def _should_exclude_late22_count(record: dict, included_names=None) -> bool:
     排除条件：
     1. 客服/售后部门（部门包含"客服"或"售后"）
     2. 销售类部门或岗位（不坐班业务，含「销售组」及岗位名含销售）
-    3. 排班到22点部门：运营管理中心-运营支撑部
+    3. 运营管理中心-运营支撑部的运维工程师、客服岗位
+    4. 员工类型精确为“外包”（最高优先级）
 
-    强制纳入名单优先于排除规则。
+    强制纳入名单可覆盖部门/岗位规则，但不能覆盖外包排除。
     部门匹配使用一/二/三级部门拼接路径，避免只看一级部门漏匹配。
     """
+    employee_type = str(record.get("emp_type") or "").strip()
+    if employee_type == "外包":
+        return True
+
     # 强制纳入名单优先
     name = str(record.get("name") or "").strip()
     default_names = LATE22_INCLUDED_NAMES if included_names is None else included_names
@@ -936,6 +941,11 @@ def _should_exclude_late22_count(record: dict, included_names=None) -> bool:
 
     if not dept_path and not position:
         return False
+
+    if "运营管理中心-运营支撑部" in dept_path and any(
+        keyword in position for keyword in ("运维工程师", "客服")
+    ):
+        return True
 
     # 岗位关键字（销售等）
     for keyword in LATE22_EXCLUDED_POSITION_KEYWORDS:
@@ -1023,14 +1033,46 @@ def parse_activity_checkin(filepath: str) -> dict[date, set]:
 # ║  2. 解析现有补贴扣款表（钉钉导出）— 提取员工信息 + 扣款4字段             ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
+_DATE_PATTERN = re.compile(r"(20\d{2})[-/.](1[0-2]|0?[1-9])[-/.](3[01]|[12]\d|0?[1-9])")
+
+
+def _parse_report_date_range(text: str) -> tuple[date | None, date | None]:
+    """从报表标题中解析完整的统计开始日期和结束日期。
+
+    钉钉月度汇总表 A1 格式示例：
+      "月度汇总表（补贴及扣款） 统计日期：2026-07-01 至 2026-07-31"
+
+    必须同时存在两个真实有效的完整日期；缺少任一日期或日期非法时返回空值，
+    由调用方 fail-closed 拒绝继续处理。
+    """
+    text = str(text or "").strip()
+    matches = _DATE_PATTERN.findall(text)
+
+    def _to_valid_date(parts: tuple[str, str, str]) -> date | None:
+        year_text, month_text, day_text = parts
+        try:
+            return date(int(year_text), int(month_text), int(day_text))
+        except (TypeError, ValueError):
+            return None
+
+    if len(matches) < 2:
+        return None, None
+    return _to_valid_date(matches[0]), _to_valid_date(matches[1])
+
+
 def parse_source_table(
     filepath: str,
     sheet: str | None = None,
     rd_dept_keywords: list[str] | None = None,
+    year: int | None = None,
+    month: int | None = None,
 ) -> list[dict]:
     """
     读取现有补贴扣款表，自动识别关键列位置（兼容不同格式/列序）。
     返回 [{row_idx, name, group, dept1, dept2, dept3, pos, is_rd, ...}]
+
+    当识别为钉钉原始月度汇总表且 year/month 都提供时，会校验报表统计范围
+    是否完整覆盖处理月份。系统模板和历史兼容格式不要求 A1 包含统计日期。
     """
     wb_values = openpyxl.load_workbook(filepath, data_only=True)
     wb_formulas = openpyxl.load_workbook(filepath, data_only=False)
@@ -1039,6 +1081,33 @@ def parse_source_table(
         ws_formula = wb_formulas[ws.title]
         rd_keywords = _normalize_keywords(rd_dept_keywords or RD_DEPT_KEYWORDS)
         is_all_people_summary = _is_all_people_monthly_summary(ws)
+
+        # 只有钉钉原始月度汇总表要求 A1 日期；系统模板和历史格式继续兼容。
+        if is_all_people_summary and year is not None and month is not None:
+            expected_start = date(year, month, 1)
+            expected_end = date(year, month, calendar.monthrange(year, month)[1])
+            a1_text = str(ws.cell(1, 1).value or "")
+            start_date, end_date = _parse_report_date_range(a1_text)
+            if start_date is None or end_date is None:
+                raise ValueError(
+                    f"报表A1单元格未包含可识别的统计日期范围"
+                    f"（必须同时包含有效的统计开始日期和统计结束日期），"
+                    f"无法确认是否为{year}年{month}月的完整自然月。"
+                    f"当前处理月份为{year}年{month}月，"
+                    f"系统要求完整范围为{expected_start.isoformat()}至{expected_end.isoformat()}。"
+                    f"请在钉钉考勤后台重新导出{expected_start.isoformat()}至"
+                    f"{expected_end.isoformat()}的“月度汇总表（补贴及扣款）”。"
+                    f"A1内容：{a1_text[:80]}"
+                )
+            if start_date != expected_start or end_date != expected_end:
+                raise ValueError(
+                    f"报表统计范围为{start_date.isoformat()}至{end_date.isoformat()}，"
+                    f"不是{year}年{month}月的完整自然月。"
+                    f"当前处理月份为{year}年{month}月，"
+                    f"系统要求完整范围为{expected_start.isoformat()}至{expected_end.isoformat()}。"
+                    f"请在钉钉考勤后台重新导出{expected_start.isoformat()}至"
+                    f"{expected_end.isoformat()}的“月度汇总表（补贴及扣款）”。"
+                )
 
         col_name   = _find_col(ws, '姓名')   or 1
         col_emp_no = _find_col(ws, '工号', '员工工号', '员工编号')

@@ -650,7 +650,7 @@ def calc_from_system_duration(sys_val):
     return (final_h, _round2(final_h / 8), None) if final_h else (0, 0, None)
 
 
-def calc_final_fields(row, schedule_ctx, is_chengdu=False):
+def calc_final_fields(row, schedule_ctx, is_chengdu=False, is_all_month_scheduled=False):
     """
     row: (工号, 姓名, 一级部门, 二级部门, 三级部门,
           请假类型, 开始时间, 结束时间, 系统时长)
@@ -666,6 +666,12 @@ def calc_final_fields(row, schedule_ctx, is_chengdu=False):
     month_start = schedule_ctx["month_start"]
     month_end = schedule_ctx["month_end"]
     next_month_start = schedule_ctx["next_month_start"]
+    if is_all_month_scheduled:
+        working_days = {
+            month_start + timedelta(days=offset)
+            for offset in range((month_end - month_start).days + 1)
+        }
+        expected_attendance_days = working_days
 
     dt_start = to_datetime(raw_start)
     dt_end   = to_datetime(raw_end)
@@ -736,7 +742,7 @@ def calc_final_fields(row, schedule_ctx, is_chengdu=False):
 
     n = parse_day_text(sys_val)
     if n is not None:
-        if d_end in working_days:
+        if is_all_month_scheduled or d_end in working_days:
             # 结束日是作息表工作日（如节前陪产假）→ 直接按作息表
             final_h    = calc_target_month_working_hours(
                 dt_start, dt_end, working_days, month_start, month_end)
@@ -1660,7 +1666,8 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
             employee_type_map: dict[str, str] | None = None,
             offsite_duration_overrides: dict | None = None,
             special_employee_names: tuple[str, ...] | set[str] | None = None,
-            special_chengdu_names: tuple[str, ...] | set[str] | None = None):
+            special_chengdu_names: tuple[str, ...] | set[str] | None = None,
+            warehouse_schedule_names: tuple[str, ...] | set[str] | None = None):
     """清洗后的内存行列表 → 计算三字段 → 写入请假明细表。"""
     wb_out = openpyxl.Workbook()
     ws_fulltime = wb_out.active
@@ -1671,6 +1678,11 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
 
     special_employee_name_set = set(special_employee_names or ())
     special_chengdu_name_set = set(special_chengdu_names or ())
+    warehouse_schedule_name_set = {
+        normalized
+        for name in (warehouse_schedule_names or ())
+        if (normalized := normalize_employee_name(name))
+    }
     special_chengdu_matched = 0
     processed = 0
     fulltime_count = 0
@@ -1706,7 +1718,13 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
             is_cd = is_chengdu_row(row, special_chengdu_name_set)
             if is_cd and (normalize_employee_name(row[ROW_EMP_NAME]) or "") in special_chengdu_name_set:
                 special_chengdu_matched += 1
-            final_h, final_days, remark = calc_final_fields(row[:9], schedule_ctx, is_chengdu=is_cd)
+            employee_name = normalize_employee_name(row[ROW_EMP_NAME]) or ""
+            final_h, final_days, remark = calc_final_fields(
+                row[:9],
+                schedule_ctx,
+                is_chengdu=is_cd,
+                is_all_month_scheduled=employee_name in warehouse_schedule_name_set,
+            )
             if (
                 str(row[ROW_APPROVAL_ID] or "").startswith(MATERNITY_OVERRIDE_APPROVAL_PREFIX)
                 and not remark

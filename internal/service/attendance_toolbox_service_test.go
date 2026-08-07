@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,9 +63,9 @@ func TestBuildRosterEmployeesUsesEmployeeProfileIDAndRealDepartmentPath(t *testi
 		"ops": {"企业根", "运营管理中心", "运营支撑部", "智慧寄存运维组"},
 	}
 
-	employees, missingEmpNo, missingDeptPath := buildRosterEmployees(users, profiles, paths)
-	if missingEmpNo != 0 || missingDeptPath != 0 || len(employees) != 1 {
-		t.Fatalf("unexpected build result: employees=%#v missingEmpNo=%d missingDeptPath=%d", employees, missingEmpNo, missingDeptPath)
+	employees, missingEmpNo, missingName, missingDeptPath := buildRosterEmployees(users, profiles, paths)
+	if missingEmpNo != 0 || missingName != 0 || missingDeptPath != 0 || len(employees) != 1 {
+		t.Fatalf("unexpected build result: employees=%#v missingEmpNo=%d missingName=%d missingDeptPath=%d", employees, missingEmpNo, missingName, missingDeptPath)
 	}
 	got := employees[0]
 	if got.EmpNo != "MT9999" || got.EmpNo == users[0].UserID || got.EmpNo == users[0].DingTalkUserID {
@@ -79,22 +80,22 @@ func TestBuildRosterEmployeesMissingEmployeeIDNeverFallsBack(t *testing.T) {
 	users := []database.User{
 		{OrgID: "org-a", UserID: "user-as-id", DingTalkUserID: "ding-as-id", Name: "无工号员工", DepartmentID: "dept", Status: "active"},
 	}
-	employees, missingEmpNo, missingDeptPath := buildRosterEmployees(
+	employees, missingEmpNo, missingName, missingDeptPath := buildRosterEmployees(
 		users,
 		nil,
 		map[string][]string{"dept": {"总部"}},
 	)
-	if len(employees) != 1 || employees[0].EmpNo != "" || missingEmpNo != 1 || missingDeptPath != 0 {
-		t.Fatalf("missing EmployeeID must fail without fallback: employees=%#v missingEmpNo=%d missingDeptPath=%d", employees, missingEmpNo, missingDeptPath)
+	if len(employees) != 1 || employees[0].EmpNo != "" || missingEmpNo != 1 || missingName != 0 || missingDeptPath != 0 {
+		t.Fatalf("missing EmployeeID must fail without fallback: employees=%#v missingEmpNo=%d missingName=%d missingDeptPath=%d", employees, missingEmpNo, missingName, missingDeptPath)
 	}
 }
 
 func TestBuildRosterEmployeesMissingDepartmentPathIsCounted(t *testing.T) {
 	users := []database.User{{OrgID: "org-a", UserID: "u1", Name: "无部门员工", DepartmentID: "missing", Status: "active"}}
 	profiles := map[string]database.EmployeeProfile{"u1": {OrgID: "org-a", UserID: "u1", EmployeeID: "MT1000"}}
-	employees, missingEmpNo, missingDeptPath := buildRosterEmployees(users, profiles, nil)
-	if len(employees) != 1 || missingEmpNo != 0 || missingDeptPath != 1 {
-		t.Fatalf("unresolved department must be counted: employees=%#v missingEmpNo=%d missingDeptPath=%d", employees, missingEmpNo, missingDeptPath)
+	employees, missingEmpNo, missingName, missingDeptPath := buildRosterEmployees(users, profiles, nil)
+	if len(employees) != 1 || missingEmpNo != 0 || missingName != 0 || missingDeptPath != 1 {
+		t.Fatalf("unresolved department must be counted: employees=%#v missingEmpNo=%d missingName=%d missingDeptPath=%d", employees, missingEmpNo, missingName, missingDeptPath)
 	}
 }
 
@@ -107,9 +108,22 @@ func TestBuildRosterEmployeesAllowsDuplicateNamesBecauseEmployeeIDIsPrimary(t *t
 		"u1": {OrgID: "org-a", UserID: "u1", EmployeeID: "MT1001"},
 		"u2": {OrgID: "org-a", UserID: "u2", EmployeeID: "MT1002"},
 	}
-	employees, missingEmpNo, missingDeptPath := buildRosterEmployees(users, profiles, map[string][]string{"dept": {"总部"}})
-	if len(employees) != 2 || missingEmpNo != 0 || missingDeptPath != 0 || employees[0].EmpNo == employees[1].EmpNo {
+	employees, missingEmpNo, missingName, missingDeptPath := buildRosterEmployees(users, profiles, map[string][]string{"dept": {"总部"}})
+	if len(employees) != 2 || missingEmpNo != 0 || missingName != 0 || missingDeptPath != 0 || employees[0].EmpNo == employees[1].EmpNo {
 		t.Fatalf("duplicate names must remain separated by EmployeeID: %#v", employees)
+	}
+}
+
+func TestBuildRosterEmployeesMissingNameDoesNotSkipOtherIntegrityChecks(t *testing.T) {
+	users := []database.User{{OrgID: "org-a", UserID: "u1", Name: "  ", DepartmentID: "missing", Status: "active"}}
+	profiles := map[string]database.EmployeeProfile{"u1": {OrgID: "org-a", UserID: "u1", EmployeeID: "MT1000"}}
+
+	employees, missingEmpNo, missingName, missingDeptPath := buildRosterEmployees(users, profiles, nil)
+	if len(employees) != 1 || missingEmpNo != 0 || missingName != 1 || missingDeptPath != 1 {
+		t.Fatalf("all integrity gaps must be counted: employees=%#v missingEmpNo=%d missingName=%d missingDeptPath=%d", employees, missingEmpNo, missingName, missingDeptPath)
+	}
+	if employees[0].Name != "" {
+		t.Fatalf("missing name must not be synthesized: %#v", employees[0])
 	}
 }
 
@@ -143,6 +157,73 @@ func TestGenerateOrgRosterExcelMissingDepartmentPathFailsClosed(t *testing.T) {
 	}
 }
 
+func TestGenerateOrgRosterExcelMissingNameFailsClosed(t *testing.T) {
+	tests := []struct {
+		name  string
+		users []database.User
+	}{
+		{
+			name: "mixed valid and missing name",
+			users: []database.User{
+				{OrgID: "org-missing-name", UserID: "valid", DingTalkUserID: "ding-valid", Name: "有效员工", Email: "valid-name@example.test", Mobile: "13900000001", DepartmentID: "dept", Status: "active"},
+				{OrgID: "org-missing-name", UserID: "missing", DingTalkUserID: "ding-missing", Name: " ", Email: "missing-name@example.test", Mobile: "13900000002", DepartmentID: "dept", Status: "active"},
+			},
+		},
+		{
+			name: "only missing name",
+			users: []database.User{
+				{OrgID: "org-missing-name", UserID: "missing", DingTalkUserID: "ding-only-missing", Name: "", Email: "only-missing-name@example.test", Mobile: "13900000003", DepartmentID: "dept", Status: "active"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := withRosterTestDB(t)
+			seedRosterDepartment(t, db, "org-missing-name", "dept", "总部", "0")
+			for index, user := range tt.users {
+				seedRosterUser(t, db, user)
+				if err := db.Create(&database.EmployeeProfile{
+					OrgID: "org-missing-name", UserID: user.UserID, EmployeeID: fmt.Sprintf("MT20%02d", index),
+				}).Error; err != nil {
+					t.Fatalf("seed profile: %v", err)
+				}
+			}
+
+			result, err := NewAttendanceToolboxService().GenerateOrgRosterExcel(context.Background(), "org-missing-name")
+			if result != nil {
+				t.Fatalf("missing name must not return a partial workbook: %#v", result)
+			}
+			if !errors.Is(err, ErrRosterMissingName) || errors.Is(err, ErrRosterNoEmployees) || !strings.Contains(err.Error(), "1 名") {
+				t.Fatalf("expected one explicit missing-name error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestGenerateOrgRosterExcelMissingNameCountIsScopedToCurrentOrganization(t *testing.T) {
+	db := withRosterTestDB(t)
+	for _, orgID := range []string{"org-a", "org-b"} {
+		seedRosterDepartment(t, db, orgID, "dept", "总部", "0")
+	}
+	users := []database.User{
+		{OrgID: "org-a", UserID: "a-missing", DingTalkUserID: "ding-a-missing", Name: "", Email: "a-missing@example.test", Mobile: "13900000011", DepartmentID: "dept", Status: "active"},
+		{OrgID: "org-b", UserID: "b-missing-1", DingTalkUserID: "ding-b-missing-1", Name: "", Email: "b-missing-1@example.test", Mobile: "13900000012", DepartmentID: "dept", Status: "active"},
+		{OrgID: "org-b", UserID: "b-missing-2", DingTalkUserID: "ding-b-missing-2", Name: " ", Email: "b-missing-2@example.test", Mobile: "13900000013", DepartmentID: "dept", Status: "active"},
+	}
+	for index, user := range users {
+		seedRosterUser(t, db, user)
+		if err := db.Create(&database.EmployeeProfile{OrgID: user.OrgID, UserID: user.UserID, EmployeeID: fmt.Sprintf("MT30%02d", index)}).Error; err != nil {
+			t.Fatalf("seed profile: %v", err)
+		}
+	}
+
+	result, err := NewAttendanceToolboxService().GenerateOrgRosterExcel(context.Background(), "org-a")
+	if result != nil || !errors.Is(err, ErrRosterMissingName) || !strings.Contains(err.Error(), "1 名") || strings.Contains(err.Error(), "2 名") {
+		t.Fatalf("missing-name count must be isolated to org-a: result=%#v err=%v", result, err)
+	}
+}
+
 func TestLoadRosterEmployeesForOrgIsolatesUsersProfilesAndDepartments(t *testing.T) {
 	db := withRosterTestDB(t)
 	for _, orgID := range []string{"org-a", "org-b"} {
@@ -164,9 +245,9 @@ func TestLoadRosterEmployeesForOrgIsolatesUsersProfilesAndDepartments(t *testing
 		t.Fatalf("seed profiles: %v", err)
 	}
 
-	employees, missingEmpNo, missingDeptPath, err := (&AttendanceToolboxService{}).loadRosterEmployeesForOrg("org-a")
-	if err != nil || len(employees) != 1 || missingEmpNo != 0 || missingDeptPath != 0 {
-		t.Fatalf("unexpected org-a result: employees=%#v missingEmpNo=%d missingDeptPath=%d err=%v", employees, missingEmpNo, missingDeptPath, err)
+	employees, missingEmpNo, missingName, missingDeptPath, err := (&AttendanceToolboxService{}).loadRosterEmployeesForOrg("org-a")
+	if err != nil || len(employees) != 1 || missingEmpNo != 0 || missingName != 0 || missingDeptPath != 0 {
+		t.Fatalf("unexpected org-a result: employees=%#v missingEmpNo=%d missingName=%d missingDeptPath=%d err=%v", employees, missingEmpNo, missingName, missingDeptPath, err)
 	}
 	if employees[0].Name != "员工A" || employees[0].EmpNo != "EA001" || employees[0].Dept1 != "部门-org-a" {
 		t.Fatalf("cross-org data leaked into roster: %#v", employees[0])
@@ -176,8 +257,10 @@ func TestLoadRosterEmployeesForOrgIsolatesUsersProfilesAndDepartments(t *testing
 func TestBuildDepartmentPathMapRejectsDanglingAndCyclicPaths(t *testing.T) {
 	db := withRosterTestDB(t)
 	departments := []database.Department{
-		{OrgID: "org-a", DepartmentID: "valid", DingTalkDepartmentID: "dt-valid", Name: "总部", ParentID: "0"},
+		{OrgID: "org-a", DepartmentID: "valid", DingTalkDepartmentID: "dt-valid", Name: "总部", ParentID: database.ScopedExternalID("org-a", "0")},
+		{OrgID: "org-a", DepartmentID: "valid-child", DingTalkDepartmentID: "dt-valid-child", Name: "运营中心", ParentID: "valid"},
 		{OrgID: "org-a", DepartmentID: "dangling", DingTalkDepartmentID: "dt-dangling", Name: "孤儿部门", ParentID: "missing"},
+		{OrgID: "org-a", DepartmentID: "foreign-root", DingTalkDepartmentID: "dt-foreign-root", Name: "外组织伪根", ParentID: database.ScopedExternalID("org-b", "0")},
 		{OrgID: "org-a", DepartmentID: "cycle-a", DingTalkDepartmentID: "dt-cycle-a", Name: "循环A", ParentID: "cycle-b"},
 		{OrgID: "org-a", DepartmentID: "cycle-b", DingTalkDepartmentID: "dt-cycle-b", Name: "循环B", ParentID: "cycle-a"},
 	}
@@ -188,8 +271,11 @@ func TestBuildDepartmentPathMapRejectsDanglingAndCyclicPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build paths: %v", err)
 	}
-	if len(paths) != 1 || paths["valid"][0] != "总部" {
+	if len(paths) != 2 || paths["valid"][0] != "总部" || strings.Join(paths["valid-child"], "/") != "总部/运营中心" {
 		t.Fatalf("invalid paths must be excluded: %#v", paths)
+	}
+	if _, exists := paths["foreign-root"]; exists {
+		t.Fatalf("another organization's scoped root must remain unresolved: %#v", paths)
 	}
 }
 
@@ -251,7 +337,9 @@ func inspectRosterWorkbook(t *testing.T, data []byte) [][]any {
 		t.Fatalf("write roster: %v", err)
 	}
 	code := `import json,openpyxl,sys; w=openpyxl.load_workbook(sys.argv[1],data_only=True); s=w["在职花名册"]; print(json.dumps([[c.value for c in row] for row in s.iter_rows()])); w.close()`
-	output, err := exec.Command(findPython(t), "-c", code, path).CombinedOutput()
+	cmd := exec.Command(findPython(t), "-c", code, path)
+	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("inspect roster: %v\n%s", err, output)
 	}

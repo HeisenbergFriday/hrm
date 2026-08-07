@@ -1,6 +1,6 @@
 ---
 purpose: 考勤模块业务规则说明
-last_updated: 2026-08-04
+last_updated: 2026-08-05
 source_of_truth:
   - internal/api/handlers.go（考勤相关 handler）
   - internal/api/attendance_toolbox_handlers.go（考勤工具箱上传计算 handler）
@@ -299,12 +299,12 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 
 - 权限：`attendance_toolbox_operate` 或兼容的 `attendance_manage`；`attendance_toolbox_dingtalk_sync`、menu-only 均不得调用。
 - 组织：JWT `org_id` 是唯一可信来源；缺失时 fail-closed，请求 body/query 不得覆盖；用户查询必须按 `org_id` 隔离并排除软删除数据。
-- 员工范围：仅当前组织 `status=active` 且未软删除的用户；业务工号必须取 `EmployeeProfile.EmployeeID`，部门路径必须取该用户当前主部门在本组织中的真实父子层级。所有用户、档案、部门查询均显式绑定 JWT `org_id`。
-- 完整性：任一待输出员工缺少 `EmployeeID`，或主部门缺失、跨组织、父级断裂、循环、空名称导致路径不可解析时，接口整体返回包含缺失人数的 400；禁止跳过后静默生成不完整文件。姓名、`UserID`、`DingTalkUserID` 均不得兜底业务工号。
+- 员工范围：仅当前组织 `status=active` 且未软删除的用户；业务工号必须取 `EmployeeProfile.EmployeeID`，部门路径必须取该用户当前主部门在本组织中的真实父子层级。所有用户、档案、部门查询均显式绑定 JWT `org_id`。钉钉根父级兼容空值、字面量 `0` 和当前组织的 `database.ScopedExternalID(orgID, "0")` 历史值；外组织 scoped 根不得视为合法根。
+- 完整性：任一待输出员工缺少 `EmployeeID`、姓名或有效部门路径（包括主部门缺失、跨组织、父级断裂、循环、部门空名称）时，接口整体返回包含对应缺失人数的 400；禁止跳过后静默生成不完整文件。`EmployeeID`、姓名、有效部门路径三者均为组织生成接口的必备字段，且不得使用 `UserID`、`DingTalkUserID`、工号或其他字段伪造姓名，也不得使用姓名、`UserID`、`DingTalkUserID` 兜底业务工号。根节点兼容不得扩大为“任意不存在父级均合法”。
 - 输出：xlsx 固定 12 列：工号、姓名、合同主体、一级部门、二级部门、三级部门、岗位、员工类型、人员分类、入职日期、离职日期、转正日期；其中工号、姓名和真实部门路径是加班入口契约，其他无权威来源字段保持空。超过三级的组织路径保留距离叶子最近的三级业务部门，顺序不得重排或猜测。
-- 回填：前端自动生成后可将同一份富花名册回填到 `overtime_roster` 与 `final_active`；不得把仅姓名文件自动回填到 `overtime_roster`。最终汇总仍可从用户上传的钉钉月度汇总表补充/纠正身份字段，手工仅姓名花名册只作为最终汇总兼容输入，不是组织生成接口的输出契约。
+- 回填：前端自动生成后可将同一份富花名册回填到 `overtime_roster` 与 `final_active`；自动请求必须逐上传位保存请求开始时的空状态和用户修改版本，只填请求开始与响应时均为空、且期间未被用户选择/删除/替换的位置。手动点击生成可替换请求开始时已有但期间未变化的位置；请求期间的用户操作始终优先。生成失败不得改动现有文件。不得把仅姓名文件自动回填到 `overtime_roster`。最终汇总仍可从用户上传的钉钉月度汇总表补充/纠正身份字段，手工仅姓名花名册只作为最终汇总兼容输入，不是组织生成接口的输出契约。
 - 重名：生成文件以权威工号区分同名员工；Python 部门映射只有在姓名全文件唯一时才建立姓名回退键，重名时只允许按工号命中，禁止首条覆盖或按姓名误映射。
-- 成功：返回 xlsx、`Content-Disposition`、`X-Content-Type-Options: nosniff`；无有效在职员工、缺业务工号或缺部门路径返回 400，数据查询、runner 失败或无输出返回 500。
+- 成功：返回 xlsx、`Content-Disposition`、`X-Content-Type-Options: nosniff`；无有效在职员工，或缺业务工号、姓名、有效部门路径时返回 400，数据查询、runner 失败或无输出返回 500。
 - 路由测试：必须调用生产使用的 `registerAttendanceToolboxRoutes` 共享注册逻辑验证 `POST` 路径和权限矩阵；禁止在测试中重复注册路径、中间件与 handler。
 
 ### POST /api/v1/attendance/toolbox/dingtalk-sync

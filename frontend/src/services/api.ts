@@ -474,6 +474,137 @@ export const attendanceToolboxAPI = {
   }),
 }
 
+export const APPROVAL_SYNC_TIMEOUT_MS = 15 * 60 * 1000
+export const APPROVAL_SYNC_POLL_INTERVAL_MS = 2 * 1000
+export const APPROVAL_SYNC_SHORT_REQUEST_TIMEOUT_MS = 10 * 1000
+export const APPROVAL_SYNC_SHORT_REQUEST_CONFIG = Object.freeze({ timeout: APPROVAL_SYNC_SHORT_REQUEST_TIMEOUT_MS })
+export const APPROVAL_SYNC_STORAGE_KEY = 'peopleops:approval-sync:request-id'
+export const APPROVAL_SYNC_NETWORK_RETRY_DELAYS_MS = [500, 1_000, 2_000] as const
+
+export type ApprovalSyncProcessResult = {
+  process_code: string
+  status: 'success' | 'partial' | 'failed'
+  fetched_count: number
+  fetch_fail_count: number
+  success_count: number
+  fail_count: number
+  error_code?: string
+  error?: string
+}
+
+export type ApprovalSyncResult = {
+  status: 'success' | 'partial' | 'failed'
+  processes: ApprovalSyncProcessResult[]
+  process_count: number
+  succeeded_processes: number
+  failed_processes: number
+  fetched_count: number
+  fetch_fail_count: number
+  success_count: number
+  fail_count: number
+  start_date: string
+  end_date: string
+  sync_time: string
+  duration_ms: number
+  request_id: string
+  discovery_error_code?: string
+  discovery_error?: string
+}
+
+export type ApprovalSyncStartAPIResponse = {
+  code: 202
+  message: 'running'
+  data: { status: 'running'; request_id: string }
+}
+
+export type ApprovalSyncRunningAPIResponse = {
+  code: 202
+  message: 'running'
+  data: { status: 'running'; request_id: string; duration_ms?: number }
+}
+
+export type ApprovalSyncAPIResponse = {
+  code: 200
+  message: ApprovalSyncResult['status']
+  data: ApprovalSyncResult
+}
+
+export type ApprovalStatsAPIResponse = {
+  code: 200
+  message: 'success'
+  data: {
+    summary: {
+      total: number
+      completed: number
+      refused: number
+      running: number
+      terminated: number
+      canceled: number
+      approval_rate: string
+    }
+    template_stats: Array<{
+      template_id: string
+      template_name: string
+      total: number
+      completed: number
+      refused: number
+      running: number
+      terminated: number
+      canceled: number
+      approval_rate: string
+    }>
+  }
+}
+
+function approvalSyncStorage(): Storage | undefined {
+  return typeof window === 'undefined' ? undefined : window.sessionStorage
+}
+
+export function getPendingApprovalSyncRequestID(): string {
+  return approvalSyncStorage()?.getItem(APPROVAL_SYNC_STORAGE_KEY)?.trim() || ''
+}
+
+function setPendingApprovalSyncRequestID(requestID: string) {
+  approvalSyncStorage()?.setItem(APPROVAL_SYNC_STORAGE_KEY, requestID)
+}
+
+function clearPendingApprovalSyncRequestID(requestID?: string) {
+  const storage = approvalSyncStorage()
+  if (!storage) return
+  if (!requestID || storage.getItem(APPROVAL_SYNC_STORAGE_KEY) === requestID) {
+    storage.removeItem(APPROVAL_SYNC_STORAGE_KEY)
+  }
+}
+
+async function pollApprovalSync(requestID: string, startedAt = Date.now()): Promise<ApprovalSyncAPIResponse> {
+  let networkFailures = 0
+  while (Date.now() - startedAt < APPROVAL_SYNC_TIMEOUT_MS) {
+    const remainingWaitMS = APPROVAL_SYNC_TIMEOUT_MS - (Date.now() - startedAt)
+    await new Promise((resolve) => setTimeout(resolve, Math.min(APPROVAL_SYNC_POLL_INTERVAL_MS, remainingWaitMS)))
+    if (Date.now() - startedAt >= APPROVAL_SYNC_TIMEOUT_MS) break
+    try {
+      const response = await api.get<ApprovalSyncAPIResponse | ApprovalSyncRunningAPIResponse, ApprovalSyncAPIResponse | ApprovalSyncRunningAPIResponse>(
+        `/approvals/sync/${encodeURIComponent(requestID)}`,
+        APPROVAL_SYNC_SHORT_REQUEST_CONFIG,
+      )
+      networkFailures = 0
+      if (response.code === 202) continue
+      clearPendingApprovalSyncRequestID(requestID)
+      return response as ApprovalSyncAPIResponse
+    } catch (error) {
+      const candidate = error as { response?: { status?: number } }
+      if (!candidate?.response && networkFailures < APPROVAL_SYNC_NETWORK_RETRY_DELAYS_MS.length) {
+        const delay = APPROVAL_SYNC_NETWORK_RETRY_DELAYS_MS[networkFailures++]
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        continue
+      }
+      if (candidate?.response?.status === 404) clearPendingApprovalSyncRequestID(requestID)
+      throw new Error(`审批同步状态查询失败，后台任务可能仍在执行（请求编号：${requestID}），请稍后刷新页面确认，暂勿重复点击`)
+    }
+  }
+  throw new Error(`审批同步页面等待超时，后台任务可能仍在执行（请求编号：${requestID}），请稍后刷新页面，暂勿重复点击`)
+}
+
 export const approvalAPI = {
   getTemplates: () => api.get('/approvals/templates'),
   getInstances: (params: {
@@ -488,7 +619,41 @@ export const approvalAPI = {
     end_date?: string
   }) => api.get('/approvals/instances', { params }),
   getApproval: (id: string) => api.get(`/approvals/${id}`),
-  sync: (data: { process_code: string; start_date?: string; end_date?: string }) => api.post('/approvals/sync', data),
+  getStats: (params: { template_id?: string; start_date?: string; end_date?: string }) =>
+    api.get<ApprovalStatsAPIResponse, ApprovalStatsAPIResponse>('/approvals/stats', { params }),
+  resumeSync: async (): Promise<ApprovalSyncAPIResponse> => {
+    const requestID = getPendingApprovalSyncRequestID()
+    if (!requestID) throw new Error('没有可恢复的审批同步任务')
+    return pollApprovalSync(requestID)
+  },
+  sync: async (data: { process_code?: string; start_date?: string; end_date?: string }): Promise<ApprovalSyncAPIResponse> => {
+    const startedAt = Date.now()
+    let requestID = ''
+    try {
+      const startResponse = await api.post<ApprovalSyncStartAPIResponse, ApprovalSyncStartAPIResponse>(
+        '/approvals/sync/start',
+        data,
+        APPROVAL_SYNC_SHORT_REQUEST_CONFIG,
+      )
+      requestID = startResponse.data?.request_id
+      if (startResponse.code !== 202 || startResponse.data?.status !== 'running' || !requestID) {
+        throw new Error('审批同步启动响应异常，请稍后重试')
+      }
+    } catch (error) {
+      const candidate = error as {
+        response?: { status?: number; data?: { data?: { request_id?: string } } }
+      }
+      if (candidate?.response?.status === 409 && candidate.response.data?.data?.request_id) {
+        requestID = candidate.response.data.data.request_id
+      } else if (candidate?.response) {
+        throw error
+      } else {
+        throw new Error('审批同步启动响应未确认，后台任务可能已启动，请稍后刷新页面确认，暂勿重复点击')
+      }
+    }
+    setPendingApprovalSyncRequestID(requestID)
+    return pollApprovalSync(requestID, startedAt)
+  },
   getOAData: (params?: { page?: number; page_size?: number; keyword?: string }) =>
     api.get('/approvals/oa-data', { params }),
 }

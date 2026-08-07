@@ -158,13 +158,16 @@ func TestGenerateOrgRosterRoute_RequestCannotOverrideJWTOrgID(t *testing.T) {
 
 func TestGenerateOrgRosterRoute_ErrorMapping(t *testing.T) {
 	tests := []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantText   string
+		name        string
+		err         error
+		wantStatus  int
+		wantText    string
+		wantMessage string
+		wantAbsent  string
 	}{
 		{name: "no active employees", err: service.ErrRosterNoEmployees, wantStatus: http.StatusBadRequest, wantText: "在职员工"},
 		{name: "missing employee ids", err: fmt.Errorf("%w：3 名在职员工缺少业务工号", service.ErrRosterMissingEmpNo), wantStatus: http.StatusBadRequest, wantText: "3 名"},
+		{name: "missing employee names", err: fmt.Errorf("internal database detail: %w", &service.RosterMissingNameError{Count: 2}), wantStatus: http.StatusBadRequest, wantText: "2 名在职员工缺少姓名", wantMessage: "当前组织有 2 名在职员工缺少姓名，请先补充后重试", wantAbsent: "internal database detail"},
 		{name: "missing department path", err: fmt.Errorf("%w：2 名在职员工无法生成部门路径", service.ErrRosterMissingDeptPath), wantStatus: http.StatusBadRequest, wantText: "2 名"},
 		{name: "database query failed", err: fmt.Errorf("%w：database unavailable", service.ErrRosterUserQueryFailed), wantStatus: http.StatusInternalServerError, wantText: "读取在职用户失败"},
 		{name: "runner failed", err: fmt.Errorf("%w：exit status 1", service.ErrRosterRunnerFailed), wantStatus: http.StatusInternalServerError, wantText: "花名册生成失败"},
@@ -179,6 +182,18 @@ func TestGenerateOrgRosterRoute_ErrorMapping(t *testing.T) {
 			}
 			if !strings.Contains(recorder.Body.String(), tt.wantText) {
 				t.Fatalf("body %q does not contain %q", recorder.Body.String(), tt.wantText)
+			}
+			if tt.wantMessage != "" {
+				var payload Response
+				if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+					t.Fatalf("decode response: %v, body=%s", err, recorder.Body.String())
+				}
+				if payload.Message != tt.wantMessage {
+					t.Fatalf("message = %q, want %q", payload.Message, tt.wantMessage)
+				}
+			}
+			if tt.wantAbsent != "" && strings.Contains(recorder.Body.String(), tt.wantAbsent) {
+				t.Fatalf("body %q leaks internal detail %q", recorder.Body.String(), tt.wantAbsent)
 			}
 		})
 	}

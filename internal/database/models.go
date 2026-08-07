@@ -284,6 +284,30 @@ type SyncStatus struct {
 	UpdatedAt    time.Time              `json:"updated_at"`
 }
 
+// ApprovalSyncTask stores every approval sync execution independently.
+// ActiveKey is populated only while running and provides a database-backed
+// per-organization lock across application instances.
+type ApprovalSyncTask struct {
+	ID              uint                   `gorm:"primaryKey" json:"id"`
+	OrgID           string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_approval_sync_task_request,priority:1;index" json:"org_id"`
+	Type            string                 `gorm:"type:varchar(32);not null;uniqueIndex:idx_approval_sync_task_request,priority:2;index" json:"type"`
+	RequestID       string                 `gorm:"type:varchar(128);not null;uniqueIndex:idx_approval_sync_task_request,priority:3" json:"request_id"`
+	ActiveKey       *string                `gorm:"type:varchar(160);uniqueIndex:idx_approval_sync_task_active" json:"-"`
+	Status          string                 `gorm:"type:varchar(32);not null;index" json:"status"`
+	Message         string                 `gorm:"type:text" json:"message"`
+	ErrorCode       string                 `gorm:"type:varchar(64)" json:"error_code"`
+	SuccessCount    int                    `gorm:"not null;default:0" json:"success_count"`
+	FailCount       int                    `gorm:"not null;default:0" json:"fail_count"`
+	FailedProcesses int                    `gorm:"not null;default:0" json:"failed_processes"`
+	DurationMS      int64                  `gorm:"not null;default:0" json:"duration_ms"`
+	StartedAt       time.Time              `gorm:"not null;index" json:"started_at"`
+	HeartbeatAt     time.Time              `gorm:"not null;index" json:"heartbeat_at"`
+	FinishedAt      *time.Time             `json:"finished_at,omitempty"`
+	Details         map[string]interface{} `gorm:"type:json;serializer:json" json:"details,omitempty"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+}
+
 // IdempotencyRecord stores completed write responses for safe client retries.
 type IdempotencyRecord struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`

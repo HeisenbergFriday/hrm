@@ -215,6 +215,23 @@ class GenerateRosterCLITest(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("2 名在职员工缺少业务工号", payload["error"])
 
+    def test_generate_roster_cli_rejects_mixed_empty_and_whitespace_names(self):
+        with tempfile.TemporaryDirectory() as workdir:
+            completed = self.run_cli(workdir, {
+                "org_name": "测试组织",
+                "employees": [
+                    {"emp_no": "MT0001", "name": "有效员工", "dept1": "总部"},
+                    {"emp_no": "MT0002", "name": "", "dept1": "总部"},
+                    {"emp_no": "MT0003", "name": "   ", "dept1": "总部"},
+                ],
+            })
+            generated = list(Path(workdir).glob("*.xlsx"))
+        self.assertNotEqual(completed.returncode, 0)
+        payload = json.loads(completed.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("2 名在职员工缺少姓名", payload["error"])
+        self.assertEqual(generated, [])
+
     def test_generate_roster_cli_rejects_missing_department_path(self):
         with tempfile.TemporaryDirectory() as workdir:
             completed = self.run_cli(workdir, {

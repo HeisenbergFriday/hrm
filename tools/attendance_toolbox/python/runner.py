@@ -1035,6 +1035,7 @@ def action_generate_roster(config: dict, output_dir: Path) -> list[dict]:
 
     normalized_employees: list[dict] = []
     missing_emp_no = 0
+    missing_name = 0
     missing_dept_path = 0
     for idx, raw in enumerate(raw_employees, 1):
         if not isinstance(raw, dict):
@@ -1047,20 +1048,25 @@ def action_generate_roster(config: dict, output_dir: Path) -> list[dict]:
         employee["dept3"] = _roster_str(raw.get("dept3"))
         if not employee["emp_no"]:
             missing_emp_no += 1
+        if not employee["name"]:
+            missing_name += 1
         if not any((employee["dept1"], employee["dept2"], employee["dept3"])):
             missing_dept_path += 1
-        if employee["name"]:
-            normalized_employees.append(employee)
+        normalized_employees.append(employee)
     if missing_emp_no:
         raise ValueError(
             f"generate-roster: {missing_emp_no} 名在职员工缺少业务工号（EmployeeID），已拒绝生成不完整花名册"
+        )
+    if missing_name:
+        raise ValueError(
+            f"generate-roster: {missing_name} 名在职员工缺少姓名，已拒绝生成不完整花名册"
         )
     if missing_dept_path:
         raise ValueError(
             f"generate-roster: {missing_dept_path} 名在职员工缺少有效部门路径，已拒绝生成不完整花名册"
         )
     if not normalized_employees:
-        raise ValueError("generate-roster: 当前组织没有姓名非空的在职员工")
+        raise ValueError("generate-roster: 当前组织没有在职员工")
 
     safe_org = re.sub(r'[\\/:*?"<>|]', "_", org_name) or "组织"
     filename = f"花名册_{safe_org}.xlsx"

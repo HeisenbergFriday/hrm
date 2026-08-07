@@ -2,6 +2,7 @@ package dingtalk
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -3737,73 +3738,176 @@ func GetApprovals(processCode, startDate, endDate string) ([]ApprovalInstance, e
 }
 
 func GetApprovalsForOrg(orgID, processCode, startDate, endDate string) ([]ApprovalInstance, error) {
-	accessToken, err := GetAccessTokenForOrg(orgID)
+	return GetApprovalsForOrgContext(context.Background(), orgID, processCode, startDate, endDate)
+}
+
+const (
+	approvalQueryMaxWindow = 120 * 24 * time.Hour
+	approvalQueryClockSkew = time.Minute
+)
+
+type approvalQueryWindow struct {
+	Start time.Time
+	End   time.Time
+}
+
+// ApprovalFetchResult keeps successfully fetched details while reporting
+// instance-detail failures separately so callers can persist partial results.
+type ApprovalFetchResult struct {
+	Instances       []ApprovalInstance
+	DetailFailCount int
+}
+
+func buildApprovalQueryWindows(startDate, endDate string, now time.Time) ([]approvalQueryWindow, error) {
+	location := ApprovalBusinessLocation()
+	now = now.In(location)
+	start, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(startDate), location)
+	if err != nil {
+		return nil, fmt.Errorf("start_date must use YYYY-MM-DD")
+	}
+	endDay, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(endDate), location)
+	if err != nil {
+		return nil, fmt.Errorf("end_date must use YYYY-MM-DD")
+	}
+	if endDay.Before(start) {
+		return nil, fmt.Errorf("end_date must not be before start_date")
+	}
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location)
+	if endDay.After(today) {
+		return nil, fmt.Errorf("end_date must not be in the future")
+	}
+
+	requestedEnd := endDay.AddDate(0, 0, 1)
+	safeEnd := now.Add(-approvalQueryClockSkew)
+	if requestedEnd.Before(safeEnd) {
+		safeEnd = requestedEnd
+	}
+	if !safeEnd.After(start) {
+		return nil, fmt.Errorf("approval query range has not started yet")
+	}
+
+	windows := make([]approvalQueryWindow, 0, 1)
+	for windowStart := start; windowStart.Before(safeEnd); {
+		windowEnd := windowStart.Add(approvalQueryMaxWindow)
+		if windowEnd.After(safeEnd) {
+			windowEnd = safeEnd
+		}
+		windows = append(windows, approvalQueryWindow{Start: windowStart, End: windowEnd})
+		windowStart = windowEnd
+	}
+	return windows, nil
+}
+
+// GetApprovalsForOrgContext queries one process code in safe 120-day windows.
+// IDs are deduplicated across adjacent windows before details are fetched.
+func GetApprovalsForOrgContext(ctx context.Context, orgID, processCode, startDate, endDate string) ([]ApprovalInstance, error) {
+	result, err := GetApprovalsForOrgContextWithResult(ctx, orgID, processCode, startDate, endDate)
 	if err != nil {
 		return nil, err
 	}
-
-	// 瑙ｆ瀽鏃ユ湡涓烘绉掓椂闂存埑
-	start, _ := time.Parse("2006-01-02", startDate)
-	end, _ := time.Parse("2006-01-02", endDate)
-
-	var allInstances []ApprovalInstance
-	cursor := 0
-
-	for {
-		body := map[string]interface{}{
-			"process_code": processCode,
-			"start_time":   start.UnixMilli(),
-			"end_time":     end.AddDate(0, 0, 1).UnixMilli(),
-			"size":         20,
-			"cursor":       cursor,
-		}
-		resp, err := postJSONOAPI(
-			fmt.Sprintf("https://oapi.dingtalk.com/topapi/processinstance/listids?access_token=%s", accessToken),
-			body,
+	if result.DetailFailCount > 0 {
+		return nil, newSyncError(
+			ErrorCodeResponseInvalid,
+			"部分审批详情拉取失败",
+			fmt.Errorf("approval detail failures: %d", result.DetailFailCount),
 		)
-		if err != nil {
-			return nil, err
-		}
+	}
+	return result.Instances, nil
+}
 
-		errcode, _ := resp["errcode"].(float64)
-		if errcode != 0 {
-			errmsg, _ := resp["errmsg"].(string)
-			return nil, fmt.Errorf("鑾峰彇瀹℃壒瀹炰緥 ID 澶辫触: %s", errmsg)
-		}
-
-		result, ok := resp["result"].(map[string]interface{})
-		if !ok {
-			break
-		}
-
-		idList, ok := result["list"].([]interface{})
-		if !ok || len(idList) == 0 {
-			break
-		}
-
-		// 閫愪釜鑾峰彇瀹℃壒璇︽儏
-		for _, id := range idList {
-			instanceID, ok := id.(string)
-			if !ok {
-				continue
-			}
-			instance, err := getApprovalDetail(accessToken, instanceID)
-			if err != nil {
-				logrus.Warnf("鑾峰彇瀹℃壒瀹炰緥 %s 璇︽儏澶辫触: %v", instanceID, err)
-				continue
-			}
-			allInstances = append(allInstances, *instance)
-		}
-
-		nextCursor, _ := result["next_cursor"].(float64)
-		if nextCursor == 0 {
-			break
-		}
-		cursor = int(nextCursor)
+// GetApprovalsForOrgContextWithResult returns successful details and a safe
+// failure count. List-ID failures still fail the whole process because no
+// complete process snapshot can be established.
+func GetApprovalsForOrgContextWithResult(ctx context.Context, orgID, processCode, startDate, endDate string) (ApprovalFetchResult, error) {
+	result := ApprovalFetchResult{}
+	processCode = strings.TrimSpace(processCode)
+	if processCode == "" {
+		return result, fmt.Errorf("process_code is required")
+	}
+	windows, err := buildApprovalQueryWindows(startDate, endDate, time.Now())
+	if err != nil {
+		return result, err
+	}
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return result, err
 	}
 
-	logrus.Infof("dingtalk sync approvals complete: %d", len(allInstances))
-	return allInstances, nil
+	instanceIDs := make([]string, 0)
+	seenIDs := make(map[string]struct{})
+	for _, window := range windows {
+		cursor := 0
+		for {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
+			body := map[string]interface{}{
+				"process_code": processCode,
+				"start_time":   window.Start.UnixMilli(),
+				"end_time":     window.End.UnixMilli(),
+				"size":         20,
+				"cursor":       cursor,
+			}
+			resp, err := postJSONOAPIContext(ctx,
+				fmt.Sprintf("https://oapi.dingtalk.com/topapi/processinstance/listids?access_token=%s", accessToken),
+				body,
+			)
+			if err != nil {
+				return result, err
+			}
+
+			errcode, _ := resp["errcode"].(float64)
+			if errcode != 0 {
+				errmsg, _ := resp["errmsg"].(string)
+				return result, newSyncError(ErrorCodeResponseInvalid, "钉钉审批查询失败", fmt.Errorf("list approval ids failed: %s", sanitizeDingTalkDiagnostic(errmsg)))
+			}
+
+			result, ok := resp["result"].(map[string]interface{})
+			if !ok {
+				break
+			}
+			idList, _ := result["list"].([]interface{})
+			instanceIDs = appendUniqueApprovalInstanceIDs(instanceIDs, seenIDs, idList)
+			nextCursor, _ := result["next_cursor"].(float64)
+			if nextCursor == 0 || len(idList) == 0 {
+				break
+			}
+			cursor = int(nextCursor)
+		}
+	}
+
+	allInstances := make([]ApprovalInstance, 0, len(instanceIDs))
+	for _, instanceID := range instanceIDs {
+		instance, err := getApprovalDetailContext(ctx, accessToken, instanceID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
+			result.DetailFailCount++
+			logrus.Warnf("get approval detail failed process_instance_id=%s error_code=%s", instanceID, SyncErrorCode(err))
+			continue
+		}
+		allInstances = append(allInstances, *instance)
+	}
+	result.Instances = allInstances
+	logrus.Infof("dingtalk sync approvals complete: success=%d failed=%d", len(allInstances), result.DetailFailCount)
+	return result, nil
+}
+
+func appendUniqueApprovalInstanceIDs(existing []string, seen map[string]struct{}, rawIDs []interface{}) []string {
+	for _, rawID := range rawIDs {
+		instanceID, ok := rawID.(string)
+		instanceID = strings.TrimSpace(instanceID)
+		if !ok || instanceID == "" {
+			continue
+		}
+		if _, exists := seen[instanceID]; exists {
+			continue
+		}
+		seen[instanceID] = struct{}{}
+		existing = append(existing, instanceID)
+	}
+	return existing
 }
 
 // GetApprovalDetailForOrg 按组织凭证拉取单个审批实例详情。
@@ -3820,10 +3924,14 @@ func GetApprovalDetailForOrg(orgID, instanceID string) (*ApprovalInstance, error
 }
 
 func getApprovalDetail(accessToken, instanceID string) (*ApprovalInstance, error) {
+	return getApprovalDetailContext(context.Background(), accessToken, instanceID)
+}
+
+func getApprovalDetailContext(ctx context.Context, accessToken, instanceID string) (*ApprovalInstance, error) {
 	body := map[string]interface{}{
 		"process_instance_id": instanceID,
 	}
-	resp, err := postJSONOAPI(
+	resp, err := postJSONOAPIContext(ctx,
 		fmt.Sprintf("https://oapi.dingtalk.com/topapi/processinstance/get?access_token=%s", accessToken),
 		body,
 	)
@@ -3834,12 +3942,12 @@ func getApprovalDetail(accessToken, instanceID string) (*ApprovalInstance, error
 	errcode, _ := resp["errcode"].(float64)
 	if errcode != 0 {
 		errmsg, _ := resp["errmsg"].(string)
-		return nil, fmt.Errorf("%s", errmsg)
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉审批详情拉取失败", fmt.Errorf("get approval detail failed: %s", sanitizeDingTalkDiagnostic(errmsg)))
 	}
 
 	pi, ok := resp["process_instance"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("瀹℃壒璇︽儏鏍煎紡寮傚父")
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉审批详情格式异常", errors.New("approval detail response missing process_instance"))
 	}
 
 	instance := &ApprovalInstance{
@@ -3867,12 +3975,16 @@ func getApprovalDetail(accessToken, instanceID string) (*ApprovalInstance, error
 
 // postJSON 鍙戦€?POST 璇锋眰鍒版柊鐗?API锛坅pi.dingtalk.com锛?
 func postJSON(endpoint string, body interface{}, headers map[string]string) (map[string]interface{}, error) {
+	return postJSONContext(context.Background(), endpoint, body, headers)
+}
+
+func postJSONContext(ctx context.Context, endpoint string, body interface{}, headers map[string]string) (map[string]interface{}, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉请求数据格式异常", err)
 	}
 
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉请求地址异常", fmt.Errorf("create request %s failed: %s", safeDingTalkEndpoint(endpoint), sanitizeDingTalkDiagnostic(err.Error())))
 	}
@@ -3911,6 +4023,10 @@ func postJSON(endpoint string, body interface{}, headers map[string]string) (map
 // postJSONOAPI 鍙戦€?POST 璇锋眰鍒版棫鐗?API锛坥api.dingtalk.com锛?
 func postJSONOAPI(url string, body interface{}) (map[string]interface{}, error) {
 	return postJSON(url, body, nil)
+}
+
+func postJSONOAPIContext(ctx context.Context, url string, body interface{}) (map[string]interface{}, error) {
+	return postJSONContext(ctx, url, body, nil)
 }
 
 // getJSON 鍙戦€?GET 璇锋眰

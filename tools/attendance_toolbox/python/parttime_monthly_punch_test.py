@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import sys
+import shutil
 import unittest
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -18,11 +21,21 @@ import calc_parttime_summary as parttime  # noqa: E402
 import parttime_monthly_punch as punch  # noqa: E402
 
 
+@contextmanager
+def temporary_workdir():
+    workdir = ROOT / f".parttime-test-{uuid.uuid4().hex}"
+    workdir.mkdir()
+    try:
+        yield workdir
+    finally:
+        shutil.rmtree(workdir)
+
+
 def write_and_parse(cfg: dict) -> dict:
-    workdir = Path(__file__).resolve().parent
-    punch.render(workdir, cfg)
-    out = workdir / "outputs" / f"兼职月度打卡记录_{cfg['year']}{cfg['month']:02d}.xlsx"
-    return parttime.parse_attendance_detail(str(out))
+    with temporary_workdir() as workdir:
+        punch.render(workdir, cfg)
+        out = workdir / "outputs" / f"兼职月度打卡记录_{cfg['year']}{cfg['month']:02d}.xlsx"
+        return parttime.parse_attendance_detail(str(out))
 
 
 class ParttimeMonthlyPunchRenderTests(unittest.TestCase):
@@ -56,9 +69,10 @@ class ParttimeMonthlyPunchRenderTests(unittest.TestCase):
         }
 
     def test_render_produces_readable_workbook(self) -> None:
-        result = punch.render(Path(__file__).resolve().parent, self.cfg)
-        self.assertTrue(Path(result["path"]).exists())
-        self.assertTrue(result["file_name"].endswith(".xlsx"))
+        with temporary_workdir() as workdir:
+            result = punch.render(workdir, self.cfg)
+            self.assertTrue(Path(result["path"]).exists())
+            self.assertTrue(result["file_name"].endswith(".xlsx"))
 
     def test_parser_consumes_grid_with_key_headers(self) -> None:
         parsed = write_and_parse(self.cfg)

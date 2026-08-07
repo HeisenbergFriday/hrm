@@ -293,18 +293,18 @@ func (s *ParttimeMonthlyPunchService) renderExcel(
 ) ([]byte, error) {
 	daysInMonth := daysInMonth(year, month)
 	config := map[string]interface{}{
-		"year":             year,
-		"month":            month,
-		"days_in_month":    daysInMonth,
-		"matched":          serializeMatched(match.Matched),
-		"unmatched":        serializeUnmatched(match.Unmatched),
-		"anomalies":        match.Anomalies,
-		"matched_count":    len(match.Matched),
-		"unmatched_count":  len(match.Unmatched),
-		"roster_count":     len(match.Matched) + len(match.Unmatched),
-		"client_id":        cfg.AppKey,
-		"client_secret":    cfg.AppSecret,
-		"admin_user_id":    adminID,
+		"year":            year,
+		"month":           month,
+		"days_in_month":   daysInMonth,
+		"matched":         serializeMatched(match.Matched),
+		"unmatched":       serializeUnmatched(match.Unmatched),
+		"anomalies":       match.Anomalies,
+		"matched_count":   len(match.Matched),
+		"unmatched_count": len(match.Unmatched),
+		"roster_count":    len(match.Matched) + len(match.Unmatched),
+		"client_id":       cfg.AppKey,
+		"client_secret":   cfg.AppSecret,
+		"admin_user_id":   adminID,
 	}
 
 	result, err := s.service.runAction(ctx, "parttime-monthly-punch", config)

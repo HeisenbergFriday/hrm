@@ -383,25 +383,28 @@ func (s *LeaveJobScheduler) runLeaveApprovalConsume() {
 		if len(approvals) == 0 {
 			continue
 		}
+		s.consumeAnnualLeaveApprovalsForOrg(orgID, approvals)
+	}
+}
 
-		svc := NewAnnualLeaveGrantServiceWithOrgID(s.db, orgID)
-		for _, approval := range approvals {
-			if !isAnnualLeaveApprovalConsumable(approval.Status, approvalResultFromExtension(approval.Extension)) {
-				log.Printf("[LeaveJobs] org=%s 审批 %s 状态/结果不可消费，跳过 (status=%s)", orgID, approval.ProcessID, approval.Status)
-				continue
-			}
-			days := parseApprovalLeaveDays(approval.Content)
-			if days <= 0 {
-				log.Printf("[LeaveJobs] org=%s 审批 %s 无法解析天数，跳过（请手动录入）", orgID, approval.ProcessID)
-				continue
-			}
-			ref := "approval:" + approval.ProcessID
-			remark := approval.Title + "（自动同步）"
-			if err := svc.ConsumeAnnualLeave(approval.ApplicantID, days, ref, remark); err != nil {
-				log.Printf("[LeaveJobs] org=%s 年假消费失败 %s: %v", orgID, approval.ProcessID, err)
-			} else {
-				log.Printf("[LeaveJobs] org=%s 年假消费成功 %s %.2f天", orgID, approval.ApplicantID, days)
-			}
+func (s *LeaveJobScheduler) consumeAnnualLeaveApprovalsForOrg(orgID string, approvals []database.Approval) {
+	svc := NewAnnualLeaveGrantServiceWithOrgID(s.db, orgID)
+	for _, approval := range approvals {
+		if !isAnnualLeaveApprovalConsumable(approval.Status, approvalResultFromExtension(approval.Extension)) {
+			log.Printf("[LeaveJobs] org=%s 审批 %s 状态/结果不可消费，跳过 (status=%s)", orgID, approval.ProcessID, approval.Status)
+			continue
+		}
+		days := parseApprovalLeaveDays(approval.Content)
+		if days <= 0 {
+			log.Printf("[LeaveJobs] org=%s 审批 %s 无法解析天数，跳过（请手动录入）", orgID, approval.ProcessID)
+			continue
+		}
+		ref := "approval:" + approval.ProcessID
+		remark := approval.Title + "（自动同步）"
+		if err := svc.ConsumeAnnualLeave(approval.ApplicantID, days, ref, remark); err != nil {
+			log.Printf("[LeaveJobs] org=%s 年假消费失败 %s: %v", orgID, approval.ProcessID, err)
+		} else {
+			log.Printf("[LeaveJobs] org=%s 年假消费成功 %s %.2f天", orgID, approval.ApplicantID, days)
 		}
 	}
 }

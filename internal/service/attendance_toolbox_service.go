@@ -25,6 +25,7 @@ import (
 var (
 	ErrRosterNoEmployees     = errors.New("当前组织没有可生成的在职员工")
 	ErrRosterMissingEmpNo    = errors.New("部分在职员工缺少业务工号")
+	ErrRosterMissingName     = errors.New("部分在职员工缺少姓名")
 	ErrRosterMissingDeptPath = errors.New("部分在职员工无法生成部门路径")
 	ErrRosterRunnerFailed    = errors.New("花名册生成失败")
 	ErrRosterNoOutput        = errors.New("花名册生成未产出结果文件")
@@ -34,6 +35,19 @@ var (
 	ErrRosterUserQueryFailed = errors.New("读取在职用户失败")
 	ErrRosterProfileFailed   = errors.New("读取员工档案失败")
 )
+
+// RosterMissingNameError carries the safe count exposed by the roster API.
+type RosterMissingNameError struct {
+	Count int
+}
+
+func (e *RosterMissingNameError) Error() string {
+	return fmt.Sprintf("%s：%d 名在职员工缺少姓名，请先补充组织人员姓名", ErrRosterMissingName, e.Count)
+}
+
+func (e *RosterMissingNameError) Unwrap() error {
+	return ErrRosterMissingName
+}
 
 const (
 	attendanceToolboxMaxUploadBytes = 500 * 1024 * 1024
@@ -1128,15 +1142,16 @@ func rosterDepartmentLevels(path []string) (dept1, dept2, dept3 string) {
 	return dept1, dept2, dept3
 }
 
-// buildRosterEmployees 构造组织花名册，并返回缺业务工号、缺部门路径的人数。
-// 姓名、UserID 和 DingTalkUserID 均不得作为业务工号兜底。
+// buildRosterEmployees 构造组织花名册，并返回缺业务工号、缺姓名、缺部门路径的人数。
+// 姓名不得伪造；姓名、UserID 和 DingTalkUserID 均不得作为业务工号兜底。
 func buildRosterEmployees(
 	users []database.User,
 	profiles map[string]database.EmployeeProfile,
 	deptPathMap map[string][]string,
-) ([]rosterEmployee, int, int) {
+) ([]rosterEmployee, int, int, int) {
 	employees := make([]rosterEmployee, 0, len(users))
 	missingEmpNo := 0
+	missingName := 0
 	missingDeptPath := 0
 	for _, user := range users {
 		profile, hasProfile := profiles[user.UserID]
@@ -1150,7 +1165,7 @@ func buildRosterEmployees(
 
 		name := strings.TrimSpace(user.Name)
 		if name == "" {
-			continue
+			missingName++
 		}
 
 		path, hasPath := deptPathMap[strings.TrimSpace(user.DepartmentID)]
@@ -1174,27 +1189,27 @@ func buildRosterEmployees(
 		}
 		employees = append(employees, record)
 	}
-	return employees, missingEmpNo, missingDeptPath
+	return employees, missingEmpNo, missingName, missingDeptPath
 }
 
 // loadRosterEmployeesForOrg 查询指定组织的 active 用户、档案与主部门路径。
-func (s *AttendanceToolboxService) loadRosterEmployeesForOrg(orgID string) ([]rosterEmployee, int, int, error) {
+func (s *AttendanceToolboxService) loadRosterEmployeesForOrg(orgID string) ([]rosterEmployee, int, int, int, error) {
 	orgID = strings.TrimSpace(orgID)
 	if orgID == "" {
-		return nil, 0, 0, errors.New("生成花名册需要提供组织 ID（org_id）")
+		return nil, 0, 0, 0, errors.New("生成花名册需要提供组织 ID（org_id）")
 	}
 	orgID = database.NormalizeOrganizationID(orgID)
 
 	deptPathMap, err := s.buildDepartmentPathMap(orgID)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("%w：%w", ErrRosterDeptDataFailed, err)
+		return nil, 0, 0, 0, fmt.Errorf("%w：%w", ErrRosterDeptDataFailed, err)
 	}
 
 	var users []database.User
 	if err := database.DB.
 		Where("org_id = ? AND status = ? AND deleted_at IS NULL", orgID, "active").
 		Order("created_at ASC").Find(&users).Error; err != nil {
-		return nil, 0, 0, fmt.Errorf("%w：%w", ErrRosterUserQueryFailed, err)
+		return nil, 0, 0, 0, fmt.Errorf("%w：%w", ErrRosterUserQueryFailed, err)
 	}
 
 	profiles := make(map[string]database.EmployeeProfile, len(users))
@@ -1207,7 +1222,7 @@ func (s *AttendanceToolboxService) loadRosterEmployeesForOrg(orgID string) ([]ro
 		if err := database.DB.
 			Where("org_id = ? AND user_id IN ? AND deleted_at IS NULL", orgID, userIDs).
 			Find(&rows).Error; err != nil {
-			return nil, 0, 0, fmt.Errorf("%w：%w", ErrRosterProfileFailed, err)
+			return nil, 0, 0, 0, fmt.Errorf("%w：%w", ErrRosterProfileFailed, err)
 		}
 		for _, profile := range rows {
 			if _, exists := profiles[profile.UserID]; !exists {
@@ -1216,8 +1231,8 @@ func (s *AttendanceToolboxService) loadRosterEmployeesForOrg(orgID string) ([]ro
 		}
 	}
 
-	employees, missingEmpNo, missingDeptPath := buildRosterEmployees(users, profiles, deptPathMap)
-	return employees, missingEmpNo, missingDeptPath, nil
+	employees, missingEmpNo, missingName, missingDeptPath := buildRosterEmployees(users, profiles, deptPathMap)
+	return employees, missingEmpNo, missingName, missingDeptPath, nil
 }
 
 // GenerateOrgRosterExcel 按 org_id 生成可直接供加班入口解析的在职花名册。
@@ -1243,7 +1258,7 @@ func (s *AttendanceToolboxService) GenerateOrgRosterExcel(ctx context.Context, o
 	}
 
 	// 2) 按组织加载部门、在职用户与员工档案。
-	employees, missingEmpNo, missingDeptPath, err := s.loadRosterEmployeesForOrg(orgID)
+	employees, missingEmpNo, missingName, missingDeptPath, err := s.loadRosterEmployeesForOrg(orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -1251,6 +1266,9 @@ func (s *AttendanceToolboxService) GenerateOrgRosterExcel(ctx context.Context, o
 	// 3) 数据不完整时整体拒绝生成，避免产出无法供加班模块使用的文件。
 	if missingEmpNo > 0 {
 		return nil, fmt.Errorf("%w：%d 名在职员工缺少业务工号（EmployeeID），请先在员工档案中补充", ErrRosterMissingEmpNo, missingEmpNo)
+	}
+	if missingName > 0 {
+		return nil, &RosterMissingNameError{Count: missingName}
 	}
 	if missingDeptPath > 0 {
 		return nil, fmt.Errorf("%w：%d 名在职员工缺少有效主部门或部门层级无法解析，请先修复组织数据", ErrRosterMissingDeptPath, missingDeptPath)
@@ -1302,7 +1320,7 @@ func (s *AttendanceToolboxService) buildDepartmentPathMap(orgID string) (map[str
 	var resolve func(id string, depth int, visiting map[string]bool) ([]string, bool)
 	resolve = func(id string, depth int, visiting map[string]bool) ([]string, bool) {
 		id = strings.TrimSpace(id)
-		if id == "" || id == "0" {
+		if isDepartmentRootParentID(orgID, id) {
 			return []string{}, true
 		}
 		if depth > 16 || visiting[id] {
@@ -1328,6 +1346,17 @@ func (s *AttendanceToolboxService) buildDepartmentPathMap(orgID string) (map[str
 		}
 	}
 	return result, nil
+}
+
+// isDepartmentRootParentID accepts both the canonical DingTalk root marker and
+// historical tenant-scoped markers emitted by organization synchronization.
+// A scoped marker from another organization remains an unresolved parent.
+func isDepartmentRootParentID(orgID, parentID string) bool {
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" || parentID == "0" {
+		return true
+	}
+	return parentID == database.ScopedExternalID(orgID, "0")
 }
 
 // ── Action: Preview ──────────────────────────────────────────────────────────

@@ -74,14 +74,14 @@ func TestRenderParttimeMonthlyPunch_MissingAdmin(t *testing.T) {
 
 // recordOrgDS is a test double that records the orgID it was asked for.
 type recordOrgDS struct {
-	lastConfigOrg    string
-	lastRosterOrg    string
-	lastAttendOrg    string
-	cfg              dingtalk.Config
-	adminID          string
-	roster           []ParttimeEmployee
-	attendance       []dingtalk.AttendanceRecord
-	attendanceErr    error
+	lastConfigOrg string
+	lastRosterOrg string
+	lastAttendOrg string
+	cfg           dingtalk.Config
+	adminID       string
+	roster        []ParttimeEmployee
+	attendance    []dingtalk.AttendanceRecord
+	attendanceErr error
 }
 
 func (r *recordOrgDS) Config(orgID string) (dingtalk.Config, error) {

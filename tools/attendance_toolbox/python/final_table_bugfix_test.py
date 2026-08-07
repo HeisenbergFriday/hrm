@@ -15,7 +15,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import openpyxl
@@ -1011,16 +1011,47 @@ class LeaveOvertimeHeaderCompatTests(unittest.TestCase):
 
 
 class GenerateRosterActionTests(unittest.TestCase):
-    """action_generate_roster 输出必须可被 parse_roster 解析（端到端契约）。"""
+    """组织生成的富花名册必须可被最终表、部门映射与真实加班入口消费。"""
+
+    @staticmethod
+    def _write_overtime_export(path: Path) -> None:
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "加班导出"
+        sheet.append([
+            "审批编号", "审批状态", "审批结果", "发起人工号", "发起人姓名", "发起人部门",
+            "开始时间", "结束时间", "明细", "时长",
+        ])
+        sheet.append([
+            "OT-001", "完成", "同意", "MT0001", "张三", "其他部门-其他部门-其他部门",
+            datetime(2026, 6, 15, 9, 0), datetime(2026, 6, 15, 18, 0), date(2026, 6, 15), 8,
+        ])
+        workbook.save(path)
+        workbook.close()
+
+    @staticmethod
+    def _write_attendance(path: Path) -> None:
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "考勤明细"
+        sheet.append(["考勤时间：2026-06-01 至 2026-06-30"])
+        sheet.append(["姓名", "工号", "考勤组", "考勤结果"])
+        sheet.append([None, None, None, 15])
+        sheet.append(["张三", "MT0001", "默认考勤组", "正常 (09:00, 18:30)"])
+        workbook.save(path)
+        workbook.close()
 
     def test_action_output_parsable_by_parse_roster(self):
-        from runner import action_generate_roster
+        from runner import action_generate_roster, run_overtime
         out_dir = tempfile.mkdtemp(prefix="roster-action-")
         try:
             config = {
                 "org_name": "测试组织",
                 "employees": [
-                    {"emp_no": "MT0001", "name": "张三", "dept1": "总部"},
+                    {
+                        "emp_no": "MT0001", "name": "张三",
+                        "dept1": "运营管理中心", "dept2": "运营支撑部", "dept3": "智慧寄存运维组",
+                    },
                     {"emp_no": "MT0002", "name": "李四", "dept1": "总部"},
                     {"emp_no": "MT0003", "name": "王五", "dept1": "总部"},
                 ],
@@ -1032,7 +1063,45 @@ class GenerateRosterActionTests(unittest.TestCase):
             self.assertEqual(len(employees), 3)
             self.assertEqual([e["name"] for e in employees], ["张三", "李四", "王五"])
             self.assertEqual([e["emp_no"] for e in employees], ["MT0001", "MT0002", "MT0003"])
-            self.assertTrue(all(e["dept1"] == "总部" for e in employees))
+
+            department_map, diagnostic = ot.parse_employee_department_map(out_path)
+            self.assertIsNone(diagnostic)
+            self.assertEqual(department_map["MT0001"]["dept1"], "运营管理中心")
+            self.assertEqual(department_map["MT0001"]["dept2"], "运营支撑部")
+            self.assertEqual(department_map["MT0001"]["dept3"], "智慧寄存运维组")
+
+            root = Path(out_dir)
+            overtime_path = root / "overtime.xlsx"
+            attendance_path = root / "attendance.xlsx"
+            overtime_output = root / "overtime-output"
+            overtime_output.mkdir()
+            self._write_overtime_export(overtime_path)
+            self._write_attendance(attendance_path)
+            overtime_outputs = run_overtime({
+                "overtime_src": str(overtime_path),
+                "overtime_roster": out_path,
+                "overtime_attendance": str(attendance_path),
+                "overtime_target_month": "2026-06",
+            }, overtime_output)
+            result_path = next(Path(item["path"]) for item in overtime_outputs if item.get("path", "").endswith(".xlsx"))
+            result_workbook = openpyxl.load_workbook(result_path, data_only=True)
+            try:
+                result_sheet = result_workbook.active
+                header_row = ot.find_header_row(result_sheet)
+                header_map = ot.build_header_map(result_sheet, header_row)
+                values = {
+                    name: result_sheet.cell(header_row + 1, column).value
+                    for name, column in header_map.items()
+                }
+            finally:
+                result_workbook.close()
+            self.assertEqual(values["系统操作"], "未加")
+            self.assertIn("运维组", values["备注"])
+            for field in (
+                "加班类型", "最终加班时长（小时）", "2倍加班小时", "3倍加班小时",
+                "2倍加班天数", "3倍加班天数",
+            ):
+                self.assertIsNone(values[field], field)
         finally:
             import shutil
             shutil.rmtree(out_dir, ignore_errors=True)
@@ -1042,8 +1111,27 @@ class GenerateRosterActionTests(unittest.TestCase):
         out_dir = tempfile.mkdtemp(prefix="roster-empty-")
         try:
             config = {"org_name": "空组织", "employees": []}
-            with self.assertRaisesRegex(ValueError, "没有姓名非空"):
+            with self.assertRaisesRegex(ValueError, "没有在职员工"):
                 action_generate_roster(config, Path(out_dir))
+        finally:
+            import shutil
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+    def test_action_mixed_valid_and_missing_names_is_rejected(self):
+        from runner import action_generate_roster
+        out_dir = tempfile.mkdtemp(prefix="roster-missing-name-")
+        try:
+            config = {
+                "org_name": "测试组织",
+                "employees": [
+                    {"emp_no": "MT0001", "name": "有效员工", "dept1": "总部"},
+                    {"emp_no": "MT0002", "name": "", "dept1": "总部"},
+                    {"emp_no": "MT0003", "name": "  ", "dept1": "总部"},
+                ],
+            }
+            with self.assertRaisesRegex(ValueError, "2 名在职员工缺少姓名"):
+                action_generate_roster(config, Path(out_dir))
+            self.assertEqual(list(Path(out_dir).glob("*.xlsx")), [])
         finally:
             import shutil
             shutil.rmtree(out_dir, ignore_errors=True)
