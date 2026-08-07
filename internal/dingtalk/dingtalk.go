@@ -2,6 +2,7 @@ package dingtalk
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,36 +119,38 @@ func safeDingTalkErrorForLog(err error) string {
 }
 
 type AppConfig struct {
-	OrgID         string              `json:"org_id"`
-	Name          string              `json:"name"`
-	CorpID        string              `json:"corp_id"`
-	AppKey        string              `json:"app_key"`
-	AppSecret     string              `json:"app_secret"`
-	AgentID       string              `json:"agent_id"`
-	AdminUserID   string              `json:"-"`
-	RobotCode     string              `json:"-"`
-	AppHomeURL    string              `json:"app_home_url"`
-	RedirectURI   string              `json:"redirect_uri"`
-	Status        string              `json:"status"`
-	HRMFieldCodes map[string][]string `json:"-"`
-	HRMFieldNames map[string][]string `json:"-"`
+	OrgID           string                       `json:"org_id"`
+	Name            string                       `json:"name"`
+	CorpID          string                       `json:"corp_id"`
+	AppKey          string                       `json:"app_key"`
+	AppSecret       string                       `json:"app_secret"`
+	AgentID         string                       `json:"agent_id"`
+	AdminUserID     string                       `json:"-"`
+	RobotCode       string                       `json:"-"`
+	AppHomeURL      string                       `json:"app_home_url"`
+	RedirectURI     string                       `json:"redirect_uri"`
+	Status          string                       `json:"status"`
+	HRMFieldCodes   map[string][]string          `json:"-"`
+	HRMFieldNames   map[string][]string          `json:"-"`
+	HRMFieldOptions map[string]map[string]string `json:"-"`
 }
 
 var ErrUserNotNotifiable = errors.New("dingtalk user is not active/notifiable")
 
 type Config struct {
-	OrgID         string
-	AppKey        string
-	AppSecret     string
-	CorpID        string
-	AgentID       string
-	AdminUserID   string
-	RobotCode     string
-	AppHomeURL    string
-	RedirectURI   string
-	ProcessCodes  map[string]string
-	HRMFieldCodes map[string][]string
-	HRMFieldNames map[string][]string
+	OrgID           string
+	AppKey          string
+	AppSecret       string
+	CorpID          string
+	AgentID         string
+	AdminUserID     string
+	RobotCode       string
+	AppHomeURL      string
+	RedirectURI     string
+	ProcessCodes    map[string]string
+	HRMFieldCodes   map[string][]string
+	HRMFieldNames   map[string][]string
+	HRMFieldOptions map[string]map[string]string
 }
 
 type accessTokenCacheEntry struct {
@@ -245,18 +248,19 @@ func ConfigForOrgID(orgID string) (Config, error) {
 
 func ConfigFromOrganization(org database.Organization) Config {
 	cfg := Config{
-		OrgID:         database.NormalizeOrganizationID(org.OrgID),
-		AppKey:        strings.TrimSpace(org.DingTalkAppKey),
-		AppSecret:     strings.TrimSpace(org.DingTalkSecret),
-		CorpID:        strings.TrimSpace(org.CorpID),
-		AgentID:       strings.TrimSpace(org.DingTalkAgentID),
-		AdminUserID:   strings.TrimSpace(org.DingTalkAdminUserID),
-		RobotCode:     firstNonEmpty(organizationExtensionString(org.Extension, "dingtalk_robot_code"), org.DingTalkAppKey),
-		AppHomeURL:    strings.TrimRight(strings.TrimSpace(org.AppHomeURL), "/"),
-		RedirectURI:   strings.TrimSpace(org.RedirectURI),
-		ProcessCodes:  processCodesFromOrganizationExtension(org.Extension),
-		HRMFieldCodes: hrmFieldMapFromOrganizationExtension(org.Extension, "dingtalk_hrm_field_codes"),
-		HRMFieldNames: hrmFieldMapFromOrganizationExtension(org.Extension, "dingtalk_hrm_field_names"),
+		OrgID:           database.NormalizeOrganizationID(org.OrgID),
+		AppKey:          strings.TrimSpace(org.DingTalkAppKey),
+		AppSecret:       strings.TrimSpace(org.DingTalkSecret),
+		CorpID:          strings.TrimSpace(org.CorpID),
+		AgentID:         strings.TrimSpace(org.DingTalkAgentID),
+		AdminUserID:     strings.TrimSpace(org.DingTalkAdminUserID),
+		RobotCode:       firstNonEmpty(organizationExtensionString(org.Extension, "dingtalk_robot_code"), org.DingTalkAppKey),
+		AppHomeURL:      strings.TrimRight(strings.TrimSpace(org.AppHomeURL), "/"),
+		RedirectURI:     strings.TrimSpace(org.RedirectURI),
+		ProcessCodes:    processCodesFromOrganizationExtension(org.Extension),
+		HRMFieldCodes:   hrmFieldMapFromOrganizationExtension(org.Extension, "dingtalk_hrm_field_codes"),
+		HRMFieldNames:   hrmFieldMapFromOrganizationExtension(org.Extension, "dingtalk_hrm_field_names"),
+		HRMFieldOptions: hrmFieldOptionsFromOrganizationExtension(org.Extension),
 	}
 	// default org: env fallback for admin is encapsulated here.
 	if cfg.OrgID == database.DefaultOrganizationID && cfg.AdminUserID == "" {
@@ -282,6 +286,7 @@ func (cfg Config) normalized() Config {
 	cfg.ProcessCodes = normalizeProcessCodes(cfg.ProcessCodes)
 	cfg.HRMFieldCodes = normalizeHRMFieldMap(cfg.HRMFieldCodes)
 	cfg.HRMFieldNames = normalizeHRMFieldMap(cfg.HRMFieldNames)
+	cfg.HRMFieldOptions = normalizeHRMFieldOptions(cfg.HRMFieldOptions)
 	return cfg
 }
 
@@ -322,17 +327,18 @@ func InitWithConfig(cfg AppConfig) error {
 
 func configFromAppConfig(cfg AppConfig) Config {
 	result := Config{
-		OrgID:         cfg.OrgID,
-		AppKey:        cfg.AppKey,
-		AppSecret:     cfg.AppSecret,
-		CorpID:        cfg.CorpID,
-		AgentID:       cfg.AgentID,
-		AdminUserID:   cfg.AdminUserID,
-		RobotCode:     cfg.RobotCode,
-		AppHomeURL:    cfg.AppHomeURL,
-		RedirectURI:   cfg.RedirectURI,
-		HRMFieldCodes: cfg.HRMFieldCodes,
-		HRMFieldNames: cfg.HRMFieldNames,
+		OrgID:           cfg.OrgID,
+		AppKey:          cfg.AppKey,
+		AppSecret:       cfg.AppSecret,
+		CorpID:          cfg.CorpID,
+		AgentID:         cfg.AgentID,
+		AdminUserID:     cfg.AdminUserID,
+		RobotCode:       cfg.RobotCode,
+		AppHomeURL:      cfg.AppHomeURL,
+		RedirectURI:     cfg.RedirectURI,
+		HRMFieldCodes:   cfg.HRMFieldCodes,
+		HRMFieldNames:   cfg.HRMFieldNames,
+		HRMFieldOptions: cfg.HRMFieldOptions,
 	}.normalized()
 	if result.OrgID == database.DefaultOrganizationID {
 		result.HRMFieldCodes = mergeHRMFieldMaps(result.HRMFieldCodes, hrmFieldCodesFromEnv())
@@ -344,18 +350,19 @@ func configFromAppConfig(cfg AppConfig) Config {
 func appConfigFromConfig(cfg Config) AppConfig {
 	cfg = cfg.normalized()
 	return AppConfig{
-		OrgID:         cfg.OrgID,
-		CorpID:        cfg.CorpID,
-		AppKey:        cfg.AppKey,
-		AppSecret:     cfg.AppSecret,
-		AgentID:       cfg.AgentID,
-		AdminUserID:   cfg.AdminUserID,
-		RobotCode:     cfg.RobotCode,
-		AppHomeURL:    cfg.AppHomeURL,
-		RedirectURI:   cfg.RedirectURI,
-		Status:        "active",
-		HRMFieldCodes: cfg.HRMFieldCodes,
-		HRMFieldNames: cfg.HRMFieldNames,
+		OrgID:           cfg.OrgID,
+		CorpID:          cfg.CorpID,
+		AppKey:          cfg.AppKey,
+		AppSecret:       cfg.AppSecret,
+		AgentID:         cfg.AgentID,
+		AdminUserID:     cfg.AdminUserID,
+		RobotCode:       cfg.RobotCode,
+		AppHomeURL:      cfg.AppHomeURL,
+		RedirectURI:     cfg.RedirectURI,
+		Status:          "active",
+		HRMFieldCodes:   cfg.HRMFieldCodes,
+		HRMFieldNames:   cfg.HRMFieldNames,
+		HRMFieldOptions: cfg.HRMFieldOptions,
 	}
 }
 
@@ -638,6 +645,62 @@ func hrmFieldMapFromOrganizationExtension(extension map[string]interface{}, exte
 		}
 	}
 	return normalizeHRMFieldMap(result)
+}
+
+func hrmFieldOptionsFromOrganizationExtension(extension map[string]interface{}) map[string]map[string]string {
+	if extension == nil {
+		return nil
+	}
+	raw, ok := extension["dingtalk_hrm_field_options"]
+	if !ok || raw == nil {
+		return nil
+	}
+	result := map[string]map[string]string{}
+	fields, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	for fieldKey, rawOptions := range fields {
+		options, ok := rawOptions.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for code, rawLabel := range options {
+			label, ok := rawLabel.(string)
+			if !ok {
+				continue
+			}
+			if result[fieldKey] == nil {
+				result[fieldKey] = map[string]string{}
+			}
+			result[fieldKey][code] = label
+		}
+	}
+	return normalizeHRMFieldOptions(result)
+}
+
+func normalizeHRMFieldOptions(values map[string]map[string]string) map[string]map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]map[string]string)
+	for _, fieldKey := range supportedHRMFieldKeys {
+		for code, label := range values[fieldKey] {
+			code = strings.TrimSpace(code)
+			label = strings.TrimSpace(label)
+			if code == "" || label == "" {
+				continue
+			}
+			if result[fieldKey] == nil {
+				result[fieldKey] = make(map[string]string)
+			}
+			result[fieldKey][code] = label
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func stringListFromConfigValue(value interface{}) []string {
@@ -1246,6 +1309,7 @@ type UserInfo struct {
 	ActualRegularDate      string                 `json:"actual_regular_date"`
 	ProbationEndDate       string                 `json:"probation_end_date"`
 	EmploymentType         string                 `json:"employment_type"`
+	EmploymentTypeCode     string                 `json:"employment_type_code"`
 	JobLevel               string                 `json:"job_level"`
 	JobFamily              string                 `json:"job_family"`
 	HRMFieldSyncStatus     string                 `json:"hrm_field_sync_status"`
@@ -1671,14 +1735,15 @@ func prefixedDingTalkSource(apiName, source string) string {
 }
 
 type hrmRegularDates struct {
-	Planned          string
-	Actual           string
-	ProbationEndDate string
-	EmploymentType   string
-	JobLevel         string
-	JobFamily        string
-	Position         string
-	PositionSource   string
+	Planned            string
+	Actual             string
+	ProbationEndDate   string
+	EmploymentType     string
+	EmploymentTypeCode string
+	JobLevel           string
+	JobFamily          string
+	Position           string
+	PositionSource     string
 }
 
 func enrichUsersWithHRMFields(accessToken string, users map[string]UserInfo) error {
@@ -1715,6 +1780,7 @@ func enrichUsersWithHRMFieldsForOrg(accessToken string, users map[string]UserInf
 			user.ActualRegularDate = regularDates.Actual
 			user.ProbationEndDate = regularDates.ProbationEndDate
 			user.EmploymentType = regularDates.EmploymentType
+			user.EmploymentTypeCode = regularDates.EmploymentTypeCode
 			user.JobLevel = regularDates.JobLevel
 			user.JobFamily = regularDates.JobFamily
 			if strings.TrimSpace(user.Position) == "" && strings.TrimSpace(regularDates.Position) != "" {
@@ -1818,7 +1884,7 @@ func parseHRMEmployeeFields(fields []interface{}, cfg Config) hrmRegularDates {
 			result.ProbationEndDate = value
 		}
 		if result.EmploymentType == "" && matchesConfiguredHRMField(fieldMap, cfg, hrmFieldEmploymentType) {
-			result.EmploymentType = extractHRMTextFieldValue(fieldMap)
+			result.EmploymentTypeCode, result.EmploymentType = resolveHRMEmploymentType(fieldMap, cfg)
 		}
 		if result.JobLevel == "" && matchesConfiguredHRMField(fieldMap, cfg, hrmFieldJobLevel) {
 			result.JobLevel = extractHRMTextFieldValue(fieldMap)
@@ -3215,6 +3281,147 @@ func extractHRMTextFieldValue(field map[string]interface{}) string {
 	return firstNonEmptyStringValue(field["value"], field["label"], field["text"], field["name"])
 }
 
+func resolveHRMEmploymentType(field map[string]interface{}, cfg Config) (string, string) {
+	rawValue, responseLabel := extractHRMOptionValue(field)
+	if rawValue == "" && responseLabel == "" {
+		return "", ""
+	}
+	if responseLabel != "" && responseLabel != rawValue {
+		return rawValue, responseLabel
+	}
+	if rawValue != "" {
+		if label := strings.TrimSpace(cfg.normalized().HRMFieldOptions[hrmFieldEmploymentType][rawValue]); label != "" {
+			return rawValue, label
+		}
+		if containsHanText(rawValue) {
+			return "", rawValue
+		}
+		return rawValue, fmt.Sprintf("未知类型（代码：%s）", rawValue)
+	}
+	return "", responseLabel
+}
+
+func extractHRMOptionValue(field map[string]interface{}) (string, string) {
+	values, ok := field["field_value_list"].([]interface{})
+	if !ok {
+		values, _ = field["fieldValueList"].([]interface{})
+	}
+	for _, item := range values {
+		valueMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		rawValue := scalarStringPreserveZero(valueMap["value"])
+		if rawValue == "" {
+			rawValue = scalarStringPreserveZero(valueMap["code"])
+		}
+		label := firstNonEmptyStringValue(
+			valueMap["label"], valueMap["text"], valueMap["name"],
+			valueMap["field_name"], valueMap["fieldName"],
+			valueMap["option_name"], valueMap["optionName"],
+		)
+		if label == "" && rawValue != "" {
+			label = findHRMOptionLabel(field, rawValue)
+		}
+		if rawValue != "" || label != "" {
+			return rawValue, label
+		}
+	}
+	rawValue := scalarStringPreserveZero(field["value"])
+	label := firstNonEmptyStringValue(field["label"], field["text"], field["option_name"], field["optionName"])
+	if label == "" && rawValue != "" {
+		label = findHRMOptionLabel(field, rawValue)
+	}
+	return rawValue, label
+}
+
+func findHRMOptionLabel(field map[string]interface{}, code string) string {
+	for _, key := range []string{
+		"options", "option_list", "optionList", "field_options", "fieldOptions",
+		"option_data_list", "optionDataList", "field_value_options", "fieldValueOptions",
+	} {
+		switch options := field[key].(type) {
+		case map[string]interface{}:
+			switch option := options[code].(type) {
+			case map[string]interface{}:
+				if label := firstNonEmptyStringValue(option["label"], option["text"], option["name"], option["field_name"], option["fieldName"]); label != "" {
+					return label
+				}
+			default:
+				if label := firstNonEmptyStringValue(option); label != "" {
+					return label
+				}
+			}
+		case []interface{}:
+			for _, option := range options {
+				optionMap, ok := option.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				optionCode := firstNonEmptyPreserveZero(optionMap["value"], optionMap["code"], optionMap["id"], optionMap["key"])
+				if optionCode != code {
+					continue
+				}
+				if label := firstNonEmptyStringValue(optionMap["label"], optionMap["text"], optionMap["name"], optionMap["field_name"], optionMap["fieldName"]); label != "" {
+					return label
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyPreserveZero(values ...interface{}) string {
+	for _, value := range values {
+		if text := scalarStringPreserveZero(value); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func scalarStringPreserveZero(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+	case int:
+		return strconv.Itoa(typed)
+	case int8:
+		return strconv.FormatInt(int64(typed), 10)
+	case int16:
+		return strconv.FormatInt(int64(typed), 10)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	default:
+		return ""
+	}
+}
+
+func containsHanText(value string) bool {
+	for _, r := range value {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveManagerNames(users map[string]UserInfo) {
 	for userID, user := range users {
 		if strings.TrimSpace(user.ManagerUserID) == "" || strings.TrimSpace(user.ManagerName) != "" {
@@ -3363,7 +3570,12 @@ func mergeDingTalkDepartmentIDs(groups ...[]int64) []int64 {
 type AttendanceRecord struct {
 	UserID            string `json:"userId"`
 	CheckType         string `json:"checkType"` // OnDuty / OffDuty
+	WorkDate          string `json:"workDate"`
 	UserCheckTime     string `json:"userCheckTime"`
+	BaseCheckTime     string `json:"baseCheckTime"`
+	PlanCheckTime     string `json:"planCheckTime"`
+	GroupID           int64  `json:"groupId"`
+	PlanID            int64  `json:"planId"`
 	LocationResult    string `json:"locationResult"` // Normal / Outside
 	TimeResult        string `json:"timeResult"`     // Normal / Late / Early
 	SourceType        string `json:"sourceType"`
@@ -3446,7 +3658,12 @@ func GetAttendanceForOrg(orgID string, userIDs []string, startDate, endDate stri
 				record := AttendanceRecord{
 					UserID:            userID,
 					CheckType:         getString(m, "checkType"),
+					WorkDate:          formatDingTalkDateTime(m["workDate"]),
 					UserCheckTime:     formatDingTalkDateTime(m["userCheckTime"]),
+					BaseCheckTime:     formatDingTalkDateTime(m["baseCheckTime"]),
+					PlanCheckTime:     formatDingTalkDateTime(m["planCheckTime"]),
+					GroupID:           int64(getFloat(m, "groupId")),
+					PlanID:            int64(getFloat(m, "planId")),
 					LocationResult:    getString(m, "locationResult"),
 					TimeResult:        getString(m, "timeResult"),
 					SourceType:        getString(m, "sourceType"),
@@ -3521,73 +3738,176 @@ func GetApprovals(processCode, startDate, endDate string) ([]ApprovalInstance, e
 }
 
 func GetApprovalsForOrg(orgID, processCode, startDate, endDate string) ([]ApprovalInstance, error) {
-	accessToken, err := GetAccessTokenForOrg(orgID)
+	return GetApprovalsForOrgContext(context.Background(), orgID, processCode, startDate, endDate)
+}
+
+const (
+	approvalQueryMaxWindow = 120 * 24 * time.Hour
+	approvalQueryClockSkew = time.Minute
+)
+
+type approvalQueryWindow struct {
+	Start time.Time
+	End   time.Time
+}
+
+// ApprovalFetchResult keeps successfully fetched details while reporting
+// instance-detail failures separately so callers can persist partial results.
+type ApprovalFetchResult struct {
+	Instances       []ApprovalInstance
+	DetailFailCount int
+}
+
+func buildApprovalQueryWindows(startDate, endDate string, now time.Time) ([]approvalQueryWindow, error) {
+	location := ApprovalBusinessLocation()
+	now = now.In(location)
+	start, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(startDate), location)
+	if err != nil {
+		return nil, fmt.Errorf("start_date must use YYYY-MM-DD")
+	}
+	endDay, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(endDate), location)
+	if err != nil {
+		return nil, fmt.Errorf("end_date must use YYYY-MM-DD")
+	}
+	if endDay.Before(start) {
+		return nil, fmt.Errorf("end_date must not be before start_date")
+	}
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location)
+	if endDay.After(today) {
+		return nil, fmt.Errorf("end_date must not be in the future")
+	}
+
+	requestedEnd := endDay.AddDate(0, 0, 1)
+	safeEnd := now.Add(-approvalQueryClockSkew)
+	if requestedEnd.Before(safeEnd) {
+		safeEnd = requestedEnd
+	}
+	if !safeEnd.After(start) {
+		return nil, fmt.Errorf("approval query range has not started yet")
+	}
+
+	windows := make([]approvalQueryWindow, 0, 1)
+	for windowStart := start; windowStart.Before(safeEnd); {
+		windowEnd := windowStart.Add(approvalQueryMaxWindow)
+		if windowEnd.After(safeEnd) {
+			windowEnd = safeEnd
+		}
+		windows = append(windows, approvalQueryWindow{Start: windowStart, End: windowEnd})
+		windowStart = windowEnd
+	}
+	return windows, nil
+}
+
+// GetApprovalsForOrgContext queries one process code in safe 120-day windows.
+// IDs are deduplicated across adjacent windows before details are fetched.
+func GetApprovalsForOrgContext(ctx context.Context, orgID, processCode, startDate, endDate string) ([]ApprovalInstance, error) {
+	result, err := GetApprovalsForOrgContextWithResult(ctx, orgID, processCode, startDate, endDate)
 	if err != nil {
 		return nil, err
 	}
-
-	// 瑙ｆ瀽鏃ユ湡涓烘绉掓椂闂存埑
-	start, _ := time.Parse("2006-01-02", startDate)
-	end, _ := time.Parse("2006-01-02", endDate)
-
-	var allInstances []ApprovalInstance
-	cursor := 0
-
-	for {
-		body := map[string]interface{}{
-			"process_code": processCode,
-			"start_time":   start.UnixMilli(),
-			"end_time":     end.AddDate(0, 0, 1).UnixMilli(),
-			"size":         20,
-			"cursor":       cursor,
-		}
-		resp, err := postJSONOAPI(
-			fmt.Sprintf("https://oapi.dingtalk.com/topapi/processinstance/listids?access_token=%s", accessToken),
-			body,
+	if result.DetailFailCount > 0 {
+		return nil, newSyncError(
+			ErrorCodeResponseInvalid,
+			"部分审批详情拉取失败",
+			fmt.Errorf("approval detail failures: %d", result.DetailFailCount),
 		)
-		if err != nil {
-			return nil, err
-		}
+	}
+	return result.Instances, nil
+}
 
-		errcode, _ := resp["errcode"].(float64)
-		if errcode != 0 {
-			errmsg, _ := resp["errmsg"].(string)
-			return nil, fmt.Errorf("鑾峰彇瀹℃壒瀹炰緥 ID 澶辫触: %s", errmsg)
-		}
-
-		result, ok := resp["result"].(map[string]interface{})
-		if !ok {
-			break
-		}
-
-		idList, ok := result["list"].([]interface{})
-		if !ok || len(idList) == 0 {
-			break
-		}
-
-		// 閫愪釜鑾峰彇瀹℃壒璇︽儏
-		for _, id := range idList {
-			instanceID, ok := id.(string)
-			if !ok {
-				continue
-			}
-			instance, err := getApprovalDetail(accessToken, instanceID)
-			if err != nil {
-				logrus.Warnf("鑾峰彇瀹℃壒瀹炰緥 %s 璇︽儏澶辫触: %v", instanceID, err)
-				continue
-			}
-			allInstances = append(allInstances, *instance)
-		}
-
-		nextCursor, _ := result["next_cursor"].(float64)
-		if nextCursor == 0 {
-			break
-		}
-		cursor = int(nextCursor)
+// GetApprovalsForOrgContextWithResult returns successful details and a safe
+// failure count. List-ID failures still fail the whole process because no
+// complete process snapshot can be established.
+func GetApprovalsForOrgContextWithResult(ctx context.Context, orgID, processCode, startDate, endDate string) (ApprovalFetchResult, error) {
+	result := ApprovalFetchResult{}
+	processCode = strings.TrimSpace(processCode)
+	if processCode == "" {
+		return result, fmt.Errorf("process_code is required")
+	}
+	windows, err := buildApprovalQueryWindows(startDate, endDate, time.Now())
+	if err != nil {
+		return result, err
+	}
+	accessToken, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return result, err
 	}
 
-	logrus.Infof("dingtalk sync approvals complete: %d", len(allInstances))
-	return allInstances, nil
+	instanceIDs := make([]string, 0)
+	seenIDs := make(map[string]struct{})
+	for _, window := range windows {
+		cursor := 0
+		for {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
+			body := map[string]interface{}{
+				"process_code": processCode,
+				"start_time":   window.Start.UnixMilli(),
+				"end_time":     window.End.UnixMilli(),
+				"size":         20,
+				"cursor":       cursor,
+			}
+			resp, err := postJSONOAPIContext(ctx,
+				fmt.Sprintf("https://oapi.dingtalk.com/topapi/processinstance/listids?access_token=%s", accessToken),
+				body,
+			)
+			if err != nil {
+				return result, err
+			}
+
+			errcode, _ := resp["errcode"].(float64)
+			if errcode != 0 {
+				errmsg, _ := resp["errmsg"].(string)
+				return result, newSyncError(ErrorCodeResponseInvalid, "钉钉审批查询失败", fmt.Errorf("list approval ids failed: %s", sanitizeDingTalkDiagnostic(errmsg)))
+			}
+
+			result, ok := resp["result"].(map[string]interface{})
+			if !ok {
+				break
+			}
+			idList, _ := result["list"].([]interface{})
+			instanceIDs = appendUniqueApprovalInstanceIDs(instanceIDs, seenIDs, idList)
+			nextCursor, _ := result["next_cursor"].(float64)
+			if nextCursor == 0 || len(idList) == 0 {
+				break
+			}
+			cursor = int(nextCursor)
+		}
+	}
+
+	allInstances := make([]ApprovalInstance, 0, len(instanceIDs))
+	for _, instanceID := range instanceIDs {
+		instance, err := getApprovalDetailContext(ctx, accessToken, instanceID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
+			result.DetailFailCount++
+			logrus.Warnf("get approval detail failed process_instance_id=%s error_code=%s", instanceID, SyncErrorCode(err))
+			continue
+		}
+		allInstances = append(allInstances, *instance)
+	}
+	result.Instances = allInstances
+	logrus.Infof("dingtalk sync approvals complete: success=%d failed=%d", len(allInstances), result.DetailFailCount)
+	return result, nil
+}
+
+func appendUniqueApprovalInstanceIDs(existing []string, seen map[string]struct{}, rawIDs []interface{}) []string {
+	for _, rawID := range rawIDs {
+		instanceID, ok := rawID.(string)
+		instanceID = strings.TrimSpace(instanceID)
+		if !ok || instanceID == "" {
+			continue
+		}
+		if _, exists := seen[instanceID]; exists {
+			continue
+		}
+		seen[instanceID] = struct{}{}
+		existing = append(existing, instanceID)
+	}
+	return existing
 }
 
 // GetApprovalDetailForOrg 按组织凭证拉取单个审批实例详情。
@@ -3604,10 +3924,14 @@ func GetApprovalDetailForOrg(orgID, instanceID string) (*ApprovalInstance, error
 }
 
 func getApprovalDetail(accessToken, instanceID string) (*ApprovalInstance, error) {
+	return getApprovalDetailContext(context.Background(), accessToken, instanceID)
+}
+
+func getApprovalDetailContext(ctx context.Context, accessToken, instanceID string) (*ApprovalInstance, error) {
 	body := map[string]interface{}{
 		"process_instance_id": instanceID,
 	}
-	resp, err := postJSONOAPI(
+	resp, err := postJSONOAPIContext(ctx,
 		fmt.Sprintf("https://oapi.dingtalk.com/topapi/processinstance/get?access_token=%s", accessToken),
 		body,
 	)
@@ -3618,12 +3942,12 @@ func getApprovalDetail(accessToken, instanceID string) (*ApprovalInstance, error
 	errcode, _ := resp["errcode"].(float64)
 	if errcode != 0 {
 		errmsg, _ := resp["errmsg"].(string)
-		return nil, fmt.Errorf("%s", errmsg)
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉审批详情拉取失败", fmt.Errorf("get approval detail failed: %s", sanitizeDingTalkDiagnostic(errmsg)))
 	}
 
 	pi, ok := resp["process_instance"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("瀹℃壒璇︽儏鏍煎紡寮傚父")
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉审批详情格式异常", errors.New("approval detail response missing process_instance"))
 	}
 
 	instance := &ApprovalInstance{
@@ -3651,12 +3975,16 @@ func getApprovalDetail(accessToken, instanceID string) (*ApprovalInstance, error
 
 // postJSON 鍙戦€?POST 璇锋眰鍒版柊鐗?API锛坅pi.dingtalk.com锛?
 func postJSON(endpoint string, body interface{}, headers map[string]string) (map[string]interface{}, error) {
+	return postJSONContext(context.Background(), endpoint, body, headers)
+}
+
+func postJSONContext(ctx context.Context, endpoint string, body interface{}, headers map[string]string) (map[string]interface{}, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉请求数据格式异常", err)
 	}
 
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉请求地址异常", fmt.Errorf("create request %s failed: %s", safeDingTalkEndpoint(endpoint), sanitizeDingTalkDiagnostic(err.Error())))
 	}
@@ -3695,6 +4023,10 @@ func postJSON(endpoint string, body interface{}, headers map[string]string) (map
 // postJSONOAPI 鍙戦€?POST 璇锋眰鍒版棫鐗?API锛坥api.dingtalk.com锛?
 func postJSONOAPI(url string, body interface{}) (map[string]interface{}, error) {
 	return postJSON(url, body, nil)
+}
+
+func postJSONOAPIContext(ctx context.Context, url string, body interface{}) (map[string]interface{}, error) {
+	return postJSONContext(ctx, url, body, nil)
 }
 
 // getJSON 鍙戦€?GET 璇锋眰

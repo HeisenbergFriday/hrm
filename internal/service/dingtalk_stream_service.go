@@ -213,6 +213,15 @@ func (s *DingTalkStreamService) ProcessEvent(ctx context.Context, header *event.
 		return StreamEventResultSuccess, nil
 
 	default:
+		// 安全诊断日志：记录未知事件的 eventType 和 payload 字段名（不含值），
+		// 用于确认钉钉是否下发"机器人进群/退群"等事件。
+		// 严禁记录 SessionWebhook、Token、Secret、消息正文等敏感信息。
+		fieldNames := extractPayloadFieldNames(rawData)
+		log.Printf(
+			"钉钉未知事件诊断: org_id=%s event_id=%s type=%s field_names=%v",
+			s.orgID, eventID, eventType, fieldNames,
+		)
+
 		reason := fmt.Sprintf("unsupported event type: %s", eventType)
 		if err := s.eventRepo.MarkSkipped(s.orgID, eventID, reason); err != nil {
 			log.Printf("钉钉未知事件标记跳过失败，返回 LATER: event_id=%s err=%v", eventID, err)
@@ -265,6 +274,41 @@ type dingTalkEventFields struct {
 	Result            string
 	StaffID           string
 	TaskID            string
+}
+
+// extractPayloadFieldNames 解析 JSON payload 并返回顶层字段名列表（不含值）。
+// 用于诊断日志，帮助确认钉钉下发的事件类型和字段结构。
+// 严禁返回敏感字段的值，只返回字段名。
+func extractPayloadFieldNames(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil
+	}
+	// 敏感字段黑名单，这些字段名不出现在日志中
+	sensitiveFields := map[string]bool{
+		"sessionWebhook": true,
+		"sessionwebhook": true,
+		"token":          true,
+		"secret":         true,
+		"appSecret":      true,
+		"appsecret":      true,
+		"access_token":   true,
+		"accessToken":    true,
+		"password":       true,
+		"authorization":  true,
+	}
+	names := make([]string, 0, len(payload))
+	for key := range payload {
+		if sensitiveFields[key] {
+			continue
+		}
+		names = append(names, key)
+	}
+	return names
 }
 
 func parseDingTalkEventPayload(raw string) dingTalkEventFields {

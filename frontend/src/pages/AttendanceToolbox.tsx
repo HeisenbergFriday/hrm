@@ -66,6 +66,13 @@ type SyncState = {
   lastSyncAt?: string
   error?: string
 }
+type DingtalkSyncSelectionRequest = {
+  start_date: string
+  end_date: string
+  flow_keys: string[]
+  max_instances?: number
+  padding_days?: number
+}
 
 interface FileField {
   name: string
@@ -106,6 +113,15 @@ interface MaternityLeaveOverride {
 
 export const getAttendanceToolboxDownloadableFiles = (run: AttendanceToolboxRunResponse | null | undefined) =>
   (run?.files || []).filter((file) => file.kind !== 'meta')
+
+export const getDingtalkSyncExportFile = (
+  run: AttendanceToolboxRunResponse | null | undefined,
+  flowKey: string,
+) => {
+  const files = run?.files || []
+  // 严格匹配 kind=export 且 flow_key 精确等于目标 flow_key，禁止回退到第一个 export。
+  return files.find((file) => file.kind === 'export' && file.flow_key === flowKey)
+}
 
 export interface SubsidyAuditMeta {
   targetMonth: string
@@ -226,11 +242,11 @@ const modules: ModuleConfig[] = [
   {
     key: 'subsidy',
     title: '补贴扣款',
-    description: '上传补贴扣款、签到、作息和考勤数据，生成核对表；存在差异时会返回压缩包。',
+    description: '数据来源：钉钉考勤打卡 → 考勤统计 → 报表管理 → 月度汇总表（补贴及扣款）。请在钉钉后台导出对应月份的Excel后上传，配合作息、签到和考勤数据生成核对表。',
     outputName: '补贴扣款核对表.xlsx',
     zipOutputName: '补贴扣款结果.zip',
     fileFields: [
-      { name: 'subsidy_src', label: '补贴扣款表', required: true, templateId: 'subsidy_source' },
+      { name: 'subsidy_src', label: '钉钉月度汇总表（补贴及扣款）', required: true, templateId: 'subsidy_source' },
       { name: 'subsidy_checkin', label: '签到表', required: true, templateId: 'activity_checkin' },
       { name: 'subsidy_schedule', label: '作息表', required: true, templateId: 'schedule' },
       { name: 'subsidy_attendance', label: '考勤表', templateId: 'subsidy_attendance' },
@@ -464,9 +480,7 @@ const fieldRequirements: Record<string, { label: string; badges: FieldBadge[] }[
   ],
   final: [
     { label: '在职花名册', badges: [
-      { label: '工号', required: true }, { label: '姓名', required: true },
-      { label: '合同主体' }, { label: '一级部门' }, { label: '二级部门' }, { label: '三级部门' },
-      { label: '岗位' }, { label: '员工类型' }, { label: '入职日期' }, { label: '离职日期' },
+      { label: '姓名', required: true },
     ]},
     { label: '作息表', badges: [
       { label: '作息时间表', required: true }, { label: '周数', required: true },
@@ -481,8 +495,9 @@ const fieldRequirements: Record<string, { label: string; badges: FieldBadge[] }[
       { label: '2倍加班天数' }, { label: '3倍加班天数' },
       { label: '发起人工号' }, { label: '发起人姓名' },
     ]},
-    { label: '补贴扣款表', badges: [
-      { label: '姓名', required: true }, { label: '工号', required: true }, { label: '旷工天数', required: true },
+    { label: '钉钉月度汇总表（补贴及扣款）', badges: [
+      { label: '姓名', required: true }, { label: '工号' }, { label: '考勤组' },
+      { label: '部门' }, { label: '岗位' }, { label: '旷工天数', required: true },
     ]},
   ],
   parttime: [
@@ -537,6 +552,8 @@ const AttendanceToolbox: React.FC = () => {
   const [missingFieldName, setMissingFieldName] = useState<string | null>(null)
   const fieldCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const [fileLists, setFileLists] = useState<Record<string, UploadFile[]>>({})
+  const fileListsRef = useRef<Record<string, UploadFile[]>>({})
+  const userFileChangeVersionsRef = useRef<Record<string, number>>({})
   const [textValues, setTextValues] = useState<Record<string, string>>({})
   const [defaultsLoading, setDefaultsLoading] = useState(false)
   const [runningModule, setRunningModule] = useState<ToolboxModuleKey | 'quick' | null>(null)
@@ -564,7 +581,12 @@ const AttendanceToolbox: React.FC = () => {
   )
   const [rosterSync, setRosterSync] = useState<SyncState>({ loading: false })
   const [transferSync, setTransferSync] = useState<SyncState>({ loading: false })
+  const [parttimePunchSync, setParttimePunchSync] = useState<SyncState>({ loading: false })
+  // 默认上一个自然月（需求：默认上一个自然月）。
+  const [parttimePunchMonth, setParttimePunchMonth] = useState<dayjs.Dayjs | null>(() => dayjs().subtract(1, 'month'))
   const autoSyncStartedRef = useRef(false)
+  const autoRosterSyncStartedRef = useRef(false)
+  const autoTransferSyncStartedRef = useRef(false)
 
   // DingTalk sync specific state
   const [dingtalkDateRange, setDingtalkDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(
@@ -630,10 +652,18 @@ const AttendanceToolbox: React.FC = () => {
   }, [refreshTemplateMeta])
 
   const setFieldFiles = useCallback((fieldName: string, list: UploadFile[]) => {
-    setFileLists((prev) => ({ ...prev, [fieldName]: list }))
+    const next = { ...fileListsRef.current, [fieldName]: list }
+    fileListsRef.current = next
+    userFileChangeVersionsRef.current[fieldName] = (userFileChangeVersionsRef.current[fieldName] || 0) + 1
+    setFileLists(next)
   }, [])
 
-  const applySyncedFile = useCallback((fieldNames: string[], fileName: string, blob: Blob) => {
+  const applySyncedFile = useCallback((
+    fieldNames: string[],
+    fileName: string,
+    blob: Blob,
+    canApply?: (fieldName: string, currentFiles: UploadFile[]) => boolean,
+  ) => {
     const syncedAt = Date.now()
     // lastModifiedDate is a legacy read-only File getter in modern browsers;
     // assigning it via Object.assign throws:
@@ -644,29 +674,72 @@ const AttendanceToolbox: React.FC = () => {
     }) as RcFile
     uploadFile.uid = `auto-sync-file-${syncedAt}`
 
-    setFileLists((prev) => {
-      const next = { ...prev }
-      fieldNames.forEach((fieldName, index) => {
-        next[fieldName] = [{
-          uid: `auto-sync-${fieldName}-${syncedAt}-${index}`,
-          name: uploadFile.name,
-          status: 'done',
-          percent: 100,
-          size: uploadFile.size,
-          type: uploadFile.type,
-          originFileObj: uploadFile,
-        }]
-      })
-      return next
+    const appliedFieldNames: string[] = []
+    const next = { ...fileListsRef.current }
+    fieldNames.forEach((fieldName, index) => {
+      const currentFiles = next[fieldName] || []
+      if (canApply && !canApply(fieldName, currentFiles)) return
+      next[fieldName] = [{
+        uid: `auto-sync-${fieldName}-${syncedAt}-${index}`,
+        name: uploadFile.name,
+        status: 'done',
+        percent: 100,
+        size: uploadFile.size,
+        type: uploadFile.type,
+        originFileObj: uploadFile,
+      }]
+      appliedFieldNames.push(fieldName)
     })
+    fileListsRef.current = next
+    setFileLists(next)
 
-    setUploadWarnings((prev) => {
-      const next = { ...prev }
-      fieldNames.forEach((fieldName) => {
-        delete next[fieldName]
+    if (appliedFieldNames.length > 0) {
+      setUploadWarnings((prev) => {
+        const nextWarnings = { ...prev }
+        appliedFieldNames.forEach((fieldName) => {
+          delete nextWarnings[fieldName]
+        })
+        return nextWarnings
       })
-      return next
-    })
+    }
+    return appliedFieldNames
+  }, [])
+
+  const fetchDingtalkExport = useCallback(async (
+    request: DingtalkSyncSelectionRequest,
+    flowKey: string,
+  ): Promise<Blob> => {
+    let response: unknown
+    try {
+      response = await attendanceToolboxAPI.runDingtalkSyncStructured(request)
+    } catch (structuredError) {
+      if (!shouldFallbackToLegacyToolboxAPI(structuredError)) {
+        throw structuredError
+      }
+      // Compatibility for servers without the structured workflow endpoint.
+      // Never enter this branch after a successful structured sync.
+      const legacyBlob = await attendanceToolboxAPI.runDingtalkSync(request) as unknown as Blob
+      if (legacyBlob.type === 'application/zip' || legacyBlob.type === 'application/x-zip-compressed') {
+        throw new Error('服务器版本暂不支持从多文件结果中自动选择业务表，请联系管理员升级')
+      }
+      return legacyBlob
+    }
+
+    const run = (response as { data?: AttendanceToolboxRunResponse })?.data
+      || (response as AttendanceToolboxRunResponse)
+    if (!run?.run_id) {
+      throw new Error('同步完成，但未返回结果编号')
+    }
+    const exportFile = getDingtalkSyncExportFile(run, flowKey)
+    if (!exportFile) {
+      throw new Error('同步完成，但未生成可用于自动回填的业务表')
+    }
+    try {
+      return await attendanceToolboxAPI.downloadRunFile(run.run_id, exportFile.file_key) as unknown as Blob
+    } catch (downloadError) {
+      // 结构化同步已经成功；下载失败只提示，禁止重新触发钉钉同步。
+      throw downloadError
+    }
   }, [])
 
   const syncLeaveSourceFromDingtalk = useCallback(async () => {
@@ -677,16 +750,12 @@ const AttendanceToolbox: React.FC = () => {
 
     setLeaveSourceSync({ loading: true })
     try {
-      const blob = await attendanceToolboxAPI.runDingtalkSync({
+      const blob = await fetchDingtalkExport({
         start_date: leaveSourceDateRange[0].format('YYYY-MM-DD'),
         end_date: leaveSourceDateRange[1].format('YYYY-MM-DD'),
         flow_keys: ['leave'],
         padding_days: LEAVE_SYNC_PADDING_DAYS,
-      }) as unknown as Blob
-
-      if (blob.type === 'application/zip') {
-        throw new Error('请假数据拉取返回了多个文件，请稍后重试或改用手动上传')
-      }
+      }, 'leave')
 
       applySyncedFile([...AUTO_SYNC_UPLOADS.leave], '请假系统导出_钉钉同步.xlsx', blob)
       setLeaveSourceSync({ loading: false, lastSyncAt: dayjs().format('YYYY-MM-DD HH:mm') })
@@ -696,55 +765,68 @@ const AttendanceToolbox: React.FC = () => {
       setLeaveSourceSync({ loading: false, error: errorMessage })
       messageApi.error(`请假数据拉取失败：${errorMessage}`)
     }
-  }, [applySyncedFile, leaveSourceDateRange, runningModule])
+  }, [applySyncedFile, fetchDingtalkExport, leaveSourceDateRange, runningModule])
 
-  const syncRosterFromDingtalk = useCallback(async (mode: SyncMode = 'manual') => {
+  // 花名册同步：必须走组织花名册生成接口，禁止再使用 position_transfer 导出表充当在职花名册。
+  // 数据来自本地数据库的 active 用户、EmployeeProfile 权威工号与真实部门路径；
+  // 同一富花名册可供加班部门映射与最终汇总使用。
+  const generateRosterFromOrgData = useCallback(async (mode: SyncMode = 'manual') => {
+    const requestSnapshot = new Map<string, { userChangeVersion: number; wasEmpty: boolean }>(
+      AUTO_SYNC_UPLOADS.roster.map((fieldName) => [fieldName, {
+        userChangeVersion: userFileChangeVersionsRef.current[fieldName] || 0,
+        wasEmpty: (fileListsRef.current[fieldName] || []).length === 0,
+      }]),
+    )
     setRosterSync({ loading: true })
     try {
-      const today = dayjs()
-      const start = today.startOf('month').format('YYYY-MM-DD')
-      const end = today.endOf('month').format('YYYY-MM-DD')
-      const blob = await attendanceToolboxAPI.runDingtalkSync({
-        start_date: start,
-        end_date: end,
-        flow_keys: ['position_transfer'],
-        padding_days: 90,
-      }) as unknown as Blob
+      // generateOrgRoster 配置了 responseType: 'blob'，axios 返回的 response.data 即为 Blob
+      const response = await attendanceToolboxAPI.generateOrgRoster()
+      const blob = response.data as Blob
 
-      if (blob.type === 'application/zip') {
-        throw new Error('自动同步返回了多个文件，请改用手动上传')
-      }
-
-      applySyncedFile([...AUTO_SYNC_UPLOADS.roster], '花名册_钉钉自动同步.xlsx', blob)
+      const appliedFieldNames = applySyncedFile(
+        [...AUTO_SYNC_UPLOADS.roster],
+        '花名册_组织生成.xlsx',
+        blob,
+        (fieldName, currentFiles) => {
+          const snapshot = requestSnapshot.get(fieldName)
+          if (!snapshot || (userFileChangeVersionsRef.current[fieldName] || 0) !== snapshot.userChangeVersion) {
+            return false
+          }
+          return mode === 'manual' || (snapshot.wasEmpty && currentFiles.length === 0)
+        },
+      )
       setRosterSync({ loading: false, lastSyncAt: dayjs().format('YYYY-MM-DD HH:mm') })
       if (mode === 'manual') {
-        messageApi.success('花名册同步完成，已自动回填到上传位')
+        if (appliedFieldNames.length === AUTO_SYNC_UPLOADS.roster.length) {
+          messageApi.success('花名册生成完成，已自动回填到加班与最终汇总上传位')
+        } else if (appliedFieldNames.length > 0) {
+          messageApi.info('花名册生成完成，已保留请求期间修改的文件并回填其余上传位')
+        } else {
+          messageApi.info('花名册生成完成，已保留请求期间修改的上传文件')
+        }
       }
     } catch (error) {
       const errorMessage = await resolveErrorMessage(error)
       setRosterSync({ loading: false, error: errorMessage })
       if (mode === 'manual') {
-        messageApi.error(`花名册同步失败：${errorMessage}`)
+        messageApi.error(`花名册生成失败：${errorMessage}`)
       }
     }
   }, [applySyncedFile])
 
+  // 异动流程同步：独立使用 position_transfer，只回填异动流程位置，不得与花名册混用。
   const syncTransferFromDingtalk = useCallback(async (mode: SyncMode = 'manual') => {
     setTransferSync({ loading: true })
     try {
       const today = dayjs()
       const start = today.subtract(3, 'month').startOf('month').format('YYYY-MM-DD')
       const end = today.endOf('month').format('YYYY-MM-DD')
-      const blob = await attendanceToolboxAPI.runDingtalkSync({
+      const blob = await fetchDingtalkExport({
         start_date: start,
         end_date: end,
         flow_keys: ['position_transfer'],
         padding_days: 90,
-      }) as unknown as Blob
-
-      if (blob.type === 'application/zip') {
-        throw new Error('自动同步返回了多个文件，请改用手动上传')
-      }
+      }, 'position_transfer')
 
       applySyncedFile([...AUTO_SYNC_UPLOADS.transfer], '异动流程_钉钉自动同步.xlsx', blob)
       setTransferSync({ loading: false, lastSyncAt: dayjs().format('YYYY-MM-DD HH:mm') })
@@ -758,21 +840,53 @@ const AttendanceToolbox: React.FC = () => {
         messageApi.error(`异动流程同步失败：${errorMessage}`)
       }
     }
-  }, [applySyncedFile])
+  }, [applySyncedFile, fetchDingtalkExport])
 
+  // 兼职月度打卡记录：只能由用户点击执行，不允许页面打开时自动抓取。
+  const syncParttimeMonthlyPunch = useCallback(async () => {
+    if (!parttimePunchMonth) {
+      messageApi.warning('请先选择月份')
+      return
+    }
+    setParttimePunchSync({ loading: true, error: undefined })
+    try {
+      const month = parttimePunchMonth.format('YYYY-MM')
+      const blob = (await attendanceToolboxAPI.parttimeMonthlyPunch({ month })) as unknown as Blob
+      // 回填到兼职汇总现有的「考勤明细」上传位（parttime_attendance_detail）。
+      applySyncedFile(['parttime_attendance_detail'], `兼职月度打卡记录_${month.replace('-', '')}.xlsx`, blob)
+      setParttimePunchSync({ loading: false, lastSyncAt: dayjs().format('YYYY-MM-DD HH:mm') })
+      messageApi.success('兼职月度打卡记录抓取完成，已自动回填到兼职汇总的「考勤明细」上传位')
+    } catch (error) {
+      const errorMessage = await resolveErrorMessage(error)
+      setParttimePunchSync({ loading: false, error: errorMessage })
+      messageApi.error(`兼职月度打卡记录抓取失败：${errorMessage}，您仍可手动上传本地 Excel`)
+    }
+  }, [applySyncedFile, parttimePunchMonth])
+
+  // 花名册生成由 canOperate 控制（数据来自本地组织数据库）
+  useEffect(() => {
+    if (!canOperate) return
+    if (autoRosterSyncStartedRef.current) return
+    autoRosterSyncStartedRef.current = true
+    void generateRosterFromOrgData('auto')
+  }, [canOperate, generateRosterFromOrgData])
+
+  // 岗位异动同步由 canDingtalkSync 控制（数据来自钉钉审批流程）
   useEffect(() => {
     if (!canDingtalkSync) return
-    if (autoSyncStartedRef.current) return
-    autoSyncStartedRef.current = true
-    void syncRosterFromDingtalk('auto')
+    if (autoTransferSyncStartedRef.current) return
+    autoTransferSyncStartedRef.current = true
     void syncTransferFromDingtalk('auto')
-  }, [canDingtalkSync, syncRosterFromDingtalk, syncTransferFromDingtalk])
+  }, [canDingtalkSync, syncTransferFromDingtalk])
 
   const removeFieldFile = (fieldName: string, fileUid: string) => {
-    setFileLists((prev) => ({
-      ...prev,
-      [fieldName]: (prev[fieldName] || []).filter((file) => file.uid !== fileUid),
-    }))
+    const next = {
+      ...fileListsRef.current,
+      [fieldName]: (fileListsRef.current[fieldName] || []).filter((file) => file.uid !== fileUid),
+    }
+    fileListsRef.current = next
+    userFileChangeVersionsRef.current[fieldName] = (userFileChangeVersionsRef.current[fieldName] || 0) + 1
+    setFileLists(next)
     setUploadWarnings((prev) => {
       const next = { ...prev }
       delete next[fieldName]
@@ -2416,34 +2530,34 @@ const AttendanceToolbox: React.FC = () => {
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Space size={4}>
                   <Text strong style={{ fontSize: 12 }}>花名册</Text>
-                  <Tag color="blue" style={{ fontSize: 11 }}>可同步</Tag>
+                  <Tag color="blue" style={{ fontSize: 11 }}>可生成</Tag>
                   {rosterSync.loading
                     ? <SyncOutlined spin />
                     : (
-                      <Tooltip title={!canDingtalkSync ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加' : undefined}>
+                      <Tooltip title={!canOperate ? '你缺少考勤工具箱操作权限，需要联系管理员添加' : undefined}>
                         <span style={{ display: 'inline-block' }}>
                           <Button
                             type="link"
                             size="small"
                             icon={<SyncOutlined />}
-                            disabled={!canDingtalkSync}
-                            onClick={() => void syncRosterFromDingtalk()}
+                            disabled={!canOperate}
+                            onClick={() => void generateRosterFromOrgData()}
                             style={{ fontSize: 11, height: 22, padding: '0 4px' }}
                           >
-                            {rosterSync.error ? '重试同步' : '从钉钉同步'}
+                            {rosterSync.error ? '重试生成' : '从组织数据生成'}
                           </Button>
                         </span>
                       </Tooltip>
                     )}
                 </Space>
                 <Text type="secondary" style={{ fontSize: 11 }}>
-                  {canDingtalkSync
-                    ? '页面加载时会自动尝试同步；失败后可手动重试，也可以继续上传本地花名册'
-                    : '当前账号无钉钉同步权限，请上传本地花名册，或联系管理员开通权限'}
+                  {canOperate
+                    ? '页面加载时会自动从本地组织数据生成花名册（使用最近一次组织同步数据）；失败后可手动重试，也可以继续上传本地花名册'
+                    : '当前账号无操作权限，请上传本地花名册，或联系管理员开通权限'}
                 </Text>
                 {rosterSync.lastSyncAt && (
                   <Text type="success" style={{ fontSize: 11 }}>
-                    上次同步：{rosterSync.lastSyncAt}
+                    上次生成：{rosterSync.lastSyncAt}
                   </Text>
                 )}
                 {!rosterSync.loading && rosterSync.lastSyncAt && (
@@ -2453,7 +2567,7 @@ const AttendanceToolbox: React.FC = () => {
                 )}
                 {rosterSync.error && (
                   <Text type="danger" style={{ fontSize: 11 }}>
-                    同步失败：{rosterSync.error}
+                    生成失败：{rosterSync.error}
                   </Text>
                 )}
               </Space>
@@ -2502,6 +2616,66 @@ const AttendanceToolbox: React.FC = () => {
                 {transferSync.error && (
                   <Text type="danger" style={{ fontSize: 11 }}>
                     同步失败：{transferSync.error}
+                  </Text>
+                )}
+              </Space>
+            </Card>
+          </Col>
+          <Col xs={24} md={12}>
+            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                <Space size={4}>
+                  <Text strong style={{ fontSize: 12 }}>兼职月度打卡记录</Text>
+                  <Tag color="blue" style={{ fontSize: 11 }}>可同步</Tag>
+                  {parttimePunchSync.loading
+                    ? <SyncOutlined spin />
+                    : (
+                      <Tooltip title={!canDingtalkSync ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加' : '仅按用户点击执行，不会自动抓取'}>
+                        <span style={{ display: 'inline-block' }}>
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<SyncOutlined />}
+                            disabled={!canDingtalkSync}
+                            onClick={() => void syncParttimeMonthlyPunch()}
+                            style={{ fontSize: 11, height: 22, padding: '0 4px' }}
+                          >
+                            {parttimePunchSync.error ? '重试抓取' : '从钉钉抓取'}
+                          </Button>
+                        </span>
+                      </Tooltip>
+                    )}
+                </Space>
+                <Space size={8} align="start" style={{ width: '100%' }}>
+                  <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>月份</Text>
+                  <DatePicker
+                    picker="month"
+                    value={parttimePunchMonth}
+                    onChange={(value) => setParttimePunchMonth(value)}
+                    format="YYYY-MM"
+                    allowClear={false}
+                    style={{ width: 120 }}
+                    placeholder="选择月份"
+                  />
+                </Space>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {canDingtalkSync
+                    ? '点击「从钉钉抓取」拉取该月打卡记录并匹配兼职花名册；失败后可手动上传本地 Excel，再次抓取会替换上一次结果'
+                    : '当前账号无钉钉同步权限，请上传本地月度打卡记录 Excel，或联系管理员开通权限'}
+                </Text>
+                {parttimePunchSync.lastSyncAt && (
+                  <Text type="success" style={{ fontSize: 11 }}>
+                    上次抓取：{parttimePunchSync.lastSyncAt}
+                  </Text>
+                )}
+                {!parttimePunchSync.loading && parttimePunchSync.lastSyncAt && (
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    已自动回填到「兼职汇总 &gt; 考勤明细」上传位
+                  </Text>
+                )}
+                {parttimePunchSync.error && (
+                  <Text type="danger" style={{ fontSize: 11 }}>
+                    抓取失败：{parttimePunchSync.error}
                   </Text>
                 )}
               </Space>

@@ -1,8 +1,8 @@
-import React, { useState } from 'react'
-import { Typography, DatePicker, Spin, Empty, Alert, Button, Row, Col, Statistic, Table, Tag, Select, message } from 'antd'
+import React, { useEffect, useRef, useState } from 'react'
+import { Typography, DatePicker, Alert, Button, Row, Col, Statistic, Table, Select, Tooltip } from 'antd'
 import { BarChartOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { approvalAPI } from '../services/api'
+import { approvalAPI, getPendingApprovalSyncRequestID, type ApprovalStatsAPIResponse, type ApprovalSyncAPIResponse } from '../services/api'
 import { hasPermission } from '../utils/permission'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -10,6 +10,13 @@ import StatusTag from '../components/StatusTag'
 import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
 import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
+import {
+  approvalSyncErrorNotice,
+  approvalSyncResultNotice,
+  approvalSyncRunningNotice,
+  missingApprovalSyncPermissionTip,
+  type ApprovalSyncNotice,
+} from '../utils/approvalSync'
 
 dayjs.locale('zh-cn')
 
@@ -22,8 +29,10 @@ interface TemplateStat {
   template_name: string
   total: number
   completed: number
-  rejected: number
-  in_progress: number
+  refused: number
+  running: number
+  terminated: number
+  canceled: number
   approval_rate: string
 }
 
@@ -36,71 +45,76 @@ interface StatusStat {
 const ApprovalStats: React.FC = () => {
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null]>([null, null])
   const [templateID, setTemplateID] = useState<string>('')
-
-  // 模拟审批统计数据
-  const mockStatsData = {
-    summary: {
-      total: 100,
-      completed: 85,
-      rejected: 10,
-      in_progress: 5,
-      approval_rate: '85.00%',
-    },
-    template_stats: [
-      {
-        template_id: 'template123',
-        template_name: '请假审批',
-        total: 45,
-        completed: 40,
-        rejected: 3,
-        in_progress: 2,
-        approval_rate: '88.89%',
-      },
-      {
-        template_id: 'template456',
-        template_name: '报销审批',
-        total: 30,
-        completed: 25,
-        rejected: 4,
-        in_progress: 1,
-        approval_rate: '83.33%',
-      },
-      {
-        template_id: 'template789',
-        template_name: '加班审批',
-        total: 25,
-        completed: 20,
-        rejected: 3,
-        in_progress: 2,
-        approval_rate: '80.00%',
-      },
-    ],
-    status_stats: [
-      { status: '已完成', count: 85, percentage: '85.00%' },
-      { status: '已拒绝', count: 10, percentage: '10.00%' },
-      { status: '处理中', count: 5, percentage: '5.00%' },
-    ],
-  }
+  const [syncNotice, setSyncNotice] = useState<ApprovalSyncNotice | null>(null)
+  const syncInFlightRef = useRef(false)
 
   const { data: templatesData } = useQuery({
     queryKey: ['approval-templates'],
     queryFn: () => approvalAPI.getTemplates(),
   })
 
-  const syncMutation = useMutation({
-    mutationFn: () => approvalAPI.sync({
-      process_code: templateID,
-      start_date: dateRange[0]?.format('YYYY-MM-DD'),
-      end_date: dateRange[1]?.format('YYYY-MM-DD'),
-    }),
+  const statsParams = {
+    template_id: templateID || undefined,
+    start_date: dateRange[0]?.format('YYYY-MM-DD'),
+    end_date: dateRange[1]?.format('YYYY-MM-DD'),
+  }
+  const { data: statsSource, refetch: refetchStats } = useQuery({
+    queryKey: ['approval-stats-source', statsParams],
+    queryFn: () => approvalAPI.getStats(statsParams),
   })
 
+  const statsPayload = (statsSource as ApprovalStatsAPIResponse | undefined)?.data
+  const summary = statsPayload?.summary || {
+    total: 0, completed: 0, refused: 0, running: 0, terminated: 0, canceled: 0, approval_rate: '0.00%',
+  }
+  const percentage = (count: number) => `${summary.total ? ((count / summary.total) * 100).toFixed(2) : '0.00'}%`
+  const statsData = {
+    summary,
+    template_stats: (statsPayload?.template_stats || []) as TemplateStat[],
+    status_stats: [
+      { status: '已通过', count: summary.completed, percentage: percentage(summary.completed) },
+      { status: '已拒绝', count: summary.refused, percentage: percentage(summary.refused) },
+      { status: '处理中', count: summary.running, percentage: percentage(summary.running) },
+      { status: '已终止', count: summary.terminated, percentage: percentage(summary.terminated) },
+      { status: '已取消', count: summary.canceled, percentage: percentage(summary.canceled) },
+    ] as StatusStat[],
+  }
+
+  const syncMutation = useMutation<ApprovalSyncAPIResponse, Error, boolean>({
+    mutationFn: (resume) => resume
+      ? approvalAPI.resumeSync()
+      : approvalAPI.sync({
+        process_code: templateID || undefined,
+        start_date: dateRange[0]?.format('YYYY-MM-DD'),
+        end_date: dateRange[1]?.format('YYYY-MM-DD'),
+      }),
+    onSuccess: (response) => {
+      setSyncNotice(approvalSyncResultNotice(response.data))
+      if (response.data.status === 'success' || response.data.status === 'partial') {
+        refetchStats()
+      }
+    },
+    onError: (error) => setSyncNotice(approvalSyncErrorNotice(error)),
+    onSettled: () => {
+      syncInFlightRef.current = false
+    },
+  })
+
+  const resumeSync = syncMutation.mutate
+  useEffect(() => {
+    if (!hasPermission('approval:sync') || !getPendingApprovalSyncRequestID() || syncInFlightRef.current) return
+    syncInFlightRef.current = true
+    setSyncNotice(approvalSyncRunningNotice())
+    resumeSync(true)
+  }, [resumeSync])
+
   const handleSync = () => {
-    if (!templateID) {
-      message.warning('请先选择审批模板/流程代码')
+    if (syncInFlightRef.current) {
       return
     }
-    syncMutation.mutate()
+    syncInFlightRef.current = true
+    setSyncNotice(approvalSyncRunningNotice(templateID))
+    syncMutation.mutate(false)
   }
 
   const columns = [
@@ -122,14 +136,14 @@ const ApprovalStats: React.FC = () => {
     },
     {
       title: '已拒绝',
-      dataIndex: 'rejected',
-      key: 'rejected',
+      dataIndex: 'refused',
+      key: 'refused',
       render: (count: number) => <StatusTag color="red">{count}</StatusTag>,
     },
     {
       title: '处理中',
-      dataIndex: 'in_progress',
-      key: 'in_progress',
+      dataIndex: 'running',
+      key: 'running',
       render: (count: number) => <StatusTag color="blue">{count}</StatusTag>,
     },
     {
@@ -175,43 +189,57 @@ const ApprovalStats: React.FC = () => {
           >
             统计
           </Button>
-          <Button
-            icon={<SyncOutlined />}
-            onClick={handleSync}
-            loading={syncMutation.isPending}
-            disabled={!hasPermission('approval:sync')}
-          >
-            同步数据
-          </Button>
+          <Tooltip title={hasPermission('approval:sync') ? undefined : missingApprovalSyncPermissionTip}>
+            <span>
+              <Button
+                icon={<SyncOutlined />}
+                onClick={handleSync}
+                loading={syncMutation.isPending}
+                disabled={!hasPermission('approval:sync') || syncMutation.isPending}
+              >
+                {syncMutation.isPending ? '同步中' : (templateID ? '同步当前模板' : '同步全部')}
+              </Button>
+            </span>
+          </Tooltip>
         </div>
+
+        {syncNotice && (
+          <Alert
+            style={{ marginBottom: 'var(--space-4)' }}
+            type={syncNotice.type}
+            message={syncNotice.message}
+            description={syncNotice.description}
+            showIcon
+          />
+        )}
 
         <Row className="mobile-stat-grid" gutter={16} style={{ marginBottom: 'var(--space-6)' }}>
           <Col span={6}>
             <Statistic
               title="总审批数"
-              value={mockStatsData.summary.total}
+              value={statsData.summary.total}
               prefix={<BarChartOutlined />}
             />
           </Col>
           <Col span={6}>
             <Statistic
               title="已完成"
-              value={mockStatsData.summary.completed}
+              value={statsData.summary.completed}
               valueStyle={{ color: 'var(--color-success)' }}
             />
           </Col>
           <Col span={6}>
             <Statistic
               title="已拒绝"
-              value={mockStatsData.summary.rejected}
+              value={statsData.summary.refused}
               valueStyle={{ color: 'var(--color-error)' }}
             />
           </Col>
           <Col span={6}>
             <Statistic
               title="通过率"
-              value={mockStatsData.summary.approval_rate}
-              valueStyle={{ color: parseFloat(mockStatsData.summary.approval_rate) >= 80 ? 'var(--color-success)' : 'var(--color-error)' }}
+              value={statsData.summary.approval_rate}
+              valueStyle={{ color: parseFloat(statsData.summary.approval_rate) >= 80 ? 'var(--color-success)' : 'var(--color-error)' }}
             />
           </Col>
         </Row>
@@ -219,8 +247,8 @@ const ApprovalStats: React.FC = () => {
         <Title level={5}>状态分布</Title>
         <div style={{ marginBottom: 'var(--space-6)' }}>
           <Row className="mobile-stat-grid" gutter={16}>
-            {mockStatsData.status_stats.map((stat, index) => (
-              <Col key={index} span={8}>
+            {statsData.status_stats.map((stat, index) => (
+              <Col key={index} flex="1 1 160px">
                 <PageCard>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Text strong>{stat.status}</Text>
@@ -251,7 +279,7 @@ const ApprovalStats: React.FC = () => {
         <Title level={5}>模板统计</Title>
         <Table
           columns={columns}
-          dataSource={mockStatsData.template_stats}
+          dataSource={statsData.template_stats}
           rowKey="template_id"
           pagination={false}
         />

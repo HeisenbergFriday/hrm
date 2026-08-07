@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"peopleops/internal/database"
+	"peopleops/internal/dingtalk"
 
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestMergeApprovalExtensionAppliesPatchWithoutDroppingExistingFields(t *testing.T) {
@@ -83,6 +86,112 @@ func TestApprovalUpsertRejectsCrossOrgRecord(t *testing.T) {
 	err := repo.UpsertByOrgProcessID(&database.Approval{OrgID: "org-b", ProcessID: "process-1"})
 	if err != ErrOrgMismatch {
 		t.Fatalf("err = %v, want ErrOrgMismatch", err)
+	}
+}
+
+func TestApprovalUpsertUpdatesStreamRecordWithoutCrossOrgDuplication(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:approval-upsert-"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&database.Approval{}); err != nil {
+		t.Fatalf("migrate approvals: %v", err)
+	}
+	existing := database.Approval{
+		OrgID: "org-a", ProcessID: "stream-instance-1", Title: "加班审批", ApplicantID: "u1", ApplicantName: "员工甲",
+		Status: "RUNNING", CreateTime: time.Now(),
+		Extension: map[string]interface{}{"source": "dingtalk_stream", "stream_event_id": "event-1"},
+	}
+	if err := db.Create(&existing).Error; err != nil {
+		t.Fatalf("create stream approval: %v", err)
+	}
+
+	repo := NewApprovalRepositoryWithOrgID(db, "org-a")
+	if err := repo.UpsertByOrgProcessID(&database.Approval{
+		OrgID: "org-a", ProcessID: "stream-instance-1", ApplicantID: "u1", ApplicantName: "u1", Status: "COMPLETED", FinishTime: time.Now(),
+		Extension: map[string]interface{}{"result": "agree", "process_code": "PROC-OVERTIME", "source": "dingtalk_sync"},
+	}); err != nil {
+		t.Fatalf("upsert full-sync approval: %v", err)
+	}
+	if err := NewApprovalRepositoryWithOrgID(db, "org-b").UpsertByOrgProcessID(&database.Approval{
+		OrgID: "org-b", ProcessID: "stream-instance-1", Title: "补卡审批", ApplicantID: "u2", ApplicantName: "员工乙", Status: "COMPLETED", CreateTime: time.Now(),
+	}); err != nil {
+		t.Fatalf("create same process id in another org: %v", err)
+	}
+
+	var orgACount int64
+	if err := db.Model(&database.Approval{}).Where("org_id = ? AND process_id = ?", "org-a", "stream-instance-1").Count(&orgACount).Error; err != nil {
+		t.Fatalf("count org-a approval: %v", err)
+	}
+	if orgACount != 1 {
+		t.Fatalf("org-a approval count = %d, want 1", orgACount)
+	}
+	var updated database.Approval
+	if err := db.Where("org_id = ? AND process_id = ?", "org-a", "stream-instance-1").First(&updated).Error; err != nil {
+		t.Fatalf("load updated approval: %v", err)
+	}
+	if updated.ID != existing.ID || updated.Status != "COMPLETED" {
+		t.Fatalf("updated approval = %#v", updated)
+	}
+	if updated.ApplicantName != "员工甲" {
+		t.Fatalf("fallback user_id overwrote real applicant name: %q", updated.ApplicantName)
+	}
+	if updated.Extension["stream_event_id"] != "event-1" || updated.Extension["result"] != "agree" || updated.Extension["process_code"] != "PROC-OVERTIME" || updated.Extension["source"] != "dingtalk_sync" {
+		t.Fatalf("updated extension = %#v", updated.Extension)
+	}
+}
+
+// TestApprovalFindAllDateFilterUsesUTC8Location 断言 FindAll 的 start_date/end_date 使用 UTC+8 时区解析，
+// 避免在 TZ=UTC 环境下日期偏移一天导致查询结果不正确。
+func TestApprovalFindAllDateFilterUsesUTC8Location(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:approval-tz-"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&database.Approval{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	loc := dingtalk.ApprovalBusinessLocation()
+	// Create an approval at 2026-08-05 10:00 UTC+8
+	approvalTime := time.Date(2026, 8, 5, 10, 0, 0, 0, loc)
+	if err := db.Create(&database.Approval{
+		OrgID: "org-a", ProcessID: "tz-filter-1", Title: "测试", ApplicantID: "u1",
+		ApplicantName: "用户", Status: "COMPLETED", CreateTime: approvalTime,
+	}).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	repo := NewApprovalRepositoryWithOrgID(db, "org-a")
+
+	// Filter start_date=2026-08-05 should match (record at 10:00 UTC+8 >= 00:00 UTC+8)
+	results, total, err := repo.FindAll(1, 10, map[string]string{"start_date": "2026-08-05"})
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	if total != 1 || len(results) != 1 {
+		t.Fatalf("start_date=2026-08-05: total=%d len=%d, want 1 (record at 10:00 UTC+8)", total, len(results))
+	}
+
+	// Filter end_date=2026-08-04 should NOT match (record at 2026-08-05 > 2026-08-04 + 1 day)
+	_, total, err = repo.FindAll(1, 10, map[string]string{"end_date": "2026-08-04"})
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	if total != 0 {
+		t.Fatalf("end_date=2026-08-04: total=%d, want 0 (record is 2026-08-05)", total)
+	}
+
+	// Filter end_date=2026-08-05 should match
+	_, total, err = repo.FindAll(1, 10, map[string]string{"end_date": "2026-08-05"})
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("end_date=2026-08-05: total=%d, want 1", total)
 	}
 }
 

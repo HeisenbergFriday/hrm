@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
 import {
@@ -22,14 +22,28 @@ import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { departmentAPI, employeeAPI, orgAPI } from '../services/api'
 import { hasPermission } from '../utils/permission'
 import { maskBankAccount, maskIdNumber } from '../utils/maskPii'
 
-const { Title, Text, Paragraph } = Typography
+const { Text } = Typography
 const { TextArea } = Input
+const { Search } = Input
 
 const missingUserManageTip = '你缺少 user_manage 权限，需要联系管理员添加'
+const defaultPageSize = 20
+const allowedPageSizes = [10, 20, 50, 100]
+
+const positiveInteger = (value: string | null, fallback: number) => {
+  const parsed = Number.parseInt(value || '', 10)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const pageSizeFromURL = (value: string | null) => {
+  const parsed = positiveInteger(value, defaultPageSize)
+  return allowedPageSizes.includes(parsed) ? parsed : defaultPageSize
+}
 
 interface EmployeeProfileRecord {
   id: number | string
@@ -166,13 +180,35 @@ const toFormValues = (profile: EmployeeProfileRecord): ProfileFormValues => {
 const EmployeeProfilePage: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingProfile, setEditingProfile] = useState<EmployeeProfileRecord | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const keyword = (searchParams.get('keyword') || '').trim()
+  const page = positiveInteger(searchParams.get('page'), 1)
+  const pageSize = pageSizeFromURL(searchParams.get('page_size'))
+  const [searchValue, setSearchValue] = useState(keyword)
   const [form] = Form.useForm<ProfileFormValues>()
   const selectedUserID = Form.useWatch('user_id', form)
   const canManage = hasPermission('user_manage')
 
+  useEffect(() => {
+    setSearchValue(keyword)
+  }, [keyword])
+
+  const updateListURL = (nextKeyword: string, nextPage: number, nextPageSize: number) => {
+    const next = new URLSearchParams(searchParams)
+    const trimmedKeyword = nextKeyword.trim()
+    if (trimmedKeyword) {
+      next.set('keyword', trimmedKeyword)
+    } else {
+      next.delete('keyword')
+    }
+    next.set('page', String(nextPage))
+    next.set('page_size', String(nextPageSize))
+    setSearchParams(next)
+  }
+
   const profilesQuery = useQuery({
-    queryKey: ['employee-profiles-page'],
-    queryFn: () => employeeAPI.getProfiles({ page: 1, page_size: 1000 }),
+    queryKey: ['employee-profiles-page', page, pageSize, keyword],
+    queryFn: () => employeeAPI.getProfiles({ page, page_size: pageSize, keyword: keyword || undefined }),
   })
 
   const employeesQuery = useQuery({
@@ -190,6 +226,7 @@ const EmployeeProfilePage: React.FC = () => {
   const employees = (employeesQuery.data?.data?.items ?? []) as EmployeeItem[]
   const departments = (departmentsQuery.data?.data?.departments ?? []) as DepartmentItem[]
   const profiles = (profilesQuery.data?.data?.items ?? []) as EmployeeProfileRecord[]
+  const total = Number(profilesQuery.data?.data?.total ?? 0)
 
   const employeeByUserID = useMemo(() => {
     const result: Record<string, EmployeeItem> = {}
@@ -364,6 +401,23 @@ const EmployeeProfilePage: React.FC = () => {
       />
 
       <PageCard>
+        <Search
+          aria-label="搜索员工档案"
+          allowClear
+          enterButton="搜索"
+          loading={profilesQuery.isFetching}
+          placeholder="搜索姓名、工号、邮箱、手机号、岗位"
+          value={searchValue}
+          onChange={(event) => {
+            setSearchValue(event.target.value)
+          }}
+          onSearch={(value) => {
+            const trimmed = value.trim()
+            setSearchValue(trimmed)
+            updateListURL(trimmed, 1, pageSize)
+          }}
+          style={{ maxWidth: 480, marginBottom: 16 }}
+        />
         {profilesQuery.isLoading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
             <Spin size="large" />
@@ -384,8 +438,21 @@ const EmployeeProfilePage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={profiles}
-            locale={{ emptyText: '暂无员工档案' }}
-            pagination={false}
+            loading={profilesQuery.isFetching}
+            locale={{ emptyText: keyword ? '未找到匹配的员工档案' : '暂无员工档案' }}
+            pagination={{
+              current: page,
+              pageSize,
+              total,
+              showSizeChanger: true,
+              pageSizeOptions: allowedPageSizes,
+              showTotal: (count) => `共 ${count} 条`,
+            }}
+            onChange={(pagination) => {
+              const nextPageSize = pagination.pageSize || pageSize
+              const nextPage = nextPageSize === pageSize ? pagination.current || 1 : 1
+              updateListURL(keyword, nextPage, nextPageSize)
+            }}
           />
         )}
       </PageCard>

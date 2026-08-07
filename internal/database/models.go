@@ -284,6 +284,30 @@ type SyncStatus struct {
 	UpdatedAt    time.Time              `json:"updated_at"`
 }
 
+// ApprovalSyncTask stores every approval sync execution independently.
+// ActiveKey is populated only while running and provides a database-backed
+// per-organization lock across application instances.
+type ApprovalSyncTask struct {
+	ID              uint                   `gorm:"primaryKey" json:"id"`
+	OrgID           string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_approval_sync_task_request,priority:1;index" json:"org_id"`
+	Type            string                 `gorm:"type:varchar(32);not null;uniqueIndex:idx_approval_sync_task_request,priority:2;index" json:"type"`
+	RequestID       string                 `gorm:"type:varchar(128);not null;uniqueIndex:idx_approval_sync_task_request,priority:3" json:"request_id"`
+	ActiveKey       *string                `gorm:"type:varchar(160);uniqueIndex:idx_approval_sync_task_active" json:"-"`
+	Status          string                 `gorm:"type:varchar(32);not null;index" json:"status"`
+	Message         string                 `gorm:"type:text" json:"message"`
+	ErrorCode       string                 `gorm:"type:varchar(64)" json:"error_code"`
+	SuccessCount    int                    `gorm:"not null;default:0" json:"success_count"`
+	FailCount       int                    `gorm:"not null;default:0" json:"fail_count"`
+	FailedProcesses int                    `gorm:"not null;default:0" json:"failed_processes"`
+	DurationMS      int64                  `gorm:"not null;default:0" json:"duration_ms"`
+	StartedAt       time.Time              `gorm:"not null;index" json:"started_at"`
+	HeartbeatAt     time.Time              `gorm:"not null;index" json:"heartbeat_at"`
+	FinishedAt      *time.Time             `json:"finished_at,omitempty"`
+	Details         map[string]interface{} `gorm:"type:json;serializer:json" json:"details,omitempty"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+}
+
 // IdempotencyRecord stores completed write responses for safe client retries.
 type IdempotencyRecord struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
@@ -377,7 +401,8 @@ type EmployeeProfile struct {
 	Nationality  string `gorm:"type:varchar(64)" json:"nationality"`                                                         // 国籍
 	IDCardNumber string `gorm:"type:varchar(32)" json:"id_card_number"`                                                      // 身份证号
 	// 工作信息（本地业务字段）
-	EmploymentType     string `gorm:"type:varchar(32)" json:"employment_type"`      // 雇佣类型：全职、兼职、实习
+	EmploymentType     string `gorm:"type:varchar(128)" json:"employment_type"`     // 钉钉返回或组织配置解析后的员工类型名称
+	EmploymentTypeCode string `gorm:"type:varchar(64)" json:"employment_type_code"` // 钉钉员工类型原始代码；不得用猜测名称替代
 	EntryDate          string `gorm:"type:varchar(32)" json:"entry_date"`           // 入职日期
 	ProbationEndDate   string `gorm:"type:varchar(32)" json:"probation_end_date"`   // 试用期结束日期
 	PlannedRegularDate string `gorm:"type:varchar(32)" json:"planned_regular_date"` // 计划转正日期
@@ -610,7 +635,7 @@ type WeekScheduleGroupTarget struct {
 	OrgID              string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_week_schedule_group_target_org_conversation,priority:1;index" json:"-"`
 	OpenConversationID string     `gorm:"type:varchar(256);not null;uniqueIndex:idx_week_schedule_group_target_org_conversation,priority:2" json:"-"`
 	GroupName          string     `gorm:"type:varchar(256);not null" json:"group_name"`
-	Status             string     `gorm:"type:varchar(32);not null;default:'active';index" json:"status"` // active / unbound
+	Status             string     `gorm:"type:varchar(32);not null;default:'active';index" json:"status"` // active / inactive / unbound
 	BoundByUserID      string     `gorm:"type:varchar(64);not null;index" json:"bound_by_user_id"`
 	BoundByUserName    string     `gorm:"type:varchar(128);not null" json:"bound_by_user_name"`
 	BoundAt            time.Time  `gorm:"not null" json:"bound_at"`

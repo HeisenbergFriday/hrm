@@ -1700,7 +1700,7 @@ def calc_probation_days(
 ) -> float | None:
     """
     当月转正天数：转正日期在当月内时，
-    从转正次日起到月末的工作日数，加上转正后发生的法定节假日天数。
+    从转正当日（闭区间）到月末的工作日数，加上转正后发生的法定节假日天数。
     """
     if not confirm_date:
         return None
@@ -1708,12 +1708,12 @@ def calc_probation_days(
         return None
 
     count = sum(
-        1 for d in working_days if confirm_date < d <= month_end
+        1 for d in working_days if confirm_date <= d <= month_end
     )
     count += sum(
         1
         for d in statutory_holidays
-        if confirm_date < d <= month_end and d.weekday() < 5
+        if confirm_date <= d <= month_end and d.weekday() < 5
     )
     return count if count > 0 else None
 

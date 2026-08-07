@@ -174,6 +174,7 @@ func respondWeekScheduleGroupPushError(c *gin.Context, err error) {
 			status = http.StatusGatewayTimeout
 		} else if code == dingtalk.ErrorCodeGroupUnavailable {
 			status = http.StatusUnprocessableEntity
+			message = "机器人已不在该群，请重新添加机器人并在群内 @机器人完成绑定。"
 		}
 		c.JSON(status, Response{Code: status, Message: message, Data: gin.H{"error_code": code}})
 	}

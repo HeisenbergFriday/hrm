@@ -95,17 +95,34 @@ func TestSendGroupScheduleMarkdownForOrgUsesOrgAppKeyAsRobotCode(t *testing.T) {
 	}
 }
 
-func TestSendGroupScheduleMarkdownForOrgMapsRobotNotInGroup(t *testing.T) {
+func TestSendGroupScheduleMarkdownForOrgDoesNotGuessUnavailableFromUnverifiedCode(t *testing.T) {
 	installGroupRobotTestOrganization(t, nil)
 	stubDingTalkHTTPClient(t, func(req *http.Request) (*http.Response, error) {
 		if strings.Contains(req.URL.Path, "/oauth2/accessToken") {
 			return jsonResponse(http.StatusOK, `{"accessToken":"token-a","expireIn":7200}`), nil
 		}
-		return jsonResponse(http.StatusOK, `{"code":"robotNotInConversation","message":"robot is not in conversation"}`), nil
+		return jsonResponse(http.StatusOK, `{"code":"unverified-code","message":"robot is not in conversation"}`), nil
 	})
 	_, err := SendGroupScheduleMarkdownForOrg("org-a", "invalid-cid", "t", "c", "https://hr.example/image")
-	if SyncErrorCode(err) != ErrorCodeGroupUnavailable || SyncErrorSafeMessage(err) != "群聊无效或机器人未加入该群" {
+	if SyncErrorCode(err) != ErrorCodeGroupRejected || SyncErrorSafeMessage(err) != "钉钉拒绝了群消息请求" {
 		t.Fatalf("err=%v code=%s safe=%s", err, SyncErrorCode(err), SyncErrorSafeMessage(err))
+	}
+}
+
+func TestConfirmedGroupUnavailableCodeMappingStartsEmpty(t *testing.T) {
+	if isConfirmedGroupUnavailableCode("unverified-code") {
+		t.Fatal("unverified raw code must not be treated as confirmed group unavailable")
+	}
+	err := classifyGroupMessageRejection("unverified-code", "群不存在或机器人不在群")
+	if SyncErrorCode(err) != ErrorCodeGroupRejected {
+		t.Fatalf("code=%s err=%v", SyncErrorCode(err), err)
+	}
+}
+
+func TestMissingConversationIDIsNotAConfirmedGroupUnavailableError(t *testing.T) {
+	_, err := SendGroupScheduleMarkdownForOrg("org-a", "", "t", "c", "https://hr.example/image")
+	if SyncErrorCode(err) != ErrorCodeResponseInvalid {
+		t.Fatalf("code=%s err=%v", SyncErrorCode(err), err)
 	}
 }
 

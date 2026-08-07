@@ -1,7 +1,7 @@
 import React from 'react'
 import dayjs from 'dayjs'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Modal } from 'antd'
@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   getHolidays: vi.fn(),
   getSyncLogs: vi.fn(),
   getGroupTargets: vi.fn(),
+  unbindGroupTarget: vi.fn(),
   pushPersonalSchedule: vi.fn(),
   pushGroupSchedule: vi.fn(),
   listShiftConfigs: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock('../services/api', () => ({
     getHolidays: (...args: unknown[]) => mocks.getHolidays(...args),
     getSyncLogs: (...args: unknown[]) => mocks.getSyncLogs(...args),
     getGroupTargets: (...args: unknown[]) => mocks.getGroupTargets(...args),
+    unbindGroupTarget: (...args: unknown[]) => mocks.unbindGroupTarget(...args),
     pushPersonalSchedule: (...args: unknown[]) => mocks.pushPersonalSchedule(...args),
     pushGroupSchedule: (...args: unknown[]) => mocks.pushGroupSchedule(...args),
   },
@@ -108,12 +110,14 @@ function mockBaseData() {
       items: [{ id: 7, group_name: '研发群', status: 'active', bound_by_user_name: '张三', bound_at: '2026-07-29T09:00:00Z' }],
     },
   })
+  mocks.unbindGroupTarget.mockResolvedValue({ data: { message: '解绑成功' } })
 }
 
 beforeEach(() => {
   Modal.destroyAll()
   document.querySelectorAll('.ant-modal-root').forEach((item) => item.remove())
   vi.clearAllMocks()
+  mocks.permissions = []
   vi.setSystemTime(new Date('2026-07-29T09:00:00+08:00'))
   mockBaseData()
   Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -263,5 +267,74 @@ describe('WeekSchedule push dialog', () => {
     const formData = mocks.pushPersonalSchedule.mock.calls[0][0] as FormData
     expect(formData.get('user_ids')).toBe('["u-1"]')
     expect(formData.get('group_target_id')).toBeNull()
+  })
+
+  it('shows the new first-use binding copy for an empty group list', async () => {
+    mocks.permissions = ['week_schedule_group_push']
+    mocks.getGroupTargets.mockResolvedValue({ data: { items: [] } })
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findAllByText('第1周')
+    await user.click((await screen.findByText('作息表推送')).closest('button') as HTMLButtonElement)
+    expect(await screen.findByText('暂无可用群聊')).toBeInTheDocument()
+    expect(screen.getByText('首次使用时，在群内 @人事系统机器人发送任意内容即可绑定。')).toBeInTheDocument()
+    expect(screen.queryByText(/绑定作息表/)).not.toBeInTheDocument()
+  })
+
+  it('keeps inactive groups visible but not selectable', async () => {
+    mocks.permissions = ['week_schedule_group_push']
+    mocks.getGroupTargets.mockResolvedValue({
+      data: {
+        items: [
+          { id: 8, group_name: '已移除机器人群', status: 'inactive', bound_by_user_name: '张三', bound_at: '2026-07-29T09:00:00Z' },
+        ],
+      },
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findAllByText('第1周')
+    await user.click((await screen.findByText('作息表推送')).closest('button') as HTMLButtonElement)
+    const dialog = await screen.findByRole('dialog', { name: '作息表推送' })
+    await user.click(within(dialog).getByRole('combobox'))
+    const optionText = await screen.findByText('已移除机器人群（已停用）')
+    expect(optionText.closest('.ant-select-item-option')).toHaveClass('ant-select-item-option-disabled')
+    expect(within(dialog).getByText('已停用')).toBeInTheDocument()
+  })
+
+  it('requires confirmation before manually unbinding a group', async () => {
+    mocks.permissions = ['week_schedule_group_push']
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findAllByText('第1周')
+    await user.click((await screen.findByText('作息表推送')).closest('button') as HTMLButtonElement)
+    const dialog = await screen.findByRole('dialog', { name: '作息表推送' })
+    const unbindText = await within(dialog).findByText('解绑')
+    await user.click(unbindText.closest('button') as HTMLButtonElement)
+    const confirmTitle = (await screen.findAllByText('确认解绑群聊？'))
+      .find((item) => item.classList.contains('ant-modal-confirm-title')) as HTMLElement
+    const confirmDialog = confirmTitle.closest('.ant-modal') as HTMLElement
+    expect(mocks.unbindGroupTarget).not.toHaveBeenCalled()
+    await user.click(within(confirmDialog).getByRole('button', { name: '确认解绑' }))
+    await waitFor(() => expect(mocks.unbindGroupTarget).toHaveBeenCalledWith(7))
+    expect(mocks.messageSuccess).toHaveBeenCalledWith('群聊已解绑')
+  })
+
+  it('shows group loading and failure states', async () => {
+    mocks.permissions = ['week_schedule_group_push']
+    let rejectGroups!: (reason?: unknown) => void
+    mocks.getGroupTargets.mockImplementation(() => new Promise((_resolve, reject) => { rejectGroups = reject }))
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findAllByText('第1周')
+    await user.click((await screen.findByText('作息表推送')).closest('button') as HTMLButtonElement)
+    const dialog = await screen.findByRole('dialog', { name: '作息表推送' })
+    expect(within(dialog).getByText('正在加载群聊…')).toBeInTheDocument()
+    await act(async () => rejectGroups(new Error('network failed')))
+    expect(await within(dialog).findByText('群聊加载失败')).toBeInTheDocument()
+    expect(within(dialog).getByText('请稍后重试')).toBeInTheDocument()
   })
 })

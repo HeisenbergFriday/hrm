@@ -218,6 +218,27 @@ def run_leave(config: dict, output_dir: Path) -> list[dict]:
     return [{"path": str(out_path), "file_name": out_path.name}]
 
 
+def format_roster_department_error(diagnostic: dict | None, roster_path: str) -> str:
+    """根据花名册解析诊断信息生成明确错误，避免只返回笼统提示。"""
+    prefix = f"花名册/员工信息表未识别到可用部门映射（{roster_path}）。"
+    if not diagnostic:
+        return prefix + " 请检查表头是否包含员工编号/姓名及一级/二级/三级部门或部门路径/部门名称等字段。"
+    matched = diagnostic.get("matched_sheets") or []
+    headers_preview = diagnostic.get("headers_preview") or []
+    missing = diagnostic.get("missing", "员工标识字段或部门字段缺失")
+    sheets_msg = f"实际识别到的工作表：{matched}" if matched else "未识别到任何包含员工标识和部门字段的表头行。"
+    header_lines = []
+    for item in headers_preview[:3]:
+        sheet = item.get("sheet")
+        headers = item.get("headers")
+        header_lines.append(f"  - [{sheet}] 表头：{headers}")
+    headers_msg = "实际表头示例：\n" + "\n".join(header_lines) if header_lines else ""
+    parts = [prefix, missing, sheets_msg]
+    if headers_msg:
+        parts.append(headers_msg)
+    return " ".join(parts[:3]) + ("\n" + headers_msg if headers_msg else "")
+
+
 def run_overtime(config: dict, output_dir: Path) -> list[dict]:
     export_path = path_or_empty(config, "overtime_src")
     if not export_path:
@@ -237,10 +258,11 @@ def run_overtime(config: dict, output_dir: Path) -> list[dict]:
         name_group_map, _ = capture(ot.load_attendance_name_group_map_if_available, attendance_path)
 
     employee_department_map = {}
+    roster_diagnostic: dict | None = None
     if roster_path:
-        employee_department_map, _ = capture(ot.parse_employee_department_map, roster_path)
+        (employee_department_map, roster_diagnostic), _ = capture(ot.parse_employee_department_map, roster_path)
         if not employee_department_map:
-            raise ValueError("花名册/员工信息表未识别到可用部门映射。")
+            raise ValueError(format_roster_department_error(roster_diagnostic, roster_path))
 
     src_rows, _ = capture(ot.clean_export_overtime, export_path)
     _, _ = capture(ot.load_work_calendar, calendar_path, rules_config)
@@ -326,7 +348,7 @@ def run_subsidy(config: dict, output_dir: Path) -> list[dict]:
     )
     if locked_ym:
         print(f"[月份] 使用请求指定补贴月份：{locked_ym[0]}年{locked_ym[1]}月")
-    source_records = sub.parse_source_table(src_path, rd_dept_keywords=rd_keywords)
+    source_records = sub.parse_source_table(src_path, rd_dept_keywords=rd_keywords, year=period_year, month=period_month)
     activity_days = sub.parse_activity_checkin(checkin_path)
     employees = sub.parse_attendance(
         att_path,
@@ -427,6 +449,8 @@ def run_final(config: dict, output_dir: Path) -> list[dict]:
     transfer_path = path_or_empty(config, "final_transfer")
 
     employees = fin.parse_roster(active_path, resign_path)
+    attendance_records = fin.parse_attendance_identity(subsidy_path)
+    employees = fin.apply_attendance_identity(employees, attendance_records)
     transfer_map = fin.parse_transfer(transfer_path) if transfer_path else {}
     schedule_ctx = fin.parse_schedule(schedule_path)
     chengdu_names = tuple(names_or_default(config, "chengdu_schedule_names", calc_leave.DEFAULT_CHENGDU_WORK_LOCATION_NAMES))
@@ -941,6 +965,149 @@ def action_audit(config: dict, output_dir: Path) -> list[dict]:
     return [{"path": str(audit_path), "file_name": audit_path.name}]
 
 
+def action_parttime_monthly_punch(config: dict, output_dir: Path) -> list[dict]:
+    """Render the part-time monthly punch grid + audit sheet (req: 兼职月度打卡记录)."""
+    from parttime_monthly_punch import render as render_parttime_monthly_punch
+    # render() writes to workdir/outputs/<file>; runner already passes that path
+    # as output_dir, so pass it through directly.
+    result = render_parttime_monthly_punch(output_dir, config)
+    return [result]
+
+
+# ── Action: generate-roster ─────────────────────────────────────────────────
+# 由 Go 后端传入当前组织的花名册数据（JSON），生成标准在职花名册 xlsx。
+
+_ROSTER_HEADERS = [
+    "工号", "姓名", "合同主体", "一级部门", "二级部门", "三级部门",
+    "岗位", "员工类型", "人员分类", "入职日期", "离职日期", "转正日期",
+]
+
+
+def _roster_str(val) -> str:
+    if val is None:
+        return ""
+    value = str(val).strip()
+    if value.endswith(".0"):
+        value = value[:-2]
+    return value
+
+
+def _roster_date(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%Y-%m-%d")
+    if isinstance(val, date):
+        return val.isoformat()
+    value = str(val).strip()
+    if not value:
+        return ""
+    for fmt in (
+        "%Y-%m-%d", "%Y/%m/%d", "%Y年%m月%d日", "%Y.%m.%d",
+        "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+    ):
+        try:
+            return datetime.strptime(value, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return value
+
+
+def action_generate_roster(config: dict, output_dir: Path) -> list[dict]:
+    """Generate an active-employee roster consumable by overtime and final modules.
+
+    config:
+        org_name: str（用于文件名/日志，不写入合同主体列）
+        employees: list of {
+            emp_no, name, contract_entity?, dept1?, dept2?, dept3?,
+            position?, emp_type?, category?, hire_date?, resign_date?, confirm_date?
+        }
+    """
+    import openpyxl
+    from openpyxl.styles import Font, Alignment
+
+    org_name = str(config.get("org_name") or "").strip()
+    raw_employees = config.get("employees", [])
+    if raw_employees is None:
+        raw_employees = []
+    if not isinstance(raw_employees, list):
+        raise ValueError("generate-roster: employees 字段需要是 list")
+
+    normalized_employees: list[dict] = []
+    missing_emp_no = 0
+    missing_name = 0
+    missing_dept_path = 0
+    for idx, raw in enumerate(raw_employees, 1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"generate-roster: employees[{idx}] 需要是 object")
+        employee = dict(raw)
+        employee["emp_no"] = _roster_str(raw.get("emp_no"))
+        employee["name"] = _roster_str(raw.get("name"))
+        employee["dept1"] = _roster_str(raw.get("dept1"))
+        employee["dept2"] = _roster_str(raw.get("dept2"))
+        employee["dept3"] = _roster_str(raw.get("dept3"))
+        if not employee["emp_no"]:
+            missing_emp_no += 1
+        if not employee["name"]:
+            missing_name += 1
+        if not any((employee["dept1"], employee["dept2"], employee["dept3"])):
+            missing_dept_path += 1
+        normalized_employees.append(employee)
+    if missing_emp_no:
+        raise ValueError(
+            f"generate-roster: {missing_emp_no} 名在职员工缺少业务工号（EmployeeID），已拒绝生成不完整花名册"
+        )
+    if missing_name:
+        raise ValueError(
+            f"generate-roster: {missing_name} 名在职员工缺少姓名，已拒绝生成不完整花名册"
+        )
+    if missing_dept_path:
+        raise ValueError(
+            f"generate-roster: {missing_dept_path} 名在职员工缺少有效部门路径，已拒绝生成不完整花名册"
+        )
+    if not normalized_employees:
+        raise ValueError("generate-roster: 当前组织没有在职员工")
+
+    safe_org = re.sub(r'[\\/:*?"<>|]', "_", org_name) or "组织"
+    filename = f"花名册_{safe_org}.xlsx"
+    out_path = output_dir / filename
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "在职花名册"
+
+    for ci, header in enumerate(_ROSTER_HEADERS, 1):
+        cell = ws.cell(1, ci, header)
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center")
+
+    missing_contract = 0
+    for raw in normalized_employees:
+        contract_entity = _roster_str(raw.get("contract_entity"))
+        if not contract_entity:
+            missing_contract += 1
+        ws.append([
+            raw["emp_no"],
+            raw["name"],
+            contract_entity,
+            raw["dept1"],
+            raw["dept2"],
+            raw["dept3"],
+            _roster_str(raw.get("position")),
+            _roster_str(raw.get("emp_type")),
+            _roster_str(raw.get("category")),
+            _roster_date(raw.get("hire_date")),
+            _roster_date(raw.get("resign_date")),
+            _roster_date(raw.get("confirm_date")),
+        ])
+
+    wb.save(str(out_path))
+    wb.close()
+    row_count = len(normalized_employees)
+    print(f"[花名册] 已生成 {filename}: {row_count} 人，缺工号 0，缺部门路径 0，缺合同主体 {missing_contract}")
+    return [{"path": str(out_path), "file_name": filename, "kind": "export", "row_count": row_count}]
+
+
 ACTIONS = {
     "export-rules": action_export_rules,
     "import-rules-preview": action_import_rules_preview,
@@ -949,6 +1116,8 @@ ACTIONS = {
     "preview-existing": action_preview_existing,
     "audit": action_audit,
     "export-templates": action_export_templates,
+    "parttime-monthly-punch": action_parttime_monthly_punch,
+    "generate-roster": action_generate_roster,
 }
 
 

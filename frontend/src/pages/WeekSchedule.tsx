@@ -10,6 +10,7 @@ import {
   Empty,
   Form,
   Input,
+  List,
   Modal,
   Popconfirm,
   Row,
@@ -864,7 +865,22 @@ export default function WeekSchedule() {
       }
       message.warning(result.message || '钉钉受理状态待确认')
     },
-    onError: (error) => message.error(getErrorMessage(error, '群聊推送提交失败')),
+    onError: async (error) => {
+      message.error(getErrorMessage(error, '群聊推送提交失败'))
+      await queryClient.invalidateQueries({ queryKey: ['week-schedule', 'group-targets'] })
+    },
+  })
+
+  const unbindGroupMutation = useMutation({
+    mutationFn: (targetID: number) => weekScheduleAPI.unbindGroupTarget(targetID),
+    onSuccess: async (_response, targetID) => {
+      if (pushGroupTargetId === targetID) {
+        setPushGroupTargetId(undefined)
+      }
+      message.success('群聊已解绑')
+      await queryClient.invalidateQueries({ queryKey: ['week-schedule', 'group-targets'] })
+    },
+    onError: (error) => message.error(getErrorMessage(error, '解绑群聊失败')),
   })
 
   const syncFromMutation = useMutation({
@@ -1005,7 +1021,7 @@ export default function WeekSchedule() {
       const { title, content } = buildSchedulePushContent(selectedMonth, section)
       if (pushTargetType === 'group') {
         const target = groupTargets.find((item) => item.id === pushGroupTargetId)
-        if (!target) {
+        if (!target || target.status !== 'active') {
           message.warning('所选群聊已失效，请重新选择')
           return
         }
@@ -1038,6 +1054,17 @@ export default function WeekSchedule() {
     } catch (error) {
       message.error(getErrorMessage(error, '生成作息表图片失败'))
     }
+  }
+
+  const confirmGroupUnbind = (target: WeekScheduleGroupTarget) => {
+    Modal.confirm({
+      title: '确认解绑群聊？',
+      content: `解绑“${target.group_name}”后将无法选择该群推送作息表。重新在群内 @人事系统机器人发送任意内容可恢复绑定。`,
+      okText: '确认解绑',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: () => unbindGroupMutation.mutateAsync(target.id),
+    })
   }
 
   const handleSubmitRule = async () => {
@@ -1668,20 +1695,65 @@ export default function WeekSchedule() {
                 value={pushGroupTargetId}
                 onChange={(value) => setPushGroupTargetId(value)}
                 optionFilterProp="label"
-                options={groupTargets.map((item) => ({ label: item.group_name, value: item.id }))}
+                options={groupTargets.map((item) => ({
+                  label: item.status === 'active'
+                    ? item.group_name
+                    : `${item.group_name}（${item.status === 'inactive' ? '已停用' : '已解绑'}）`,
+                  value: item.id,
+                  disabled: item.status !== 'active',
+                }))}
                 notFoundContent={groupTargetsQuery.isLoading ? <Spin size="small" /> : '暂无已绑定群聊'}
               />
               {groupTargetsQuery.isError && (
-                <Alert style={{ marginTop: 8 }} type="error" showIcon message="群聊加载失败" description={getErrorMessage(groupTargetsQuery.error, '请稍后重试')} />
+                <Alert style={{ marginTop: 8 }} type="error" showIcon message="群聊加载失败" description="请稍后重试" />
               )}
-              {!groupTargetsQuery.isLoading && !groupTargetsQuery.isError && groupTargets.length === 0 && (
-                <Alert style={{ marginTop: 8 }} type="info" showIcon message="暂无已绑定群聊" description="请在目标钉钉群内 @机器人发送“绑定作息表”。" />
+              {!groupTargetsQuery.isLoading && !groupTargetsQuery.isError && groupTargets.every((item) => item.status !== 'active') && (
+                <Alert
+                  style={{ marginTop: 8 }}
+                  type="info"
+                  showIcon
+                  message="暂无可用群聊"
+                  description="首次使用时，在群内 @人事系统机器人发送任意内容即可绑定。"
+                />
               )}
               {pushGroupTargetId && (
                 <div style={{ marginTop: 8 }}>
                   <Text type="secondary">目标群聊：</Text>
                   <Text strong>{groupTargets.find((item) => item.id === pushGroupTargetId)?.group_name || '-'}</Text>
                 </div>
+              )}
+              {!groupTargetsQuery.isLoading && !groupTargetsQuery.isError && groupTargets.length > 0 && (
+                <List
+                  size="small"
+                  header={<Text type="secondary">群聊绑定管理</Text>}
+                  dataSource={groupTargets}
+                  renderItem={(item) => (
+                    <List.Item
+                      actions={item.status === 'active'
+                        ? [
+                            <Button
+                              key="unbind"
+                              type="link"
+                              danger
+                              size="small"
+                              icon={<DeleteOutlined />}
+                              loading={unbindGroupMutation.isPending && unbindGroupMutation.variables === item.id}
+                              onClick={() => confirmGroupUnbind(item)}
+                            >
+                              解绑
+                            </Button>,
+                          ]
+                        : undefined}
+                    >
+                      <Space size={8}>
+                        <Text>{item.group_name}</Text>
+                        <Tag color={item.status === 'active' ? 'success' : 'default'}>
+                          {item.status === 'active' ? '可用' : item.status === 'inactive' ? '已停用' : '已解绑'}
+                        </Tag>
+                      </Space>
+                    </List.Item>
+                  )}
+                />
               )}
             </div>
           )}

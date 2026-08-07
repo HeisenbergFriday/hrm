@@ -284,7 +284,7 @@ func (r *UserRepository) FindAllFiltered(page, pageSize int, search string) ([]d
 	if search = strings.TrimSpace(search); search != "" {
 		like := "%" + search + "%"
 		query = query.Where(
-			"users.name LIKE ? OR users.user_id LIKE ? OR users.mobile LIKE ? OR users.email LIKE ?",
+			"users.name"+colCollate(r.db)+" LIKE ? OR users.user_id LIKE ? OR users.mobile LIKE ? OR users.email LIKE ?",
 			like, like, like, like,
 		)
 	}

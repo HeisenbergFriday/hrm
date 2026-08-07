@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Button,
@@ -16,8 +16,8 @@ import {
   Typography,
   message,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { CloseCircleOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { departmentAPI, orgAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -109,9 +109,9 @@ const renderDistributionItems = (items: DistributionItem[], loading?: boolean) =
 }
 
 const statConfig = [
-  { key: 'active', title: '在职人数', icon: <UserOutlined />, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)' },
-  { key: 'probation', title: '试用期人数', icon: <TeamOutlined />, color: 'var(--color-info)', bg: '#e0f2fe' },
-  { key: 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: 'var(--color-warning-dark)', bg: '#fef3c7' },
+  { key: 'active', title: '在职人数', icon: <UserOutlined />, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', filterType: undefined },
+  { key: 'probation', title: '试用期人数', icon: <TeamOutlined />, color: 'var(--color-info)', bg: '#e0f2fe', filterType: 'probation' },
+  { key: 'warning', title: '计划转正预警', icon: <WarningOutlined />, color: 'var(--color-warning-dark)', bg: '#fef3c7', filterType: 'regularization_warning' },
 ] as const
 
 const getPositionDiagnosticText = (record: EmployeeItem) => {
@@ -123,8 +123,15 @@ const getPositionDiagnosticText = (record: EmployeeItem) => {
   return [api, reason, fields].filter(Boolean).join('\n') || '暂无诊断信息'
 }
 
+const FILTER_TYPE_LABELS: Record<string, string> = {
+  probation: '试用期员工',
+  regularization_warning: '计划转正预警',
+}
+
 const EmployeeList: React.FC = () => {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+
   const [employees, setEmployees] = useState<EmployeeItem[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
   const [overview, setOverview] = useState<OverviewData | null>(null)
@@ -132,11 +139,14 @@ const EmployeeList: React.FC = () => {
   const [loadError, setLoadError] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
-  const [search, setSearch] = useState('')
-  const [departmentID, setDepartmentID] = useState<string>()
-  const [status, setStatus] = useState<string>()
+  const page = Math.max(1, Number(searchParams.get('page')) || 1)
+  const pageSize = Math.max(1, Number(searchParams.get('page_size')) || 10)
+  const search = searchParams.get('search')?.trim() || ''
+  const departmentID = searchParams.get('department_id') || undefined
+  const status = searchParams.get('status') || undefined
+  const rawFilterType = searchParams.get('filter_type') || ''
+  const filterType = FILTER_TYPE_LABELS[rawFilterType] ? rawFilterType : undefined
+  const [searchInput, setSearchInput] = useState(search)
   const loadSeqRef = useRef(0)
 
   const departmentNameMap = useMemo(() => {
@@ -144,7 +154,25 @@ const EmployeeList: React.FC = () => {
     return Object.fromEntries(entries) as Record<string, string>
   }, [departments])
 
-  const hasActiveFilters = Boolean(search || departmentID || status)
+  const hasActiveFilters = Boolean(search || departmentID || status || filterType)
+
+  const updateSearchParams = useCallback((updates: Record<string, string | number | undefined>, resetPage = false) => {
+    const next = new URLSearchParams(searchParams)
+    Object.entries(updates).forEach(([key, value]) => {
+      const normalized = String(value ?? '').trim()
+      if (normalized && !(key === 'page' && normalized === '1') && !(key === 'page_size' && normalized === '10')) {
+        next.set(key, normalized)
+      } else {
+        next.delete(key)
+      }
+    })
+    if (resetPage) next.delete('page')
+    setSearchParams(next)
+  }, [searchParams, setSearchParams])
+
+  useEffect(() => {
+    setSearchInput(search)
+  }, [search])
 
   const scopeLabel = useMemo(() => {
     if (loading && !overview?.scope) {
@@ -176,6 +204,7 @@ const EmployeeList: React.FC = () => {
           department_id: departmentID,
           search,
           status,
+          filter_type: filterType,
         }),
       ])
       // 忽略过期响应，避免筛选/翻页竞态覆盖新结果
@@ -193,13 +222,10 @@ const EmployeeList: React.FC = () => {
     }
   }
 
-  useEffect(() => { void loadData() }, [page, pageSize, search, departmentID, status])
+  useEffect(() => { void loadData() }, [page, pageSize, search, departmentID, status, filterType])
 
   const clearFilters = () => {
-    setPage(1)
-    setSearch('')
-    setDepartmentID(undefined)
-    setStatus(undefined)
+    setSearchParams(new URLSearchParams())
   }
 
   const canSyncOrg = hasPermission('attendance_manage')
@@ -308,45 +334,70 @@ const EmployeeList: React.FC = () => {
     >
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 'var(--space-5)' }}>
-        {statConfig.map((item, idx) => (
-          <Col xs={24} md={8} key={item.key}>
-            <div style={{
-              background: 'var(--color-bg-card)',
-              borderRadius: 'var(--radius-xl)',
-              padding: '20px 22px',
-              boxShadow: 'var(--shadow-card)',
-              border: '1px solid var(--color-border)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 14,
-            }}>
-              <div style={{
-                width: 48,
-                height: 48,
-                borderRadius: 'var(--radius-lg)',
-                background: item.bg,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 'var(--font-size-xl)',
-                color: item.color,
-                flexShrink: 0,
-              }}>
-                {item.icon}
-              </div>
-              <div>
-                <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.title}</Text>
-                <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text-title)', lineHeight: 1.2, marginTop: 2, minHeight: 34 }}>
-                  {overviewLoading ? (
-                    <Skeleton.Input active size="small" style={{ width: 56, height: 28 }} />
-                  ) : (
-                    summaryValues[idx]
-                  )}
+        {statConfig.map((item, idx) => {
+          const isActive = item.filterType ? filterType === item.filterType : !filterType
+          const isClickable = !!item.filterType
+          const handleCardClick = () => {
+            if (!isClickable) return
+            updateSearchParams({ filter_type: filterType === item.filterType ? undefined : item.filterType }, true)
+          }
+          const handleCardKeyDown = (e: React.KeyboardEvent) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              handleCardClick()
+            }
+          }
+          return (
+            <Col xs={24} md={8} key={item.key}>
+              <div
+                role={isClickable ? 'button' : undefined}
+                tabIndex={isClickable ? 0 : undefined}
+                aria-label={isClickable ? `筛选${item.title}` : undefined}
+                aria-pressed={isClickable ? isActive : undefined}
+                onClick={handleCardClick}
+                onKeyDown={handleCardKeyDown}
+                style={{
+                  background: 'var(--color-bg-card)',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: '20px 22px',
+                  boxShadow: 'var(--shadow-card)',
+                  border: isClickable && isActive ? `2px solid ${item.color}` : '1px solid var(--color-border)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  cursor: isClickable ? 'pointer' : 'default',
+                  transition: 'border-color 0.2s, box-shadow 0.2s',
+                  ...(isClickable && isActive ? { boxShadow: `0 0 0 1px ${item.color}` } : {}),
+                }}
+              >
+                <div style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: 'var(--radius-lg)',
+                  background: item.bg,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 'var(--font-size-xl)',
+                  color: item.color,
+                  flexShrink: 0,
+                }}>
+                  {item.icon}
+                </div>
+                <div>
+                  <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.title}</Text>
+                  <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text-title)', lineHeight: 1.2, marginTop: 2, minHeight: 34 }}>
+                    {overviewLoading ? (
+                      <Skeleton.Input active size="small" style={{ width: 56, height: 28 }} />
+                    ) : (
+                      summaryValues[idx]
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          </Col>
-        ))}
+            </Col>
+          )
+        })}
       </Row>
 
       {/* 分布卡片 */}
@@ -373,7 +424,13 @@ const EmployeeList: React.FC = () => {
             allowClear
             enterButton={<SearchOutlined />}
             placeholder="搜索姓名、工号、邮箱、手机号、岗位"
-            onSearch={(value) => { setPage(1); setSearch(value.trim()) }}
+            value={searchInput}
+            onChange={(event) => {
+              const value = event.target.value
+              setSearchInput(value)
+              if (value === '' && search !== '') updateSearchParams({ search: undefined }, true)
+            }}
+            onSearch={(value) => updateSearchParams({ search: value.trim() }, true)}
             style={{ width: 320 }}
           />
           <Select
@@ -381,7 +438,7 @@ const EmployeeList: React.FC = () => {
             placeholder="按部门筛选"
             style={{ width: 220 }}
             value={departmentID}
-            onChange={(value) => { setPage(1); setDepartmentID(value) }}
+            onChange={(value) => updateSearchParams({ department_id: value }, true)}
             options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
           />
           <Select
@@ -389,16 +446,33 @@ const EmployeeList: React.FC = () => {
             placeholder="按状态筛选"
             style={{ width: 160 }}
             value={status}
-            onChange={(value) => { setPage(1); setStatus(value) }}
+            onChange={(value) => updateSearchParams({ status: value }, true)}
             options={[
               { label: '在职', value: 'active' },
               { label: '离职/停用', value: 'inactive' },
             ]}
           />
           {hasActiveFilters ? (
-            <Button type="link" onClick={clearFilters}>清除筛选</Button>
+            <Button type="link" aria-label="清除筛选" onClick={clearFilters} icon={<CloseCircleOutlined />}>清除筛选</Button>
           ) : null}
         </Space>
+
+        {filterType && FILTER_TYPE_LABELS[filterType] ? (
+          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Tag
+              color={filterType === 'probation' ? 'blue' : 'orange'}
+              closable
+              closeIcon={<CloseCircleOutlined aria-label="关闭业务筛选" />}
+              onClose={() => updateSearchParams({ filter_type: undefined }, true)}
+            >
+              {FILTER_TYPE_LABELS[filterType]}
+            </Tag>
+            <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
+              当前筛选：{FILTER_TYPE_LABELS[filterType]}
+              {!overviewLoading ? `（${total} 人）` : ''}
+            </Text>
+          </div>
+        ) : null}
 
         {loadError ? (
           <Alert
@@ -425,7 +499,7 @@ const EmployeeList: React.FC = () => {
               total,
               showSizeChanger: false,
               showTotal: (value) => <span style={{ color: 'var(--color-text-secondary)' }}>共 {value} 人</span>,
-              onChange: (nextPage, nextPageSize) => { setPage(nextPage); setPageSize(nextPageSize) },
+              onChange: (nextPage, nextPageSize) => updateSearchParams({ page: nextPage, page_size: nextPageSize }),
             }}
             locale={{
               emptyText: (

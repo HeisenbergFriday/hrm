@@ -7,6 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"peopleops/internal/dingtalk"
+	"peopleops/internal/middleware"
+	"peopleops/internal/service"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -102,6 +106,62 @@ func TestPushWeekScheduleToGroupRejectsClientCredentialOverrides(t *testing.T) {
 	}
 }
 
+func TestWeekScheduleGroupPushPermissionRegression(t *testing.T) {
+	tests := []struct {
+		name       string
+		permission string
+		wantStatus int
+	}{
+		{name: "missing permission", wantStatus: http.StatusForbidden},
+		{name: "group push permission", permission: service.WeekScheduleGroupPushPermission, wantStatus: http.StatusOK},
+		{name: "attendance manage compatibility", permission: "attendance_manage", wantStatus: http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/week-schedule/push/group", nil)
+			c.Set("userID", "u-1")
+			c.Set("orgID", "org-a")
+			permissions := map[string]struct{}{}
+			if tc.permission != "" {
+				permissions[tc.permission] = struct{}{}
+			}
+			middleware.SetAuthContextForTest(c, &middleware.AuthContext{
+				OrgID: "org-a", UserID: "u-1", PermissionSet: permissions, MenuKeySet: map[string]struct{}{},
+			})
+			middleware.RequirePermission(service.WeekScheduleGroupPushPermission, "attendance_manage")(c)
+			if tc.wantStatus == http.StatusOK {
+				if c.IsAborted() {
+					t.Fatalf("request unexpectedly aborted: status=%d body=%s", recorder.Code, recorder.Body.String())
+				}
+				return
+			}
+			if !c.IsAborted() || recorder.Code != tc.wantStatus {
+				t.Fatalf("aborted=%t status=%d body=%s", c.IsAborted(), recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestWeekSchedulePersonalPushRegressionStillUsesPersonalUploadContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	_ = w.WriteField("user_ids", `["u-1"]`)
+	_ = w.Close()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/week-schedule/push/personal", body)
+	c.Request.Header.Set("Content-Type", w.FormDataContentType())
+	c.Set("orgID", "org-a")
+	PushPersonalWeekSchedule(c)
+	if recorder.Code != http.StatusBadRequest || !bytes.Contains(recorder.Body.Bytes(), []byte("请上传作息表图片")) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestServeWeekScheduleGroupImageRejectsInvalidToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -110,5 +170,22 @@ func TestServeWeekScheduleGroupImageRejectsInvalidToken(t *testing.T) {
 	ServeWeekScheduleGroupImage(c)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRespondWeekScheduleGroupPushErrorUsesConfirmedUnavailableMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	respondWeekScheduleGroupPushError(c, &dingtalk.SyncError{
+		Code:        dingtalk.ErrorCodeGroupUnavailable,
+		SafeMessage: "old internal summary",
+	})
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	want := "机器人已不在该群，请重新添加机器人并在群内 @机器人完成绑定。"
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("body=%s", recorder.Body.String())
 	}
 }

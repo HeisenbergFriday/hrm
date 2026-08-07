@@ -72,7 +72,7 @@ var (
 	syncUsersForOrg           = dingtalk.SyncUsersForOrg
 	syncUsersWithDeptsForOrg  = dingtalk.SyncUsersWithDeptsForOrg
 	persistOrgSyncDepartments = func(c *gin.Context, orgID string, depts []dingtalk.DeptInfo) (service.OrgDepartmentSyncResult, error) {
-		orgService := service.NewOrgService(middleware.RequestDB(c))
+		orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 		return orgService.SyncDepartmentsWithChangeLog(orgID, dingtalkDepartmentsToOrgSyncItems(orgID, depts), "dingtalk_sync")
 	}
 	writeOrgSyncStatusForRequest = func(c *gin.Context, orgID string, update orgSyncStatusUpdate) error {
@@ -731,6 +731,7 @@ func applyDingTalkProfileFields(profile *database.EmployeeProfile, user dingtalk
 	}
 	if user.EmploymentType != "" {
 		profile.EmploymentType = user.EmploymentType
+		profile.EmploymentTypeCode = user.EmploymentTypeCode
 	}
 	if user.JobLevel != "" {
 		profile.JobLevel = user.JobLevel
@@ -1959,7 +1960,7 @@ func GetUsers(c *gin.Context) {
 			})
 			return
 		}
-		orgService := service.NewOrgService(middleware.RequestDB(c))
+		orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 		users, total, err := orgService.ListEmployees(scope, page, pageSize, service.OrgEmployeeFilters{
 			DepartmentID: c.Query("department_id"),
 			Search:       c.Query("search"),
@@ -3476,6 +3477,10 @@ func GetSyncStatus(c *gin.Context) {
 }
 
 func GetOrgOverview(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	scope, err := resolveOrgScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3486,7 +3491,7 @@ func GetOrgOverview(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	overview, err := orgService.GetOverview(scope, c.Query("department_id"))
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
@@ -3546,13 +3551,17 @@ func GetScopedDepartments(c *gin.Context) {
 }
 
 func GetOrgDepartmentTree(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	// ?all=true 跳过 scope 过滤，用于配置数据权限时展示全部部门
 	if c.Query("all") == "true" {
 		if !currentUserHasAnyPermission(c, "permission_manage", "user_manage") {
 			respondOrgAccessDenied(c)
 			return
 		}
-		orgService := service.NewOrgService(middleware.RequestDB(c))
+		orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 		tree, err := orgService.GetDepartmentTree(nil)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, Response{
@@ -3580,7 +3589,7 @@ func GetOrgDepartmentTree(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	tree, err := orgService.GetDepartmentTree(scope)
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
@@ -3606,6 +3615,10 @@ func GetOrgDepartmentTree(c *gin.Context) {
 }
 
 func GetOrgDepartmentHistory(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	scope, err := resolveOrgScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3617,7 +3630,7 @@ func GetOrgDepartmentHistory(c *gin.Context) {
 	}
 
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	logs, err := orgService.GetDepartmentHistory(scope, c.Param("id"), limit)
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
@@ -3643,6 +3656,10 @@ func GetOrgDepartmentHistory(c *gin.Context) {
 }
 
 func GetOrgEmployees(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 
@@ -3656,15 +3673,20 @@ func GetOrgEmployees(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	users, total, err := orgService.ListEmployees(scope, page, pageSize, service.OrgEmployeeFilters{
 		DepartmentID: c.Query("department_id"),
 		Search:       c.Query("search"),
 		Status:       c.Query("status"),
+		FilterType:   c.Query("filter_type"),
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrOrgAccessDenied) {
 			respondOrgAccessDenied(c)
+			return
+		}
+		if errors.Is(err, service.ErrInvalidOrgEmployeeFilter) {
+			c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "员工筛选类型无效"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3687,6 +3709,10 @@ func GetOrgEmployees(c *gin.Context) {
 }
 
 func GetOrgEmployeeDetail(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
 	scope, err := resolveOrgScope(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -3697,7 +3723,7 @@ func GetOrgEmployeeDetail(c *gin.Context) {
 		return
 	}
 
-	orgService := service.NewOrgService(middleware.RequestDB(c))
+	orgService := service.NewOrgServiceWithOrgID(middleware.RequestDB(c), orgID)
 	detail, err := orgService.GetEmployeeAggregate(scope, c.Param("id"))
 	if err != nil {
 		switch {
@@ -4903,116 +4929,7 @@ func GetApproval(c *gin.Context) {
 
 // SyncApproval 同步审批数据
 func SyncApproval(c *gin.Context) {
-	var req struct {
-		StartDate   string `json:"start_date"`
-		EndDate     string `json:"end_date"`
-		ProcessCode string `json:"process_code"`
-	}
-	c.ShouldBindJSON(&req)
-
-	if req.StartDate == "" {
-		req.StartDate = time.Now().AddDate(0, -1, 0).Format("2006-01-02")
-	}
-	if req.EndDate == "" {
-		req.EndDate = time.Now().Format("2006-01-02")
-	}
-
-	syncService := service.NewSyncService(middleware.RequestDB(c))
-	orgID, ok := currentOrgIDOrAbort(c)
-	if !ok {
-		return
-	}
-	orgID = database.NormalizeOrganizationID(orgID)
-
-	req.ProcessCode = strings.TrimSpace(req.ProcessCode)
-	if req.ProcessCode == "" {
-		updateSyncStatus(syncService, orgID, "approvals", "failed", "缺少 process_code，未执行审批同步")
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    http.StatusBadRequest,
-			Message: "请在请求中提供 process_code 参数",
-		})
-		return
-	}
-
-	instances, err := dingtalk.GetApprovalsForOrg(orgID, req.ProcessCode, req.StartDate, req.EndDate)
-	if err != nil {
-		updateSyncStatus(syncService, orgID, "approvals", "failed", err.Error())
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "同步审批失败: " + err.Error(),
-		})
-		return
-	}
-
-	// 写入数据库（按 org_id+process_id upsert；统计成功/失败）
-	successCount := 0
-	failCount := 0
-	approvalRepo := repository.NewApprovalRepositoryWithOrgID(middleware.RequestDB(c), orgID)
-	for _, inst := range instances {
-		createTime, _ := time.Parse("2006-01-02 15:04:05", inst.CreateTime)
-		finishTime, _ := time.Parse("2006-01-02 15:04:05", inst.FinishTime)
-
-		content := make(map[string]interface{})
-		for _, fv := range inst.FormValues {
-			name, _ := fv["name"].(string)
-			value, _ := fv["value"].(string)
-			if name != "" {
-				content[name] = value
-			}
-		}
-
-		approval := &database.Approval{
-			OrgID:     orgID,
-			ProcessID: inst.ProcessInstanceID,
-			Title:     inst.Title,
-			// 与 Stream 路径一致：ApplicantID 存钉钉原始 user_id，隔离靠 org_id
-			ApplicantID:   inst.OriginatorUserID,
-			ApplicantName: inst.OriginatorUserID,
-			Status:        inst.Status,
-			CreateTime:    createTime,
-			FinishTime:    finishTime,
-			Content:       content,
-			Extension: map[string]interface{}{
-				"result":       inst.Result,
-				"process_code": req.ProcessCode,
-				"source":       "dingtalk_sync",
-			},
-		}
-
-		if err := approvalRepo.UpsertByOrgProcessID(approval); err != nil {
-			failCount++
-			log.Printf("[SyncApproval] org=%s process_id=%s upsert failed: %v", orgID, inst.ProcessInstanceID, err)
-			continue
-		}
-		successCount++
-	}
-
-	status := "success"
-	msg := fmt.Sprintf("同步成功 %d 个审批实例", successCount)
-	if failCount > 0 && successCount > 0 {
-		status = "partial"
-		msg = fmt.Sprintf("同步部分成功：success=%d failed=%d", successCount, failCount)
-	} else if failCount > 0 && successCount == 0 {
-		status = "failed"
-		msg = fmt.Sprintf("同步失败：failed=%d", failCount)
-	}
-	updateSyncStatus(syncService, orgID, "approvals", status, msg)
-
-	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
-		Message: status,
-		Data: gin.H{
-			"sync_status": gin.H{
-				"count":        successCount,
-				"failed_count": failCount,
-				"status":       status,
-				"message":      msg,
-				"sync_time":    time.Now(),
-				"start_date":   req.StartDate,
-				"end_date":     req.EndDate,
-			},
-		},
-	})
+	syncApprovalCompat(c)
 }
 
 // GetRoles 获取角色列表
@@ -5555,7 +5472,16 @@ func RunJob(c *gin.Context) {
 // GetEmployeeProfiles 获取员工档案列表
 func GetEmployeeProfiles(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
 
 	employeeService, _, ok := employeeServiceForRequest(c)
 	if !ok {
@@ -5565,6 +5491,7 @@ func GetEmployeeProfiles(c *gin.Context) {
 	filters := map[string]string{
 		"department_id": c.Query("department_id"),
 		"status":        c.Query("status"),
+		"keyword":       strings.TrimSpace(c.Query("keyword")),
 	}
 	if !currentUserHasAnyPermission(c, "user_manage") {
 		if _, ok := resolveScopeAndApplyFilters(c, filters); !ok {

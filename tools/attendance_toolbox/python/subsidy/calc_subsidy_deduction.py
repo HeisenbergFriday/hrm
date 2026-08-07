@@ -20,6 +20,7 @@ calc_subsidy_deduction.py
 
 import argparse
 import ast
+import calendar
 import math
 import os
 import re
@@ -71,7 +72,7 @@ _SCHEDULE_COLOR_NORMALIZE_DISTANCE = 32
 # 22点补贴排除规则：
 # 1. 客服/售后部门（部门包含"客服"或"售后"）
 # 2. 不坐班业务/销售人员：部门路径含「销售」、或岗位含「销售」
-# 3. 排班到22点部门：运营管理中心-运营支撑部
+# 3. 运营管理中心-运营支撑部仅排除运维工程师和客服岗位
 LATE22_EXCLUDED_DEPT_KEYWORDS = (
     "客服",
     "售后",
@@ -79,7 +80,6 @@ LATE22_EXCLUDED_DEPT_KEYWORDS = (
 )
 LATE22_EXCLUDED_DEPT_FULL = (
     "AI智慧文创事业部-销售组",        # 不坐班业务（保留精确前缀，兼容历史）
-    "运营管理中心-运营支撑部",        # 排班到22点
 )
 # 岗位关键字：销售类岗位不享受晚走补贴（即使部门名不含销售）
 LATE22_EXCLUDED_POSITION_KEYWORDS = (
@@ -516,6 +516,12 @@ def _find_col(ws, *keywords) -> int | None:
     return None
 
 
+def _is_all_people_monthly_summary(ws) -> bool:
+    """识别工具箱生成的全员补贴扣款月度汇总表。"""
+    title = _field_key(ws.cell(1, 1).value)
+    return "月度汇总表（补贴及扣款）" in title and _find_col(ws, "UserId") is not None
+
+
 def _find_source_detail_col(ws, *keywords) -> int | None:
     """
     源表有两层表头：第3行常有"4月需补回晚走补贴/5月共计..."等汇总列，
@@ -552,6 +558,14 @@ def _find_data_start(ws, col_name: int) -> int | None:
     for row in range(1, min(6, ws.max_row + 1)):
         val = ws.cell(row, col_name).value
         if val and isinstance(val, str) and _field_key(val) not in (name_key, ""):
+            return row
+    return None
+
+
+def _find_header_row(ws, col: int, title: str) -> int | None:
+    title_key = _field_key(title)
+    for row in range(1, min(10, ws.max_row) + 1):
+        if _field_key(ws.cell(row, col).value) == title_key:
             return row
     return None
 
@@ -902,11 +916,16 @@ def _should_exclude_late22_count(record: dict, included_names=None) -> bool:
     排除条件：
     1. 客服/售后部门（部门包含"客服"或"售后"）
     2. 销售类部门或岗位（不坐班业务，含「销售组」及岗位名含销售）
-    3. 排班到22点部门：运营管理中心-运营支撑部
+    3. 运营管理中心-运营支撑部的运维工程师、客服岗位
+    4. 员工类型精确为“外包”（最高优先级）
 
-    强制纳入名单优先于排除规则。
+    强制纳入名单可覆盖部门/岗位规则，但不能覆盖外包排除。
     部门匹配使用一/二/三级部门拼接路径，避免只看一级部门漏匹配。
     """
+    employee_type = str(record.get("emp_type") or "").strip()
+    if employee_type == "外包":
+        return True
+
     # 强制纳入名单优先
     name = str(record.get("name") or "").strip()
     default_names = LATE22_INCLUDED_NAMES if included_names is None else included_names
@@ -922,6 +941,11 @@ def _should_exclude_late22_count(record: dict, included_names=None) -> bool:
 
     if not dept_path and not position:
         return False
+
+    if "运营管理中心-运营支撑部" in dept_path and any(
+        keyword in position for keyword in ("运维工程师", "客服")
+    ):
+        return True
 
     # 岗位关键字（销售等）
     for keyword in LATE22_EXCLUDED_POSITION_KEYWORDS:
@@ -1009,14 +1033,46 @@ def parse_activity_checkin(filepath: str) -> dict[date, set]:
 # ║  2. 解析现有补贴扣款表（钉钉导出）— 提取员工信息 + 扣款4字段             ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
+_DATE_PATTERN = re.compile(r"(20\d{2})[-/.](1[0-2]|0?[1-9])[-/.](3[01]|[12]\d|0?[1-9])")
+
+
+def _parse_report_date_range(text: str) -> tuple[date | None, date | None]:
+    """从报表标题中解析完整的统计开始日期和结束日期。
+
+    钉钉月度汇总表 A1 格式示例：
+      "月度汇总表（补贴及扣款） 统计日期：2026-07-01 至 2026-07-31"
+
+    必须同时存在两个真实有效的完整日期；缺少任一日期或日期非法时返回空值，
+    由调用方 fail-closed 拒绝继续处理。
+    """
+    text = str(text or "").strip()
+    matches = _DATE_PATTERN.findall(text)
+
+    def _to_valid_date(parts: tuple[str, str, str]) -> date | None:
+        year_text, month_text, day_text = parts
+        try:
+            return date(int(year_text), int(month_text), int(day_text))
+        except (TypeError, ValueError):
+            return None
+
+    if len(matches) < 2:
+        return None, None
+    return _to_valid_date(matches[0]), _to_valid_date(matches[1])
+
+
 def parse_source_table(
     filepath: str,
     sheet: str | None = None,
     rd_dept_keywords: list[str] | None = None,
+    year: int | None = None,
+    month: int | None = None,
 ) -> list[dict]:
     """
     读取现有补贴扣款表，自动识别关键列位置（兼容不同格式/列序）。
     返回 [{row_idx, name, group, dept1, dept2, dept3, pos, is_rd, ...}]
+
+    当识别为钉钉原始月度汇总表且 year/month 都提供时，会校验报表统计范围
+    是否完整覆盖处理月份。系统模板和历史兼容格式不要求 A1 包含统计日期。
     """
     wb_values = openpyxl.load_workbook(filepath, data_only=True)
     wb_formulas = openpyxl.load_workbook(filepath, data_only=False)
@@ -1024,13 +1080,41 @@ def parse_source_table(
         ws = wb_values[sheet] if sheet else wb_values.active
         ws_formula = wb_formulas[ws.title]
         rd_keywords = _normalize_keywords(rd_dept_keywords or RD_DEPT_KEYWORDS)
+        is_all_people_summary = _is_all_people_monthly_summary(ws)
+
+        # 只有钉钉原始月度汇总表要求 A1 日期；系统模板和历史格式继续兼容。
+        if is_all_people_summary and year is not None and month is not None:
+            expected_start = date(year, month, 1)
+            expected_end = date(year, month, calendar.monthrange(year, month)[1])
+            a1_text = str(ws.cell(1, 1).value or "")
+            start_date, end_date = _parse_report_date_range(a1_text)
+            if start_date is None or end_date is None:
+                raise ValueError(
+                    f"报表A1单元格未包含可识别的统计日期范围"
+                    f"（必须同时包含有效的统计开始日期和统计结束日期），"
+                    f"无法确认是否为{year}年{month}月的完整自然月。"
+                    f"当前处理月份为{year}年{month}月，"
+                    f"系统要求完整范围为{expected_start.isoformat()}至{expected_end.isoformat()}。"
+                    f"请在钉钉考勤后台重新导出{expected_start.isoformat()}至"
+                    f"{expected_end.isoformat()}的“月度汇总表（补贴及扣款）”。"
+                    f"A1内容：{a1_text[:80]}"
+                )
+            if start_date != expected_start or end_date != expected_end:
+                raise ValueError(
+                    f"报表统计范围为{start_date.isoformat()}至{end_date.isoformat()}，"
+                    f"不是{year}年{month}月的完整自然月。"
+                    f"当前处理月份为{year}年{month}月，"
+                    f"系统要求完整范围为{expected_start.isoformat()}至{expected_end.isoformat()}。"
+                    f"请在钉钉考勤后台重新导出{expected_start.isoformat()}至"
+                    f"{expected_end.isoformat()}的“月度汇总表（补贴及扣款）”。"
+                )
 
         col_name   = _find_col(ws, '姓名')   or 1
         col_emp_no = _find_col(ws, '工号', '员工工号', '员工编号')
         col_group  = _find_col(ws, '考勤组') or 2
-        col_dept1  = _find_col(ws, '一级部门') or 3
-        col_dept2  = _find_col(ws, '二级部门') or 4
-        col_dept3  = _find_col(ws, '三级部门') or 5
+        col_dept1  = (_find_col(ws, '部门') or 3) if is_all_people_summary else (_find_col(ws, '一级部门') or 3)
+        col_dept2  = None if is_all_people_summary else (_find_col(ws, '二级部门') or 4)
+        col_dept3  = None if is_all_people_summary else (_find_col(ws, '三级部门') or 5)
         col_pos    = _find_col(ws, '职位')   or 6
         col_map = {
             'deduct_late': _find_source_detail_col(ws, '15-30分钟迟到扣款', '迟到扣款'),
@@ -1056,7 +1140,8 @@ def parse_source_table(
             ] if not col]
             raise ValueError(f"源表中未找到以下列，请检查表头: {missing}")
 
-        data_start = _find_data_start(ws, col_name)
+        header_row = _find_header_row(ws, col_name, "姓名") if is_all_people_summary else None
+        data_start = (header_row + 1) if header_row else _find_data_start(ws, col_name)
         if data_start is None:
             return []
 
@@ -1069,11 +1154,11 @@ def parse_source_table(
             if name in ('姓名', '合计', ''):
                 continue
             emp_no = _normalize_emp_no(ws.cell(r, col_emp_no).value) if col_emp_no else None
-            if not emp_no or not emp_no.startswith(VALID_EMP_NO_PREFIXES):
+            if not is_all_people_summary and (not emp_no or not emp_no.startswith(VALID_EMP_NO_PREFIXES)):
                 continue
             dept1_val = ws.cell(r, col_dept1).value
-            dept2_val = ws.cell(r, col_dept2).value
-            dept3_val = ws.cell(r, col_dept3).value
+            dept2_val = ws.cell(r, col_dept2).value if col_dept2 else None
+            dept3_val = ws.cell(r, col_dept3).value if col_dept3 else None
             position = ws.cell(r, col_pos).value
             is_rd = _is_rd_dept(dept1_val, dept2_val, dept3_val, keywords=rd_keywords)
             row = {
@@ -1666,7 +1751,10 @@ def parse_attendance(
 
     wb = openpyxl.load_workbook(filepath, data_only=True)
     ws = wb.active  # 月度汇总
+    is_all_people_summary = _is_all_people_monthly_summary(ws)
     col_emp_no = _find_col(ws, '工号', '员工工号', '员工编号')
+    col_department = _find_col(ws, '部门') if is_all_people_summary else None
+    col_position = _find_col(ws, '职位') if is_all_people_summary else None
     rd_keywords = _normalize_keywords(rd_dept_keywords or RD_DEPT_KEYWORDS)
 
     # 自动检测日期行：在前10行中查找连续的日期/周末标记列。
@@ -1756,14 +1844,14 @@ def parse_attendance(
             continue
         emp_name = _clean_name(emp_name.strip())
         emp_no = _normalize_emp_no(ws.cell(row_idx, col_emp_no).value) if col_emp_no else None
-        if not emp_no or not emp_no.startswith(VALID_EMP_NO_PREFIXES):
+        if not is_all_people_summary and (not emp_no or not emp_no.startswith(VALID_EMP_NO_PREFIXES)):
             continue
 
         # 从源表获取部门信息（考勤表可能没有部门列）
         # 先尝试从列3/4/5读取，再拼接路径做产研关键字匹配
-        dept_raw = ws.cell(row_idx, 3).value
-        dept2_raw = ws.cell(row_idx, 4).value if ws.max_column > 3 else None
-        dept3_raw = ws.cell(row_idx, 5).value if ws.max_column > 4 else None
+        dept_raw = ws.cell(row_idx, col_department or 3).value
+        dept2_raw = None if is_all_people_summary else (ws.cell(row_idx, 4).value if ws.max_column > 3 else None)
+        dept3_raw = None if is_all_people_summary else (ws.cell(row_idx, 5).value if ws.max_column > 4 else None)
         is_rd = _is_rd_dept(dept_raw, dept2_raw, dept3_raw, keywords=rd_keywords)
 
         info = {
@@ -1773,7 +1861,7 @@ def parse_attendance(
             'dept1': dept_raw,
             'dept2': dept2_raw,
             'dept3': dept3_raw,
-            'pos':   ws.cell(row_idx, 6).value if ws.max_column > 5 else None,
+            'pos':   ws.cell(row_idx, col_position).value if col_position else (ws.cell(row_idx, 6).value if ws.max_column > 5 else None),
         }
 
         # 按日期读取考勤格
