@@ -30,6 +30,10 @@ func TestIdempotencyRecordUniqueIndexIsOrganizationScoped(t *testing.T) {
 	assertModelHasNoIndex(t, &IdempotencyRecord{}, "idx_idempotency_records_digest")
 }
 
+func TestAnnualLeaveConsumeRequestGateIsOrganizationScoped(t *testing.T) {
+	assertUniqueIndexFields(t, &AnnualLeaveConsumeRequest{}, "idx_leave_request_org_ref", []string{"org_id", "request_ref"})
+}
+
 func TestSyncStatusUniqueIndexIsOrganizationScoped(t *testing.T) {
 	assertUniqueIndexFields(t, &SyncStatus{}, "idx_org_sync_type", []string{"org_id", "type"})
 	assertModelHasNoIndex(t, &SyncStatus{}, "idx_sync_statuses_org_type")

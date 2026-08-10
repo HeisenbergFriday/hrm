@@ -1,6 +1,6 @@
 ---
 purpose: 开发问题复盘日志——沉淀已定位根因且有复用价值的缺陷与防复发约束，供开发前查阅、开发后更新
-last_updated: 2026-08-05
+last_updated: 2026-08-10
 source_of_truth:
   - 本文件（问题条目与防复发索引）
   - AGENTS.md（开发前必读 / 开发后必记流程）
@@ -63,7 +63,8 @@ update_when:
 |---|---|---|
 | `employee-profile` `search` `api-contract` `test` | 员工档案搜索必须走 `/employee/profiles` 的 handler → EmployeeService → EmployeeRepository 真实链路；禁止用 `/org/employees` 花名册测试代替；关键词、分页和 URL 状态需做前后端契约回归 | [2026-07-31 员工档案搜索错测花名册链路](#2026-07-31-p1-员工档案搜索错测花名册链路导致页面无法搜索) |
 | `org-sync` `frontend` `timeout` `api-contract` `multi-tenant` `security` | 用户/部门/全量组织同步共享同组织门闩；JWT `org_id` 唯一可信；超过网关时限的全量同步必须短请求启动+轮询；执行上下文脱离客户端取消，终态用独立短上下文持久化；HTTP 207 必须刷新已成功数据；响应/状态不得回显原始错误 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
-| `approval-sync` `frontend` `timeout` `partial` `multi-tenant` `idempotency` | 审批全量同步必须按 JWT 企业配置编排多个流程，使用短启动+持久化状态轮询；逐流程失败隔离并汇总 `success/partial/failed`；审批、年假消费和加班/调休入账均须幂等 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
+| `approval-sync` `whitelist` `async-boundary` `timeout` `partial` `multi-tenant` `idempotency` | 审批同步范围只取当前 JWT 企业 `ConfigForOrgID(orgID).ProcessCodes`；`Prepare` 禁止外部调用；任务与 running 状态先落库、HTTP 202 先写出，再调度后台外部调用；逐流程失败隔离，审批及下游入账均须幂等 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
+| `approval-sync` `reconciliation` `annual-leave` `overtime` `attendance` `state-reversal` `dingtalk` `concurrency` | 审批逐条对账覆盖有效↔无效冲正/恢复；凌晨 6 点前考勤同时影响打卡日与前一工作日；补偿队列按最久未尝试轮转；钉钉绝对同步失败只标记触发记录，从未外部同步的记录在开关关闭时可仅恢复本地额度 | [2026-08-07 历史审批补同步未触发下游业务对账](#2026-08-07-p1-历史审批补同步未触发下游业务对账) |
 | `org-sync` `department` `stable-id` `transaction` `release` | 钉钉同步必须按租户内稳定外部 ID 匹配历史部门/员工，保留既有本地 ID 与引用；部门写入失败整事务回滚并跳过员工；发布镜像必须来自可追溯干净 Commit | [2026-07-28 组织同步历史 ID 冲突](#2026-07-28-p1-组织同步历史本地-id-与租户前缀-id-冲突导致部门落库失败) |
 | `org-sync` `department-membership` `counting` `multi-tenant` | 完整部门归属写租户隔离关系表；查询仅在无关系时回退主部门；直属人数按完整关系，父级汇总按员工集合去重；**部署 membership 特性后所有已有组织必须重新同步，否则 0 条 membership 导致多部门员工被遗漏** | [2026-07-28 组织同步仅保存主部门导致部门人数偏少](#2026-07-28-p1-组织同步仅保存主部门导致部门人数偏少) |
 | `org-sync` `dingtalk` `mobile` `unique-index` `null` | 钉钉空手机号不得转换为共享占位值；新员工空手机号写 `NULL`，已有真实手机号不得被空值或占位值覆盖 | [2026-07-28 组织同步共享手机号占位值冲突](#2026-07-28-p1-组织同步共享手机号占位值触发唯一索引冲突) |
@@ -81,6 +82,12 @@ update_when:
 |---|---|---|
 | `attendance` `frontend` `timezone` `test` | 考勤时间必须显式按业务时区 UTC+8 格式化；禁止依赖浏览器、Node 或 CI 宿主机时区 | [2026-07-24 考勤时间展示依赖宿主时区](#2026-07-24-p2-考勤时间展示依赖宿主时区导致-ci-失败) |
 | `week-schedule` `notification-copy` `date-aware` | 作息表通知必须定位最近周六并读取实际日历状态；周五写“明天”、周六写“今天”、周一至周四写“本周六”、周日写“下周六”；是否上班置于首行，大/小周仅作补充 | [2026-07-29 作息表推送只判断明天导致周六提醒不灵活](#2026-07-29-p2-作息表推送只判断明天导致周六上班提醒不灵活) |
+
+### 测试 / 验证
+
+| 标签 | 约束摘要 | 条目 |
+|---|---|---|
+| `go-test` `sqlite` `test-isolation` `count` | 共享内存 SQLite 测试 DSN 必须每次调用唯一并在测试结束关闭连接；禁止只用 `t.Name()`，否则 `go test -count=N` 会跨轮复用数据 | [2026-08-07 SQLite 测试 DSN 跨轮复用](#2026-08-07-p2-sqlite-测试-dsn-跨轮复用导致重复执行污染) |
 
 ### 部署 / 配置
 
@@ -161,6 +168,42 @@ update_when:
 ---
 
 ## 问题条目
+
+### 2026-08-07 P2 SQLite 测试 DSN 跨轮复用导致重复执行污染
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-07 |
+| 级别 | P2 |
+| 模块/标签 | `go-test` `sqlite` `test-isolation` `count` `concurrency` |
+| 范围 | 后端测试基础设施 |
+| 现象 | 并发年假门闩测试单次通过，但使用 `go test -count=20` 时后续轮次创建 grant 触发唯一键冲突。 |
+| 根因 | `openLeaveJobsDB` 的共享内存 SQLite DSN 仅包含 `t.Name()`；同一进程内重复执行同名测试时仍有连接持有该命名内存库，后续轮次复用了前一轮数据。 |
+| 修复 | DSN 增加纳秒级唯一后缀，并在 `t.Cleanup` 关闭底层 `sql.DB`，确保每次 helper 调用拥有独立数据库生命周期。 |
+| 验证 | `go test ./internal/service -run '^TestAnnualLeaveConcurrentRequestGateAndTenantIsolation$' -count=20` 通过。 |
+| 防复发 | 共享内存数据库测试 helper 必须生成每次调用唯一的 DSN，并注册连接清理；涉及并发/幂等的测试至少补跑多次 `-count=N`。 |
+| 状态 | fixed |
+
+### 2026-08-07 P1 历史审批补同步未触发下游业务对账
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-08-07 |
+| 级别 | P1 |
+| 模块/标签 | `approval-sync` `reconciliation` `annual-leave` `overtime` `business-date` `state-reversal` `retryable` `concurrency` `partial` `multi-tenant` `idempotency` |
+| 范围 | 后端（审批同步 → 年假消费 / 加班匹配 / 调休台账） |
+| 现象 | 历史审批补同步最初只写 `Approval`；接入逐条对账后仍有四个剩余问题：同意后取消/终止未冲正；历史年假会误用当前年份额度；无考勤生成的零分钟匹配无法在迟到数据补齐后重算；同步任务与定时任务并发时年假“先查日志、后锁 grant”存在重复扣减窗口。 |
+| 根因 | 对账没有持久化业务有效态；年假消费接口缺少业务日期边界；加班把暂缺数据状态当作终态；子消费日志唯一键只能约束单个 grant，不能作为审批请求级门闩，且 MySQL `REPEATABLE READ` 下一致性读不能封闭并发检查窗口。 |
+| 修复 | 对账状态扩展为 `applied/skipped/reversed/retryable/failed`，有效→无效追加冲正、无效→有效进入下一轮。新增 `AnnualLeaveConsumeRequest(org_id,request_ref)` 门闩，与 grant `FOR UPDATE`、余额、正向/冲正日志同事务；存量日志幂等回填门闩。年假解析业务时区内开始/结束/天数，只消费同年度且不晚于业务季度的 grant，跨年按自然日占比分段。加班暂缺状态原位重算，调休按来源净额事务化 credit/rollback，成功重算关闭 pending 补卡；撤销后的钉钉快照标记 rollback，恢复时重新回写一次。 |
+| 验证 | `go test ./internal/... -count=1` 与 `go test ./internal/... -cover -count=1` 通过；覆盖取消/终止/拒绝冲正、撤销恢复、跨年分段、坏日期 fail-closed、迟到考勤原位重算、回滚失败 partial、跨 grant 并发和同键跨租户。覆盖率：service 50.1%、repository 39.4%、database 34.2%、api 42.4%。并发用例 `-count=20` 通过；`go vet ./internal/...`、`golangci-lint run ./internal/...`、逐文件 `gofmt`、`git diff --check` 通过。根级 `golangci-lint run` 报告 0 issues 后因现有无权限目录 `codex_tmp_ascii/tmp3645sj2l` 枚举失败；`go test -race` 因环境缺少 gcc/clang/MSVC 在 runtime/cgo 构建前阻塞，未执行测试代码。 |
+| 防复发 | 1. 审批消费方必须显式定义有效↔无效状态流转，冲正只追加审计台账，恢复使用新操作轮次。<br>2. 历史年假必须解析表单业务日期并限定年度/季度；日期缺失或异常 fail-closed，禁止按完成日期或当前余额猜测。<br>3. 多 grant 消费必须有独立的 `org_id + request_ref` 请求门闩，并与行锁、余额和日志同事务；禁止用子日志预查代替门闩。<br>4. 暂缺外部/考勤数据产生的零结果必须标为 retryable；终态与可重试态不可共用“已处理”分支。<br>5. 原始审批写入与下游对账分离；失败保留审批、继续批次、标记 `partial`，所有查询和写入绑定 `org_id`。<br>6. 回归必须覆盖取消/终止/拒绝、恢复、跨年、坏日期、迟到数据、并发跨 grant 和同业务键跨租户。 |
+| 2026-08-10 同根因续修 | 考勤写入此前未通知加班匹配，且定时任务只处理昨天，历史 `no_clock_record` 等记录可能长期滞留；调休本地冲正后，钉钉绝对余额回滚失败仍可能保留旧 `success`，审批快速恢复会误跳过校准。 |
+| 2026-08-10 修复 | 钉钉考勤与 Doris 考勤均在成功写入后，按当前组织和本批去重的员工日期精确重算五种 retryable 状态；下游失败不回滚考勤，并由默认 30 天、最大 180 天、单轮最多 500 条的逐组织定时任务补偿，查询使用 `org_id + match_status + work_date` 复合索引。钉钉回滚先持久化 `rollback_pending`，失败/超时写 `rollback_failed` 与脱敏错误，确认成功后才写 `rollback_success/rolled_back`；重试和恢复都使用年度绝对余额，历史记录区分 `rollback/retry/reactivation`。 |
+| 2026-08-10 验证 | `go test ./internal/... -count=1`、关键考勤/回滚/恢复幂等用例 `-count=20`、`go vet ./internal/...`、`golangci-lint run ./internal/...`、任务 Go 文件 `gofmt -d`、`git diff --check` 均通过。覆盖真实审批同步产生 retryable、考勤自动重算单次 credit、重复同步、跨租户、终态跳过、失败保留与定时补偿、Doris 去重回调、回滚成功/失败/超时重试及快速恢复。环境无 gcc/clang/MSVC，未运行 `go test -race`。 |
+| 2026-08-10 防复发补充 | 1. 所有正式 Attendance 写入口必须在整批写成功后发布精确、去重且带 `org_id` 的员工日期影响集；禁止全表审批扫描。<br>2. 重算失败不得撤销已落库考勤，日志与数据库错误必须脱敏；补偿查询必须同时限制组织、retryable 状态、日期范围和条数。<br>3. 外部绝对余额调用前先落 pending，失败落 failed；旧 success 不能覆盖回滚不确定性。<br>4. 钉钉失败/超时重试和审批恢复统一使用年度绝对余额，禁止重复增量补偿；本地来源净额继续作为 credit/debit 幂等门闩。 |
+| 2026-08-10 同根因复核 | **现象/根因**：单条绝对余额失败把同员工同年度全部成功记录改为失败，后续可能重新增量发放；凌晨跨日打卡只触发打卡日；补偿固定按工作日取前 500 条；所有 `rolled_back` 恢复均强制外部校准。<br>**修复**：绝对同步失败由调用方只持久化触发记录，年度批量状态仅在绝对同步成功后更新；00:00 至 06:00（含）考勤同时发布当天与前一天；补偿按 `updated_at + id` 选最久未尝试记录并在处理前统一 touch；恢复按开关与成功同步历史区分，从未外部同步且开关关闭时清除回滚标记、恢复本地额度并记为 `skipped`，已有外部历史或不确定状态仍要求绝对校准。<br>**防复发**：1. 单条外部失败不得批量覆盖同年度兄弟记录。<br>2. 考勤影响日期必须与加班查询窗口的次日 06:00 边界一致，钉钉与 Doris 入口复用同一 helper。<br>3. 有上限的 retryable 队列必须记录每次尝试并按最久未尝试排序，不能按不变业务键固定取头部。<br>4. 撤销恢复是否必须外部校准应由同步开关、不确定状态和成功同步历史共同判断，不能只看 `rolled_back`。 |
+| 2026-08-10 本轮验证 | 新增四类回归、Doris 跨午夜入口及补偿跳过记录 touch 用例通过；关键用例 `-count=20` 通过；`go test ./internal/... -count=1`、`go vet ./...`、`golangci-lint run`（0 issues）、涉及文件 `gofmt -d`、`git diff --check` 均通过。 |
+| 状态 | fixed |
 
 ### 2026-08-03 P2 补贴扣款数据来源纠正
 
@@ -386,6 +429,10 @@ update_when:
 | 验证 | 后端异步定向与完整相关包测试通过；实际 Go 包全量 `go test ./internal/... ./cmd/... ./tools/... -count=1` 通过，`go vet ./internal/... ./cmd/... ./tools/...` 通过，`golangci-lint run ./internal/... ./cmd/... ./tools/...` 为 `0 issues`，`go build ./cmd/... ./tools/ops/sync_org_data` 通过。前端组织同步定向 2 files / 18 tests 通过，覆盖短请求启动、多次 running、success、partial_failed、failed、409、404/服务重启、页面轮询超时、网络失败、刷新回调失败与 HRM 原文脱敏；`npm run lint`、`npm run build` 通过。根目录 `go test ./...` 因既有无权限临时目录在包发现阶段阻塞，已改用实际包根执行，不将其记为代码测试失败。`go test -race` 本次未执行，不声称通过。未部署。 |
 | 2026-08-05 审批同步同根因复发 | **现象/根因**：审批实例页和统计页强制选择模板，旧 `/approvals/sync` 也强制 `process_code`；页面依赖 Axios 默认 10 秒长连接，且单次 `listids` 无法编排企业全部流程。只删除前端校验会造成无流程假成功、任一流程失败阻断、长任务误判和下游重复风险。<br>**修复**：新增可测试的 `ApprovalSyncService`，空流程代码以 JWT 企业的 `ConfigForOrgID(orgID).ProcessCodes` 为权威来源并稳定去重排序；新增 `/approvals/sync/start` 与 `/approvals/sync/:request_id`，复用组织同步的持久化 running/终态、脱离客户端取消的 15 分钟执行上下文、独立 5 秒收尾上下文和同企业门闩。每个流程独立拉取/逐条 upsert，详情失败保留已成功实例并汇总安全计数；日期最多 120 天连续分片、未来结束时间截断并跨片去重。审批按 `org_id + process_id` upsert，保留 `result/process_code/source`；年假消费和加班匹配/调休入账补充重复全量同步回归。前端空模板显示“同步全部”，选中后显示“同步当前模板”，短启动后轮询并区分 running/success/partial/failed/配置缺失，success/partial 刷新，传输失败提示任务状态不确定。<br>**验证**：`go test ./internal/api/... ./internal/service/... ./internal/repository/... -count=1` 全部通过；审批/下游定向测试覆盖全量、单流程、缺配置、去重、跨企业、冲突、部分/全部失败、日期分片、upsert、错误脱敏、年假/加班/调休防重。前端 `29/29` 文件、`370/370` 用例、lint、build 通过；审批 Playwright 用例通过。完整 Chromium E2E 为 `11 passed / 5 failed`，失败均来自本任务外考勤工具箱未 mock `POST /attendance/toolbox/roster/generate` 及既有路由预期，不影响审批用例结论。`go vet ./...`、`golangci-lint run`（0 issues）、`git diff --check` 通过。 |
 | 2026-08-05 防复发补充 | 1. 一键全量同步不是“空参数调用单流程接口”，必须有服务端权威流程清单、稳定编排、逐流程隔离和完整汇总。<br>2. 审批长任务沿用短启动+持久化状态轮询；启动响应或轮询传输失败只能标记状态未知，禁止假定任务未执行并自动重试。<br>3. `SyncStatus` 查询必须绑定 JWT `org_id + type + request_id`，流程配置不得跨企业回退；进程内锁只适用单实例。<br>4. 同步实现变更必须同时回归审批 upsert、Stream 重放、年假审批状态与消费引用、加班类型识别、同员工同日匹配和调休台账唯一性。<br>5. `listids` 的 120 天分片、未来时间保护和跨片实例 ID 去重必须在主审批同步与工具箱调用中分别有生产代码测试，禁止只覆盖其中一条链路。 |
+| 2026-08-07 审批流程白名单同根因复发 | **现象/根因**：`ApprovalSyncService.Prepare` 将当前企业显式配置的 `ProcessCodes` 与钉钉动态发现的全部可管理流程合并，并用合并结果校验显式 `process_code`，使“可管理”被误当成“允许同步”，未配置流程可进入全量或单流程同步。旧测试 `TestApprovalSyncPrepareDiscoveryUnionDeduplicatesProcesses` 还固化了该扩权行为。<br>**修复**：审批实例同步移除动态发现依赖与合并逻辑；全量只使用当前企业配置白名单并去空、去重、排序；显式流程必须命中同一白名单，否则返回 `APPROVAL_PROCESS_NOT_ACCESSIBLE`；空白名单返回 `APPROVAL_PROCESS_CODES_MISSING`。准备阶段失败发生在任务持久化前，API 回归断言任务数为 0。动态发现客户端能力保留，但不参与审批实例同步范围决策。<br>**验证**：`go test ./internal/service/... ./internal/api/... ./internal/dingtalk/... -count=1` 全部通过，覆盖配置全量、动态额外流程排除、显式越权拒绝、稳定规范化、跨企业隔离、非默认企业不回退和空配置不建任务；`go vet ./...` 通过；`golangci-lint run` 为 0 issues；`git diff --check` 通过。 |
+| 2026-08-07 防复发补充 | 1. “钉钉可管理流程”是发现能力，不是审批实例同步授权；禁止与 `ProcessCodes` 求并集。<br>2. 全量与显式单流程必须复用同一个当前企业白名单，先校验白名单再创建任务。<br>3. 白名单为空优先返回 `APPROVAL_PROCESS_CODES_MISSING`；不得因显式参数或动态发现结果创建任务。<br>4. 回归测试必须同时断言计划流程、实际 fetch 流程和失败准备后的任务数，避免只测辅助集合函数。 |
+| 2026-08-07 审批异步启动边界同根因复发 | **现象/根因**：`POST /approvals/sync/start` 在创建持久化任务前调用 `Prepare`，而 `Prepare` 同步调用钉钉流程发现；即使移除发现调用，handler 仍在写出 HTTP 202 前启动 goroutine，调度后钉钉实例拉取可能抢在受理响应前执行，前端仍可能在取得 `request_id` 前超时。<br>**修复**：`Prepare` 收口为日期、当前企业本地配置和白名单规划；审批任务与 `SyncStatus=running` 先持久化，随后写出 HTTP 202，最后才通过后台调度入口执行 `Run`。执行上下文继续 `WithoutCancel` 且最多 15 分钟，终态继续使用独立 5 秒上下文；终态持久化键强制使用请求线程生成的 `request_id`，持久化边界将未知状态收口为 `failed`，并把第三方错误原文替换为稳定安全文案。<br>**验证**：channel/调度注入测试在后台回调被交付时断言 202 响应、有效 `request_id`、任务 running 和 SyncStatus running 均已完成；随后覆盖阻塞外部阶段、客户端取消后成功、外部失败安全终态、后台漏回 request_id、同企业 409 和跨企业受理。`go test ./internal/api ./internal/service ./internal/repository -run 'ApprovalSync' -count=1` 通过；`go vet ./...` 通过；`golangci-lint run` 为 `0 issues`；`git diff --check` 通过。 |
+| 2026-08-07 异步边界防复发补充 | 1. 短启动接口返回 202 前只允许参数/租户/日期/权限校验、本地配置读取和 running 持久化；外部发现、校验和业务拉取必须在后台阶段。<br>2. 代码顺序必须是“任务持久化 → running 状态持久化 → 写出 202 → 调度 goroutine”；仅把外部调用包进 goroutine但在响应前启动仍不满足契约。<br>3. 边界测试使用可注入调度器、channel 或同步信号，直接观察响应与持久化状态，不以毫秒阈值推断。<br>4. 客户端取消、执行超时、外部失败和 panic 都必须进入安全终态；任务详情和 SyncStatus 禁止保存第三方原始错误、Token、Secret 或敏感 URL 参数。 |
 | 防复发 | 1. 所有组织写同步入口必须复用同一租户边界、并发门闩、安全错误契约和长任务超时，禁止只修全量入口。<br>2. JWT `org_id` 是唯一可信组织来源；空组织 fail-closed，禁止 `NormalizeOrganizationID("")` 回退 default。<br>3. 后续阶段是否执行必须依据前置阶段最终结果，包含源拉取、校验和事务落库。<br>4. 批量逐项处理先形成每项最终状态，再汇总成功/失败；禁止在多个子步骤直接累加全局计数。<br>5. HTTP 207 是有效完成结果，刷新已成功写入的数据；传输失败和 HTTP 500 不盲目刷新。<br>6. 响应与用户可见状态禁止原始 `err.Error()`、HTML 网关页或第三方原始错误；诊断日志必须统一脱敏并带 request_id。<br>7. 进程内锁只适用于单实例；多实例上线前必须实现分布式互斥或任务队列。<br>8. 所有预计超过 60 秒的页面操作优先设计为短启动+状态轮询，避免依赖任一层网关长连接；仍使用长请求时必须同时核对后端执行上限、Nginx/负载均衡/CDN 空闲超时和客户端超时。<br>9. 后台任务的运行中状态与完整终态必须持久化；结果查询同时使用当前 JWT `org_id`、任务类型和 `request_id`，禁止只按 request_id 或进程内 map 查询。<br>10. 业务执行上下文过期后不得继续用于终态落库；收尾写入应保留租户/追踪值、脱离已过期取消信号并设置独立短上限。 |
 | 状态 | fixed |
 

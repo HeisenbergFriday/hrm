@@ -102,6 +102,12 @@ func (r *SupplementaryRequestRepository) Reject(id uint, rejectedReason string) 
 	}).Error
 }
 
+func (r *SupplementaryRequestRepository) ResolvePendingByMatchResultID(matchResultID uint) error {
+	return r.scoped().Model(&database.OvertimeSupplementaryRequest{}).
+		Where("match_result_id = ? AND status = ?", matchResultID, "pending").
+		Updates(map[string]interface{}{"status": "resolved", "rejected_reason": "考勤数据已补齐并自动重算"}).Error
+}
+
 func (r *SupplementaryRequestRepository) UpdateDingtalkProcessID(id uint, processID string) error {
 	return r.scoped().Model(&database.OvertimeSupplementaryRequest{}).Where("id = ?", id).Update("dingtalk_process_id", processID).Error
 }

@@ -936,6 +936,7 @@ func organizationScopedModelTables() []string {
 		&OvertimeSupplementaryRequest{},
 		&CompensatoryLeaveLedger{},
 		&AnnualLeaveConsumeLog{},
+		&AnnualLeaveConsumeRequest{},
 		&PerformanceTemplate{},
 		&PerformanceTemplateSection{},
 		&PerformanceTemplateItem{},
@@ -1022,6 +1023,7 @@ var organizationScopedTableNameSet = map[string]struct{}{
 	"overtime_supplementary_requests":      {},
 	"compensatory_leave_ledgers":           {},
 	"annual_leave_consume_logs":            {},
+	"annual_leave_consume_requests":        {},
 	"performance_templates":                {},
 	"performance_template_sections":        {},
 	"performance_template_items":           {},
@@ -1226,7 +1228,13 @@ func migrate() error {
 	if err := DB.AutoMigrate(&AnnualLeaveConsumeLog{}); err != nil {
 		log.Printf("[migrate] AnnualLeaveConsumeLog 迁移失败（忽略）: %v", err)
 	}
+	if err := DB.AutoMigrate(&AnnualLeaveConsumeRequest{}); err != nil {
+		return err
+	}
 	if err := migrateAnnualLeaveConsumeLogSchema(); err != nil {
+		return err
+	}
+	if err := MigrateAnnualLeaveConsumeRequests(DB); err != nil {
 		return err
 	}
 	if err := migrateOvertimeMatchSchema(); err != nil {

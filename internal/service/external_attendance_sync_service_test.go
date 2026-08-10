@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"peopleops/internal/database"
+	"peopleops/internal/dingtalk"
 	"peopleops/internal/repository"
 )
 
@@ -86,6 +87,90 @@ func TestRunDisabledRejects(t *testing.T) {
 	if !errors.Is(err, ErrExternalSyncDisabled) {
 		t.Fatalf("want disabled, got %v", err)
 	}
+}
+
+func TestDorisAttendanceRecalculationDeduplicatesWrittenPairs(t *testing.T) {
+	db := openLeaveJobsDB(t)
+	if err := db.AutoMigrate(&database.User{}, &database.Attendance{}); err != nil {
+		t.Fatalf("migrate attendance tables: %v", err)
+	}
+
+	const orgID = "xiaotie"
+	localUID := database.ScopedExternalID(orgID, "external-user-1")
+	svc := NewExternalAttendanceSyncService(
+		nil,
+		repository.NewExternalAttendanceLocalRepository(db, orgID),
+		orgID,
+		time.Minute,
+		true,
+	)
+	checkTime := time.Date(2026, 8, 5, 18, 30, 0, 0, time.Local)
+	row := repository.ExternalAttendanceRow{
+		UserID:        "external-user-1",
+		WorkDate:      "2026-08-05",
+		CheckType:     "OffDuty",
+		UserCheckTime: sql.NullTime{Valid: true, Time: checkTime},
+		SourceType:    "USER",
+	}
+	if err := svc.applyBusinessAttendance(localUID, row.UserID, row); err != nil {
+		t.Fatalf("first Doris attendance write: %v", err)
+	}
+	if err := svc.applyBusinessAttendance(localUID, row.UserID, row); err != nil {
+		t.Fatalf("duplicate Doris attendance write: %v", err)
+	}
+
+	callCount := 0
+	svc.SetRetryableOvertimeRecalculator(func(pairs []repository.UserDatePair) (int, error) {
+		callCount++
+		if len(pairs) != 1 || pairs[0].UserID != localUID || pairs[0].WorkDate != row.WorkDate {
+			t.Fatalf("recalculation pairs = %#v", pairs)
+		}
+		return 1, nil
+	})
+	if err := svc.recalculateAffectedOvertime(); err != nil {
+		t.Fatalf("recalculate Doris attendance: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("recalculator call count = %d, want 1", callCount)
+	}
+
+	var attendanceCount int64
+	if err := db.Model(&database.Attendance{}).
+		Where("org_id = ? AND user_id = ?", orgID, localUID).
+		Count(&attendanceCount).Error; err != nil {
+		t.Fatalf("count persisted Doris attendance: %v", err)
+	}
+	if attendanceCount != 1 {
+		t.Fatalf("attendance count = %d, want 1", attendanceCount)
+	}
+}
+
+func TestDorisEarlyMorningAttendanceAffectsPreviousWorkDate(t *testing.T) {
+	db := openLeaveJobsDB(t)
+	if err := db.AutoMigrate(&database.User{}, &database.Attendance{}); err != nil {
+		t.Fatalf("migrate attendance tables: %v", err)
+	}
+
+	const orgID = "xiaotie"
+	localUID := database.ScopedExternalID(orgID, "external-night-user")
+	svc := NewExternalAttendanceSyncService(
+		nil,
+		repository.NewExternalAttendanceLocalRepository(db, orgID),
+		orgID,
+		time.Minute,
+		true,
+	)
+	row := repository.ExternalAttendanceRow{
+		UserID:        "external-night-user",
+		WorkDate:      "2026-08-06",
+		CheckType:     "OffDuty",
+		UserCheckTime: sql.NullTime{Valid: true, Time: time.Date(2026, 8, 6, 1, 0, 0, 0, dingtalk.ApprovalBusinessLocation())},
+		SourceType:    "USER",
+	}
+	if err := svc.applyBusinessAttendance(localUID, row.UserID, row); err != nil {
+		t.Fatalf("write early-morning Doris attendance: %v", err)
+	}
+	assertUserDatePairs(t, svc.AffectedAttendanceUserDatePairs(), localUID, "2026-08-05", "2026-08-06")
 }
 
 func TestPageTieKeyUsedForCursorNotEmptyRecord(t *testing.T) {

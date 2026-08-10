@@ -40,12 +40,13 @@ func (s *LeaveJobScheduler) runQuarterlyGrantJob() {
 	}
 }
 
-// runOvertimeMatchJob 每天凌晨2点执行加班匹配
+// runOvertimeMatchJob 每天凌晨2点执行加班匹配和 retryable 补偿
 func (s *LeaveJobScheduler) runOvertimeMatchJob() {
 	for {
 		next := s.nextDailyAt(2, 0)
 		time.Sleep(time.Until(next))
 		s.runOvertimeMatch()
+		s.runRetryableMatchCompensation()
 	}
 }
 
@@ -130,6 +131,44 @@ func (s *LeaveJobScheduler) runOvertimeMatch() {
 			continue
 		}
 		log.Printf("[LeaveJobs] org=%s 加班匹配完成", orgID)
+	}
+}
+
+// runRetryableMatchCompensation scans retryable overtime matches over a
+// configurable lookback window and re-evaluates them. This catches cases where
+// attendance was synced after the initial matching attempt (e.g. late clock data,
+// external Doris sync, manual attendance correction).
+// Default window: 30 days. Override with OVERTIME_RETRY_LOOKBACK_DAYS env var.
+func (s *LeaveJobScheduler) runRetryableMatchCompensation() {
+	lookbackDays := 30
+	if raw := strings.TrimSpace(os.Getenv("OVERTIME_RETRY_LOOKBACK_DAYS")); raw != "" {
+		var parsed int
+		if n, err := fmt.Sscanf(raw, "%d", &parsed); err == nil && n == 1 && parsed >= 1 {
+			lookbackDays = parsed
+		}
+	}
+	if lookbackDays > 180 {
+		lookbackDays = 180 // cap to avoid full table scan
+	}
+	endDate := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	startDate := time.Now().AddDate(0, 0, -lookbackDays).Format("2006-01-02")
+	log.Printf("[LeaveJobs] 开始 retryable 加班补偿扫描，范围: %s ~ %s", startDate, endDate)
+
+	orgs, err := s.listActiveOrgIDs()
+	if err != nil {
+		log.Printf("[LeaveJobs] 读取组织失败: %v", err)
+		return
+	}
+	for _, orgID := range orgs {
+		svc := NewOvertimeMatchingServiceWithOrgID(s.db, orgID)
+		recalculated, err := svc.RunRetryableMatchCompensation(startDate, endDate)
+		if err != nil {
+			log.Printf("[LeaveJobs] org=%s retryable 补偿失败: %v", orgID, err)
+			continue
+		}
+		if recalculated > 0 {
+			log.Printf("[LeaveJobs] org=%s retryable 补偿完成，重算 %d 条", orgID, recalculated)
+		}
 	}
 }
 
@@ -399,9 +438,14 @@ func (s *LeaveJobScheduler) consumeAnnualLeaveApprovalsForOrg(orgID string, appr
 			log.Printf("[LeaveJobs] org=%s 审批 %s 无法解析天数，跳过（请手动录入）", orgID, approval.ProcessID)
 			continue
 		}
-		ref := "approval:" + approval.ProcessID
+		ref := approvalBusinessReference(approval.ProcessID)
 		remark := approval.Title + "（自动同步）"
-		if err := svc.ConsumeAnnualLeave(approval.ApplicantID, days, ref, remark); err != nil {
+		start, end, err := parseApprovalLeaveBusinessPeriod(approval.Content)
+		if err != nil {
+			log.Printf("[LeaveJobs] org=%s 审批 %s 无法解析业务日期，跳过（请人工处理）", orgID, approval.ProcessID)
+			continue
+		}
+		if _, err := svc.ConsumeAnnualLeaveForPeriod(approval.ApplicantID, days, ref, remark, start, end); err != nil {
 			log.Printf("[LeaveJobs] org=%s 年假消费失败 %s: %v", orgID, approval.ProcessID, err)
 		} else {
 			log.Printf("[LeaveJobs] org=%s 年假消费成功 %s %.2f天", orgID, approval.ApplicantID, days)
@@ -468,29 +512,9 @@ func (s *LeaveJobScheduler) listActiveOrgIDsForSeed() ([]string, error) {
 }
 
 // isAnnualLeaveApprovalConsumable 判断审批是否可作为年假自动消费候选。
-// 规则：
-// 1) status 大小写不敏感，仅 completed/COMPLETED 可消费；
-// 2) result 为 agree/approved/pass/success/同意/通过 时可消费；
-// 3) result 为 refuse/rejected/拒绝 等必须跳过；
-// 4) result 缺失时兼容历史数据：仅凭 completed 状态放行（旧 SyncApproval 可能未写 result）。
+// 只有钉钉明确返回 COMPLETED + agree 才能产生年假消费。
 func isAnnualLeaveApprovalConsumable(status, result string) bool {
-	if !strings.EqualFold(strings.TrimSpace(status), "completed") {
-		return false
-	}
-	normalized := strings.ToLower(strings.TrimSpace(result))
-	// 兼容历史：缺少 result 时不阻断 completed 审批消费。
-	if normalized == "" {
-		return true
-	}
-	switch normalized {
-	case "agree", "approved", "pass", "success", "同意", "通过":
-		return true
-	case "refuse", "reject", "rejected", "deny", "denied", "拒绝", "不通过":
-		return false
-	default:
-		// 未知结果保守跳过，避免错误扣减。
-		return false
-	}
+	return isApprovalBusinessEffective(status, result)
 }
 
 func approvalResultFromExtension(ext map[string]interface{}) string {

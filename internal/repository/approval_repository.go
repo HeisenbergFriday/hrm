@@ -173,6 +173,18 @@ func (r *ApprovalRepository) FindByUintID(id uint) (*database.Approval, error) {
 	return &approval, nil
 }
 
+func (r *ApprovalRepository) FindByProcessID(processID string) (*database.Approval, error) {
+	if _, err := r.requireOrgID(); err != nil {
+		return nil, err
+	}
+	var approval database.Approval
+	err := r.scoped().Where("process_id = ?", strings.TrimSpace(processID)).First(&approval).Error
+	if err != nil {
+		return nil, err
+	}
+	return &approval, nil
+}
+
 func (r *ApprovalRepository) FindAll(page, pageSize int, filters map[string]string) ([]database.Approval, int64, error) {
 	if _, err := r.requireOrgID(); err != nil {
 		return nil, 0, err

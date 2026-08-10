@@ -113,6 +113,7 @@ func ExternalAttendanceSyncRun(c *gin.Context) {
 	if err != nil {
 		msg = err.Error()
 	}
+
 	c.JSON(http.StatusOK, Response{Code: 200, Message: msg, Data: job})
 }
 
@@ -257,7 +258,11 @@ func newExternalSyncService(c *gin.Context, orgID string) *service.ExternalAtten
 			}
 		}
 	}
-	local := repository.NewExternalAttendanceLocalRepository(middleware.RequestDB(c), orgID)
+	requestDB := middleware.RequestDB(c)
+	local := repository.NewExternalAttendanceLocalRepository(requestDB, orgID)
 	lookback := time.Duration(cfg.LookbackMinutes) * time.Minute
-	return service.NewExternalAttendanceSyncService(sourceRepo, local, orgID, lookback, cfg.Enabled)
+	svc := service.NewExternalAttendanceSyncService(sourceRepo, local, orgID, lookback, cfg.Enabled)
+	attendanceSvc := service.NewAttendanceServiceWithOrgID(requestDB, orgID)
+	svc.SetRetryableOvertimeRecalculator(attendanceSvc.RecalculateRetryableOvertime)
+	return svc
 }

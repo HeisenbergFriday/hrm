@@ -17,6 +17,7 @@ func TestApprovalResyncDoesNotDuplicateOvertimeMatchOrCompensatoryCredit(t *test
 		&database.OvertimeMatchResult{},
 		&database.CompensatoryLeaveLedger{},
 		&database.OvertimeSyncHistory{},
+		&database.OvertimeSupplementaryRequest{},
 	); err != nil {
 		t.Fatalf("migrate overtime tables: %v", err)
 	}

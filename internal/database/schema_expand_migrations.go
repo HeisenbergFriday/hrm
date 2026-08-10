@@ -26,10 +26,31 @@ func MigrateAnnualLeaveConsumeLogSchema(db *gorm.DB) error {
 		return err
 	}
 	if !hasCol {
-		if err := db.Exec("ALTER TABLE `annual_leave_consume_logs` ADD COLUMN `request_ref` varchar(128)").Error; err != nil {
+		if err := db.Exec("ALTER TABLE `annual_leave_consume_logs` ADD COLUMN `request_ref` varchar(160)").Error; err != nil {
 			return err
 		}
 	}
+	for _, column := range []struct {
+		name string
+		sql  string
+	}{
+		{"operation_no", "ALTER TABLE `annual_leave_consume_logs` ADD COLUMN `operation_no` int NOT NULL DEFAULT 1"},
+		{"entry_type", "ALTER TABLE `annual_leave_consume_logs` ADD COLUMN `entry_type` varchar(32) NOT NULL DEFAULT 'consume'"},
+		{"business_start_date", "ALTER TABLE `annual_leave_consume_logs` ADD COLUMN `business_start_date` varchar(32)"},
+		{"business_end_date", "ALTER TABLE `annual_leave_consume_logs` ADD COLUMN `business_end_date` varchar(32)"},
+		{"reversal_of_id", "ALTER TABLE `annual_leave_consume_logs` ADD COLUMN `reversal_of_id` bigint unsigned NOT NULL DEFAULT 0"},
+	} {
+		exists, err := columnExistsDB(db, "annual_leave_consume_logs", column.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if err := db.Exec(column.sql).Error; err != nil {
+				return err
+			}
+		}
+	}
+
 	// Set-based backfill only; never drop/merge legacy unique indexes here.
 	return db.Exec(`
 		UPDATE annual_leave_consume_logs
@@ -38,6 +59,52 @@ func MigrateAnnualLeaveConsumeLogSchema(db *gorm.DB) error {
 			ELSE CONCAT('approval:', approval_ref)
 		END
 		WHERE request_ref IS NULL OR request_ref = ''
+	`).Error
+}
+
+// MigrateAnnualLeaveConsumeRequests backfills the request gate from existing
+// positive consumption logs. INSERT IGNORE makes the migration repeatable and
+// preserves one gate per organization and approval request.
+func MigrateAnnualLeaveConsumeRequests(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("nil db")
+	}
+	requestsExist, err := tableExistsDB(db, "annual_leave_consume_requests")
+	if err != nil || !requestsExist {
+		return err
+	}
+	logsExist, err := tableExistsDB(db, "annual_leave_consume_logs")
+	if err != nil || !logsExist {
+		return err
+	}
+	return db.Exec(`
+		INSERT IGNORE INTO annual_leave_consume_requests (
+			org_id, request_ref, approval_ref, user_id, status, operation_no, days,
+			business_start_date, business_end_date, created_at, updated_at
+		)
+		SELECT
+			org_id,
+			CASE
+				WHEN approval_ref IS NULL OR approval_ref = '' THEN request_ref
+				WHEN approval_ref LIKE 'approval:%' THEN approval_ref
+				ELSE CONCAT('approval:', approval_ref)
+			END,
+			COALESCE(NULLIF(approval_ref, ''), request_ref),
+			MAX(user_id),
+			'applied',
+			1,
+			SUM(CASE WHEN entry_type = 'reversal' THEN -days ELSE days END),
+			MIN(business_start_date),
+			MAX(business_end_date),
+			MIN(created_at),
+			MAX(updated_at)
+		FROM annual_leave_consume_logs
+		GROUP BY org_id, CASE
+			WHEN approval_ref IS NULL OR approval_ref = '' THEN request_ref
+			WHEN approval_ref LIKE 'approval:%' THEN approval_ref
+			ELSE CONCAT('approval:', approval_ref)
+		END, COALESCE(NULLIF(approval_ref, ''), request_ref)
+		HAVING SUM(CASE WHEN entry_type = 'reversal' THEN -days ELSE days END) > 0
 	`).Error
 }
 

@@ -531,8 +531,8 @@ func TestAnnualLeaveConsumeSchemaExpandBackfillIsRepeatableAndDoesNotDropIndexes
 		t.Fatal("request_ref column was not added")
 	}
 	firstAlterCount := countExecPrefix(state.execs, "ALTER TABLE")
-	if firstAlterCount != 1 {
-		t.Fatalf("expected one schema-expand ALTER, got %v", state.execs)
+	if firstAlterCount != 6 {
+		t.Fatalf("expected six schema-expand ALTERs, got %v", state.execs)
 	}
 	if err := MigrateAnnualLeaveConsumeLogSchema(db); err != nil {
 		t.Fatal(err)
@@ -553,6 +553,33 @@ func TestAnnualLeaveConsumeSchemaExpandBackfillIsRepeatableAndDoesNotDropIndexes
 	}
 	if !foundBackfill {
 		t.Fatalf("request_ref backfill not executed: %v", state.execs)
+	}
+}
+
+func TestAnnualLeaveConsumeRequestBackfillIsRepeatableAndNonDestructive(t *testing.T) {
+	state := &orgUniqueTestState{tables: map[string]map[string]bool{
+		"annual_leave_consume_logs":     {"org_id": true, "request_ref": true, "approval_ref": true, "user_id": true, "entry_type": true, "days": true},
+		"annual_leave_consume_requests": {"org_id": true, "request_ref": true},
+	}}
+	db := openOrgUniqueTestDB(t, state)
+	if err := MigrateAnnualLeaveConsumeRequests(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateAnnualLeaveConsumeRequests(db); err != nil {
+		t.Fatal(err)
+	}
+	insertCount := 0
+	for _, exec := range state.execs {
+		upper := strings.ToUpper(strings.TrimSpace(exec))
+		if strings.HasPrefix(upper, "INSERT IGNORE INTO ANNUAL_LEAVE_CONSUME_REQUESTS") {
+			insertCount++
+		}
+		if strings.Contains(upper, "DELETE ") || strings.Contains(upper, "DROP ") {
+			t.Fatalf("request backfill must be non-destructive: %s", exec)
+		}
+	}
+	if insertCount != 2 {
+		t.Fatalf("repeatable backfill executions=%d, want 2; execs=%v", insertCount, state.execs)
 	}
 }
 

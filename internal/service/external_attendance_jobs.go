@@ -64,6 +64,8 @@ func (s *ExternalAttendanceJobScheduler) runOnce(cfg database.ExternalAttendance
 	for _, m := range database.ExternalCorpMappings {
 		local := repository.NewExternalAttendanceLocalRepository(s.db, m.OrgID)
 		svc := NewExternalAttendanceSyncService(source, local, m.OrgID, lookback, cfg.Enabled)
+		attendanceSvc := NewAttendanceServiceWithOrgID(s.db, m.OrgID)
+		svc.SetRetryableOvertimeRecalculator(attendanceSvc.RecalculateRetryableOvertime)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		job, err := svc.Run(ctx, ExternalSyncRunOptions{
 			Source:         externalSyncSourceAll,

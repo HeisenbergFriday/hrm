@@ -53,37 +53,25 @@ func TestApprovalSyncPrepareFullAndSingleProcess(t *testing.T) {
 		if orgID != "org-a" {
 			t.Fatalf("config orgID = %q", orgID)
 		}
-		return dingtalk.Config{OrgID: "org-a", AdminUserID: "admin-a", ProcessCodes: map[string]string{"b": "PROC-B", "a": "PROC-A", "dup": " PROC-A "}}, nil
-	}
-	serviceUnderTest.resolveAdmin = func(config dingtalk.Config) (string, error) {
-		if config.OrgID != "org-a" {
-			t.Fatalf("resolved config org = %q", config.OrgID)
-		}
-		return "admin-a", nil
-	}
-	serviceUnderTest.listProcesses = func(orgID, operator string) ([]dingtalk.ApprovalProcessTemplate, error) {
-		if orgID != "org-a" || operator != "admin-a" {
-			t.Fatalf("discovery scope = %q/%q", orgID, operator)
-		}
-		return []dingtalk.ApprovalProcessTemplate{{ProcessCode: "PROC-C"}, {ProcessCode: " PROC-B "}}, nil
+		return dingtalk.Config{OrgID: "org-a", ProcessCodes: map[string]string{"b": "PROC-B", "a": "PROC-A", "dup": " PROC-A "}}, nil
 	}
 
 	full, err := serviceUnderTest.Prepare(ApprovalSyncInput{}, now)
 	if err != nil {
 		t.Fatalf("Prepare(full) error = %v", err)
 	}
-	if !reflect.DeepEqual(full.ProcessCodes, []string{"PROC-A", "PROC-B", "PROC-C"}) {
+	if !reflect.DeepEqual(full.ProcessCodes, []string{"PROC-A", "PROC-B"}) {
 		t.Fatalf("full process codes = %#v", full.ProcessCodes)
 	}
 	if full.StartDate != "2026-07-05" || full.EndDate != "2026-08-05" {
 		t.Fatalf("default dates = %s..%s", full.StartDate, full.EndDate)
 	}
 
-	single, err := serviceUnderTest.Prepare(ApprovalSyncInput{ProcessCode: " PROC-C "}, now)
+	single, err := serviceUnderTest.Prepare(ApprovalSyncInput{ProcessCode: " PROC-B "}, now)
 	if err != nil {
 		t.Fatalf("Prepare(single) error = %v", err)
 	}
-	if !reflect.DeepEqual(single.ProcessCodes, []string{"PROC-C"}) {
+	if !reflect.DeepEqual(single.ProcessCodes, []string{"PROC-B"}) {
 		t.Fatalf("single process codes = %#v", single.ProcessCodes)
 	}
 	if configCalls != 2 {
@@ -97,10 +85,11 @@ func TestApprovalSyncPrepareMissingConfigAndDateValidation(t *testing.T) {
 	serviceUnderTest.configForOrg = func(string) (dingtalk.Config, error) {
 		return dingtalk.Config{OrgID: "org-a", ProcessCodes: map[string]string{"empty": " "}}, nil
 	}
-	serviceUnderTest.resolveAdmin = func(dingtalk.Config) (string, error) { return "admin", nil }
-	serviceUnderTest.listProcesses = func(string, string) ([]dingtalk.ApprovalProcessTemplate, error) { return nil, nil }
 	if _, err := serviceUnderTest.Prepare(ApprovalSyncInput{}, now); !errors.Is(err, ErrApprovalProcessCodesMissing) {
 		t.Fatalf("missing config error = %v", err)
+	}
+	if _, err := serviceUnderTest.Prepare(ApprovalSyncInput{ProcessCode: "P"}, now); !errors.Is(err, ErrApprovalProcessCodesMissing) {
+		t.Fatalf("explicit process with empty whitelist error = %v", err)
 	}
 	if _, err := serviceUnderTest.Prepare(ApprovalSyncInput{ProcessCode: "P", StartDate: "2026-08-06", EndDate: "2026-08-05"}, now); !errors.Is(err, ErrApprovalSyncDateInvalid) {
 		t.Fatalf("reversed date error = %v", err)
@@ -110,49 +99,12 @@ func TestApprovalSyncPrepareMissingConfigAndDateValidation(t *testing.T) {
 	}
 }
 
-func TestApprovalSyncPrepareDiscoveryFailureIsPartialOrFailed(t *testing.T) {
-	now := time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC)
-	serviceUnderTest, _ := newApprovalSyncServiceStub("org-a")
-	serviceUnderTest.resolveAdmin = func(dingtalk.Config) (string, error) { return "admin-a", nil }
-	serviceUnderTest.listProcesses = func(string, string) ([]dingtalk.ApprovalProcessTemplate, error) {
-		return nil, errors.New("access_token=must-not-leak")
-	}
-	serviceUnderTest.configForOrg = func(string) (dingtalk.Config, error) {
-		return dingtalk.Config{OrgID: "org-a", ProcessCodes: map[string]string{"leave": "PROC-LEAVE"}}, nil
-	}
-	plan, err := serviceUnderTest.Prepare(ApprovalSyncInput{}, now)
-	if err != nil || plan.DiscoveryErrorCode != ApprovalSyncErrorDiscovery || !reflect.DeepEqual(plan.ProcessCodes, []string{"PROC-LEAVE"}) {
-		t.Fatalf("partial discovery plan = %#v err=%v", plan, err)
-	}
-	serviceUnderTest.fetchApprovals = func(context.Context, string, string, string, string) (dingtalk.ApprovalFetchResult, error) {
-		return dingtalk.ApprovalFetchResult{}, nil
-	}
-	partial := serviceUnderTest.Run(context.Background(), plan, "discovery-partial")
-	if partial.Status != ApprovalSyncStatusPartial || strings.Contains(partial.DiscoveryError, "must-not-leak") {
-		t.Fatalf("partial result = %#v", partial)
-	}
-
-	serviceUnderTest.configForOrg = func(string) (dingtalk.Config, error) {
-		return dingtalk.Config{OrgID: "org-a"}, nil
-	}
-	plan, err = serviceUnderTest.Prepare(ApprovalSyncInput{}, now)
-	if err != nil {
-		t.Fatalf("failed discovery must produce asynchronous plan: %v", err)
-	}
-	failed := serviceUnderTest.Run(context.Background(), plan, "discovery-failed")
-	if failed.Status != ApprovalSyncStatusFailed || failed.DiscoveryErrorCode != ApprovalSyncErrorDiscovery {
-		t.Fatalf("failed result = %#v", failed)
-	}
-}
-
 func TestApprovalSyncUTC8BoundariesAndStoredTimesUnderUTCHost(t *testing.T) {
 	nowUTC := time.Date(2026, 8, 5, 16, 30, 0, 0, time.UTC) // 2026-08-06 00:30 UTC+8
 	serviceUnderTest, store := newApprovalSyncServiceStub("org-a")
 	serviceUnderTest.configForOrg = func(string) (dingtalk.Config, error) {
 		return dingtalk.Config{OrgID: "org-a", ProcessCodes: map[string]string{"x": "PROC-X"}}, nil
 	}
-	serviceUnderTest.resolveAdmin = func(dingtalk.Config) (string, error) { return "admin", nil }
-	serviceUnderTest.listProcesses = func(string, string) ([]dingtalk.ApprovalProcessTemplate, error) { return nil, nil }
 	plan, err := serviceUnderTest.Prepare(ApprovalSyncInput{}, nowUTC)
 	if err != nil || plan.EndDate != "2026-08-06" || plan.StartDate != "2026-07-06" {
 		t.Fatalf("UTC+8 defaults plan=%#v err=%v", plan, err)
@@ -268,65 +220,38 @@ func TestApprovalSyncRunHonorsCancellation(t *testing.T) {
 	}
 }
 
-func TestApprovalSyncPrepareDiscoveryUnionDeduplicatesProcesses(t *testing.T) {
+func TestApprovalSyncPrepareFullSyncExcludesDynamicallyDiscoveredProcesses(t *testing.T) {
 	now := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
 	svc, _ := newApprovalSyncServiceStub("org-a")
 	svc.configForOrg = func(orgID string) (dingtalk.Config, error) {
 		if orgID != "org-a" {
 			t.Fatalf("config orgID = %q, want org-a boundary", orgID)
 		}
-		return dingtalk.Config{OrgID: "org-a", AdminUserID: "admin-a", ProcessCodes: map[string]string{"leave": "PROC-A", "overtime": "PROC-B"}}, nil
+		return dingtalk.Config{OrgID: "org-a", ProcessCodes: map[string]string{"leave": "PROC-A", "overtime": "PROC-B"}}, nil
 	}
-	svc.resolveAdmin = func(config dingtalk.Config) (string, error) { return "admin-a", nil }
-	svc.listProcesses = func(orgID, operator string) ([]dingtalk.ApprovalProcessTemplate, error) {
-		if orgID != "org-a" {
-			t.Fatalf("discovery orgID = %q", orgID)
-		}
-		return []dingtalk.ApprovalProcessTemplate{
-			{ProcessCode: "PROC-B"}, // duplicate of configured
-			{ProcessCode: "PROC-C"}, // new discovered
-			{ProcessCode: "PROC-D"}, // new discovered
-		}, nil
-	}
+	dynamicallyDiscovered := []string{"PROC-B", "PROC-C", "PROC-D"}
 
 	plan, err := svc.Prepare(ApprovalSyncInput{}, now)
 	if err != nil {
 		t.Fatalf("Prepare error = %v", err)
 	}
-	want := []string{"PROC-A", "PROC-B", "PROC-C", "PROC-D"}
+	want := []string{"PROC-A", "PROC-B"}
 	if !reflect.DeepEqual(plan.ProcessCodes, want) {
-		t.Fatalf("union codes = %#v, want %#v (configured + discovered, deduplicated, sorted)", plan.ProcessCodes, want)
+		t.Fatalf("full sync codes = %#v, want configured whitelist %#v", plan.ProcessCodes, want)
 	}
-}
-
-func TestApprovalSyncPrepareDiscoveryPartialFailureStillProducesPlan(t *testing.T) {
-	now := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
-	svc, _ := newApprovalSyncServiceStub("org-a")
-	svc.configForOrg = func(string) (dingtalk.Config, error) {
-		return dingtalk.Config{OrgID: "org-a", AdminUserID: "admin-a", ProcessCodes: map[string]string{"leave": "PROC-A"}}, nil
-	}
-	svc.resolveAdmin = func(dingtalk.Config) (string, error) { return "admin-a", nil }
-	svc.listProcesses = func(string, string) ([]dingtalk.ApprovalProcessTemplate, error) {
-		return nil, errors.New("dingtalk API timeout")
-	}
-
-	plan, err := svc.Prepare(ApprovalSyncInput{}, now)
-	if err != nil {
-		t.Fatalf("discovery failure must not abort: %v", err)
-	}
-	if plan.DiscoveryErrorCode != ApprovalSyncErrorDiscovery {
-		t.Fatalf("discovery error code = %q, want %q", plan.DiscoveryErrorCode, ApprovalSyncErrorDiscovery)
-	}
-	if !reflect.DeepEqual(plan.ProcessCodes, []string{"PROC-A"}) {
-		t.Fatalf("fallback codes = %#v", plan.ProcessCodes)
-	}
-
-	svc.fetchApprovals = func(context.Context, string, string, string, string) (dingtalk.ApprovalFetchResult, error) {
+	fetchedCodes := make([]string, 0, len(plan.ProcessCodes))
+	svc.fetchApprovals = func(_ context.Context, _, processCode, _, _ string) (dingtalk.ApprovalFetchResult, error) {
+		fetchedCodes = append(fetchedCodes, processCode)
 		return dingtalk.ApprovalFetchResult{}, nil
 	}
-	result := svc.Run(context.Background(), plan, "partial-discovery")
-	if result.Status != ApprovalSyncStatusPartial {
-		t.Fatalf("status = %q, want partial (discovery error present)", result.Status)
+	result := svc.Run(context.Background(), plan, "configured-only")
+	if result.Status != ApprovalSyncStatusSuccess || !reflect.DeepEqual(fetchedCodes, want) {
+		t.Fatalf("result=%#v fetched codes=%#v", result, fetchedCodes)
+	}
+	for _, code := range dynamicallyDiscovered[1:] {
+		if containsApprovalProcessCode(fetchedCodes, code) {
+			t.Fatalf("dynamic-only process %q was synchronized", code)
+		}
 	}
 }
 
@@ -337,23 +262,60 @@ func TestApprovalSyncPrepareSingleTemplateValidatesOrgBoundary(t *testing.T) {
 		if orgID != "org-a" {
 			t.Fatalf("config leaked to %q", orgID)
 		}
-		return dingtalk.Config{OrgID: "org-a", AdminUserID: "admin-a", ProcessCodes: map[string]string{"leave": "PROC-A"}}, nil
-	}
-	svc.resolveAdmin = func(dingtalk.Config) (string, error) { return "admin-a", nil }
-	svc.listProcesses = func(orgID, operator string) ([]dingtalk.ApprovalProcessTemplate, error) {
-		return []dingtalk.ApprovalProcessTemplate{{ProcessCode: "PROC-A"}, {ProcessCode: "PROC-B"}}, nil
+		return dingtalk.Config{OrgID: "org-a", ProcessCodes: map[string]string{"leave": "PROC-A"}}, nil
 	}
 
 	// Valid single template
-	plan, err := svc.Prepare(ApprovalSyncInput{ProcessCode: "PROC-B"}, now)
-	if err != nil || !reflect.DeepEqual(plan.ProcessCodes, []string{"PROC-B"}) {
+	plan, err := svc.Prepare(ApprovalSyncInput{ProcessCode: "PROC-A"}, now)
+	if err != nil || !reflect.DeepEqual(plan.ProcessCodes, []string{"PROC-A"}) {
 		t.Fatalf("single template plan = %#v err=%v", plan, err)
 	}
 
-	// Inaccessible template must fail
-	_, err = svc.Prepare(ApprovalSyncInput{ProcessCode: "PROC-FOREIGN"}, now)
+	// A dynamically discoverable but unconfigured template must fail.
+	_, err = svc.Prepare(ApprovalSyncInput{ProcessCode: "PROC-B"}, now)
 	if !errors.Is(err, ErrApprovalProcessNotAccessible) {
 		t.Fatalf("inaccessible template error = %v", err)
+	}
+}
+
+func TestApprovalSyncPrepareKeepsOrganizationWhitelistsIsolated(t *testing.T) {
+	now := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
+	requestedOrgs := make([]string, 0, 4)
+	configForOrg := func(orgID string) (dingtalk.Config, error) {
+		requestedOrgs = append(requestedOrgs, orgID)
+		switch orgID {
+		case "org-a":
+			return dingtalk.Config{OrgID: orgID, ProcessCodes: map[string]string{"leave": "PROC-A"}}, nil
+		case "org-b":
+			return dingtalk.Config{OrgID: orgID, ProcessCodes: map[string]string{"leave": "PROC-B"}}, nil
+		default:
+			return dingtalk.Config{}, errors.New("unexpected organization config fallback")
+		}
+	}
+
+	serviceA, _ := newApprovalSyncServiceStub("org-a")
+	serviceA.configForOrg = configForOrg
+	serviceB, _ := newApprovalSyncServiceStub("org-b")
+	serviceB.configForOrg = configForOrg
+
+	planA, err := serviceA.Prepare(ApprovalSyncInput{}, now)
+	if err != nil || !reflect.DeepEqual(planA.ProcessCodes, []string{"PROC-A"}) {
+		t.Fatalf("org-a plan=%#v err=%v", planA, err)
+	}
+	planB, err := serviceB.Prepare(ApprovalSyncInput{}, now)
+	if err != nil || !reflect.DeepEqual(planB.ProcessCodes, []string{"PROC-B"}) {
+		t.Fatalf("org-b plan=%#v err=%v", planB, err)
+	}
+	if _, err := serviceA.Prepare(ApprovalSyncInput{ProcessCode: "PROC-B"}, now); !errors.Is(err, ErrApprovalProcessNotAccessible) {
+		t.Fatalf("org-a accepted org-b process: %v", err)
+	}
+	if _, err := serviceB.Prepare(ApprovalSyncInput{ProcessCode: "PROC-A"}, now); !errors.Is(err, ErrApprovalProcessNotAccessible) {
+		t.Fatalf("org-b accepted org-a process: %v", err)
+	}
+	for _, orgID := range requestedOrgs {
+		if orgID == database.DefaultOrganizationID {
+			t.Fatalf("non-default approval sync fell back to default config: calls=%#v", requestedOrgs)
+		}
 	}
 }
 
@@ -378,6 +340,7 @@ func TestApprovalSyncPreservesExistingApplicantNameAcrossFullSync(t *testing.T) 
 	}
 
 	svc := NewApprovalSyncService(db, "org-a")
+	svc.reconciler = nil // This test isolates applicant-name upsert behavior.
 	svc.fetchApprovals = func(context.Context, string, string, string, string) (dingtalk.ApprovalFetchResult, error) {
 		return dingtalk.ApprovalFetchResult{Instances: []dingtalk.ApprovalInstance{{
 			ProcessInstanceID: "stream-keep-name", OriginatorUserID: "ding-u1",
@@ -419,6 +382,7 @@ func TestApprovalSyncRunDoesNotOverwriteRealNameWithFallback(t *testing.T) {
 	}
 
 	svc := NewApprovalSyncService(db, "org-a")
+	svc.reconciler = nil // This test isolates applicant-name upsert behavior.
 	svc.fetchApprovals = func(context.Context, string, string, string, string) (dingtalk.ApprovalFetchResult, error) {
 		return dingtalk.ApprovalFetchResult{Instances: []dingtalk.ApprovalInstance{{
 			ProcessInstanceID: "fallback-test", OriginatorUserID: "ding-fb",
