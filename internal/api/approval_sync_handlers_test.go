@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,15 @@ func stubApprovalSyncFactory(t *testing.T, runner approvalSyncRunner) {
 	t.Cleanup(func() { newApprovalSyncServiceForRequest = original })
 }
 
+func captureApprovalSyncBackground(t *testing.T) *func() {
+	t.Helper()
+	original := launchApprovalSyncBackground
+	var captured func()
+	launchApprovalSyncBackground = func(task func()) { captured = task }
+	t.Cleanup(func() { launchApprovalSyncBackground = original })
+	return &captured
+}
+
 func TestStartApprovalSyncUsesBlankProcessCodeForFullPlanAndPersistsTerminalState(t *testing.T) {
 	db := useOrgSyncTestDB(t)
 	if err := db.AutoMigrate(&database.ApprovalSyncTask{}); err != nil {
@@ -104,6 +114,156 @@ func TestStartApprovalSyncUsesBlankProcessCodeForFullPlanAndPersistsTerminalStat
 	}
 }
 
+func TestStartApprovalSyncPersistsAcceptedStateBeforeLaunchingExternalWork(t *testing.T) {
+	db := useOrgSyncTestDB(t)
+	if err := db.AutoMigrate(&database.ApprovalSyncTask{}); err != nil {
+		t.Fatalf("migrate approval sync tasks: %v", err)
+	}
+	runStarted := make(chan struct{})
+	releaseRun := make(chan struct{})
+	runner := &approvalSyncRunnerStub{
+		prepare: func(service.ApprovalSyncInput, time.Time) (service.ApprovalSyncPlan, error) {
+			return service.ApprovalSyncPlan{ProcessCodes: []string{"PROC-A"}, StartDate: "2026-08-01", EndDate: "2026-08-05"}, nil
+		},
+		run: func(context.Context, service.ApprovalSyncPlan, string) service.ApprovalSyncResult {
+			close(runStarted)
+			<-releaseRun
+			return approvalSyncTerminalResult(service.ApprovalSyncStatusSuccess, "approval-test-request")
+		},
+	}
+	stubApprovalSyncFactory(t, runner)
+
+	var scheduled func()
+	var taskAtLaunch database.ApprovalSyncTask
+	var statusAtLaunch database.SyncStatus
+	var taskErr, statusErr error
+	var responseCodeAtLaunch int
+	var responseBodyAtLaunch string
+	originalLauncher := launchApprovalSyncBackground
+	t.Cleanup(func() { launchApprovalSyncBackground = originalLauncher })
+	var recorder *httptest.ResponseRecorder
+	launchApprovalSyncBackground = func(task func()) {
+		responseCodeAtLaunch = recorder.Code
+		responseBodyAtLaunch = recorder.Body.String()
+		taskErr = db.Where("org_id = ? AND type = ? AND request_id = ?", "org-a", approvalSyncType, "approval-test-request").First(&taskAtLaunch).Error
+		statusErr = db.Where("org_id = ? AND type = ?", "org-a", approvalSyncType).First(&statusAtLaunch).Error
+		scheduled = task
+	}
+	c, responseRecorder := newApprovalSyncHandlerContext(t, "org-a", http.MethodPost, "/api/v1/approvals/sync/start", `{}`)
+	recorder = responseRecorder
+
+	StartApprovalSync(c)
+
+	if responseCodeAtLaunch != http.StatusAccepted || !strings.Contains(responseBodyAtLaunch, `"request_id":"approval-test-request"`) {
+		t.Fatalf("response at background launch = %d %s", responseCodeAtLaunch, responseBodyAtLaunch)
+	}
+	if taskErr != nil || taskAtLaunch.Status != "running" || taskAtLaunch.RequestID != "approval-test-request" {
+		t.Fatalf("task at background launch = %#v err=%v", taskAtLaunch, taskErr)
+	}
+	if statusErr != nil || statusAtLaunch.Status != "running" || statusAtLaunch.RequestID != "approval-test-request" {
+		t.Fatalf("sync status at background launch = %#v err=%v", statusAtLaunch, statusErr)
+	}
+	if scheduled == nil {
+		t.Fatal("background task was not scheduled")
+	}
+	select {
+	case <-runStarted:
+		t.Fatal("external work ran before the accepted response and running state were persisted")
+	default:
+	}
+
+	go scheduled()
+	select {
+	case <-runStarted:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled external work did not start")
+	}
+	close(releaseRun)
+	waitForApprovalSyncTask(t, db, "org-a", "approval-test-request", service.ApprovalSyncStatusSuccess)
+}
+
+func TestApprovalSyncBackgroundIgnoresClientCancellation(t *testing.T) {
+	db := useOrgSyncTestDB(t)
+	if err := db.AutoMigrate(&database.ApprovalSyncTask{}); err != nil {
+		t.Fatalf("migrate approval sync tasks: %v", err)
+	}
+	observedContext := make(chan error, 1)
+	runner := &approvalSyncRunnerStub{
+		prepare: func(service.ApprovalSyncInput, time.Time) (service.ApprovalSyncPlan, error) {
+			return service.ApprovalSyncPlan{ProcessCodes: []string{"PROC-A"}}, nil
+		},
+		run: func(ctx context.Context, _ service.ApprovalSyncPlan, requestID string) service.ApprovalSyncResult {
+			observedContext <- ctx.Err()
+			return approvalSyncTerminalResult(service.ApprovalSyncStatusSuccess, requestID)
+		},
+	}
+	stubApprovalSyncFactory(t, runner)
+	scheduled := captureApprovalSyncBackground(t)
+	clientContext, cancelClient := context.WithCancel(context.Background())
+	c, recorder := newApprovalSyncHandlerContext(t, "org-a", http.MethodPost, "/api/v1/approvals/sync/start", `{}`)
+	c.Request = c.Request.WithContext(requestmeta.WithTenant(clientContext, "org-a"))
+
+	StartApprovalSync(c)
+	cancelClient()
+	if recorder.Code != http.StatusAccepted || *scheduled == nil {
+		t.Fatalf("start response = %d body=%s scheduled=%v", recorder.Code, recorder.Body.String(), *scheduled != nil)
+	}
+	(*scheduled)()
+	if err := <-observedContext; err != nil {
+		t.Fatalf("background context inherited client cancellation: %v", err)
+	}
+	waitForApprovalSyncTask(t, db, "org-a", "approval-test-request", service.ApprovalSyncStatusSuccess)
+}
+
+func TestApprovalSyncBackgroundFailurePersistsSafeTerminalState(t *testing.T) {
+	db := useOrgSyncTestDB(t)
+	if err := db.AutoMigrate(&database.ApprovalSyncTask{}); err != nil {
+		t.Fatalf("migrate approval sync tasks: %v", err)
+	}
+	runner := &approvalSyncRunnerStub{
+		prepare: func(service.ApprovalSyncInput, time.Time) (service.ApprovalSyncPlan, error) {
+			return service.ApprovalSyncPlan{ProcessCodes: []string{"PROC-A"}}, nil
+		},
+		run: func(_ context.Context, _ service.ApprovalSyncPlan, _ string) service.ApprovalSyncResult {
+			return service.ApprovalSyncResult{
+				Status:       service.ApprovalSyncStatusFailed,
+				ProcessCount: 1, FailedProcesses: 1,
+				Processes: []service.ApprovalSyncProcessResult{{
+					ProcessCode: "PROC-A", Status: service.ApprovalSyncStatusFailed,
+					ErrorCode: service.ApprovalSyncErrorInternal,
+					Error:     "dingtalk raw error access_token=secret-token&url=https://private.example/path?secret=hidden",
+				}},
+			}
+		},
+	}
+	stubApprovalSyncFactory(t, runner)
+	scheduled := captureApprovalSyncBackground(t)
+	c, recorder := newApprovalSyncHandlerContext(t, "org-a", http.MethodPost, "/api/v1/approvals/sync/start", `{}`)
+
+	StartApprovalSync(c)
+	if recorder.Code != http.StatusAccepted || *scheduled == nil {
+		t.Fatalf("start response = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	(*scheduled)()
+	task := waitForApprovalSyncTask(t, db, "org-a", "approval-test-request", service.ApprovalSyncStatusFailed)
+	var syncStatus database.SyncStatus
+	if err := db.Where("org_id = ? AND type = ?", "org-a", approvalSyncType).First(&syncStatus).Error; err != nil {
+		t.Fatalf("query terminal sync status: %v", err)
+	}
+	if syncStatus.Status != service.ApprovalSyncStatusFailed {
+		t.Fatalf("sync status = %#v", syncStatus)
+	}
+	persisted, err := json.Marshal(map[string]interface{}{"task": task.Details, "status": syncStatus.Details})
+	if err != nil {
+		t.Fatalf("marshal persisted details: %v", err)
+	}
+	for _, sensitive := range []string{"secret-token", "private.example", "secret=hidden", "dingtalk raw error"} {
+		if bytes.Contains(persisted, []byte(sensitive)) {
+			t.Fatalf("persisted terminal state contains %q: %s", sensitive, persisted)
+		}
+	}
+}
+
 func TestApprovalSyncRejectsClientOrganizationAndMissingConfiguration(t *testing.T) {
 	db := useOrgSyncTestDB(t)
 	if err := db.AutoMigrate(&database.ApprovalSyncTask{}); err != nil {
@@ -133,6 +293,50 @@ func TestApprovalSyncRejectsClientOrganizationAndMissingConfiguration(t *testing
 	if !strings.Contains(recorder.Body.String(), service.ApprovalSyncErrorConfigMissing) {
 		t.Fatalf("missing config error code not returned: %s", recorder.Body.String())
 	}
+	var taskCount int64
+	if err := db.Model(&database.ApprovalSyncTask{}).Count(&taskCount).Error; err != nil {
+		t.Fatalf("count approval sync tasks: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("missing configuration created %d approval sync tasks", taskCount)
+	}
+}
+
+func TestApprovalSyncRejectsUnconfiguredExplicitProcessBeforeCreatingTask(t *testing.T) {
+	db := useOrgSyncTestDB(t)
+	if err := db.AutoMigrate(&database.ApprovalSyncTask{}); err != nil {
+		t.Fatalf("migrate approval sync tasks: %v", err)
+	}
+	runner := &approvalSyncRunnerStub{
+		prepare: func(input service.ApprovalSyncInput, _ time.Time) (service.ApprovalSyncPlan, error) {
+			if input.ProcessCode != "PROC-NOT-CONFIGURED" {
+				t.Fatalf("process code = %q", input.ProcessCode)
+			}
+			return service.ApprovalSyncPlan{}, service.ErrApprovalProcessNotAccessible
+		},
+		run: func(context.Context, service.ApprovalSyncPlan, string) service.ApprovalSyncResult {
+			t.Fatal("Run must not be called")
+			return service.ApprovalSyncResult{}
+		},
+	}
+	stubApprovalSyncFactory(t, runner)
+	c, recorder := newApprovalSyncHandlerContext(t, "org-a", http.MethodPost, "/api/v1/approvals/sync/start", `{"process_code":"PROC-NOT-CONFIGURED"}`)
+
+	StartApprovalSync(c)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), service.ApprovalSyncErrorNotAccessible) {
+		t.Fatalf("not accessible error code not returned: %s", recorder.Body.String())
+	}
+	var taskCount int64
+	if err := db.Model(&database.ApprovalSyncTask{}).Count(&taskCount).Error; err != nil {
+		t.Fatalf("count approval sync tasks: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("unconfigured explicit process created %d approval sync tasks", taskCount)
+	}
 }
 
 func TestApprovalSyncConflictIsPerOrganization(t *testing.T) {
@@ -149,9 +353,8 @@ func TestApprovalSyncConflictIsPerOrganization(t *testing.T) {
 		prepare: func(service.ApprovalSyncInput, time.Time) (service.ApprovalSyncPlan, error) {
 			return service.ApprovalSyncPlan{ProcessCodes: []string{"PROC-A"}}, nil
 		},
-		run: func(context.Context, service.ApprovalSyncPlan, string) service.ApprovalSyncResult {
-			t.Fatal("conflicting task must not run")
-			return service.ApprovalSyncResult{}
+		run: func(_ context.Context, _ service.ApprovalSyncPlan, requestID string) service.ApprovalSyncResult {
+			return approvalSyncTerminalResult(service.ApprovalSyncStatusSuccess, requestID)
 		},
 	}
 	stubApprovalSyncFactory(t, runner)
@@ -160,10 +363,18 @@ func TestApprovalSyncConflictIsPerOrganization(t *testing.T) {
 	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "real-running-request") {
 		t.Fatalf("conflict response = %d %s", recorder.Code, recorder.Body.String())
 	}
-	repoB := repository.NewApprovalSyncTaskRepositoryWithOrgID(db, "org-b")
-	if conflict, err := repoB.Acquire(&database.ApprovalSyncTask{Type: approvalSyncType, RequestID: "org-b-request"}, now.Add(-approvalSyncStaleAfter), now); err != nil || conflict != nil {
-		t.Fatalf("different organization must acquire: conflict=%#v err=%v", conflict, err)
+	scheduled := captureApprovalSyncBackground(t)
+	c, recorder = newApprovalSyncHandlerContext(t, "org-b", http.MethodPost, "/api/v1/approvals/sync/start", `{}`)
+	StartApprovalSync(c)
+	if recorder.Code != http.StatusAccepted || *scheduled == nil {
+		t.Fatalf("different organization start = %d body=%s", recorder.Code, recorder.Body.String())
 	}
+	var orgBTask database.ApprovalSyncTask
+	if err := db.Where("org_id = ? AND type = ? AND request_id = ?", "org-b", approvalSyncType, "approval-test-request").First(&orgBTask).Error; err != nil || orgBTask.Status != "running" {
+		t.Fatalf("different organization task = %#v err=%v", orgBTask, err)
+	}
+	(*scheduled)()
+	waitForApprovalSyncTask(t, db, "org-b", "approval-test-request", service.ApprovalSyncStatusSuccess)
 }
 
 func TestGetApprovalSyncResultChecksOrgAndTaskType(t *testing.T) {
@@ -329,11 +540,11 @@ func TestApprovalSyncConflictReturnsRealRequestID(t *testing.T) {
 }
 
 func TestApprovalSyncStatusFailCountUsesApprovalInstanceUnit(t *testing.T) {
-	update := approvalSyncStatusUpdate(service.ApprovalSyncResult{FailCount: 2, FetchFailCount: 3, FailedProcesses: 4})
-	if update.FailCount != 5 {
-		t.Fatalf("fail_count = %d, want 5 failed approval instances", update.FailCount)
+	update := approvalSyncStatusUpdate(service.ApprovalSyncResult{FailCount: 2, FetchFailCount: 3, ReconcileFailCount: 4, FailedProcesses: 5})
+	if update.FailCount != 9 {
+		t.Fatalf("fail_count = %d, want 9 failed approval instance stages", update.FailCount)
 	}
-	if update.Details["failed_processes"] != 4 {
+	if update.Details["failed_processes"] != 5 {
 		t.Fatalf("failed_processes details = %#v", update.Details)
 	}
 }

@@ -59,7 +59,7 @@ update_when:
 1. **组织架构同步**：钉钉部门/用户 → 本地 `departments` / `users` 表
 2. **考勤同步（钉钉 API）**：钉钉打卡记录 → 本地 `attendances` 表
 3. **考勤同步（外部 Doris，一期）**：Doris 只读表 → `external_*` staging → `attendances` / `user_department_relations`（按 JWT org 隔离，未知 corp 拒绝）
-4. **审批同步**：短请求启动 → 持久化 `SyncStatus` → 按当前企业流程代码逐流程拉取钉钉审批实例 → `approvals` 幂等 upsert → 前端轮询完整终态
+4. **审批同步**：短请求启动 → 持久化 `SyncStatus` → 按当前企业流程代码逐流程拉取钉钉审批实例 → `approvals` 幂等 upsert → 逐条下游业务对账 → 前端轮询完整终态
 5. **年假发放**：本地计算 → 写入 `annual_leave_grants` → 同步到钉钉假期配置
 6. **加班匹配**：钉钉审批 + 本地打卡 → 计算有效加班时长 → 写入 `overtime_match_results` → 生成调休余额 → 同步到钉钉
 7. **大小周排班与通知**：本地配置 `week_schedule_rules` → 计算每周班次 → 同步到钉钉考勤组；或生成月作息表 → 个人消息 / 已绑定企业内部机器人群消息
@@ -82,8 +82,9 @@ update_when:
 2. **短启动与持久化**：`POST /approvals/sync/start` 在返回 `202 + request_id` 前写入 `SyncStatus(type=approvals,status=running)`；前端用 `GET /approvals/sync/:request_id` 短轮询，查询同时绑定 `org_id + type + request_id`。
 3. **后台执行**：执行上下文通过 `context.WithoutCancel` 脱离客户端断开并受 15 分钟上限约束；终态写入使用独立 5 秒上下文。同企业进程内 `TryLock` 防重，不同企业并行；多实例部署需要分布式互斥或任务队列。
 4. **分流程容错**：`listids` 每次只查询一个流程代码，日期按最多 120 天连续分片、结束时间不超过安全当前时间，并按实例 ID 去重。流程之间独立拉取和写入，一个流程失败不阻断后续流程。
-5. **终态与安全**：逐流程汇总拉取、详情拉取失败、写入成功和写入失败；聚合为 `success` / `partial` / `failed`。响应与 `SyncStatus.details` 只保存稳定错误码和安全文案，不保存原始第三方错误、Token、Secret 或 URL 参数。
-6. **业务幂等**：审批按 `org_id + process_id` upsert，保留 `extension.result/process_code/source`。下游年假消费按审批实例引用防重，加班匹配/调休入账按现有业务唯一键防重；非通过或非对应类型审批不得触发下游业务。
+5. **逐条业务对账**：每条审批 upsert 成功后调用可注入的 `ApprovalBusinessReconciliationService`。`COMPLETED + agree` 为有效态；有效→无效执行冲正，无效→有效重新入账一次。年假使用表单业务日期，加班使用实际工作日期；所有读写显式绑定当前 `org_id`。
+6. **终态与安全**：对账结果区分 `applied/skipped/reversed/retryable/failed`，逐流程汇总计数并聚合为 `success/partial/failed`。retryable 或 failed 进入 partial；单条失败不回滚审批且不阻断后续记录。响应与 `SyncStatus.details` 只保存稳定错误码和安全文案。
+7. **业务幂等与事务**：审批按 `org_id + process_id` upsert。年假请求门闩 `AnnualLeaveConsumeRequest(org_id, request_ref)` 与 grant 行锁、余额、正向/冲正日志同事务，适配 MySQL `REPEATABLE READ`；加班调休按来源净额在锁定匹配记录后 credit/rollback。事务失败不得遗留永久 running/pending。
 
 ---
 
@@ -151,7 +152,7 @@ type Response struct {
 - 例如：`User.Extension`、`Approval.Content`
 
 #### 幂等性设计
-- **年假消费**：`AnnualLeaveConsumeLog.request_ref` 唯一索引防重
+- **年假消费**：`AnnualLeaveConsumeRequest(org_id, request_ref)` 请求级门闩；`AnnualLeaveConsumeLog` 可按多个 grant 记录正向/冲正明细
 - **加班同步**：`OvertimeSyncHistory` 快照，避免重复同步
 - **加班匹配**：`OvertimeMatchResult.match_ref` 用于当前幂等，历史数据仍兼容 `user_id+work_date` 口径
 
@@ -197,9 +198,9 @@ type Response struct {
 
 ### 加班→调休流程
 1. 从钉钉同步加班审批（异步审批同步；单模板或当前企业全量流程）
-2. 运行匹配（`RunOvertimeMatch`）：审批记录↔打卡记录，计算 `effective_overtime_minutes`
-3. 写入 `CompensatoryLeaveLedger`（credit）
-4. 同步到钉钉假期余额（`ResyncOvertimeToDingTalk`）
+2. 审批 upsert 后对明确通过记录直接运行单条匹配；定时/手动 `RunOvertimeMatch` 继续作为补偿入口。匹配使用审批表单的实际加班日期，不使用同步日或审批完成日
+3. 暂缺考勤的零分钟状态保留为 retryable；考勤补齐后原位重算，成功后写入 `CompensatoryLeaveLedger`（credit）并关闭 pending 补卡请求
+4. 审批撤销写 `rollback` 台账并回写年度绝对余额；审批恢复后只重新 credit/同步一次
 
 ### 年假发放流程
 1. 按季度计算员工年假资格（`AnnualLeaveEligibility`）

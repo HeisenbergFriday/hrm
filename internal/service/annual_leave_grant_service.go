@@ -71,6 +71,20 @@ type GrantOperationResult struct {
 	Errors              []string `json:"errors,omitempty"`
 }
 
+type AnnualLeaveMutationResult struct {
+	Changed     bool
+	Status      string
+	OperationNo int
+}
+
+type annualLeaveBusinessSegment struct {
+	StartDate string
+	EndDate   string
+	Year      int
+	Quarter   int
+	Days      float64
+}
+
 func (s *AnnualLeaveGrantService) GrantQuarter(year, quarter int) error {
 	_, err := s.GrantQuarterWithResult(year, quarter)
 	return err
@@ -433,94 +447,323 @@ func (s *AnnualLeaveGrantService) SyncAllGrantsToDingTalk() (*GrantOperationResu
 	return result, nil
 }
 
-// approvalRef 作为唯一键防止同一条审批重复扣减；传空时跳过去重检查（手动录入场景）。
-// 必须绑定租户 orgID，禁止跨组织扣减同 user_id 余额。
+// 审批消费通过请求门闩防重；手动录入使用每次调用生成的 request_ref。
+// 所有余额、门闩和台账读写必须绑定租户 orgID。
 func (s *AnnualLeaveGrantService) ConsumeAnnualLeave(userID string, days float64, approvalRef, remark string) error {
+	_, err := s.consumeAnnualLeave(userID, days, approvalRef, remark, time.Time{}, time.Time{})
+	return err
+}
+
+func (s *AnnualLeaveGrantService) ConsumeAnnualLeaveForPeriod(userID string, days float64, approvalRef, remark string, start, end time.Time) (AnnualLeaveMutationResult, error) {
+	if start.IsZero() || end.IsZero() {
+		return AnnualLeaveMutationResult{}, fmt.Errorf("annual leave business date required")
+	}
+	return s.consumeAnnualLeave(userID, days, approvalRef, remark, start, end)
+}
+
+func (s *AnnualLeaveGrantService) consumeAnnualLeave(userID string, days float64, approvalRef, remark string, start, end time.Time) (AnnualLeaveMutationResult, error) {
 	if days <= 0 {
-		return fmt.Errorf("消费天数必须大于0")
+		return AnnualLeaveMutationResult{}, fmt.Errorf("消费天数必须大于0")
 	}
 	orgID := strings.TrimSpace(s.orgID)
 	if orgID == "" {
-		return fmt.Errorf("org_id required for annual leave consumption")
+		return AnnualLeaveMutationResult{}, fmt.Errorf("org_id required for annual leave consumption")
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return AnnualLeaveMutationResult{}, fmt.Errorf("user_id required for annual leave consumption")
 	}
 
 	approvalRef = strings.TrimSpace(approvalRef)
 	requestRef := buildConsumeRequestRef(userID, approvalRef)
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if approvalRef != "" {
-			var exists int64
-			if err := tx.Model(&database.AnnualLeaveConsumeLog{}).
-				Where("org_id = ? AND approval_ref = ?", orgID, approvalRef).
-				Count(&exists).Error; err != nil {
-				return err
-			}
-			if exists > 0 {
-				return nil
-			}
+	segments, err := splitAnnualLeaveBusinessSegments(days, start, end)
+	if err != nil {
+		return AnnualLeaveMutationResult{}, err
+	}
+	result := AnnualLeaveMutationResult{}
+	err = withAnnualLeaveTransactionRetry(s.db, func(tx *gorm.DB) error {
+		gate := database.AnnualLeaveConsumeRequest{
+			OrgID:             orgID,
+			RequestRef:        requestRef,
+			ApprovalRef:       approvalRef,
+			UserID:            userID,
+			Status:            "applying",
+			OperationNo:       1,
+			Days:              days,
+			BusinessStartDate: formatAnnualLeaveBusinessDate(start),
+			BusinessEndDate:   formatAnnualLeaveBusinessDate(end),
 		}
-
-		var grants []database.AnnualLeaveGrant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("org_id = ? AND user_id = ? AND remaining_days > 0", orgID, userID).
-			Order("year asc, quarter asc, id asc").
-			Find(&grants).Error; err != nil {
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&gate).Error; err != nil {
 			return err
 		}
-
-		totalRemaining := 0.0
-		for _, grant := range grants {
-			totalRemaining += grant.RemainingDays
+		operationNo := 1
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("org_id = ? AND request_ref = ?", orgID, requestRef).
+			First(&gate).Error; err != nil {
+			return err
 		}
-		if totalRemaining+1e-9 < days {
-			return fmt.Errorf("年假余额不足，还差 %.2f 天", days-totalRemaining)
+		switch gate.Status {
+		case "applying":
+			// This state is only visible to the transaction that inserted it.
+		case "applied":
+			if gate.UserID != userID || gate.ApprovalRef != approvalRef {
+				return fmt.Errorf("annual leave request identity mismatch")
+			}
+			startDate := formatAnnualLeaveBusinessDate(start)
+			endDate := formatAnnualLeaveBusinessDate(end)
+			if gate.BusinessStartDate != "" && (gate.BusinessStartDate != startDate || gate.BusinessEndDate != endDate || absFloat(gate.Days-days) > 1e-9) {
+				return fmt.Errorf("annual leave request payload changed after application")
+			}
+			result = AnnualLeaveMutationResult{Changed: false, Status: gate.Status, OperationNo: gate.OperationNo}
+			return nil
+		case "reversed":
+			if gate.UserID != userID || gate.ApprovalRef != approvalRef {
+				return fmt.Errorf("annual leave request identity mismatch")
+			}
+			operationNo = gate.OperationNo + 1
+		default:
+			return fmt.Errorf("unsupported annual leave request status %q", gate.Status)
 		}
 
-		remaining := days
-		for _, grant := range grants {
-			if remaining <= 0 {
-				break
+		for _, segment := range segments {
+			if err := consumeAnnualLeaveSegment(tx, orgID, userID, approvalRef, requestRef, remark, operationNo, segment); err != nil {
+				return err
 			}
-			if grant.RemainingDays <= 0 {
-				continue
-			}
-
-			deduct := remaining
-			if deduct > grant.RemainingDays {
-				deduct = grant.RemainingDays
-			}
-
-			newUsed := grant.UsedDays + deduct
-			newRemaining := grant.RemainingDays - deduct
-			if err := tx.Model(&database.AnnualLeaveGrant{}).
-				Where("id = ? AND org_id = ?", grant.ID, orgID).
-				Updates(map[string]interface{}{
-					"used_days":      newUsed,
-					"remaining_days": newRemaining,
-				}).Error; err != nil {
-				return fmt.Errorf("更新发放记录 %d 失败: %w", grant.ID, err)
-			}
-
-			logEntry := &database.AnnualLeaveConsumeLog{
-				OrgID:       orgID,
-				UserID:      userID,
-				GrantID:     grant.ID,
-				ApprovalRef: approvalRef,
-				RequestRef:  requestRef,
-				Days:        deduct,
-				Remark:      remark,
-			}
-			if err := tx.Create(logEntry).Error; err != nil {
-				return fmt.Errorf("写入消费记录失败: %w", err)
-			}
-
-			remaining -= deduct
 		}
+		if err := tx.Model(&database.AnnualLeaveConsumeRequest{}).
+			Where("org_id = ? AND request_ref = ?", orgID, requestRef).
+			Updates(map[string]interface{}{
+				"status":              "applied",
+				"operation_no":        operationNo,
+				"days":                days,
+				"business_start_date": formatAnnualLeaveBusinessDate(start),
+				"business_end_date":   formatAnnualLeaveBusinessDate(end),
+			}).Error; err != nil {
+			return err
+		}
+		result = AnnualLeaveMutationResult{Changed: true, Status: "applied", OperationNo: operationNo}
 		return nil
 	})
-	if err != nil && approvalRef != "" && isDuplicateKeyError(err) {
+	return result, err
+}
+
+func (s *AnnualLeaveGrantService) RollbackAnnualLeave(approvalRef, remark string) (AnnualLeaveMutationResult, error) {
+	orgID := strings.TrimSpace(s.orgID)
+	approvalRef = strings.TrimSpace(approvalRef)
+	if orgID == "" {
+		return AnnualLeaveMutationResult{}, fmt.Errorf("org_id required for annual leave rollback")
+	}
+	if approvalRef == "" {
+		return AnnualLeaveMutationResult{}, fmt.Errorf("approval_ref required for annual leave rollback")
+	}
+	requestRef := buildConsumeRequestRef("", approvalRef)
+	result := AnnualLeaveMutationResult{Status: "reversed"}
+	err := withAnnualLeaveTransactionRetry(s.db, func(tx *gorm.DB) error {
+		var gate database.AnnualLeaveConsumeRequest
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("org_id = ? AND request_ref = ?", orgID, requestRef).
+			First(&gate).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil
+			}
+			return err
+		}
+		result.OperationNo = gate.OperationNo
+		if gate.Status == "reversed" {
+			return nil
+		}
+		if gate.Status != "applied" {
+			return fmt.Errorf("unsupported annual leave request status %q", gate.Status)
+		}
+		var logs []database.AnnualLeaveConsumeLog
+		if err := tx.Where("org_id = ? AND approval_ref = ? AND operation_no = ? AND entry_type = ?", orgID, gate.ApprovalRef, gate.OperationNo, "consume").
+			Order("id asc").Find(&logs).Error; err != nil {
+			return err
+		}
+		if len(logs) == 0 {
+			return fmt.Errorf("annual leave consume logs missing for rollback")
+		}
+		for _, entry := range logs {
+			var grant database.AnnualLeaveGrant
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ? AND org_id = ?", entry.GrantID, orgID).First(&grant).Error; err != nil {
+				return fmt.Errorf("load annual leave grant %d for rollback: %w", entry.GrantID, err)
+			}
+			if grant.UsedDays+1e-9 < entry.Days {
+				return fmt.Errorf("annual leave grant %d rollback exceeds used days", grant.ID)
+			}
+			if err := tx.Model(&database.AnnualLeaveGrant{}).Where("id = ? AND org_id = ?", grant.ID, orgID).
+				Updates(map[string]interface{}{
+					"used_days":      grant.UsedDays - entry.Days,
+					"remaining_days": grant.RemainingDays + entry.Days,
+				}).Error; err != nil {
+				return err
+			}
+			reversal := database.AnnualLeaveConsumeLog{
+				OrgID:             orgID,
+				UserID:            entry.UserID,
+				GrantID:           entry.GrantID,
+				ApprovalRef:       gate.ApprovalRef,
+				RequestRef:        fmt.Sprintf("%s:reverse:%d", requestRef, gate.OperationNo),
+				OperationNo:       gate.OperationNo,
+				EntryType:         "reversal",
+				BusinessStartDate: entry.BusinessStartDate,
+				BusinessEndDate:   entry.BusinessEndDate,
+				ReversalOfID:      entry.ID,
+				Days:              entry.Days,
+				Remark:            remark,
+			}
+			if err := tx.Create(&reversal).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&database.AnnualLeaveConsumeRequest{}).
+			Where("id = ? AND org_id = ?", gate.ID, orgID).Update("status", "reversed").Error; err != nil {
+			return err
+		}
+		result.Changed = true
 		return nil
+	})
+	return result, err
+}
+
+func consumeAnnualLeaveSegment(tx *gorm.DB, orgID, userID, approvalRef, requestRef, remark string, operationNo int, segment annualLeaveBusinessSegment) error {
+	var grants []database.AnnualLeaveGrant
+	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("org_id = ? AND user_id = ? AND remaining_days > 0", orgID, userID)
+	if segment.Year > 0 {
+		query = query.Where("year = ? AND quarter <= ?", segment.Year, segment.Quarter)
+	}
+	if err := query.Order("year asc, quarter asc, id asc").Find(&grants).Error; err != nil {
+		return err
+	}
+	totalRemaining := 0.0
+	for _, grant := range grants {
+		totalRemaining += grant.RemainingDays
+	}
+	if totalRemaining+1e-9 < segment.Days {
+		return fmt.Errorf("%d年年假余额不足，还差 %.2f 天", segment.Year, segment.Days-totalRemaining)
+	}
+	remaining := segment.Days
+	for _, grant := range grants {
+		if remaining <= 1e-9 {
+			break
+		}
+		deduct := remaining
+		if deduct > grant.RemainingDays {
+			deduct = grant.RemainingDays
+		}
+		if err := tx.Model(&database.AnnualLeaveGrant{}).Where("id = ? AND org_id = ?", grant.ID, orgID).
+			Updates(map[string]interface{}{
+				"used_days":      grant.UsedDays + deduct,
+				"remaining_days": grant.RemainingDays - deduct,
+			}).Error; err != nil {
+			return fmt.Errorf("更新发放记录 %d 失败: %w", grant.ID, err)
+		}
+		childRequestRef := requestRef
+		if operationNo > 1 {
+			childRequestRef = fmt.Sprintf("%s:op:%d", requestRef, operationNo)
+		}
+		entry := database.AnnualLeaveConsumeLog{
+			OrgID:             orgID,
+			UserID:            userID,
+			GrantID:           grant.ID,
+			ApprovalRef:       approvalRef,
+			RequestRef:        childRequestRef,
+			OperationNo:       operationNo,
+			EntryType:         "consume",
+			BusinessStartDate: segment.StartDate,
+			BusinessEndDate:   segment.EndDate,
+			Days:              deduct,
+			Remark:            remark,
+		}
+		if err := tx.Create(&entry).Error; err != nil {
+			return fmt.Errorf("写入消费记录失败: %w", err)
+		}
+		remaining -= deduct
+	}
+	return nil
+}
+
+func splitAnnualLeaveBusinessSegments(days float64, start, end time.Time) ([]annualLeaveBusinessSegment, error) {
+	if start.IsZero() && end.IsZero() {
+		return []annualLeaveBusinessSegment{{Quarter: 4, Days: days}}, nil
+	}
+	location := dingtalk.ApprovalBusinessLocation()
+	start = start.In(location)
+	end = end.In(location)
+	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, location)
+	endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, location)
+	if endDay.Before(startDay) {
+		return nil, fmt.Errorf("annual leave business end date precedes start date")
+	}
+	totalCalendarDays := int(endDay.Sub(startDay).Hours()/24) + 1
+	if totalCalendarDays <= 0 {
+		return nil, fmt.Errorf("annual leave business date range invalid")
+	}
+	segments := make([]annualLeaveBusinessSegment, 0, endDay.Year()-startDay.Year()+1)
+	allocated := 0.0
+	for year := startDay.Year(); year <= endDay.Year(); year++ {
+		segmentStart := startDay
+		if year != startDay.Year() {
+			segmentStart = time.Date(year, 1, 1, 0, 0, 0, 0, location)
+		}
+		segmentEnd := endDay
+		if year != endDay.Year() {
+			segmentEnd = time.Date(year, 12, 31, 0, 0, 0, 0, location)
+		}
+		calendarDays := int(segmentEnd.Sub(segmentStart).Hours()/24) + 1
+		segmentDays := days * float64(calendarDays) / float64(totalCalendarDays)
+		if year == endDay.Year() {
+			segmentDays = days - allocated
+		}
+		allocated += segmentDays
+		segments = append(segments, annualLeaveBusinessSegment{
+			StartDate: segmentStart.Format("2006-01-02"),
+			EndDate:   segmentEnd.Format("2006-01-02"),
+			Year:      year,
+			Quarter:   (int(segmentEnd.Month())-1)/3 + 1,
+			Days:      segmentDays,
+		})
+	}
+	return segments, nil
+}
+
+func formatAnnualLeaveBusinessDate(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.In(dingtalk.ApprovalBusinessLocation()).Format("2006-01-02")
+}
+
+func absFloat(value float64) float64 {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func withAnnualLeaveTransactionRetry(db *gorm.DB, fn func(*gorm.DB) error) error {
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		err = db.Transaction(fn)
+		if err == nil || !isRetryableDatabaseTransactionError(err) {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
 	}
 	return err
+}
+
+func isRetryableDatabaseTransactionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "deadlock found") ||
+		strings.Contains(message, "lock wait timeout")
 }
 
 // GetConsumeLog 查询用户的年假消费记录
@@ -555,6 +798,9 @@ func (s *AnnualLeaveGrantService) handleExistingGrantResult(result *GrantOperati
 
 func buildConsumeRequestRef(userID, approvalRef string) string {
 	if approvalRef != "" {
+		if strings.HasPrefix(approvalRef, "approval:") {
+			return approvalRef
+		}
 		return "approval:" + approvalRef
 	}
 	return fmt.Sprintf("manual:%s:%d", userID, time.Now().UnixNano())

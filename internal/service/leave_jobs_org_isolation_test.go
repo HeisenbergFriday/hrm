@@ -1,7 +1,9 @@
 package service
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"peopleops/internal/database"
 
@@ -12,11 +14,15 @@ import (
 
 func openLeaveJobsDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:leave-jobs-"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{
+	dsn := fmt.Sprintf("file:leave-jobs-%s-%d?mode=memory&cache=shared", t.Name(), time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
+	}
+	if sqlDB, sqlErr := db.DB(); sqlErr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
 	}
 	return db
 }

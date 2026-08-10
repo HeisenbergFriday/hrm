@@ -30,6 +30,7 @@ const (
 
 var (
 	approvalSyncExecutionTimeout     = approvalSyncMaxExecutionTimeout
+	launchApprovalSyncBackground     = func(task func()) { go task() }
 	newApprovalSyncServiceForRequest = func(db *gorm.DB, orgID string) approvalSyncRunner {
 		return service.NewApprovalSyncService(db, orgID)
 	}
@@ -88,12 +89,20 @@ func prepareApprovalSync(c *gin.Context) (string, approvalSyncRunner, service.Ap
 	plan, err := syncService.Prepare(input, time.Now())
 	if err != nil {
 		errorCode, message := service.ApprovalSyncPreparationError(err)
-		status := http.StatusBadRequest
-		if errorCode != service.ApprovalSyncErrorConfigMissing && errorCode != service.ApprovalSyncErrorInvalidDate {
-			status = http.StatusInternalServerError
+		status := http.StatusInternalServerError
+		resultStatus := "failed"
+		switch errorCode {
+		case service.ApprovalSyncErrorConfigMissing:
+			status = http.StatusBadRequest
+			resultStatus = "config_missing"
+		case service.ApprovalSyncErrorInvalidDate:
+			status = http.StatusBadRequest
+		case service.ApprovalSyncErrorNotAccessible:
+			status = http.StatusForbidden
+			resultStatus = "forbidden"
 		}
 		log.Printf("[approval-sync] org=%s stage=prepare result=failed error_code=%s", redactOrgIDForSyncLog(orgID), sanitizeSyncLogText(errorCode))
-		c.JSON(status, Response{Code: status, Message: message, Data: gin.H{"status": "config_missing", "error_code": errorCode}})
+		c.JSON(status, Response{Code: status, Message: message, Data: gin.H{"status": resultStatus, "error_code": errorCode}})
 		return "", nil, service.ApprovalSyncPlan{}, false
 	}
 	return orgID, syncService, plan, true
@@ -123,8 +132,9 @@ func newApprovalSyncStatusContext(source *gin.Context) (*gin.Context, context.Ca
 }
 
 func approvalSyncStatusUpdate(result service.ApprovalSyncResult) orgSyncStatusUpdate {
-	// fail_count has one unit: approval instance failures (fetch detail + write).
-	failCount := result.FailCount + result.FetchFailCount
+	result = safeApprovalSyncPersistedResult(result)
+	// fail_count has one unit: approval instance failures (fetch detail + write + reconciliation).
+	failCount := result.FailCount + result.FetchFailCount + result.ReconcileFailCount
 	return orgSyncStatusUpdate{
 		SyncType:     approvalSyncType,
 		Status:       result.Status,
@@ -138,6 +148,42 @@ func approvalSyncStatusUpdate(result service.ApprovalSyncResult) orgSyncStatusUp
 			"result": result, "failed_processes": result.FailedProcesses,
 		},
 	}
+}
+
+func safeApprovalSyncPersistedResult(result service.ApprovalSyncResult) service.ApprovalSyncResult {
+	switch result.Status {
+	case service.ApprovalSyncStatusSuccess, service.ApprovalSyncStatusPartial, service.ApprovalSyncStatusFailed:
+	default:
+		result.Status = service.ApprovalSyncStatusFailed
+	}
+	result.RequestID = sanitizeSyncLogText(result.RequestID)
+	if result.DiscoveryErrorCode != "" {
+		result.DiscoveryErrorCode = sanitizeSyncLogText(result.DiscoveryErrorCode)
+		result.DiscoveryError = "审批流程准备失败，请检查企业流程配置或应用权限"
+	}
+	for index := range result.Processes {
+		process := &result.Processes[index]
+		process.ProcessCode = sanitizeSyncLogText(process.ProcessCode)
+		process.ErrorCode = sanitizeSyncLogText(process.ErrorCode)
+		if process.Error == "" {
+			continue
+		}
+		switch process.ErrorCode {
+		case service.ApprovalSyncErrorTimeout:
+			process.Error = "审批同步执行超时，请稍后查询或重试"
+		case service.ApprovalSyncErrorPartialFetch:
+			if process.Status == service.ApprovalSyncStatusPartial {
+				process.Error = "部分审批详情拉取失败"
+			} else {
+				process.Error = "审批详情拉取失败"
+			}
+		case service.ApprovalSyncErrorReconcile:
+			process.Error = "审批已同步，但业务对账失败，请稍后重试"
+		default:
+			process.Error = "审批同步失败，请检查企业流程配置、应用权限或稍后重试"
+		}
+	}
+	return result
 }
 
 func approvalSyncResultMessage(result service.ApprovalSyncResult) string {
@@ -156,6 +202,9 @@ func approvalSyncResultErrorCode(result service.ApprovalSyncResult) string {
 		if process.ErrorCode != "" {
 			return process.ErrorCode
 		}
+	}
+	if result.Status == service.ApprovalSyncStatusFailed {
+		return service.ApprovalSyncErrorInternal
 	}
 	return ""
 }
@@ -207,11 +256,12 @@ func acquireApprovalSyncTask(store approvalSyncTaskStore, task *database.Approva
 }
 
 func completeApprovalSyncTask(store approvalSyncTaskStore, result service.ApprovalSyncResult, message string) error {
+	result = safeApprovalSyncPersistedResult(result)
 	finishedAt := time.Now().In(service.ApprovalSyncLocation())
 	return store.Complete(&database.ApprovalSyncTask{
 		Type: approvalSyncType, RequestID: result.RequestID,
 		Status: result.Status, Message: message, ErrorCode: approvalSyncResultErrorCode(result),
-		SuccessCount: result.SuccessCount, FailCount: result.FailCount + result.FetchFailCount,
+		SuccessCount: result.SuccessCount, FailCount: result.FailCount + result.FetchFailCount + result.ReconcileFailCount,
 		FailedProcesses: result.FailedProcesses, DurationMS: result.DurationMS,
 		HeartbeatAt: finishedAt, FinishedAt: &finishedAt,
 		Details: map[string]interface{}{"result": result, "failed_processes": result.FailedProcesses},
@@ -252,6 +302,8 @@ func syncApprovalCompat(c *gin.Context) {
 	middleware.RebindRequestContext(c, executionContext)
 	syncService := newApprovalSyncServiceForRequest(middleware.RequestDB(c), orgID)
 	result := syncService.Run(executionContext, plan, requestID)
+	result.RequestID = requestID
+	result = safeApprovalSyncPersistedResult(result)
 	if err := completeApprovalSyncTask(taskStore, result, approvalSyncResultMessage(result)); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "审批同步已执行，但任务结果保存失败", Data: gin.H{"request_id": requestID}})
 		return
@@ -305,7 +357,9 @@ func StartApprovalSync(c *gin.Context) {
 		return
 	}
 
-	go func() {
+	c.JSON(http.StatusAccepted, Response{Code: http.StatusAccepted, Message: "running", Data: gin.H{"status": "running", "request_id": requestID}})
+
+	launchApprovalSyncBackground(func() {
 		defer cancelExecution()
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -325,6 +379,8 @@ func StartApprovalSync(c *gin.Context) {
 
 		syncService := newApprovalSyncServiceForRequest(middleware.RequestDB(backgroundContext), orgID)
 		result := syncService.Run(executionContext, plan, requestID)
+		result.RequestID = requestID
+		result = safeApprovalSyncPersistedResult(result)
 		statusContext, cancelStatus := newApprovalSyncStatusContext(backgroundContext)
 		defer cancelStatus()
 		finalTaskStore := newApprovalSyncTaskRepositoryForRequest(middleware.RequestDB(statusContext), orgID)
@@ -334,9 +390,7 @@ func StartApprovalSync(c *gin.Context) {
 		if err := writeOrgSyncStatusForRequest(statusContext, orgID, approvalSyncStatusUpdate(result)); err != nil {
 			log.Printf("[approval-sync] request_id=%s org=%s result=final_status_persist_failed error_type=%T", sanitizeSyncLogText(requestID), redactOrgIDForSyncLog(orgID), err)
 		}
-	}()
-
-	c.JSON(http.StatusAccepted, Response{Code: http.StatusAccepted, Message: "running", Data: gin.H{"status": "running", "request_id": requestID}})
+	})
 }
 
 // GetApprovalSyncResult validates org, task type, and request_id before returning state.

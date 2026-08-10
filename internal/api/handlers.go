@@ -4541,6 +4541,12 @@ func SyncAttendance(c *gin.Context) {
 		Force     bool   `json:"force"` // true 时先删除该范围内旧记录再重新拉取
 	}
 	c.ShouldBindJSON(&req)
+	orgID := strings.TrimSpace(c.GetString("orgID"))
+	if orgID == "" {
+		c.JSON(http.StatusUnauthorized, Response{Code: http.StatusUnauthorized, Message: "缺少组织信息"})
+		return
+	}
+	orgID = database.NormalizeOrganizationID(orgID)
 
 	if req.StartDate == "" {
 		req.StartDate = time.Now().AddDate(0, 0, -7).Format("2006-01-02")
@@ -4558,18 +4564,20 @@ func SyncAttendance(c *gin.Context) {
 			return
 		}
 		end = end.AddDate(0, 0, 1) // 包含 end 当天
-		if err := middleware.RequestDB(c).Where("check_time >= ? AND check_time < ?", start, end).Delete(&database.Attendance{}).Error; err != nil {
+		if err := middleware.RequestDB(c).Where("org_id = ? AND check_time >= ? AND check_time < ?", orgID, start, end).Delete(&database.Attendance{}).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "清理旧记录失败: " + err.Error()})
 			return
 		}
 	}
 
 	syncService := service.NewSyncService(middleware.RequestDB(c))
-	orgID := database.NormalizeOrganizationID(c.GetString("orgID"))
 
 	// 获取所有用户的钉钉 UserID
 	var users []database.User
-	middleware.RequestDB(c).Select("user_id, name").Find(&users)
+	if err := middleware.RequestDB(c).Where("org_id = ?", orgID).Select("user_id, name").Find(&users).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "读取员工失败"})
+		return
+	}
 
 	var userIDs []string
 	userNameMap := make(map[string]string)
@@ -4602,45 +4610,15 @@ func SyncAttendance(c *gin.Context) {
 		return
 	}
 
-	// 写入数据库
-	count := 0
-	for _, r := range records {
-		checkType := "上班"
-		if r.CheckType == "OffDuty" {
-			checkType = "下班"
-		}
-		checkTime, _ := time.ParseInLocation("2006-01-02 15:04:05", r.UserCheckTime, time.FixedZone("CST", 8*3600))
-
-		record := &database.Attendance{
-			UserID:    r.UserID,
-			UserName:  userNameMap[r.UserID],
-			CheckTime: checkTime,
-			CheckType: checkType,
-			Location:  r.LocationResult,
-			Extension: map[string]interface{}{
-				"time_result":     r.TimeResult,
-				"location_result": r.LocationResult,
-			},
-		}
-		if r.TimeResult == "Late" || r.TimeResult == "Early" || r.TimeResult == "NotSigned" {
-			abnormalType := "迟到"
-			if r.TimeResult == "Early" {
-				abnormalType = "早退"
-			} else if r.TimeResult == "NotSigned" {
-				abnormalType = "缺勤"
-			}
-			record.Extension["abnormal_type"] = abnormalType
-		}
-
-		if err := service.NewAttendanceService(middleware.RequestDB(c)).SaveRecord(record); err != nil {
-			updateSyncStatus(syncService, orgID, "attendance", "failed", err.Error())
-			c.JSON(http.StatusInternalServerError, Response{
-				Code:    http.StatusInternalServerError,
-				Message: "鍚屾鑰冨嫟澶辫触: " + err.Error(),
-			})
-			return
-		}
-		count++
+	attendanceSvc := service.NewAttendanceServiceWithOrgID(middleware.RequestDB(c), orgID)
+	count, err := attendanceSvc.SyncRecords(orgID, records, userNameMap)
+	if err != nil {
+		updateSyncStatus(syncService, orgID, "attendance", "failed", err.Error())
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "同步考勤失败: " + err.Error(),
+		})
+		return
 	}
 
 	updateSyncStatus(syncService, orgID, "attendance", "success", fmt.Sprintf("同步 %d 条考勤记录", count))

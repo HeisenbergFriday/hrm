@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
@@ -17,13 +18,14 @@ import (
 )
 
 type OvertimeMatchingService struct {
-	db         *gorm.DB
-	orgID      string
-	matchRepo  *repository.OvertimeMatchResultRepository
-	ledgerRepo *repository.CompensatoryLeaveLedgerRepository
-	ruleRepo   *repository.OvertimeRuleConfigRepository
-	suppRepo   *repository.SupplementaryRequestRepository
-	rematch    *overtimeRematchSession
+	db                           *gorm.DB
+	orgID                        string
+	matchRepo                    *repository.OvertimeMatchResultRepository
+	ledgerRepo                   *repository.CompensatoryLeaveLedgerRepository
+	ruleRepo                     *repository.OvertimeRuleConfigRepository
+	suppRepo                     *repository.SupplementaryRequestRepository
+	rematch                      *overtimeRematchSession
+	setAbsoluteCompTimeQuotaFunc func(string, string, int, int, string) error
 }
 
 func (s *OvertimeMatchingService) scopedDB() *gorm.DB {
@@ -37,22 +39,24 @@ func (s *OvertimeMatchingService) scopedDB() *gorm.DB {
 
 func NewOvertimeMatchingService(db *gorm.DB) *OvertimeMatchingService {
 	return &OvertimeMatchingService{
-		db:         db,
-		matchRepo:  repository.NewOvertimeMatchResultRepository(db),
-		ledgerRepo: repository.NewCompensatoryLeaveLedgerRepository(db),
-		ruleRepo:   repository.NewOvertimeRuleConfigRepository(db),
-		suppRepo:   repository.NewSupplementaryRequestRepository(db),
+		db:                           db,
+		matchRepo:                    repository.NewOvertimeMatchResultRepository(db),
+		ledgerRepo:                   repository.NewCompensatoryLeaveLedgerRepository(db),
+		ruleRepo:                     repository.NewOvertimeRuleConfigRepository(db),
+		suppRepo:                     repository.NewSupplementaryRequestRepository(db),
+		setAbsoluteCompTimeQuotaFunc: dingtalk.SetCompensatoryLeaveQuotaForOrg,
 	}
 }
 
 func NewOvertimeMatchingServiceWithOrgID(db *gorm.DB, orgID string) *OvertimeMatchingService {
 	return &OvertimeMatchingService{
-		db:         db,
-		orgID:      orgID,
-		matchRepo:  repository.NewOvertimeMatchResultRepositoryWithOrgID(db, orgID),
-		ledgerRepo: repository.NewCompensatoryLeaveLedgerRepositoryWithOrgID(db, orgID),
-		ruleRepo:   repository.NewOvertimeRuleConfigRepositoryWithOrgID(db, orgID),
-		suppRepo:   repository.NewSupplementaryRequestRepositoryWithOrgID(db, orgID),
+		db:                           db,
+		orgID:                        orgID,
+		matchRepo:                    repository.NewOvertimeMatchResultRepositoryWithOrgID(db, orgID),
+		ledgerRepo:                   repository.NewCompensatoryLeaveLedgerRepositoryWithOrgID(db, orgID),
+		ruleRepo:                     repository.NewOvertimeRuleConfigRepositoryWithOrgID(db, orgID),
+		suppRepo:                     repository.NewSupplementaryRequestRepositoryWithOrgID(db, orgID),
+		setAbsoluteCompTimeQuotaFunc: dingtalk.SetCompensatoryLeaveQuotaForOrg,
 	}
 }
 
@@ -184,6 +188,7 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 
 	// 检查是否已经存在该员工当天的匹配记录（幂等控制，含软删除记录避免唯一索引冲突）
 	var existingMatch database.OvertimeMatchResult
+	reactivating := false
 	err = s.scopedDB().Unscoped().Where("user_id = ? AND work_date = ?", approval.ApplicantID, approvalDate).First(&existingMatch).Error
 	if err == nil {
 		if existingMatch.DeletedAt.Valid {
@@ -191,23 +196,29 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 			if delErr := s.scopedDB().Unscoped().Delete(&existingMatch).Error; delErr != nil {
 				return delErr
 			}
-		} else if !force {
+		} else if !force && isOvertimeRollbackState(&existingMatch) {
+			reactivating = true
+			fmt.Printf("[OvertimeMatch] 审批恢复，重新计算并执行绝对余额校准: user_id=%s, work_date=%s, status=%s\n",
+				approval.ApplicantID, approvalDate, existingMatch.MatchStatus)
+		} else if !force && !isOvertimeRetryableMatchStatus(existingMatch.MatchStatus) {
 			// 已存在有效匹配记录，直接返回
 			fmt.Printf("[OvertimeMatch] 跳过已存在的匹配记录: user_id=%s, work_date=%s\n", approval.ApplicantID, approvalDate)
 			return s.ensureExistingMatchSettled(&existingMatch)
-		} else {
+		} else if force {
 			// 强制重新匹配，物理删除旧记录（软删除同样会保留索引冲突）
 			fmt.Printf("[OvertimeMatch] 强制重新匹配，删除旧记录: user_id=%s, work_date=%s\n", approval.ApplicantID, approvalDate)
 			if delErr := s.scopedDB().Unscoped().Delete(&existingMatch).Error; delErr != nil {
 				return delErr
 			}
+		} else {
+			fmt.Printf("[OvertimeMatch] 重算可重试匹配记录: user_id=%s, work_date=%s, status=%s\n", approval.ApplicantID, approvalDate, existingMatch.MatchStatus)
 		}
 	} else if err != gorm.ErrRecordNotFound {
 		return err
 	}
 
 	// 查找该员工的考勤打卡记录（窗口：工作日 00:00 到次日 06:00，覆盖夜班跨日场景）
-	startOfDay, _ := time.ParseInLocation("2006-01-02", approvalDate, time.Local)
+	startOfDay, _ := time.ParseInLocation("2006-01-02", approvalDate, dingtalk.ApprovalBusinessLocation())
 	endOfWindow := startOfDay.Add(30 * time.Hour) // 次日 06:00:00
 
 	var attendances []database.Attendance
@@ -329,6 +340,9 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 	if err != nil {
 		return err
 	}
+	if err := s.suppRepo.ResolvePendingByMatchResultID(match.ID); err != nil {
+		return fmt.Errorf("resolve supplementary request: %w", err)
+	}
 
 	// 生成调休台账
 	if effectiveOvertimeMinutes > 0 {
@@ -340,11 +354,23 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 			_ = s.matchRepo.UpdateLocalBalanceStatus(match.ID, "failed")
 			_ = s.matchRepo.UpdateStatus(match.ID, "local_balance_failed", "本系统调休余额增加失败："+err.Error())
 			fmt.Printf("[OvertimeMatch] 本系统调休余额增加失败: %s\n", err.Error())
-			return nil
+			return fmt.Errorf("credit compensatory leave: %w", err)
 		}
 		_ = s.matchRepo.UpdateLocalBalanceStatus(match.ID, "success")
 		match.LocalBalanceStatus = "success"
 		fmt.Printf("[OvertimeMatch] 本系统调休余额增加成功\n")
+	}
+	if reactivating || isRollbackUncertain(match) {
+		requiresAbsolute, err := s.reactivationRequiresAbsoluteBalance(match)
+		if err != nil {
+			return err
+		}
+		if requiresAbsolute {
+			return s.forceAbsoluteBalanceRecalibration(match, "reactivation")
+		}
+		if err := s.matchRepo.UpdateRollbackDingtalkStatus(match.ID, "", ""); err != nil {
+			return err
+		}
 	}
 	if handled, err := s.applyHistoricalSyncPolicy(match); err != nil {
 		return err
@@ -357,7 +383,9 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 		return nil
 	}
 	if effectiveOvertimeMinutes > 0 {
-		_ = s.syncOvertimeToDingTalk(match)
+		if err := s.syncOvertimeToDingTalk(match); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -366,6 +394,8 @@ func (s *OvertimeMatchingService) ensureExistingMatchSettled(match *database.Ove
 	if match.EffectiveOvertimeMinutes <= 0 {
 		return nil
 	}
+
+	// Step 1: Ensure local balance is credited.
 	if !strings.EqualFold(strings.TrimSpace(match.LocalBalanceStatus), "success") {
 		compSvc := NewCompensatoryLeaveService(s.db)
 		if s.orgID != "" {
@@ -374,11 +404,32 @@ func (s *OvertimeMatchingService) ensureExistingMatchSettled(match *database.Ove
 		if err := compSvc.CreditFromOvertime(match.ID); err != nil {
 			_ = s.matchRepo.UpdateLocalBalanceStatus(match.ID, "failed")
 			_ = s.matchRepo.UpdateStatus(match.ID, "local_balance_failed", "本系统调休余额增加失败："+err.Error())
-			return nil
+			return fmt.Errorf("credit compensatory leave: %w", err)
 		}
 		_ = s.matchRepo.UpdateLocalBalanceStatus(match.ID, "success")
 		match.LocalBalanceStatus = "success"
 	}
+
+	// Step 2: If the previous DingTalk rollback was uncertain (pending or failed),
+	// we cannot trust the DingTalk balance. Force an absolute balance recalibration
+	// instead of incremental push.
+	if isOvertimeRollbackState(match) {
+		requiresAbsolute, err := s.reactivationRequiresAbsoluteBalance(match)
+		if err != nil {
+			return err
+		}
+		if !requiresAbsolute {
+			if err := s.matchRepo.UpdateRollbackDingtalkStatus(match.ID, "", ""); err != nil {
+				return err
+			}
+		} else {
+			log.Printf("[OvertimeSettle] org=%s user=%s date=%s 检测到回滚状态不确定(%s)，强制绝对余额校准",
+				s.orgID, match.UserID, match.WorkDate, match.RollbackDingtalkSyncStatus)
+			return s.forceAbsoluteBalanceRecalibration(match, "reactivation")
+		}
+	}
+
+	// Step 3: Normal settlement path — historical sync or fresh push.
 	if handled, err := s.applyHistoricalSyncPolicy(match); err != nil {
 		return err
 	} else if handled {
@@ -390,14 +441,69 @@ func (s *OvertimeMatchingService) ensureExistingMatchSettled(match *database.Ove
 	return nil
 }
 
+// forceAbsoluteBalanceRecalibration performs a full absolute balance sync for
+// the user+year, then marks the match as synced. This is used when a previous
+// rollback state is uncertain and we need to guarantee DingTalk consistency.
+func (s *OvertimeMatchingService) forceAbsoluteBalanceRecalibration(match *database.OvertimeMatchResult, syncMode string) error {
+	year, ok := workDateYear(match.WorkDate)
+	if !ok {
+		return fmt.Errorf("invalid work date %q", match.WorkDate)
+	}
+	if !overtimeDingTalkSyncEnabled() {
+		if err := s.persistRollbackFailure(match.ID, "DingTalk compensatory leave sync disabled"); err != nil {
+			return err
+		}
+		return fmt.Errorf("DingTalk compensatory leave sync disabled")
+	}
+	if err := s.matchRepo.UpdateRollbackDingtalkStatus(match.ID, "rollback_pending", ""); err != nil {
+		return err
+	}
+	if err := s.matchRepo.UpdateSyncStatus(match.ID, "reactivation_pending", "", ""); err != nil {
+		return err
+	}
+	if err := s.syncAbsoluteOvertimeBalances([]overtimeSyncScope{{UserID: match.UserID, Year: year}}); err != nil {
+		safeErr := sanitizeSyncError(err)
+		if persistErr := s.persistRollbackFailure(match.ID, safeErr); persistErr != nil {
+			return persistErr
+		}
+		return fmt.Errorf("absolute balance recalibration failed: %s", safeErr)
+	}
+	if strings.TrimSpace(syncMode) == "" {
+		syncMode = "reactivation"
+	}
+	requestID := fmt.Sprintf("%s:%s:%s:%d", syncMode, match.UserID, match.WorkDate, time.Now().UnixNano())
+	if err := s.matchRepo.UpdateSyncStatus(match.ID, "success", requestID, ""); err != nil {
+		return err
+	}
+	if err := s.matchRepo.UpdateRollbackDingtalkStatus(match.ID, "", ""); err != nil {
+		return err
+	}
+	status := "synced"
+	reason := "绝对余额校准完成"
+	if match.EffectiveOvertimeMinutes <= 0 {
+		status = match.MatchStatus
+		reason = match.MatchReason
+	}
+	if err := s.matchRepo.UpdateStatus(match.ID, status, reason); err != nil {
+		return err
+	}
+	return s.upsertOvertimeSyncHistoryWithMinutes(match, requestID, syncMode, match.EffectiveOvertimeMinutes)
+}
+
 func (s *OvertimeMatchingService) RollbackApprovalMatch(approvalID uint) error {
 	match, err := s.matchRepo.FindByApprovalID(approvalID)
 	if err != nil {
 		return err
 	}
-	if match.MatchStatus == "rolled_back" {
+	rollbackStatus := strings.ToLower(strings.TrimSpace(match.RollbackDingtalkSyncStatus))
+	if match.MatchStatus == "rolled_back" && (rollbackStatus == "rollback_success" || rollbackStatus == "rolled_back") {
 		return nil
 	}
+	retryMode := rollbackStatus == "rollback_pending" || rollbackStatus == "rollback_failed" ||
+		strings.EqualFold(strings.TrimSpace(match.DingtalkSyncStatus), "rollback_pending") ||
+		strings.EqualFold(strings.TrimSpace(match.DingtalkSyncStatus), "rollback_failed")
+
+	// Step 1: Local rollback (idempotent — RollbackCredit checks source balance).
 	compSvc := NewCompensatoryLeaveService(s.db)
 	if s.orgID != "" {
 		compSvc = NewCompensatoryLeaveServiceWithOrgID(s.db, s.orgID)
@@ -405,7 +511,92 @@ func (s *OvertimeMatchingService) RollbackApprovalMatch(approvalID uint) error {
 	if err := compSvc.RollbackCredit(match.ID); err != nil {
 		return err
 	}
-	return s.matchRepo.UpdateStatus(match.ID, "rolled_back", "审批撤销")
+	if err := s.matchRepo.UpdateLocalBalanceStatus(match.ID, "reversed"); err != nil {
+		return err
+	}
+
+	// Step 2: If DingTalk was never confirmed synced, local rollback is terminal.
+	if !requiresDingTalkRollback(match) {
+		if err := s.matchRepo.UpdateRollbackDingtalkStatus(match.ID, "rollback_success", ""); err != nil {
+			return err
+		}
+		return s.matchRepo.UpdateStatus(match.ID, "rolled_back", "审批撤销，调休额度已冲正")
+	}
+
+	// Step 3: Persist uncertainty before leaving the database boundary. The
+	// external call below is deliberately outside any long database transaction.
+	if err := s.matchRepo.UpdateRollbackDingtalkStatus(match.ID, "rollback_pending", ""); err != nil {
+		return err
+	}
+	if err := s.matchRepo.UpdateSyncStatus(match.ID, "rollback_pending", "", ""); err != nil {
+		return err
+	}
+	if err := s.matchRepo.UpdateStatus(match.ID, "rollback_pending", "审批撤销，本地调休已冲正，钉钉绝对余额校准中"); err != nil {
+		return err
+	}
+
+	year, ok := workDateYear(match.WorkDate)
+	if !ok {
+		if err := s.persistRollbackFailure(match.ID, "invalid work date"); err != nil {
+			return err
+		}
+		return fmt.Errorf("invalid overtime work date %q", match.WorkDate)
+	}
+	if !overtimeDingTalkSyncEnabled() {
+		if err := s.persistRollbackFailure(match.ID, "DingTalk compensatory leave sync disabled"); err != nil {
+			return err
+		}
+		return fmt.Errorf("DingTalk compensatory leave sync disabled")
+	}
+
+	syncErr := s.syncAbsoluteOvertimeBalances([]overtimeSyncScope{{UserID: match.UserID, Year: year}})
+	if syncErr != nil {
+		safeErr := sanitizeSyncError(syncErr)
+		if err := s.persistRollbackFailure(match.ID, safeErr); err != nil {
+			return err
+		}
+		log.Printf("[OvertimeRollback] org=%s user=%s date=%s 钉钉回滚失败，本地冲正已保留: %s",
+			s.orgID, match.UserID, match.WorkDate, safeErr)
+		return fmt.Errorf("DingTalk rollback failed: %s", safeErr)
+	}
+
+	// Step 4: Only a confirmed absolute sync can make the rollback terminal.
+	syncMode := "rollback"
+	if retryMode {
+		syncMode = "retry"
+	}
+	requestID := fmt.Sprintf("%s:%s:%s:%d", syncMode, match.UserID, match.WorkDate, time.Now().UnixNano())
+	if err := s.matchRepo.UpdateSyncStatus(match.ID, "rollback_success", requestID, ""); err != nil {
+		return err
+	}
+	if err := s.matchRepo.UpdateRollbackDingtalkStatus(match.ID, "rollback_success", ""); err != nil {
+		return err
+	}
+	if err := s.upsertOvertimeSyncHistoryWithMinutes(match, requestID, syncMode, 0); err != nil {
+		return err
+	}
+	return s.matchRepo.UpdateStatus(match.ID, "rolled_back", "审批撤销，调休额度已冲正")
+}
+
+func requiresDingTalkRollback(match *database.OvertimeMatchResult) bool {
+	if match == nil {
+		return false
+	}
+	syncStatus := strings.ToLower(strings.TrimSpace(match.DingtalkSyncStatus))
+	rollbackStatus := strings.ToLower(strings.TrimSpace(match.RollbackDingtalkSyncStatus))
+	return syncStatus == "success" || syncStatus == "rollback_pending" || syncStatus == "rollback_failed" ||
+		rollbackStatus == "rollback_pending" || rollbackStatus == "rollback_failed"
+}
+
+func (s *OvertimeMatchingService) persistRollbackFailure(matchID uint, safeErr string) error {
+	safeErr = sanitizeSyncError(fmt.Errorf("%s", safeErr))
+	if err := s.matchRepo.UpdateRollbackDingtalkStatus(matchID, "rollback_failed", safeErr); err != nil {
+		return err
+	}
+	if err := s.matchRepo.UpdateSyncStatus(matchID, "rollback_failed", "", safeErr); err != nil {
+		return err
+	}
+	return s.matchRepo.UpdateStatus(matchID, "rollback_failed", "审批撤销，本地调休已冲正，钉钉余额待绝对校准")
 }
 
 func (s *OvertimeMatchingService) syncOvertimeToDingTalk(match *database.OvertimeMatchResult) error {
@@ -427,7 +618,7 @@ func (s *OvertimeMatchingService) syncOvertimeToDingTalk(match *database.Overtim
 	if err := dingtalk.UpdateCompensatoryLeaveQuotaForOrg(orgID, match.UserID, match.EffectiveOvertimeMinutes, match.WorkDate, reason); err != nil {
 		_ = s.matchRepo.UpdateSyncStatus(match.ID, "failed", requestID, err.Error())
 		_ = s.matchRepo.UpdateStatus(match.ID, "dingtalk_sync_failed", "钉钉调休余额同步失败："+err.Error())
-		return nil
+		return err
 	}
 
 	if err := s.matchRepo.UpdateSyncStatus(match.ID, "success", requestID, ""); err != nil {
@@ -496,12 +687,7 @@ func isCompletedApprovalStatus(status string) bool {
 }
 
 func isApprovedApprovalResult(a *database.Approval) bool {
-	raw, ok := a.Extension["result"].(string)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return true
-	}
-	result := strings.ToLower(strings.TrimSpace(raw))
-	return result == "agree" || result == "approved" || result == "pass" || result == "success" || result == "同意" || result == "通过"
+	return strings.EqualFold(approvalResultFromExtension(a.Extension), "agree")
 }
 
 func (s *OvertimeMatchingService) getConfiguredProcessCode() string {
@@ -731,15 +917,15 @@ func parseApprovalTime(value string) time.Time {
 		time.RFC3339,
 	}
 	for _, layout := range layouts {
-		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+		if t, err := time.ParseInLocation(layout, value, dingtalk.ApprovalBusinessLocation()); err == nil {
 			return t
 		}
 	}
 	if ts, err := strconv.ParseInt(value, 10, 64); err == nil && ts > 0 {
 		if ts > 1_000_000_000_000 {
-			return time.UnixMilli(ts).In(time.Local)
+			return time.UnixMilli(ts).In(dingtalk.ApprovalBusinessLocation())
 		}
-		return time.Unix(ts, 0).In(time.Local)
+		return time.Unix(ts, 0).In(dingtalk.ApprovalBusinessLocation())
 	}
 	return time.Time{}
 }
@@ -921,7 +1107,27 @@ func (s *OvertimeMatchingService) saveMatchResult(a *database.Approval, approval
 		DingtalkSyncStatus:       dingtalkSyncStatus,
 		CalcVersion:              "v2",
 	}
+	existing, err := s.matchRepo.FindByApprovalID(a.ID)
+	if err == gorm.ErrRecordNotFound {
+		existing, err = s.matchRepo.FindByUserAndWorkDate(a.ApplicantID, result.WorkDate)
+	}
+	if err == nil && (isOvertimeRetryableMatchStatus(existing.MatchStatus) || isOvertimeRollbackState(existing)) {
+		result.MatchRef = existing.MatchRef
+		return s.matchRepo.UpdateCalculation(existing.ID, result)
+	}
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return err
+	}
 	return s.matchRepo.Create(result)
+}
+
+func isOvertimeRetryableMatchStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "no_clock_record", "insufficient_clock_record", "query_clock_failed", "unmatched", "invalid_clock_time":
+		return true
+	default:
+		return false
+	}
 }
 
 func newOvertimeMatchRef(approvalID uint, approvalStart time.Time) string {
@@ -1121,6 +1327,10 @@ func (s *OvertimeMatchingService) applyHistoricalSyncPolicy(match *database.Over
 	if err != nil {
 		return false, err
 	}
+	if strings.EqualFold(strings.TrimSpace(history.SyncMode), "rollback") ||
+		history.EffectiveOvertimeMinutes != match.EffectiveOvertimeMinutes {
+		return false, nil
+	}
 
 	requestID := strings.TrimSpace(history.SyncRequestID)
 	if requestID == "" {
@@ -1155,6 +1365,13 @@ func (s *OvertimeMatchingService) upsertOvertimeSyncHistory(match *database.Over
 	if match == nil || match.EffectiveOvertimeMinutes <= 0 {
 		return nil
 	}
+	return s.upsertOvertimeSyncHistoryWithMinutes(match, requestID, syncMode, match.EffectiveOvertimeMinutes)
+}
+
+func (s *OvertimeMatchingService) upsertOvertimeSyncHistoryWithMinutes(match *database.OvertimeMatchResult, requestID, syncMode string, effectiveMinutes int) error {
+	if match == nil {
+		return nil
+	}
 	now := time.Now()
 	history := database.OvertimeSyncHistory{
 		OrgID:                    match.OrgID,
@@ -1162,7 +1379,7 @@ func (s *OvertimeMatchingService) upsertOvertimeSyncHistory(match *database.Over
 		WorkDate:                 match.WorkDate,
 		ApprovalID:               match.ApprovalID,
 		ApprovalProcessID:        match.ApprovalProcessID,
-		EffectiveOvertimeMinutes: match.EffectiveOvertimeMinutes,
+		EffectiveOvertimeMinutes: effectiveMinutes,
 		SyncRequestID:            requestID,
 		SyncMode:                 syncMode,
 		SyncedAt:                 &now,
@@ -1197,6 +1414,80 @@ func workDateYear(workDate string) (int, bool) {
 	return parsed.Year(), true
 }
 
+// sanitizeSyncError strips sensitive details (URLs, tokens, secrets) from sync
+// errors before persisting them to the database.
+func sanitizeSyncError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" {
+		return "sync failed"
+	}
+	msg = regexp.MustCompile(`(?i)https?://[^\s]+`).ReplaceAllString(msg, "[url redacted]")
+	msg = regexp.MustCompile(`(?i)(access[_ -]?token|token|secret|password|authorization|bearer|app[_ -]?key|app[_ -]?secret)\s*[:=]\s*[^\s,;]+`).ReplaceAllString(msg, "$1=[redacted]")
+	msg = strings.Map(func(r rune) rune {
+		if r < 0x20 && r != '\t' {
+			return ' '
+		}
+		return r
+	}, msg)
+	if len(msg) > 400 {
+		return msg[:400]
+	}
+	return msg
+}
+
+// isRollbackUncertain returns true if the rollback state is uncertain — the
+// DingTalk rollback was pending or failed, meaning we cannot trust the
+// DingTalk balance is consistent with local state.
+func isRollbackUncertain(match *database.OvertimeMatchResult) bool {
+	if match == nil {
+		return false
+	}
+	rbStatus := strings.ToLower(strings.TrimSpace(match.RollbackDingtalkSyncStatus))
+	syncStatus := strings.ToLower(strings.TrimSpace(match.DingtalkSyncStatus))
+	return rbStatus == "rollback_pending" || rbStatus == "rollback_failed" ||
+		syncStatus == "rollback_pending" || syncStatus == "rollback_failed" || syncStatus == "reactivation_pending"
+}
+
+func isOvertimeRollbackState(match *database.OvertimeMatchResult) bool {
+	if match == nil {
+		return false
+	}
+	matchStatus := strings.ToLower(strings.TrimSpace(match.MatchStatus))
+	rollbackStatus := strings.ToLower(strings.TrimSpace(match.RollbackDingtalkSyncStatus))
+	return matchStatus == "rolled_back" || matchStatus == "rollback_pending" || matchStatus == "rollback_failed" ||
+		rollbackStatus == "rollback_pending" || rollbackStatus == "rollback_failed" ||
+		rollbackStatus == "rollback_success" || rollbackStatus == "rolled_back"
+}
+
+func (s *OvertimeMatchingService) reactivationRequiresAbsoluteBalance(match *database.OvertimeMatchResult) (bool, error) {
+	if match == nil {
+		return false, nil
+	}
+	// When external sync is enabled, preserve the existing reactivation contract:
+	// restore with one absolute write instead of risking a duplicate increment.
+	if overtimeDingTalkSyncEnabled() {
+		return true, nil
+	}
+	if isRollbackUncertain(match) {
+		return true, nil
+	}
+	syncStatus := strings.ToLower(strings.TrimSpace(match.DingtalkSyncStatus))
+	if syncStatus == "success" || syncStatus == "rollback_success" {
+		return true, nil
+	}
+	history, err := s.findOvertimeSyncHistory(match.UserID, match.WorkDate)
+	if err == gorm.ErrRecordNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("query overtime sync history for reactivation: %w", err)
+	}
+	return history != nil, nil
+}
+
 func (s *OvertimeMatchingService) syncAbsoluteOvertimeBalances(scopes []overtimeSyncScope) error {
 	if !overtimeDingTalkSyncEnabled() || len(scopes) == 0 {
 		return nil
@@ -1215,11 +1506,12 @@ func (s *OvertimeMatchingService) syncAbsoluteOvertimeBalances(scopes []overtime
 		reason := fmt.Sprintf("加班匹配重算回写 %d", scope.Year)
 		orgID, orgErr := resolveServiceOrgID(s.orgID, s.db)
 		if orgErr != nil {
-			_ = s.markOvertimeYearSyncFailed(scope, orgErr)
 			return fmt.Errorf("user %s year %d: %w", scope.UserID, scope.Year, orgErr)
 		}
-		if err := dingtalk.SetCompensatoryLeaveQuotaForOrg(orgID, scope.UserID, scope.Year, totalMinutes, reason); err != nil {
-			_ = s.markOvertimeYearSyncFailed(scope, err)
+		if s.setAbsoluteCompTimeQuotaFunc == nil {
+			return fmt.Errorf("absolute compensatory leave sync function is not configured")
+		}
+		if err := s.setAbsoluteCompTimeQuotaFunc(orgID, scope.UserID, scope.Year, totalMinutes, reason); err != nil {
 			return fmt.Errorf("user %s year %d: %w", scope.UserID, scope.Year, err)
 		}
 		if err := s.markOvertimeYearSynced(scope); err != nil {
@@ -1246,19 +1538,103 @@ func (s *OvertimeMatchingService) markOvertimeYearSynced(scope overtimeSyncScope
 	}).Error
 }
 
-func (s *OvertimeMatchingService) markOvertimeYearSyncFailed(scope overtimeSyncScope, syncErr error) error {
-	startDate := fmt.Sprintf("%04d-01-01", scope.Year)
-	endDate := fmt.Sprintf("%04d-12-31", scope.Year)
-	query := s.scopedDB().Model(&database.OvertimeMatchResult{}).
-		Where("user_id = ? AND work_date >= ? AND work_date <= ? AND effective_overtime_minutes > 0 AND local_balance_status = ?", scope.UserID, startDate, endDate, "success")
-	if s.orgID != "" {
-		query = query.Where("org_id = ?", s.orgID)
+// RecalcRetryableForAttendancePairs re-evaluates retryable overtime match results
+// for the given (user_id, work_date) pairs. This is called after attendance records
+// are synced so that previously-missing clock data can be matched against approvals.
+// Returns the number of matches successfully recalculated.
+func (s *OvertimeMatchingService) RecalcRetryableForAttendancePairs(pairs []repository.UserDatePair) (int, error) {
+	if strings.TrimSpace(s.orgID) == "" {
+		return 0, fmt.Errorf("org_id required for overtime recalc")
 	}
-	return query.Updates(map[string]interface{}{
-		"dingtalk_sync_status": "failed",
-		"dingtalk_sync_error":  syncErr.Error(),
-		"match_status":         "dingtalk_sync_failed",
-	}).Error
+	if len(pairs) == 0 {
+		return 0, nil
+	}
+
+	pairs = deduplicateUserDatePairs(pairs)
+	retryable := make([]database.OvertimeMatchResult, 0)
+	seenMatches := make(map[uint]struct{})
+	const pairBatchSize = 200
+	for start := 0; start < len(pairs); start += pairBatchSize {
+		end := start + pairBatchSize
+		if end > len(pairs) {
+			end = len(pairs)
+		}
+		batch, err := s.matchRepo.FindRetryableByUserDatePairs(pairs[start:end])
+		if err != nil {
+			return 0, fmt.Errorf("query retryable matches: %w", err)
+		}
+		for _, match := range batch {
+			if _, exists := seenMatches[match.ID]; exists {
+				continue
+			}
+			seenMatches[match.ID] = struct{}{}
+			retryable = append(retryable, match)
+		}
+	}
+	if len(retryable) == 0 {
+		return 0, nil
+	}
+	recalculated := 0
+	failed := 0
+	for _, match := range retryable {
+		if match.ApprovalID == 0 {
+			continue
+		}
+		if err := s.MatchApproval(match.ApprovalID); err != nil {
+			failed++
+			log.Printf("[OvertimeRecalc] org=%s user=%s date=%s approval=%d 重算失败: %s",
+				s.orgID, match.UserID, match.WorkDate, match.ApprovalID, sanitizeSyncError(err))
+			continue
+		}
+		recalculated++
+	}
+	if failed > 0 {
+		return recalculated, fmt.Errorf("%d retryable overtime matches failed", failed)
+	}
+	return recalculated, nil
+}
+
+// RunRetryableMatchCompensation scans for retryable overtime matches within a
+// date range and re-evaluates them. Used by the scheduled compensation job.
+// Returns the number of matches successfully recalculated.
+func (s *OvertimeMatchingService) RunRetryableMatchCompensation(startDate, endDate string) (int, error) {
+	if strings.TrimSpace(s.orgID) == "" {
+		return 0, fmt.Errorf("org_id required for overtime compensation")
+	}
+
+	retryable, err := s.matchRepo.FindRetryableInDateRange(startDate, endDate, 500)
+	if err != nil {
+		return 0, fmt.Errorf("query retryable matches in range: %w", err)
+	}
+	if len(retryable) == 0 {
+		return 0, nil
+	}
+	retryIDs := make([]uint, 0, len(retryable))
+	for _, match := range retryable {
+		retryIDs = append(retryIDs, match.ID)
+	}
+	if err := s.matchRepo.TouchRetryAttempts(retryIDs); err != nil {
+		return 0, fmt.Errorf("mark retryable overtime compensation attempts: %w", err)
+	}
+
+	recalculated := 0
+	failed := 0
+	for _, match := range retryable {
+		if match.ApprovalID == 0 {
+			continue
+		}
+		if err := s.MatchApproval(match.ApprovalID); err != nil {
+			failed++
+			log.Printf("[OvertimeCompensation] org=%s user=%s date=%s approval=%d 重算失败: %s",
+				s.orgID, match.UserID, match.WorkDate, match.ApprovalID, sanitizeSyncError(err))
+			continue
+		}
+		recalculated++
+	}
+	if failed > 0 {
+		return recalculated, fmt.Errorf("%d retryable overtime compensation matches failed", failed)
+	}
+	return recalculated, nil
 }
 
 // createSupplementaryRequestIfNotExists 为无打卡记录的加班匹配创建补卡申请记录

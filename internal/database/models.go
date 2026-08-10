@@ -751,36 +751,40 @@ type OvertimeRuleConfig struct {
 
 // OvertimeMatchResult 加班审批与考勤匹配结果
 type OvertimeMatchResult struct {
-	ID                       uint           `gorm:"primaryKey" json:"id"`
-	OrgID                    string         `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_overtime_match_org_user_work_date,priority:1;index" json:"org_id"`
-	UserID                   string         `gorm:"type:varchar(64);not null;uniqueIndex:idx_overtime_match_org_user_work_date,priority:2" json:"user_id"`
-	UserName                 string         `gorm:"type:varchar(128)" json:"user_name"`
-	WorkDate                 string         `gorm:"type:varchar(32);not null;uniqueIndex:idx_overtime_match_org_user_work_date,priority:3" json:"work_date"`
-	MatchRef                 string         `gorm:"type:varchar(160);index" json:"match_ref"`
-	ApprovalID               uint           `gorm:"not null;index" json:"approval_id"`
-	ApprovalProcessID        string         `gorm:"type:varchar(64)" json:"approval_process_id"`
-	ApprovalStatus           string         `gorm:"type:varchar(32)" json:"approval_status"`
-	ApprovalStartTime        time.Time      `json:"approval_start_time"`                        // 发起申请时间（CreateTime）
-	ApprovalEndTime          time.Time      `json:"approval_end_time"`                          // 审批流通过时间（FinishTime）
-	ApprovalDurationMinutes  int            `gorm:"default:0" json:"approval_duration_minutes"` // 审批流耗时（分钟）
-	OvertimeStartTime        time.Time      `json:"overtime_start_time"`                        // 准备加班开始时间（表单填写）
-	OvertimeEndTime          time.Time      `json:"overtime_end_time"`                          // 准备加班结束时间（表单填写）
-	OvertimeDurationMinutes  int            `gorm:"default:0" json:"overtime_duration_minutes"` // 准备加班时长（分钟）
-	ActualFirstClockTime     *time.Time     `json:"actual_first_clock_time"`
-	ActualLastClockTime      *time.Time     `json:"actual_last_clock_time"`
-	ActualClockSpanMinutes   int            `gorm:"default:0" json:"actual_clock_span_minutes"`
-	BreakDeductMinutes       int            `gorm:"default:0" json:"break_deduct_minutes"`
-	EffectiveOvertimeMinutes int            `gorm:"default:0" json:"effective_overtime_minutes"`
-	MatchStatus              string         `gorm:"type:varchar(32);not null" json:"match_status"` // matched / no_clock_record / insufficient_clock_record / invalid_clock_time / zero_overtime / local_balance_failed / dingtalk_sync_failed / synced
-	MatchReason              string         `gorm:"type:text" json:"match_reason"`
-	LocalBalanceStatus       string         `gorm:"type:varchar(32);default:pending" json:"local_balance_status"`
-	DingtalkSyncStatus       string         `gorm:"type:varchar(32);default:pending" json:"dingtalk_sync_status"`
-	DingtalkSyncRequestID    string         `gorm:"type:varchar(128)" json:"dingtalk_sync_request_id"`
-	DingtalkSyncError        string         `gorm:"type:text" json:"dingtalk_sync_error"`
-	CalcVersion              string         `gorm:"type:varchar(32)" json:"calc_version"`
-	CreatedAt                time.Time      `json:"created_at"`
-	UpdatedAt                time.Time      `json:"updated_at"`
-	DeletedAt                gorm.DeletedAt `gorm:"index" json:"-"`
+	ID                       uint       `gorm:"primaryKey" json:"id"`
+	OrgID                    string     `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_overtime_match_org_user_work_date,priority:1;index;index:idx_overtime_retry_org_status_date,priority:1" json:"org_id"`
+	UserID                   string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_overtime_match_org_user_work_date,priority:2" json:"user_id"`
+	UserName                 string     `gorm:"type:varchar(128)" json:"user_name"`
+	WorkDate                 string     `gorm:"type:varchar(32);not null;uniqueIndex:idx_overtime_match_org_user_work_date,priority:3;index:idx_overtime_retry_org_status_date,priority:3" json:"work_date"`
+	MatchRef                 string     `gorm:"type:varchar(160);index" json:"match_ref"`
+	ApprovalID               uint       `gorm:"not null;index" json:"approval_id"`
+	ApprovalProcessID        string     `gorm:"type:varchar(64)" json:"approval_process_id"`
+	ApprovalStatus           string     `gorm:"type:varchar(32)" json:"approval_status"`
+	ApprovalStartTime        time.Time  `json:"approval_start_time"`                        // 发起申请时间（CreateTime）
+	ApprovalEndTime          time.Time  `json:"approval_end_time"`                          // 审批流通过时间（FinishTime）
+	ApprovalDurationMinutes  int        `gorm:"default:0" json:"approval_duration_minutes"` // 审批流耗时（分钟）
+	OvertimeStartTime        time.Time  `json:"overtime_start_time"`                        // 准备加班开始时间（表单填写）
+	OvertimeEndTime          time.Time  `json:"overtime_end_time"`                          // 准备加班结束时间（表单填写）
+	OvertimeDurationMinutes  int        `gorm:"default:0" json:"overtime_duration_minutes"` // 准备加班时长（分钟）
+	ActualFirstClockTime     *time.Time `json:"actual_first_clock_time"`
+	ActualLastClockTime      *time.Time `json:"actual_last_clock_time"`
+	ActualClockSpanMinutes   int        `gorm:"default:0" json:"actual_clock_span_minutes"`
+	BreakDeductMinutes       int        `gorm:"default:0" json:"break_deduct_minutes"`
+	EffectiveOvertimeMinutes int        `gorm:"default:0" json:"effective_overtime_minutes"`
+	MatchStatus              string     `gorm:"type:varchar(32);not null;index:idx_overtime_retry_org_status_date,priority:2" json:"match_status"` // matched / no_clock_record / insufficient_clock_record / invalid_clock_time / zero_overtime / local_balance_failed / dingtalk_sync_failed / synced
+	MatchReason              string     `gorm:"type:text" json:"match_reason"`
+	LocalBalanceStatus       string     `gorm:"type:varchar(32);default:pending" json:"local_balance_status"`
+	DingtalkSyncStatus       string     `gorm:"type:varchar(32);default:pending" json:"dingtalk_sync_status"` // pending / success / failed / rollback_pending / rollback_failed / rollback_success
+	DingtalkSyncRequestID    string     `gorm:"type:varchar(128)" json:"dingtalk_sync_request_id"`
+	DingtalkSyncError        string     `gorm:"type:text" json:"dingtalk_sync_error"`
+	// RollbackDingtalkSyncStatus tracks the DingTalk rollback state: empty (no rollback),
+	// rollback_pending, rollback_failed, rollback_success.
+	RollbackDingtalkSyncStatus string         `gorm:"type:varchar(32);default:'';index" json:"rollback_dingtalk_sync_status"`
+	RollbackDingtalkSyncError  string         `gorm:"type:text" json:"rollback_dingtalk_sync_error"`
+	CalcVersion                string         `gorm:"type:varchar(32)" json:"calc_version"`
+	CreatedAt                  time.Time      `json:"created_at"`
+	UpdatedAt                  time.Time      `json:"updated_at"`
+	DeletedAt                  gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // OvertimeSyncHistory 已成功同步到钉钉的加班记录快照
@@ -840,16 +844,38 @@ type CompensatoryLeaveLedger struct {
 
 // AnnualLeaveConsumeLog 年假消费台账（防重复，FIFO扣减记录）
 type AnnualLeaveConsumeLog struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	OrgID       string    `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_leave_consume_org_request_grant,priority:1;index" json:"org_id"`
-	UserID      string    `gorm:"type:varchar(64);not null;index" json:"user_id"`
-	GrantID     uint      `gorm:"not null;index;uniqueIndex:idx_leave_consume_org_request_grant,priority:3" json:"grant_id"` // 对应的发放记录
-	ApprovalRef string    `gorm:"type:varchar(128);index:idx_leave_consume_approval_ref" json:"approval_ref"`                // 审批ID，重试时用于幂等
-	RequestRef  string    `gorm:"type:varchar(160);not null;uniqueIndex:idx_leave_consume_org_request_grant,priority:2" json:"-"`
-	Days        float64   `gorm:"not null;default:0" json:"days"`
-	Remark      string    `gorm:"type:text" json:"remark"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                uint      `gorm:"primaryKey" json:"id"`
+	OrgID             string    `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_leave_consume_org_request_grant,priority:1;index" json:"org_id"`
+	UserID            string    `gorm:"type:varchar(64);not null;index" json:"user_id"`
+	GrantID           uint      `gorm:"not null;index;uniqueIndex:idx_leave_consume_org_request_grant,priority:3" json:"grant_id"` // 对应的发放记录
+	ApprovalRef       string    `gorm:"type:varchar(128);index:idx_leave_consume_approval_ref" json:"approval_ref"`                // 审批ID，重试时用于幂等
+	RequestRef        string    `gorm:"type:varchar(160);not null;uniqueIndex:idx_leave_consume_org_request_grant,priority:2" json:"-"`
+	OperationNo       int       `gorm:"not null;default:1;index" json:"operation_no"`
+	EntryType         string    `gorm:"type:varchar(32);not null;default:consume;index" json:"entry_type"` // consume / reversal
+	BusinessStartDate string    `gorm:"type:varchar(32);index" json:"business_start_date"`
+	BusinessEndDate   string    `gorm:"type:varchar(32);index" json:"business_end_date"`
+	ReversalOfID      uint      `gorm:"default:0;index" json:"reversal_of_id"`
+	Days              float64   `gorm:"not null;default:0" json:"days"`
+	Remark            string    `gorm:"type:text" json:"remark"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// AnnualLeaveConsumeRequest serializes one approval-level annual leave mutation.
+// Child consume logs may span grants, but this row is the request-level gate.
+type AnnualLeaveConsumeRequest struct {
+	ID                uint      `gorm:"primaryKey" json:"id"`
+	OrgID             string    `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_leave_request_org_ref,priority:1;index" json:"org_id"`
+	RequestRef        string    `gorm:"type:varchar(160);not null;uniqueIndex:idx_leave_request_org_ref,priority:2" json:"request_ref"`
+	ApprovalRef       string    `gorm:"type:varchar(128);not null;index" json:"approval_ref"`
+	UserID            string    `gorm:"type:varchar(64);not null;index" json:"user_id"`
+	Status            string    `gorm:"type:varchar(32);not null;index" json:"status"` // applied / reversed
+	OperationNo       int       `gorm:"not null;default:1" json:"operation_no"`
+	Days              float64   `gorm:"not null;default:0" json:"days"`
+	BusinessStartDate string    `gorm:"type:varchar(32);index" json:"business_start_date"`
+	BusinessEndDate   string    `gorm:"type:varchar(32);index" json:"business_end_date"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // UploadedFile stores per-org uploaded file metadata. Disk path is uploads/<org>/<stored_name>.

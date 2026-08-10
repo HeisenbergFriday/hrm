@@ -16,10 +16,13 @@ func TestIsAnnualLeaveApprovalConsumable(t *testing.T) {
 		{name: "COMPLETED+agree", status: "COMPLETED", result: "agree", want: true},
 		{name: "completed+agree", status: "completed", result: "agree", want: true},
 		{name: "COMPLETED+refuse", status: "COMPLETED", result: "refuse", want: false},
+		{name: "COMPLETED+approved-alias", status: "COMPLETED", result: "approved", want: false},
+		{name: "COMPLETED+pass-alias", status: "COMPLETED", result: "pass", want: false},
+		{name: "COMPLETED+success-alias", status: "COMPLETED", result: "success", want: false},
 		{name: "running", status: "RUNNING", result: "agree", want: false},
-		{name: "completed+empty-result-compat", status: "completed", result: "", want: true},
+		{name: "completed+empty-result", status: "completed", result: "", want: false},
 		{name: "completed+拒绝", status: "COMPLETED", result: "拒绝", want: false},
-		{name: "completed+通过", status: "COMPLETED", result: "通过", want: true},
+		{name: "completed+通过", status: "COMPLETED", result: "通过", want: false},
 		{name: "completed+unknown", status: "COMPLETED", result: "redirect", want: false},
 	}
 	for _, tt := range tests {
@@ -42,7 +45,7 @@ func TestApprovalResultFromExtension(t *testing.T) {
 
 func TestConsumeAnnualLeaveApprovalsForOrgIsStatusSafeAndIdempotent(t *testing.T) {
 	db := openLeaveJobsDB(t)
-	if err := db.AutoMigrate(&database.AnnualLeaveGrant{}, &database.AnnualLeaveConsumeLog{}); err != nil {
+	if err := db.AutoMigrate(&database.AnnualLeaveGrant{}, &database.AnnualLeaveConsumeLog{}, &database.AnnualLeaveConsumeRequest{}); err != nil {
 		t.Fatalf("migrate leave tables: %v", err)
 	}
 	grant := database.AnnualLeaveGrant{
@@ -53,7 +56,7 @@ func TestConsumeAnnualLeaveApprovalsForOrgIsStatusSafeAndIdempotent(t *testing.T
 		t.Fatalf("create grant: %v", err)
 	}
 	approvals := []database.Approval{
-		{OrgID: "org-a", ProcessID: "leave-approved", Title: "年假审批", ApplicantID: "user-1", Status: "COMPLETED", Content: map[string]interface{}{"天数": "1"}, Extension: map[string]interface{}{"result": "agree"}},
+		{OrgID: "org-a", ProcessID: "leave-approved", Title: "年假审批", ApplicantID: "user-1", Status: "COMPLETED", Content: map[string]interface{}{"天数": "1", "开始日期": "2026-07-10", "结束日期": "2026-07-10"}, Extension: map[string]interface{}{"result": "agree"}},
 		{OrgID: "org-a", ProcessID: "leave-refused", Title: "年假审批", ApplicantID: "user-1", Status: "COMPLETED", Content: map[string]interface{}{"天数": "2"}, Extension: map[string]interface{}{"result": "refuse"}},
 		{OrgID: "org-a", ProcessID: "leave-terminated", Title: "年假审批", ApplicantID: "user-1", Status: "TERMINATED", Content: map[string]interface{}{"天数": "2"}, Extension: map[string]interface{}{"result": "agree"}},
 		{OrgID: "org-a", ProcessID: "leave-canceled", Title: "年假审批", ApplicantID: "user-1", Status: "CANCELED", Content: map[string]interface{}{"天数": "2"}, Extension: map[string]interface{}{"result": "agree"}},

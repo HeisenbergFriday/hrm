@@ -39,6 +39,16 @@ type ExternalAttendanceSyncService struct {
 	cfgEnabled bool
 	// run-scoped counter: approve_list JSON parse failures (reported in ErrorSummary)
 	approveParseFailures int
+	// affectedAttendancePairs collects (user_id, work_date) pairs from attendance
+	// rows that were successfully written during the current run.
+	affectedAttendancePairs       []attendanceUserDatePair
+	attendanceBusinessWriteFailed bool
+	retryableOvertimeRecalculator func([]repository.UserDatePair) (int, error)
+}
+
+type attendanceUserDatePair struct {
+	UserID   string
+	WorkDate string
 }
 
 type ExternalSyncRunOptions struct {
@@ -79,6 +89,14 @@ func NewExternalAttendanceSyncService(
 		lookback:   lookback,
 		pageSize:   200,
 		cfgEnabled: enabled,
+	}
+}
+
+// SetRetryableOvertimeRecalculator binds the post-write overtime reconciliation
+// used by both HTTP and cron entry points. Tests inject a deterministic function.
+func (s *ExternalAttendanceSyncService) SetRetryableOvertimeRecalculator(fn func([]repository.UserDatePair) (int, error)) {
+	if s != nil {
+		s.retryableOvertimeRecalculator = fn
 	}
 }
 
@@ -190,10 +208,16 @@ func (s *ExternalAttendanceSyncService) Run(ctx context.Context, opt ExternalSyn
 	}
 
 	s.approveParseFailures = 0
+	s.affectedAttendancePairs = nil
+	s.attendanceBusinessWriteFailed = false
 	var runErrs []string
 	if source == externalSyncSourceAttendance || source == externalSyncSourceAll {
 		if err := s.syncAttendance(ctx, job, lookback); err != nil {
 			runErrs = append(runErrs, "attendance:"+sanitizeExternalErr(err))
+		} else if !s.attendanceBusinessWriteFailed {
+			if err := s.recalculateAffectedOvertime(); err != nil {
+				runErrs = append(runErrs, "overtime_recalc:"+sanitizeSyncError(err))
+			}
 		}
 	}
 	if source == externalSyncSourceDepartment || source == externalSyncSourceAll {
@@ -588,6 +612,7 @@ func (s *ExternalAttendanceSyncService) applyBusinessAttendance(localUID, extern
 	punches := collectExternalBusinessPunches(row)
 
 	seen := map[string]struct{}{}
+	affectedPairs := make([]repository.UserDatePair, 0, len(punches))
 	for _, p := range punches {
 		if p.checkTime.IsZero() {
 			continue
@@ -616,10 +641,50 @@ func (s *ExternalAttendanceSyncService) applyBusinessAttendance(localUID, extern
 			},
 		}
 		if err := s.local.UpsertBusinessAttendance(att); err != nil {
+			s.attendanceBusinessWriteFailed = true
 			return err
 		}
+		affectedPairs = append(affectedPairs, attendanceAffectedUserDatePairs(localUID, p.checkTime)...)
+	}
+	// Track the punch date and, for early-morning punches, the previous overtime
+	// work date whose matching window extends through 06:00.
+	for _, pair := range affectedPairs {
+		s.affectedAttendancePairs = append(s.affectedAttendancePairs, attendanceUserDatePair(pair))
 	}
 	return nil
+}
+
+// AffectedAttendanceUserDatePairs returns the deduplicated (user_id, work_date)
+// pairs that were successfully written during the last Run(). Callers use this
+// to trigger retryable overtime recalculation.
+func (s *ExternalAttendanceSyncService) AffectedAttendanceUserDatePairs() []repository.UserDatePair {
+	if len(s.affectedAttendancePairs) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var pairs []repository.UserDatePair
+	for _, p := range s.affectedAttendancePairs {
+		key := p.UserID + ":" + p.WorkDate
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		pairs = append(pairs, repository.UserDatePair{UserID: p.UserID, WorkDate: p.WorkDate})
+	}
+	return deduplicateUserDatePairs(pairs)
+}
+
+func (s *ExternalAttendanceSyncService) recalculateAffectedOvertime() error {
+	pairs := s.AffectedAttendanceUserDatePairs()
+	if len(pairs) == 0 || s.retryableOvertimeRecalculator == nil {
+		return nil
+	}
+	_, err := s.retryableOvertimeRecalculator(pairs)
+	if err != nil {
+		log.Printf("[ExternalAttendanceSync] org=%s affected_pairs=%d 加班重算失败，等待定时补偿: %s",
+			s.orgID, len(pairs), sanitizeSyncError(err))
+	}
+	return err
 }
 
 func (s *ExternalAttendanceSyncService) syncDepartments(ctx context.Context, job *database.ExternalSyncJob, lookback time.Duration, fullSnapshot bool) error {

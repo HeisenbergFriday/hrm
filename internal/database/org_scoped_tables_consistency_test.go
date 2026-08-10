@@ -58,6 +58,7 @@ func TestOrganizationScopedTablesIncludeAllOrgIDModels(t *testing.T) {
 		&OvertimeSupplementaryRequest{},
 		&CompensatoryLeaveLedger{},
 		&AnnualLeaveConsumeLog{},
+		&AnnualLeaveConsumeRequest{},
 		&PerformanceTemplate{},
 		&PerformanceTemplateSection{},
 		&PerformanceTemplateItem{},

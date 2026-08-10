@@ -1,6 +1,6 @@
 ---
 purpose: 年假与调休模块业务规则说明
-last_updated: 2026-05-26
+last_updated: 2026-08-10
 source_of_truth:
   - internal/api/router.go（接口注册）
   - internal/api/leave_handlers.go（年假调休相关 handler）
@@ -8,6 +8,7 @@ source_of_truth:
   - internal/service/annual_leave_grant_service.go（年假发放服务）
   - internal/service/compensatory_leave_service.go（调休服务）
   - internal/service/overtime_matching_service.go（加班匹配服务）
+  - internal/service/approval_reconciliation_service.go（审批同步后的业务对账）
   - internal/database/models.go（年假调休相关模型）
   - frontend/src/pages/LeaveOvertime.tsx（年假调休页面）
 update_when:
@@ -112,8 +113,9 @@ type AnnualLeaveGrant struct {
 }
 ```
 
-#### AnnualLeaveConsumeLog
-年假消费台账（FIFO 扣减，幂等 via request_ref）
+#### AnnualLeaveConsumeRequest / AnnualLeaveConsumeLog
+
+`AnnualLeaveConsumeRequest` 是审批请求级门闩，唯一键为 `org_id + request_ref`，记录 `applied/reversed` 和当前操作轮次。`AnnualLeaveConsumeLog` 是可审计子台账，同一请求可跨多个 grant；`entry_type=consume/reversal` 分别记录正向消费和冲正，冲正不删除历史。
 
 ```go
 type AnnualLeaveConsumeLog struct {
@@ -122,6 +124,11 @@ type AnnualLeaveConsumeLog struct {
     GrantID     uint    // 对应的发放记录
     ApprovalRef string  // 审批 ID，重试时用于幂等
     RequestRef  string  // 请求唯一标识（幂等键）
+    OperationNo int     // 撤销后恢复时递增
+    EntryType   string  // consume / reversal
+    BusinessStartDate string
+    BusinessEndDate string
+    ReversalOfID uint
     Days        float64
     Remark      string
     CreatedAt   time.Time
@@ -129,7 +136,7 @@ type AnnualLeaveConsumeLog struct {
 }
 ```
 
-唯一索引：`request_ref + grant_id`
+子台账唯一索引：`org_id + request_ref + grant_id`；请求级唯一索引：`org_id + request_ref`（`AnnualLeaveConsumeRequest`）。
 
 ---
 
@@ -513,15 +520,19 @@ Body：
 
 ### 年假消费流程
 
-1. **FIFO 扣减**（`ConsumeAnnualLeave`）
-   - 按 `effective_date` 升序查询 `AnnualLeaveGrant`
-   - 依次扣减，直到扣完
-   - 写入 `AnnualLeaveConsumeLog`（幂等 via `request_ref`）
+1. **按业务日期消费**（`ConsumeAnnualLeaveForPeriod`）
+   - 审批自动消费必须解析表单的开始日期、结束日期和天数，使用 `ApprovalBusinessLocation()`；解析失败 fail-closed
+   - 只查询业务日期同年度、且季度不晚于该年度日期段结束季度的 grant；同一日期段内按 `year/quarter/id` 既有顺序消费
+   - 跨年按各年度覆盖的自然日数量占比分摊总天数，分别写入年度消费明细
+   - `AnnualLeaveConsumeRequest` 门闩、grant `FOR UPDATE`、余额和子日志处于同一事务；审批自动消费使用稳定 `approval:<process_id>`
+   - 撤销追加 `reversal` 日志并返还原 grant；恢复审批递增操作轮次并重新消费一次
 
 ### 加班匹配流程
 
 1. **同步审批**（`SyncApproval`）
    - 从钉钉同步加班审批
+   - 审批同步完成后直接调用业务对账服务；历史审批不等待只处理“昨天”的定时任务
+   - 仅 `COMPLETED + agree` 生效，实际工作日期从审批表单的加班开始时间提取
    - 写入 `approvals` 表
 
 2. **运行匹配**（`RunOvertimeMatch`）
@@ -529,6 +540,10 @@ Body：
    - 读取打卡记录
    - 计算有效加班时长（审批时间 ∩ 打卡时间）
    - 写入 `OvertimeMatchResult`
+   - `no_clock_record`、`insufficient_clock_record`、`query_clock_failed`、`unmatched`、`invalid_clock_time` 为可重试状态；后续审批同步或考勤补齐时原位更新同一记录
+   - 钉钉考勤 `AttendanceService.SyncRecords` 与 Doris `ExternalAttendanceSyncService` 都在考勤成功写入后，按各自绑定的 `org_id` 收集并去重本批 `user_id + work_date`，只查询上述 retryable 状态；00:00 至 06:00（含）的打卡同时发布打卡日与前一工作日，以覆盖跨午夜加班窗口；单批员工日期查询按 200 分块
+   - 考勤写入失败时不启动重算；重算失败不回滚考勤，只记录脱敏安全日志。每日补偿任务逐组织扫描可配置 `OVERTIME_RETRY_LOOKBACK_DAYS`（默认 30、最大 180）范围，单轮最多 500 条；候选按 `updated_at + id` 从最久未尝试开始排序，并在处理前统一刷新尝试时间，避免固定头部记录长期阻塞后续队列
+   - 重算成功后关闭 pending 补卡请求；已成功生成本地额度或钉钉同步的记录只补齐未完成阶段
 
 3. **生成调休余额**
    - 读取 `OvertimeMatchResult`
@@ -537,14 +552,19 @@ Body：
 4. **同步到钉钉**（`ResyncOvertimeToDingTalk`）
    - 调用钉钉假期余额接口
    - 写入 `OvertimeSyncHistory`（防重复同步）
+   - 审批撤销时先执行本地来源净额 rollback；需要校准钉钉时先落 `rollback_pending`，外部失败/超时落 `rollback_failed` 和脱敏错误，只有年度绝对余额确认成功才落 `rollback_success/rolled_back`
+   - `rollback_pending`、`rollback_failed` 或其他不确定状态重试，以及已有外部同步历史的撤销恢复，都使用年度绝对余额接口；禁止重复增量补偿。绝对同步失败只更新当前触发记录，不得污染同员工同年度其他成功记录；从未同步钉钉且同步开关关闭的记录恢复时只恢复本地额度并标记外部同步 `skipped`。`OvertimeSyncHistory.sync_mode` 使用 `rollback`、`retry`、`reactivation` 保留审计轨迹
 
 ---
 
 ## 幂等性设计
 
+审批同步后的年假消费和加班匹配都必须显式绑定当前 `org_id`。单条对账失败只影响该条对账状态，审批原始数据保留并允许后续重复同步安全重试。
+
 ### 年假消费幂等
-- `AnnualLeaveConsumeLog.request_ref` 唯一索引
-- 同一个 `request_ref` 只能消费一次
+- `AnnualLeaveConsumeRequest` 的 `org_id + request_ref` 唯一键是请求级门闩；不能用单条消费日志的 `approval_ref` 唯一代替，因为一次审批可能拆分多个 grant
+- 门闩插入/锁定与 grant 扣减、正向/冲正日志同事务；事务失败不遗留 running/pending，可安全重试
+- MySQL `REPEATABLE READ` 下使用唯一键竞争 + `SELECT ... FOR UPDATE` 锁定门闩，禁止“先查日志、后锁 grant”
 
 ### 加班同步幂等
 - `OvertimeSyncHistory` 记录已同步的加班记录
@@ -553,6 +573,8 @@ Body：
 ### 加班匹配幂等
 - `OvertimeMatchResult.match_ref` 用于当前匹配幂等
 - 历史数据仍兼容 `user_id + work_date` 口径
+- 调休 credit/rollback 按来源净额在锁定匹配记录的事务内判断；重复撤销不重复扣减，撤销后恢复可重新 credit 一次
+- 本地 rollback、外部绝对余额调用、状态更新分阶段执行；外部调用不得放进长数据库事务，失败后依靠状态机安全重试
 
 ---
 
