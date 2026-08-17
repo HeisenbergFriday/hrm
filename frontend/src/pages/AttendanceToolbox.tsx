@@ -37,7 +37,6 @@ import {
   CloudDownloadOutlined,
   CopyOutlined,
   DownloadOutlined,
-  ExclamationCircleOutlined,
   FileExcelOutlined,
   FileProtectOutlined,
   InfoCircleOutlined,
@@ -52,13 +51,14 @@ import PageContainer from '../components/PageContainer'
 import OvertimeRulesEditor, { AppliedRulesState } from './OvertimeRulesEditor'
 import { attendanceToolboxAPI, AttendanceToolboxRunResponse } from '../services/api'
 import { useAuthStore } from '../store/authStore'
+import { confirmOrgSync } from '../utils/orgSyncAction'
 import { shouldFallbackToLegacyToolboxAPI } from '../utils/toolboxFallback'
 
 const { Text, Title, Paragraph } = Typography
 const { Dragger } = Upload
 const { RangePicker } = DatePicker
 
-type ToolboxModuleKey = 'leave' | 'overtime' | 'subsidy' | 'final' | 'parttime' | 'dingtalk_sync'
+type ToolboxModuleKey = 'leave' | 'overtime' | 'subsidy' | 'final' | 'parttime'
 type ToolboxDefaults = Record<string, string[]>
 type SyncMode = 'auto' | 'manual'
 type SyncState = {
@@ -200,11 +200,11 @@ const loadMaternityLeaveOverrides = (): MaternityLeaveOverride[] => {
 
 /** Recommended month-end order (UI guide only; tabs stay free to switch). */
 const MONTH_END_WIZARD_STEPS: Array<{ key: ToolboxModuleKey; title: string; hint: string }> = [
-  { key: 'dingtalk_sync', title: '钉钉同步', hint: '拉审批中间表' },
   { key: 'leave', title: '请假明细', hint: '生成请假表' },
   { key: 'overtime', title: '加班明细', hint: '生成加班回填' },
   { key: 'subsidy', title: '补贴扣款', hint: '生成核对表' },
   { key: 'final', title: '最终汇总', hint: '生成最终表' },
+  { key: 'parttime', title: '兼职汇总', hint: '生成兼职表' },
 ]
 
 const modules: ModuleConfig[] = [
@@ -289,14 +289,6 @@ const modules: ModuleConfig[] = [
     textFields: [
       { name: 'part_special_names', label: '特殊人员名单', placeholder: '不填则使用原工具默认特殊人员名单，多个姓名用逗号分隔' },
     ],
-  },
-  {
-    key: 'dingtalk_sync',
-    title: '钉钉同步',
-    description: '从钉钉同步审批数据，生成中间表用于后续考勤计算。',
-    outputName: '钉钉同步结果.xlsx',
-    zipOutputName: '钉钉同步结果.zip',
-    fileFields: [],
   },
 ]
 
@@ -415,6 +407,10 @@ export async function resolveErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : '计算失败'
 }
 
+export function isRosterDepartmentPathError(messageText: string): boolean {
+  return messageText.includes('缺少有效主部门') || messageText.includes('部门层级无法解析')
+}
+
 // ── Field badge data per module (for the upload requirements collapse) ──
 
 type FieldBadge = { label: string; required?: boolean }
@@ -525,11 +521,13 @@ const heroBadges = [
 
 const AUTO_SYNC_UPLOADS = {
   leave: ['leave_src'],
+  overtime: ['overtime_src'],
   roster: ['overtime_roster', 'final_active'],
   transfer: ['final_transfer'],
 } as const
 
 const LEAVE_SYNC_PADDING_DAYS = 31
+const OVERTIME_SYNC_PADDING_DAYS = 31
 
 // ── Main component ──
 
@@ -545,10 +543,9 @@ const AttendanceToolbox: React.FC = () => {
   const canOperate = hasPerm('attendance_toolbox_operate') || hasPerm('attendance_manage')
   const canDingtalkSync = hasPerm('attendance_toolbox_dingtalk_sync') || hasPerm('attendance_manage')
   const canEditRules = hasPerm('attendance_toolbox_rules_edit') || hasPerm('attendance_manage')
-  const canQuick = canOperate && canDingtalkSync
 
   const [activeModule, setActiveModule] = useState<ToolboxModuleKey>('leave')
-  const [completedModules, setCompletedModules] = useState<Partial<Record<ToolboxModuleKey | 'quick', boolean>>>({})
+  const [completedModules, setCompletedModules] = useState<Partial<Record<ToolboxModuleKey, boolean>>>({})
   const [missingFieldName, setMissingFieldName] = useState<string | null>(null)
   const fieldCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const [fileLists, setFileLists] = useState<Record<string, UploadFile[]>>({})
@@ -556,9 +553,9 @@ const AttendanceToolbox: React.FC = () => {
   const userFileChangeVersionsRef = useRef<Record<string, number>>({})
   const [textValues, setTextValues] = useState<Record<string, string>>({})
   const [defaultsLoading, setDefaultsLoading] = useState(false)
-  const [runningModule, setRunningModule] = useState<ToolboxModuleKey | 'quick' | null>(null)
+  const [runningModule, setRunningModule] = useState<ToolboxModuleKey | null>(null)
   // 按模块隔离，避免请假 audit/log 泄漏到加班/汇总 Tab
-  const [runLogByModule, setRunLogByModule] = useState<Partial<Record<ToolboxModuleKey | 'quick', string>>>({})
+  const [runLogByModule, setRunLogByModule] = useState<Partial<Record<ToolboxModuleKey, string>>>({})
   const [lastRun, setLastRun] = useState<AttendanceToolboxRunResponse | null>(null)
   const [previewRows, setPreviewRows] = useState<Record<string, string>[]>([])
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -567,8 +564,6 @@ const AttendanceToolbox: React.FC = () => {
     rules: null,
     rulesJson: null,
   })
-  const [quickRunLeave, setQuickRunLeave] = useState(true)
-  const [quickRunOvertime, setQuickRunOvertime] = useState(true)
   const [maternityLeaveOverrides, setMaternityLeaveOverrides] = useState<MaternityLeaveOverride[]>(loadMaternityLeaveOverrides)
   const [uploadWarnings, setUploadWarnings] = useState<Record<string, string[]>>({})
   const [auditWarningsByModule, setAuditWarningsByModule] = useState<Partial<Record<ToolboxModuleKey, string[]>>>({})
@@ -579,6 +574,10 @@ const AttendanceToolbox: React.FC = () => {
   const [leaveSourceDateRange, setLeaveSourceDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>(
     getPreviousCalendarMonthRange,
   )
+  const [overtimeSourceSync, setOvertimeSourceSync] = useState<SyncState>({ loading: false })
+  const [overtimeSourceDateRange, setOvertimeSourceDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>(
+    getPreviousCalendarMonthRange,
+  )
   const [rosterSync, setRosterSync] = useState<SyncState>({ loading: false })
   const [transferSync, setTransferSync] = useState<SyncState>({ loading: false })
   const [parttimePunchSync, setParttimePunchSync] = useState<SyncState>({ loading: false })
@@ -587,15 +586,11 @@ const AttendanceToolbox: React.FC = () => {
   const autoSyncStartedRef = useRef(false)
   const autoRosterSyncStartedRef = useRef(false)
   const autoTransferSyncStartedRef = useRef(false)
-
-  // DingTalk sync specific state
-  const [dingtalkDateRange, setDingtalkDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(
-    getPreviousCalendarMonthRange,
-  )
-  const [dingtalkFlowKeys, setDingtalkFlowKeys] = useState<string[]>(['leave', 'overtime', 'attendance_correction', 'position_transfer'])
-  const [dingtalkUnlimited, setDingtalkUnlimited] = useState(true)
-  const [dingtalkMaxInstances, setDingtalkMaxInstances] = useState<number>(100)
-  const [dingtalkPaddingDays, setDingtalkPaddingDays] = useState<number>(31)
+  const generateRosterFromOrgDataRef = useRef<(
+    mode: SyncMode,
+    allowOrgRepair: boolean,
+    requestSnapshot?: Map<string, { userChangeVersion: number; wasEmpty: boolean }>,
+  ) => Promise<void>>(async () => undefined)
 
   const moduleMap = useMemo(() => new Map(modules.map((item) => [item.key, item])), [])
 
@@ -767,11 +762,40 @@ const AttendanceToolbox: React.FC = () => {
     }
   }, [applySyncedFile, fetchDingtalkExport, leaveSourceDateRange, runningModule])
 
+  const syncOvertimeSourceFromDingtalk = useCallback(async () => {
+    if (runningModule) {
+      messageApi.warning('当前有任务正在执行，请稍候')
+      return
+    }
+
+    setOvertimeSourceSync({ loading: true })
+    try {
+      const blob = await fetchDingtalkExport({
+        start_date: overtimeSourceDateRange[0].format('YYYY-MM-DD'),
+        end_date: overtimeSourceDateRange[1].format('YYYY-MM-DD'),
+        flow_keys: ['overtime'],
+        padding_days: OVERTIME_SYNC_PADDING_DAYS,
+      }, 'overtime')
+
+      applySyncedFile([...AUTO_SYNC_UPLOADS.overtime], '加班系统导出_钉钉同步.xlsx', blob)
+      setOvertimeSourceSync({ loading: false, lastSyncAt: dayjs().format('YYYY-MM-DD HH:mm') })
+      messageApi.success('加班数据拉取完成，已自动回填到加班系统导出表')
+    } catch (error) {
+      const errorMessage = await resolveErrorMessage(error)
+      setOvertimeSourceSync({ loading: false, error: errorMessage })
+      messageApi.error(`加班数据拉取失败：${errorMessage}`)
+    }
+  }, [applySyncedFile, fetchDingtalkExport, overtimeSourceDateRange, runningModule])
+
   // 花名册同步：必须走组织花名册生成接口，禁止再使用 position_transfer 导出表充当在职花名册。
   // 数据来自本地数据库的 active 用户、EmployeeProfile 权威工号与真实部门路径；
   // 同一富花名册可供加班部门映射与最终汇总使用。
-  const generateRosterFromOrgData = useCallback(async (mode: SyncMode = 'manual') => {
-    const requestSnapshot = new Map<string, { userChangeVersion: number; wasEmpty: boolean }>(
+  const generateRosterFromOrgData = useCallback(async (
+    mode: SyncMode = 'manual',
+    allowOrgRepair = true,
+    requestSnapshotOverride?: Map<string, { userChangeVersion: number; wasEmpty: boolean }>,
+  ) => {
+    const requestSnapshot = requestSnapshotOverride || new Map<string, { userChangeVersion: number; wasEmpty: boolean }>(
       AUTO_SYNC_UPLOADS.roster.map((fieldName) => [fieldName, {
         userChangeVersion: userFileChangeVersionsRef.current[fieldName] || 0,
         wasEmpty: (fileListsRef.current[fieldName] || []).length === 0,
@@ -779,9 +803,8 @@ const AttendanceToolbox: React.FC = () => {
     )
     setRosterSync({ loading: true })
     try {
-      // generateOrgRoster 配置了 responseType: 'blob'，axios 返回的 response.data 即为 Blob
-      const response = await attendanceToolboxAPI.generateOrgRoster()
-      const blob = response.data as Blob
+      // 全局响应拦截器已经返回 response.data；这里直接得到 Blob，禁止再次解包。
+      const blob = await attendanceToolboxAPI.generateOrgRoster()
 
       const appliedFieldNames = applySyncedFile(
         [...AUTO_SYNC_UPLOADS.roster],
@@ -808,11 +831,24 @@ const AttendanceToolbox: React.FC = () => {
     } catch (error) {
       const errorMessage = await resolveErrorMessage(error)
       setRosterSync({ loading: false, error: errorMessage })
+      if (allowOrgRepair && isRosterDepartmentPathError(errorMessage) && permissions.includes('attendance_manage')) {
+        confirmOrgSync({
+          title: '组织数据异常，是否同步并重试花名册？',
+          content: `${errorMessage}。系统将从钉钉重新同步部门和员工，完成后自动重试一次花名册生成。`,
+          onStart: () => setRosterSync({ loading: true }),
+          onSettled: () => setRosterSync((current) => ({ ...current, loading: false })),
+          onCompleted: async () => {
+            await generateRosterFromOrgDataRef.current(mode, false, requestSnapshot)
+          },
+        })
+        return
+      }
       if (mode === 'manual') {
         messageApi.error(`花名册生成失败：${errorMessage}`)
       }
     }
-  }, [applySyncedFile])
+  }, [applySyncedFile, permissions])
+  generateRosterFromOrgDataRef.current = generateRosterFromOrgData
 
   // 异动流程同步：独立使用 position_transfer，只回填异动流程位置，不得与花名册混用。
   const syncTransferFromDingtalk = useCallback(async (mode: SyncMode = 'manual') => {
@@ -1056,17 +1092,12 @@ const AttendanceToolbox: React.FC = () => {
     }
     setLastRun(data)
     if (data.module) {
-      setRunLogByModule((prev) => ({ ...prev, [data.module as ToolboxModuleKey | 'quick']: data.log || '' }))
+      setRunLogByModule((prev) => ({ ...prev, [data.module as ToolboxModuleKey]: data.log || '' }))
     }
     // Prefer zip when multiple files; otherwise single file. Meta files are technical details, not user results.
     const downloadables = getAttendanceToolboxDownloadableFiles(data)
     if (downloadables.length === 0) {
-      const isSyncModule = data.module === 'dingtalk_sync' || data.module === 'quick'
-      messageApi.warning(
-        isSyncModule
-          ? '本次同步未生成可下载结果，请检查同步日志和钉钉流程码配置'
-          : '本次计算未生成可下载结果，请检查运行日志与输入文件',
-      )
+      messageApi.warning('本次计算未生成可下载结果，请检查运行日志与输入文件')
       return false
     }
 
@@ -1273,90 +1304,6 @@ const AttendanceToolbox: React.FC = () => {
     }))
   }
 
-  const handleQuickWorkflow = async () => {
-    if (runningModule) {
-      messageApi.warning('当前有任务正在执行，请稍候')
-      return
-    }
-    if (!canQuick) {
-      messageApi.warning('你缺少一键联动所需权限（操作 + 钉钉同步），需要联系管理员添加')
-      return
-    }
-    if (!dingtalkDateRange || !dingtalkDateRange[0] || !dingtalkDateRange[1]) {
-      messageApi.warning('请选择同步日期范围')
-      return
-    }
-    if (!quickRunLeave && !quickRunOvertime) {
-      messageApi.warning('一键联动至少选择请假或加班其中一项')
-      return
-    }
-    const maternityOverrides = quickRunLeave ? getMaternityLeaveOverridesForSubmit() : []
-    if (maternityOverrides === null) return
-
-    const scheduleFiles = fileLists.leave_schedule || fileLists.overtime_calendar || []
-    if (!scheduleFiles.length) {
-      messageApi.warning('一键联动必须上传作息表（可在请假或加班页签上传）')
-      return
-    }
-
-    const formData = new FormData()
-    formData.append('dingtalk_sync_start_date', dingtalkDateRange[0].format('YYYY-MM-DD'))
-    formData.append('dingtalk_sync_end_date', dingtalkDateRange[1].format('YYYY-MM-DD'))
-    formData.append('dingtalk_sync_flow_keys', dingtalkFlowKeys.join(','))
-    formData.append('dingtalk_sync_padding_days', String(dingtalkPaddingDays))
-    if (!dingtalkUnlimited) {
-      formData.append('dingtalk_sync_max_instances', String(dingtalkMaxInstances))
-    }
-    formData.append('run_leave', quickRunLeave ? 'true' : 'false')
-    formData.append('run_overtime', quickRunOvertime ? 'true' : 'false')
-    for (const file of scheduleFiles) {
-      if (file.originFileObj) {
-        formData.append('leave_schedule', file.originFileObj)
-        formData.append('overtime_calendar', file.originFileObj)
-      }
-    }
-    // Optional helpers from existing uploads
-    for (const key of ['leave_offsite_duration', 'overtime_attendance', 'overtime_roster', 'overtime_schedules'] as const) {
-      for (const file of fileLists[key] || []) {
-        if (file.originFileObj) formData.append(key, file.originFileObj)
-      }
-    }
-    if (Object.prototype.hasOwnProperty.call(textValues, 'leave_special_names')) {
-      formData.append('leave_special_names', (textValues.leave_special_names || '').trim())
-    }
-    if (Object.prototype.hasOwnProperty.call(textValues, 'chengdu_schedule_names')) {
-      formData.append('chengdu_schedule_names', (textValues.chengdu_schedule_names || '').trim())
-    }
-    if (quickRunLeave) {
-      formData.append('maternity_leave_overrides', JSON.stringify(maternityOverrides))
-    }
-    if (appliedRules.source === 'custom' && appliedRules.rulesJson) {
-      formData.append('rules_json', appliedRules.rulesJson)
-    }
-    const quickMonth = (textValues.overtime_target_month || '').trim()
-    if (quickRunOvertime && quickMonth) {
-      formData.append('overtime_target_month', quickMonth)
-    }
-
-    setRunningModule('quick')
-    try {
-      const response = await attendanceToolboxAPI.runQuickWorkflow(formData)
-      const ok = await applyRunResponse(response, '一键联动完成，结果已下载')
-      if (ok) {
-        setCompletedModules((prev) => ({
-          ...prev,
-          dingtalk_sync: true,
-          ...(quickRunLeave ? { leave: true } : {}),
-          ...(quickRunOvertime ? { overtime: true } : {}),
-        }))
-      }
-    } catch (error) {
-      messageApi.error(await resolveErrorMessage(error))
-    } finally {
-      setRunningModule(null)
-    }
-  }
-
   const handleRun = async (moduleKey: ToolboxModuleKey) => {
     const config = moduleMap.get(moduleKey)
     if (!config) return
@@ -1366,11 +1313,7 @@ const AttendanceToolbox: React.FC = () => {
       return
     }
 
-    if (moduleKey === 'dingtalk_sync' && !canDingtalkSync) {
-      messageApi.warning('你缺少考勤工具箱钉钉同步权限，需要联系管理员添加')
-      return
-    }
-    if (moduleKey !== 'dingtalk_sync' && !canOperate) {
+    if (!canOperate) {
       messageApi.warning('你缺少考勤工具箱操作权限，需要联系管理员添加')
       return
     }
@@ -1383,57 +1326,6 @@ const AttendanceToolbox: React.FC = () => {
       }
     } catch {
       setRunningModule(null)
-      return
-    }
-
-    if (moduleKey === 'dingtalk_sync') {
-      if (!dingtalkDateRange || !dingtalkDateRange[0] || !dingtalkDateRange[1]) {
-        messageApi.warning('请选择同步日期范围')
-        setRunningModule(null)
-        return
-      }
-      if (dingtalkFlowKeys.length === 0) {
-        messageApi.warning('请至少选择一个同步流程')
-        setRunningModule(null)
-        return
-      }
-      try {
-        // Prefer structured result; only fall back when server lacks the new endpoint.
-        try {
-          const formData = new FormData()
-          formData.append('dingtalk_sync_start_date', dingtalkDateRange[0].format('YYYY-MM-DD'))
-          formData.append('dingtalk_sync_end_date', dingtalkDateRange[1].format('YYYY-MM-DD'))
-          formData.append('dingtalk_sync_flow_keys', dingtalkFlowKeys.join(','))
-          formData.append('dingtalk_sync_padding_days', String(dingtalkPaddingDays))
-          if (!dingtalkUnlimited) {
-            formData.append('dingtalk_sync_max_instances', String(dingtalkMaxInstances))
-          }
-          const response = await attendanceToolboxAPI.runDingtalkSyncStructured(formData)
-          const ok = await applyRunResponse(response, '同步完成，结果已下载')
-          if (ok) {
-            setCompletedModules((prev) => ({ ...prev, dingtalk_sync: true }))
-          }
-        } catch (structuredError) {
-          if (!shouldFallbackToLegacyToolboxAPI(structuredError)) {
-            throw structuredError
-          }
-          // Version mismatch only — do not re-run after successful structured sync.
-          const blob = await attendanceToolboxAPI.runDingtalkSync({
-            start_date: dingtalkDateRange[0].format('YYYY-MM-DD'),
-            end_date: dingtalkDateRange[1].format('YYYY-MM-DD'),
-            flow_keys: dingtalkFlowKeys,
-            max_instances: dingtalkUnlimited ? undefined : dingtalkMaxInstances,
-            padding_days: dingtalkPaddingDays,
-          }) as unknown as Blob
-          downloadBlob(blob, getDownloadName(config, blob))
-          setCompletedModules((prev) => ({ ...prev, dingtalk_sync: true }))
-          messageApi.success('同步完成，结果已下载')
-        }
-      } catch (error) {
-        messageApi.error(await resolveErrorMessage(error))
-      } finally {
-        setRunningModule(null)
-      }
       return
     }
 
@@ -1706,10 +1598,6 @@ const AttendanceToolbox: React.FC = () => {
   }
 
   const renderModule = (config: ModuleConfig) => {
-    if (config.key === 'dingtalk_sync') {
-      return renderDingtalkSync(config)
-    }
-
     const requiredFields = config.fileFields.filter((f) => f.required)
     const optionalFields = config.fileFields.filter((f) => !f.required)
     const requiredReadyCount = requiredFields.filter((f) => (fileLists[f.name] || []).length > 0).length
@@ -1843,6 +1731,65 @@ const AttendanceToolbox: React.FC = () => {
                   {leaveSourceSync.error && (
                     <Text type="danger" style={{ fontSize: 12 }}>
                       拉取失败：{leaveSourceSync.error}
+                    </Text>
+                  )}
+                </Space>
+              </Col>
+            </Row>
+          </Card>
+        )}
+
+        {config.key === 'overtime' && (
+          <Card size="small" title="钉钉加班数据" style={{ borderRadius: 'var(--radius-lg)' }}>
+            <Row gutter={[16, 12]} align="middle">
+              <Col xs={24} md={12}>
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  <Text strong>加班日期范围</Text>
+                  <RangePicker
+                    style={{ width: '100%' }}
+                    value={overtimeSourceDateRange as RangePickerProps['value']}
+                    onChange={(dates) => {
+                      if (dates?.[0] && dates[1]) {
+                        setOvertimeSourceDateRange([dates[0], dates[1]])
+                      }
+                    }}
+                    allowClear={false}
+                    placeholder={['开始日期', '结束日期']}
+                    aria-label="钉钉加班拉取日期范围"
+                  />
+                </Space>
+              </Col>
+              <Col xs={24} md={12}>
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  <Tooltip
+                    title={!canDingtalkSync
+                      ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加'
+                      : undefined}
+                  >
+                    <span style={{ display: 'inline-block' }}>
+                      <Button
+                        type="primary"
+                        icon={<SyncOutlined />}
+                        aria-label="从钉钉拉取加班表"
+                        loading={overtimeSourceSync.loading}
+                        disabled={!canDingtalkSync || !!runningModule}
+                        onClick={() => void syncOvertimeSourceFromDingtalk()}
+                      >
+                        从钉钉拉取加班表
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    按加班审批流程直接生成源表并回填；会自动扩展前后 {OVERTIME_SYNC_PADDING_DAYS} 天查询，手动上传仍可作为兜底。
+                  </Text>
+                  {overtimeSourceSync.lastSyncAt && (
+                    <Text type="success" style={{ fontSize: 12 }}>
+                      上次拉取：{overtimeSourceSync.lastSyncAt}
+                    </Text>
+                  )}
+                  {overtimeSourceSync.error && (
+                    <Text type="danger" style={{ fontSize: 12 }}>
+                      拉取失败：{overtimeSourceSync.error}
                     </Text>
                   )}
                 </Space>
@@ -2135,245 +2082,6 @@ const AttendanceToolbox: React.FC = () => {
             }]}
           />
         )}
-      </Space>
-    )
-  }
-
-  const renderDingtalkSync = (config: ModuleConfig) => {
-    const flowOptions = [
-      { label: '请假', value: 'leave' },
-      { label: '加班', value: 'overtime' },
-      { label: '补卡', value: 'attendance_correction' },
-      { label: '岗位异动', value: 'position_transfer' },
-    ]
-
-    const downloadableFiles = getAttendanceToolboxDownloadableFiles(lastRun)
-    const hasDownloadableResult = downloadableFiles.length > 0
-
-    return (
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        <Alert
-          type="info"
-          showIcon
-          message={config.description}
-          description="同步过程会按所选流程逐页拉取钉钉审批数据，流程越多耗时越久。下方一键联动可在同一次请求内直接生成请假/加班明细。"
-        />
-
-        <Card size="small" title="同步参数" style={{ borderRadius: 'var(--radius-lg)' }}>
-          <Row gutter={[16, 16]}>
-            <Col xs={24} md={12}>
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Text strong>同步日期范围 *</Text>
-                <RangePicker
-                  style={{ width: '100%' }}
-                  value={dingtalkDateRange as RangePickerProps['value']}
-                  onChange={(dates) => setDingtalkDateRange(dates as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null)}
-                  placeholder={['开始日期', '结束日期']}
-                  aria-label="钉钉同步日期范围"
-                />
-              </Space>
-            </Col>
-            <Col xs={24} md={12}>
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Text strong>审批发起时间前后扩展天数</Text>
-                <InputNumber
-                  style={{ width: '100%' }}
-                  min={0}
-                  max={365}
-                  value={dingtalkPaddingDays}
-                  onChange={(value) => setDingtalkPaddingDays(value ?? 31)}
-                />
-                <Text type="secondary">钉钉审批列表只能按发起时间查。为避免提前申请的跨区间请假/加班漏掉，会在所选日期前后扩展查询。</Text>
-              </Space>
-            </Col>
-          </Row>
-        </Card>
-
-        <Card size="small" title="同步流程" style={{ borderRadius: 'var(--radius-lg)' }}>
-          <Checkbox.Group
-            options={flowOptions}
-            value={dingtalkFlowKeys}
-            onChange={(values) => setDingtalkFlowKeys(values as string[])}
-          />
-        </Card>
-
-        <Card size="small" title="拉取限制" style={{ borderRadius: 'var(--radius-lg)' }}>
-          <Row gutter={[16, 16]}>
-            <Col xs={24} md={12}>
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Checkbox
-                  checked={dingtalkUnlimited}
-                  onChange={(e) => setDingtalkUnlimited(e.target.checked)}
-                >
-                  全量拉取，不限制条数
-                </Checkbox>
-                <Text type="secondary">开启后会一直分页拉到钉钉返回没有下一页，避免因为条数上限漏数据。</Text>
-              </Space>
-            </Col>
-            <Col xs={24} md={12}>
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Text strong>每类流程最多拉取审批数</Text>
-                <InputNumber
-                  style={{ width: '100%' }}
-                  min={1}
-                  max={10000}
-                  value={dingtalkMaxInstances}
-                  disabled={dingtalkUnlimited}
-                  onChange={(value) => setDingtalkMaxInstances(value ?? 100)}
-                />
-                <Text type="secondary">仅在关闭全量拉取时生效，用于排查字段或小样本测试。</Text>
-              </Space>
-            </Col>
-          </Row>
-        </Card>
-
-        <Card size="small" title="一键同步并生成请假/加班" style={{ borderRadius: 'var(--radius-lg)' }}>
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Text type="secondary">
-              钉钉同步后，在同一次请求内直接用中间表计算请假/加班（需作息表；可选排班/考勤/花名册）。
-              当前加班规则：{appliedRules.source === 'custom' ? '自定义规则' : '默认规则'}。
-            </Text>
-            <Space wrap>
-              <Checkbox checked={quickRunLeave} onChange={(e) => setQuickRunLeave(e.target.checked)}>
-                生成请假明细
-              </Checkbox>
-              <Checkbox checked={quickRunOvertime} onChange={(e) => setQuickRunOvertime(e.target.checked)}>
-                生成加班明细
-              </Checkbox>
-            </Space>
-            <Tooltip
-              title={
-                !canQuick
-                  ? '你缺少一键联动所需权限（操作 + 钉钉同步），需要联系管理员添加'
-                  : undefined
-              }
-            >
-              <span style={{ display: 'inline-block' }}>
-                <Button
-                  type="default"
-                  icon={<CalculatorOutlined />}
-                  loading={runningModule === 'quick'}
-                  disabled={!canQuick || !!runningModule || (!quickRunLeave && !quickRunOvertime)}
-                  onClick={handleQuickWorkflow}
-                >
-                  一键同步并生成请假/加班
-                </Button>
-              </span>
-            </Tooltip>
-          </Space>
-        </Card>
-
-        {lastRun && (lastRun.module === 'dingtalk_sync' || lastRun.module === 'quick') && (
-          <Card size="small" title="同步/联动结果" style={{ borderRadius: 'var(--radius-lg)' }}>
-            <Space direction="vertical" style={{ width: '100%' }} size={8}>
-              <Space wrap>
-                {hasDownloadableResult ? (
-                  <Tag color="success" icon={<CheckCircleOutlined />}>同步完成</Tag>
-                ) : (
-                  <Tag color="warning" icon={<ExclamationCircleOutlined />}>未生成结果</Tag>
-                )}
-                {lastRun.expires_at && (
-                  <Text type="secondary" style={{ fontSize: 12 }}>结果有效至 {lastRun.expires_at}</Text>
-                )}
-              </Space>
-              {formatRunStats(lastRun.stats as Record<string, unknown> | undefined).length > 0 && (
-                <Space wrap size={[6, 6]}>
-                  {formatRunStats(lastRun.stats as Record<string, unknown> | undefined).map((item) => (
-                    <Tag key={`${item.label}-${item.text}`} style={{ margin: 0 }}>
-                      {item.label}: {item.text}
-                    </Tag>
-                  ))}
-                </Space>
-              )}
-              <Collapse
-                size="small"
-                items={[{
-                  key: 'tech',
-                  label: '技术信息',
-                  children: <Text type="secondary" style={{ fontSize: 12 }}>run_id: {lastRun.run_id}</Text>,
-                }]}
-              />
-              {!hasDownloadableResult && (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="本次没有生成可下载文件"
-                  description="请查看下方同步日志；如果提示“未配置流程码”，需要补齐服务器钉钉流程码配置后重新同步。"
-                />
-              )}
-              {hasDownloadableResult && (
-                <Space wrap>
-                  {downloadableFiles.map((f) => (
-                    <Button
-                      key={f.file_key}
-                      size="small"
-                      icon={<DownloadOutlined />}
-                      onClick={() => handleDownloadRunFile(f.file_key, f.file_name)}
-                    >
-                      {f.file_name}
-                      {typeof f.row_count === 'number' ? ` (${f.row_count}行)` : ''}
-                    </Button>
-                  ))}
-                  <Button size="small" type="primary" icon={<CloudDownloadOutlined />} onClick={handleDownloadRunZip}>
-                    全部 ZIP 下载
-                  </Button>
-                </Space>
-              )}
-              {(runLogByModule[config.key] || runLogByModule.quick || '') && (
-                <Collapse
-                  items={[{
-                    key: 'sync-log',
-                    label: '同步日志',
-                    children: (
-                      <pre style={{
-                        margin: 0,
-                        padding: 12,
-                        background: 'var(--color-bg-layout)',
-                        borderRadius: 6,
-                        fontSize: 12,
-                        maxHeight: 240,
-                        overflow: 'auto',
-                        whiteSpace: 'pre-wrap',
-                      }}
-                      >
-                        {runLogByModule[config.key] || runLogByModule.quick}
-                      </pre>
-                    ),
-                  }]}
-                />
-              )}
-            </Space>
-          </Card>
-        )}
-
-        <Card
-          size="small"
-          style={{
-            position: 'sticky',
-            bottom: 0,
-            zIndex: 10,
-            boxShadow: '0 -4px 16px rgba(0,0,0,0.06)',
-            borderRadius: 'var(--radius-lg)',
-          }}
-          styles={{ body: { padding: '12px 16px' } }}
-        >
-          <Row justify="end" align="middle">
-            <Tooltip title={!canDingtalkSync ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加' : undefined}>
-              <span style={{ display: 'inline-block' }}>
-                <Button
-                  type="primary"
-                  size="large"
-                  icon={<SyncOutlined />}
-                  loading={runningModule === config.key}
-                  disabled={!canDingtalkSync || !!runningModule}
-                  onClick={() => handleRun(config.key)}
-                >
-                  从钉钉同步并生成中间表
-                </Button>
-              </span>
-            </Tooltip>
-          </Row>
-        </Card>
       </Space>
     )
   }
@@ -2808,9 +2516,7 @@ const AttendanceToolbox: React.FC = () => {
               {completedModules[item.key] ? <CheckCircleOutlined style={{ color: 'var(--color-success)' }} /> : null}
               {item.key === 'final'
                 ? <CloudDownloadOutlined />
-                : item.key === 'dingtalk_sync'
-                  ? <SyncOutlined />
-                  : <FileExcelOutlined />}
+                : <FileExcelOutlined />}
               {item.title}
             </span>
           ),

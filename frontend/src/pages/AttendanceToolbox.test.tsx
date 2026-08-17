@@ -9,15 +9,17 @@ import AttendanceToolbox, {
   getDingtalkSyncExportFile,
   getPreviousCalendarMonthRange,
   getSubsidyAuditMeta,
+  isRosterDepartmentPathError,
   resolveErrorMessage,
 } from './AttendanceToolbox'
+
+const { mockConfirmOrgSync } = vi.hoisted(() => ({ mockConfirmOrgSync: vi.fn() }))
 
 const mockRun = vi.fn()
 const mockGetDefaults = vi.fn()
 const mockListTemplates = vi.fn()
 const mockRunDingtalkSync = vi.fn()
 const mockRunWorkflow = vi.fn()
-const mockRunQuickWorkflow = vi.fn()
 const mockRunDingtalkSyncStructured = vi.fn()
 const mockDownloadRunFile = vi.fn()
 const mockDownloadRunZip = vi.fn()
@@ -41,6 +43,10 @@ vi.mock('../store/authStore', () => ({
     selector({ permissions: mockPermissions }),
 }))
 
+vi.mock('../utils/orgSyncAction', () => ({
+  confirmOrgSync: (options: unknown) => mockConfirmOrgSync(options),
+}))
+
 vi.mock('../services/api', () => ({
   attendanceToolboxAPI: {
     getDefaults: (...args: unknown[]) => mockGetDefaults(...args),
@@ -48,7 +54,6 @@ vi.mock('../services/api', () => ({
     run: (...args: unknown[]) => mockRun(...args),
     runDingtalkSync: (...args: unknown[]) => mockRunDingtalkSync(...args),
     runWorkflow: (...args: unknown[]) => mockRunWorkflow(...args),
-    runQuickWorkflow: (...args: unknown[]) => mockRunQuickWorkflow(...args),
     runDingtalkSyncStructured: (...args: unknown[]) => mockRunDingtalkSyncStructured(...args),
     downloadRunFile: (...args: unknown[]) => mockDownloadRunFile(...args),
     downloadRunZip: (...args: unknown[]) => mockDownloadRunZip(...args),
@@ -235,6 +240,11 @@ describe('getAttendanceToolboxDownloadableFiles', () => {
 })
 
 describe('attendance toolbox error messages', () => {
+  it('detects only roster department path integrity errors for automatic repair', () => {
+    expect(isRosterDepartmentPathError('1 名在职员工缺少有效主部门或部门层级无法解析')).toBe(true)
+    expect(isRosterDepartmentPathError('1 名在职员工缺少业务工号')).toBe(false)
+  })
+
   it('hides nginx HTML and returns a friendly message for gateway timeouts', async () => {
     const message = await resolveErrorMessage({
       response: {
@@ -303,7 +313,6 @@ describe('AttendanceToolbox', () => {
     mockListTemplates.mockReset()
     mockRunDingtalkSync.mockReset()
     mockRunWorkflow.mockReset()
-    mockRunQuickWorkflow.mockReset()
     mockRunDingtalkSyncStructured.mockReset()
     mockDownloadRunFile.mockReset()
     mockDownloadRunZip.mockReset()
@@ -313,6 +322,7 @@ describe('AttendanceToolbox', () => {
     mockAuditUploads.mockReset()
     mockExportTemplates.mockReset()
     mockGenerateOrgRoster.mockReset()
+    mockConfirmOrgSync.mockReset()
 
     mockGetDefaults.mockResolvedValue({
       data: {
@@ -340,12 +350,10 @@ describe('AttendanceToolbox', () => {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     }))
     mockGenerateOrgRoster.mockReset()
-    // 与 axios responseType=blob 的真实响应契约保持一致：Blob 位于 response.data。
-    mockGenerateOrgRoster.mockResolvedValue({
-      data: new Blob(['roster-xlsx'], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      }),
-    })
+    // 全局响应拦截器会解包 response.data，调用方直接收到 Blob。
+    mockGenerateOrgRoster.mockResolvedValue(new Blob(['roster-xlsx'], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }))
 
     vi.stubGlobal('URL', {
       createObjectURL: () => 'blob:mock',
@@ -434,18 +442,16 @@ describe('AttendanceToolbox', () => {
     expect(await screen.findByText('审批状态')).toBeInTheDocument()
   })
 
-  it('renders dingtalk sync tab with its action button', async () => {
-    const user = userEvent.setup()
+  it('renders only the five output tabs without a standalone dingtalk sync tab', async () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByRole('tab', { name: /钉钉同步/ }))
-    expect(await screen.findByRole('button', { name: /从钉钉同步并生成中间表/ })).toBeInTheDocument()
-    const dateInputs = await screen.findAllByLabelText('钉钉同步日期范围')
-    const previousMonth = dayjs().subtract(1, 'month')
-    expect(dateInputs.map((input) => (input as HTMLInputElement).value)).toEqual([
-      previousMonth.startOf('month').format('YYYY-MM-DD'),
-      previousMonth.endOf('month').format('YYYY-MM-DD'),
-    ])
+    expect(screen.getAllByRole('tab')).toHaveLength(5)
+    expect(screen.getByRole('tab', { name: /请假明细/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /加班明细/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /补贴扣款/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /最终汇总/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /兼职汇总/ })).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /钉钉同步/ })).not.toBeInTheDocument()
   })
 
   it('pulls the leave export from dingtalk and fills the upload field', async () => {
@@ -467,6 +473,47 @@ describe('AttendanceToolbox', () => {
     expect(await screen.findByText('请假系统导出_钉钉同步.xlsx')).toBeInTheDocument()
     expect(messageApi.success).toHaveBeenCalledWith('请假数据拉取完成，已自动回填到请假系统导出表')
     expect(mockDownloadRunFile).toHaveBeenCalledWith('run-leave', 'leave_export.xlsx')
+  })
+
+  it('pulls only the overtime export from dingtalk and fills the overtime source field', async () => {
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await user.click(screen.getByRole('tab', { name: /加班明细/ }))
+    await user.click(screen.getByRole('button', { name: '从钉钉拉取加班表' }))
+
+    await waitFor(() => {
+      const previousMonth = dayjs().subtract(1, 'month')
+      expect(mockRunDingtalkSyncStructured).toHaveBeenCalledWith(expect.objectContaining({
+        start_date: previousMonth.startOf('month').format('YYYY-MM-DD'),
+        end_date: previousMonth.endOf('month').format('YYYY-MM-DD'),
+        flow_keys: ['overtime'],
+        padding_days: 31,
+      }))
+    })
+    expect(await screen.findByText('加班系统导出_钉钉同步.xlsx')).toBeInTheDocument()
+    expect(messageApi.success).toHaveBeenCalledWith('加班数据拉取完成，已自动回填到加班系统导出表')
+    expect(mockDownloadRunFile).toHaveBeenCalledWith('run-overtime', 'overtime_export.xlsx')
+  })
+
+  it('keeps manual overtime upload available when pulling overtime data fails', async () => {
+    mockRunDingtalkSyncStructured.mockImplementation((request: { flow_keys?: string[] }) => {
+      if (request.flow_keys?.includes('overtime')) {
+        return Promise.reject({ response: { status: 400, data: { message: '加班流程未配置' } } })
+      }
+      return Promise.resolve(makeDingtalkSyncRunResponse(request.flow_keys?.[0] || 'position_transfer'))
+    })
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await user.click(screen.getByRole('tab', { name: /加班明细/ }))
+    await user.click(screen.getByRole('button', { name: '从钉钉拉取加班表' }))
+
+    await waitFor(() => expect(messageApi.error).toHaveBeenCalledWith('加班数据拉取失败：加班流程未配置'))
+    expect(screen.getByText('拉取失败：加班流程未配置')).toBeInTheDocument()
+    expect(screen.getAllByText('点击或拖拽 Excel 到这里').length).toBeGreaterThan(0)
   })
 
   it('keeps manual upload available when pulling leave data fails', async () => {
@@ -578,7 +625,7 @@ describe('AttendanceToolbox', () => {
 
   it('auto roster response preserves a user upload made during the request and fills the other empty slot', async () => {
     const user = userEvent.setup()
-    let resolveRosterGeneration: ((value: { data: Blob }) => void) | undefined
+    let resolveRosterGeneration: ((value: Blob) => void) | undefined
     mockGenerateOrgRoster.mockImplementation(() => new Promise((resolve) => {
       resolveRosterGeneration = resolve
     }))
@@ -593,7 +640,7 @@ describe('AttendanceToolbox', () => {
     }))
 
     await act(async () => {
-      resolveRosterGeneration?.({ data: new Blob(['generated']) })
+      resolveRosterGeneration?.(new Blob(['generated']))
       await Promise.resolve()
     })
 
@@ -626,7 +673,7 @@ describe('AttendanceToolbox', () => {
 
   it('auto roster response does not refill a slot the user replaced and deleted during the request', async () => {
     const user = userEvent.setup()
-    let resolveRosterGeneration: ((value: { data: Blob }) => void) | undefined
+    let resolveRosterGeneration: ((value: Blob) => void) | undefined
     mockGenerateOrgRoster.mockImplementation(() => new Promise((resolve) => {
       resolveRosterGeneration = resolve
     }))
@@ -642,7 +689,7 @@ describe('AttendanceToolbox', () => {
     await user.click(within(overtime.panel).getByRole('button', { name: '移除替换文件.xlsx' }))
 
     await act(async () => {
-      resolveRosterGeneration?.({ data: new Blob(['generated']) })
+      resolveRosterGeneration?.(new Blob(['generated']))
       await Promise.resolve()
     })
 
@@ -664,7 +711,7 @@ describe('AttendanceToolbox', () => {
     const final = await getUploadInputByTabAndLabel(user, /最终汇总/, '在职花名册')
     await user.upload(final.input, new File(['manual-before'], '汇总手工文件.xlsx'))
 
-    let resolveManualGeneration: ((value: { data: Blob }) => void) | undefined
+    let resolveManualGeneration: ((value: Blob) => void) | undefined
     mockGenerateOrgRoster.mockImplementationOnce(() => new Promise((resolve) => {
       resolveManualGeneration = resolve
     }))
@@ -675,7 +722,7 @@ describe('AttendanceToolbox', () => {
     const changedOvertime = await getUploadInputByTabAndLabel(user, /加班明细/, '花名册/员工信息表')
     await user.upload(changedOvertime.input, new File(['manual-after'], '请求后替换.xlsx'))
     await act(async () => {
-      resolveManualGeneration?.({ data: new Blob(['generated-manual']) })
+      resolveManualGeneration?.(new Blob(['generated-manual']))
       await Promise.resolve()
     })
 
@@ -738,6 +785,57 @@ describe('AttendanceToolbox', () => {
       return req?.flow_keys?.includes('position_transfer')
     })
     expect(ptCalls.length).toBe(1)
+  })
+
+  it('offers organization sync and retries roster once after a department path error', async () => {
+    mockPermissions = ['attendance_manage']
+    mockGenerateOrgRoster
+      .mockRejectedValueOnce({
+        response: {
+          status: 400,
+          data: { message: '1 名在职员工缺少有效主部门或部门层级无法解析，请先修复组织数据' },
+        },
+      })
+      .mockResolvedValueOnce(new Blob(['repaired-roster'], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      }))
+
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await waitFor(() => expect(mockConfirmOrgSync).toHaveBeenCalledTimes(1))
+
+    const options = mockConfirmOrgSync.mock.calls[0][0] as {
+      onStart?: () => void
+      onCompleted?: () => Promise<void>
+      onSettled?: () => void
+    }
+    await act(async () => {
+      options.onStart?.()
+      await options.onCompleted?.()
+      options.onSettled?.()
+    })
+
+    expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(2)
+    await userEvent.setup().click(screen.getByText('固定配置（名单 / 同步源）'))
+    expect(await screen.findByText(/上次生成：/)).toBeInTheDocument()
+  })
+
+  it('does not start organization sync repair without attendance_manage permission', async () => {
+    mockPermissions = ['attendance_toolbox_operate']
+    mockGenerateOrgRoster.mockRejectedValue({
+      response: {
+        status: 400,
+        data: { message: '1 名在职员工缺少有效主部门或部门层级无法解析，请先修复组织数据' },
+      },
+    })
+
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+    expect(mockConfirmOrgSync).not.toHaveBeenCalled()
+    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    expect(await screen.findByText(/生成失败：1 名在职员工缺少有效主部门/)).toBeInTheDocument()
   })
 
   it('permission matrix: operate-only generates roster and disables transfer sync', async () => {
@@ -826,8 +924,8 @@ describe('AttendanceToolbox', () => {
     // 无钉钉同步权限时不应自动拉花名册/异动
     expect(mockRunDingtalkSync).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: '从钉钉拉取请假表' })).toBeDisabled()
-    await user.click(screen.getByRole('tab', { name: /钉钉同步/ }))
-    expect(await screen.findByRole('button', { name: /从钉钉同步并生成中间表/ })).toBeDisabled()
+    await user.click(screen.getByRole('tab', { name: /加班明细/ }))
+    expect(await screen.findByRole('button', { name: '从钉钉拉取加班表' })).toBeDisabled()
   })
 
   it('skips auto transfer sync without dingtalk permission but generates roster with operate', async () => {
