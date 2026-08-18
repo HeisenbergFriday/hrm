@@ -107,7 +107,7 @@ func TestDorisAttendanceRecalculationDeduplicatesWrittenPairs(t *testing.T) {
 		time.Minute,
 		true,
 	)
-	checkTime := time.Date(2026, 8, 5, 18, 30, 0, 0, time.Local)
+	checkTime := time.Date(2026, 8, 5, 18, 30, 0, 0, dingtalk.ApprovalBusinessLocation())
 	row := repository.ExternalAttendanceRow{
 		UserID:        "external-user-1",
 		WorkDate:      "2026-08-05",

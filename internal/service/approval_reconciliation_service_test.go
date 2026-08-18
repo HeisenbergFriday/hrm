@@ -36,18 +36,19 @@ func TestApprovalSyncRunReconcilesHistoricalLeaveAndOvertimeIdempotently(t *test
 	if err := db.Create(&grants).Error; err != nil {
 		t.Fatalf("create grants: %v", err)
 	}
+	businessLocation := dingtalk.ApprovalBusinessLocation()
 	attendances := []database.Attendance{
-		{OrgID: "org-a", UserID: "user-overtime", UserName: "员工甲", CheckTime: time.Date(2025, 1, 15, 18, 0, 0, 0, attendanceCST), CheckType: "OnDuty"},
-		{OrgID: "org-a", UserID: "user-overtime", UserName: "员工甲", CheckTime: time.Date(2025, 1, 15, 21, 0, 0, 0, attendanceCST), CheckType: "OffDuty"},
-		{OrgID: "org-b", UserID: "user-overtime", UserName: "外组织员工", CheckTime: time.Date(2025, 1, 15, 17, 0, 0, 0, attendanceCST), CheckType: "OnDuty"},
-		{OrgID: "org-b", UserID: "user-overtime", UserName: "外组织员工", CheckTime: time.Date(2025, 1, 15, 23, 0, 0, 0, attendanceCST), CheckType: "OffDuty"},
+		{OrgID: "org-a", UserID: "user-overtime", UserName: "员工甲", CheckTime: time.Date(2025, 1, 15, 18, 0, 0, 0, businessLocation), CheckType: "OnDuty"},
+		{OrgID: "org-a", UserID: "user-overtime", UserName: "员工甲", CheckTime: time.Date(2025, 1, 15, 21, 0, 0, 0, businessLocation), CheckType: "OffDuty"},
+		{OrgID: "org-b", UserID: "user-overtime", UserName: "外组织员工", CheckTime: time.Date(2025, 1, 15, 17, 0, 0, 0, businessLocation), CheckType: "OnDuty"},
+		{OrgID: "org-b", UserID: "user-overtime", UserName: "外组织员工", CheckTime: time.Date(2025, 1, 15, 23, 0, 0, 0, businessLocation), CheckType: "OffDuty"},
 	}
 	if err := db.Create(&attendances).Error; err != nil {
 		t.Fatalf("create attendances: %v", err)
 	}
 	foreignApproval := database.Approval{
 		OrgID: "org-b", ProcessID: "historical-leave", Title: "外组织审批", ApplicantID: "foreign-user",
-		Status: "RUNNING", CreateTime: time.Date(2025, 1, 9, 9, 0, 0, 0, attendanceCST),
+		Status: "RUNNING", CreateTime: time.Date(2025, 1, 9, 9, 0, 0, 0, businessLocation),
 	}
 	if err := db.Omit("FinishTime").Create(&foreignApproval).Error; err != nil {
 		t.Fatalf("create foreign approval: %v", err)

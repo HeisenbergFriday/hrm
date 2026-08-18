@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"peopleops/internal/database"
+	"peopleops/internal/dingtalk"
 )
 
 func TestApprovalResyncDoesNotDuplicateOvertimeMatchOrCompensatoryCredit(t *testing.T) {
@@ -22,7 +23,8 @@ func TestApprovalResyncDoesNotDuplicateOvertimeMatchOrCompensatoryCredit(t *test
 		t.Fatalf("migrate overtime tables: %v", err)
 	}
 
-	createTime := time.Date(2026, 8, 5, 9, 0, 0, 0, time.Local)
+	businessLocation := dingtalk.ApprovalBusinessLocation()
+	createTime := time.Date(2026, 8, 5, 9, 0, 0, 0, businessLocation)
 	finishTime := createTime.Add(time.Hour)
 	approvals := []database.Approval{
 		{
@@ -48,8 +50,8 @@ func TestApprovalResyncDoesNotDuplicateOvertimeMatchOrCompensatoryCredit(t *test
 		t.Fatalf("create approvals: %v", err)
 	}
 	attendances := []database.Attendance{
-		{OrgID: "org-a", UserID: "user-1", UserName: "员工甲", CheckTime: time.Date(2026, 8, 5, 18, 0, 0, 0, time.Local), CheckType: "OnDuty"},
-		{OrgID: "org-a", UserID: "user-1", UserName: "员工甲", CheckTime: time.Date(2026, 8, 5, 21, 0, 0, 0, time.Local), CheckType: "OffDuty"},
+		{OrgID: "org-a", UserID: "user-1", UserName: "员工甲", CheckTime: time.Date(2026, 8, 5, 18, 0, 0, 0, businessLocation), CheckType: "OnDuty"},
+		{OrgID: "org-a", UserID: "user-1", UserName: "员工甲", CheckTime: time.Date(2026, 8, 5, 21, 0, 0, 0, businessLocation), CheckType: "OffDuty"},
 	}
 	if err := db.Create(&attendances).Error; err != nil {
 		t.Fatalf("create attendances: %v", err)
