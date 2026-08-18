@@ -129,4 +129,26 @@ func TestBuildEmployeePunchData_EnrichesIdentity(t *testing.T) {
 	}
 }
 
+func TestBuildEmployeePunchData_PreservesExplicitStatusesWithoutPunchTimes(t *testing.T) {
+	records := []dingtalk.AttendanceRecord{
+		{UserID: "uid-1", WorkDate: "2026-07-02", TimeResult: "NotSigned"},
+		{UserID: "uid-1", WorkDate: "2026-07-03", TimeResult: "Absenteeism"},
+		{UserID: "uid-1", WorkDate: "2026-07-04", TimeResult: "Serious_Late"},
+	}
+	identity := map[string]ParttimeEmployee{
+		"uid-1": {Name: "实习生甲", EmployeeNo: "JZ001", Position: "实习生", Department: "研发部"},
+	}
+
+	got := buildEmployeePunchData(records, identity)
+	if len(got) != 1 {
+		t.Fatalf("expected one punched employee, got %d", len(got))
+	}
+	want := map[int]string{2: "缺卡", 3: "旷工", 4: "严重迟到"}
+	for day, wantLabel := range want {
+		if got[0].Days[day] != wantLabel {
+			t.Errorf("day %d status=%q want %q; all days=%v", day, got[0].Days[day], wantLabel, got[0].Days)
+		}
+	}
+}
+
 var _ = errors.New

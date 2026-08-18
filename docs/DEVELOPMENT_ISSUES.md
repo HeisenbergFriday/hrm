@@ -54,6 +54,7 @@ update_when:
 | `attendance-toolbox` `permission` | 计算/审计/模板需 `attendance_toolbox_operate`；钉钉同步需 `attendance_toolbox_dingtalk_sync`；一键联动 AND | `.ai/MODULES/attendance.md` 权限矩阵 |
 | `attendance-toolbox` `dingtalk-sync` `frontend-refresh` | 工具箱不展示独立“钉钉同步”页签；钉钉拉取仅从请假、加班和固定配置按需入口执行，导航配置与回归测试必须一致 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
 | `attendance-toolbox` `parttime` `leave-priority` | 兼职汇总同一日同时含外出/出差与事假时，必须先按事假处理并停止出勤计算；组合状态判断必须早于外出计出勤的提前返回 | [2026-08-01 外出/出差与事假并存误计出勤](development-issues/2026.md#2026-08-01-p1-外出出差与事假并存误计出勤) |
+| `attendance-toolbox` `parttime` `status-mapping` `roster` | 钉钉月度打卡明确返回的 `NotSigned`、`Absenteeism/Absent`、`SeriousLate`（含下划线/大小写变体）必须转换为可见状态；标准化花名册不得丢失实习生职位和部门；完全没有源记录的日期仍保持空白，禁止默认补出勤 | [2026-08-18 兼职月度打卡异常状态被静默丢弃](development-issues/2026.md#2026-08-18-p1-兼职月度打卡异常状态被静默丢弃) |
 | `attendance-toolbox` `dingtalk` `approval` `time-window` | `processinstance/listids` 禁止直接提交超长或未来时间范围；客户端必须按最多 120 天连续分片、结束时间预留时钟偏差，并跨片去重、全局执行条数上限 | [2026-08-01 钉钉审批查询时间范围非法](development-issues/2026.md#2026-08-01-p1-钉钉审批查询时间范围非法导致工具箱同步失败) |
 | `attendance-toolbox` `structured-result` `auto-fill` | 自动回填必须从 structured run 按 `kind=export + flow_key` 下载业务表；审计/元数据不得上传，也不得因多文件而改走 ZIP 或重跑同步 | [2026-08-01 自动回填误判多文件](development-issues/2026.md#2026-08-01-p1-自动回填将审计文件计入结果导致同步成功后仍报错) |
 | `attendance-toolbox` `roster` `data-contract` `multi-tenant` | 自动回填到加班入口的组织花名册必须使用当前 org 的 `EmployeeProfile.EmployeeID`、真实姓名与有效部门路径；当前 org 的 `<org>:0` 是兼容历史数据的根哨兵，外组织同形值仍属悬空；缺工号/姓名/路径整体 400；仅姓名文件不得自动回填加班；自动响应不得覆盖请求期间的用户选择/删除/替换；禁止审批字段/position_transfer 充当花名册 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
@@ -88,7 +89,7 @@ update_when:
 
 | 标签 | 约束摘要 | 条目 / 文档 |
 |---|---|---|
-| `attendance` `frontend` `timezone` `test` | 考勤时间必须显式按业务时区 UTC+8 格式化；禁止依赖浏览器、Node 或 CI 宿主机时区 | [2026-07-24 考勤时间展示依赖宿主时区](development-issues/2026.md#2026-07-24-p2-考勤时间展示依赖宿主时区导致-ci-失败) |
+| `attendance` `approval` `timezone` `test` | 考勤与审批时间必须显式按业务时区 UTC+8 构造和格式化；测试数据也禁止使用 `time.Local` 或依赖浏览器、Node、Go/CI 宿主机时区 | [2026-07-24 考勤时间展示依赖宿主时区](development-issues/2026.md#2026-07-24-p2-考勤时间展示依赖宿主时区导致-ci-失败) |
 | `week-schedule` `notification-copy` `date-aware` | 作息表通知必须定位最近周六并读取实际日历状态；周五写“明天”、周六写“今天”、周一至周四写“本周六”、周日写“下周六”；是否上班置于首行，大/小周仅作补充 | [2026-07-29 作息表推送只判断明天导致周六提醒不灵活](development-issues/2026.md#2026-07-29-p2-作息表推送只判断明天导致周六上班提醒不灵活) |
 
 ### 测试 / 验证
@@ -105,6 +106,7 @@ update_when:
 | `dingtalk-stream` `multi-tenant` `credentials` `app-home-url` `fail-closed` | Stream 显式组织必须读取同一组织的 AppKey/Secret；Compose 禁止默认覆盖为 `default`；非 default 组织群图片推送必须配置组织级公网 HTTPS AppHomeURL/RedirectURI；上线核对 org、healthy、重启次数并执行真实绑定/推送 | [2026-07-29 Stream 连接错误组织导致群机器人无响应](development-issues/2026.md#2026-07-29-p1-dingtalk-stream-默认绑定错误组织导致群机器人无响应) |
 | `deploy` `upload-and-restart` | 上传失败续传用独立脚本，禁止改 `build-and-deploy.ps1` 行为 | cerebrum Decision Log |
 | `git` `merge` `release` | 跨分支冲突必须按语义单元核对生产代码、配套测试和 `go.mod/go.sum`；禁止按文件整侧选取后直接推送，至少执行编译、全量测试与双远端祖先检查 | [2026-07-23 双远端 master 合并遗漏依赖与安全配套代码](development-issues/2026.md#2026-07-23-p1-双远端-master-合并遗漏依赖与安全配套代码) |
+| `go` `security` `govulncheck` `docker` | Go 标准库出现可达漏洞时，最低工具链版本和发布构建镜像必须同步升级到修复版本；CI、`go.mod`、Dockerfile 禁止版本漂移 | [2026-08-18 Go 1.26.5 标准库漏洞阻塞发布](development-issues/2026.md#2026-08-18-p1-go-1265-标准库漏洞阻塞发布) |
 
 ### AI 协作 / 上下文
 

@@ -9,7 +9,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM golang:1.26.5-alpine AS backend-builder
+FROM golang:1.26.6-alpine AS backend-builder
 WORKDIR /src
 
 ENV CGO_ENABLED=0 \
