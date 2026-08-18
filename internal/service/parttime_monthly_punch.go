@@ -59,11 +59,36 @@ type MatchedParttimeEmployee struct {
 // parser understands. The parser recognises leading status keywords such as
 // 正常/迟到/早退/缺卡/旷工/休息 followed by optional "(HH:MM,HH:MM)" times.
 func statusLabel(onDuty, offDuty, timeResult string) string {
+	// DingTalk can report an exception without a check timestamp. Preserve the
+	// explicit result so the monthly grid does not silently turn that day blank.
+	normalizedResult := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(timeResult)))
+	status := ""
+	switch normalizedResult {
+	case "notsigned":
+		status = "缺卡"
+	case "absenteeism", "absent":
+		status = "旷工"
+	case "seriouslate":
+		status = "严重迟到"
+	}
+	if status != "" {
+		if onDuty != "" && offDuty != "" {
+			return status + " (" + onDuty + "," + offDuty + ")"
+		}
+		if onDuty != "" {
+			return status + " (" + onDuty + ")"
+		}
+		if offDuty != "" {
+			return status + " (" + offDuty + ")"
+		}
+		return status
+	}
+
 	hasCheck := onDuty != "" || offDuty != ""
 	switch {
 	case !hasCheck:
 		return ""
-	case timeResult == "Late" && onDuty != "":
+	case normalizedResult == "late" && onDuty != "":
 		if offDuty != "" {
 			return "迟到 (" + onDuty + "," + offDuty + ")"
 		}
@@ -110,6 +135,8 @@ func MatchParttimeMonthlyPunch(roster []ParttimeEmployee, punched []EmployeePunc
 			EmployeeNo: normalizeEmployeeNo(e.EmployeeNo),
 			Name:       normalizeParttimeName(e.Name),
 			UserID:     strings.TrimSpace(e.UserID),
+			Position:   strings.TrimSpace(e.Position),
+			Department: strings.TrimSpace(e.Department),
 		}
 	}
 

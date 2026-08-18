@@ -115,6 +115,29 @@ func TestMatchParttimeMonthlyPunch_NameCleaning(t *testing.T) {
 	}
 }
 
+func TestMatchParttimeMonthlyPunch_PreservesInternPositionAndDepartment(t *testing.T) {
+	roster := []ParttimeEmployee{{
+		EmployeeNo: "JZ001",
+		Name:       "实习生甲",
+		Position:   "实习生",
+		Department: "研发部",
+	}}
+	punched := []EmployeePunchData{{
+		EmployeeNo: "JZ001",
+		Name:       "实习生甲",
+		Days:       map[int]string{1: "正常"},
+	}}
+
+	match := MatchParttimeMonthlyPunch(roster, punched)
+	if len(match.Matched) != 1 {
+		t.Fatalf("expected one matched intern, got %+v", match)
+	}
+	got := match.Matched[0]
+	if got.Position != "实习生" || got.Department != "研发部" {
+		t.Fatalf("expected intern identity fields to survive matching, got %+v", got)
+	}
+}
+
 func TestMatchParttimeMonthlyPunch_EmptyNoAndNameFallsBack(t *testing.T) {
 	// Numeric-only and special employee numbers are treated as valid numbers
 	// (not filtered) and matched by number when present in the report.
@@ -142,6 +165,12 @@ func TestStatusLabel(t *testing.T) {
 		{"08:30", "", "Normal", "正常 (08:30)"},
 		{"09:05", "18:00", "Late", "迟到 (09:05,18:00)"},
 		{"08:30", "17:00", "Early", "早退 (08:30,17:00)"},
+		{"", "", "NotSigned", "缺卡"},
+		{"", "", "not_signed", "缺卡"},
+		{"", "", "Absenteeism", "旷工"},
+		{"", "", "Absent", "旷工"},
+		{"", "", "SeriousLate", "严重迟到"},
+		{"09:30", "", "Serious_Late", "严重迟到 (09:30)"},
 	}
 	for _, c := range cases {
 		got := statusLabel(c.on, c.off, c.result)
