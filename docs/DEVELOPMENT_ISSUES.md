@@ -106,6 +106,7 @@ update_when:
 | `dingtalk-stream` `multi-tenant` `credentials` `app-home-url` `fail-closed` | Stream 显式组织必须读取同一组织的 AppKey/Secret；Compose 禁止默认覆盖为 `default`；非 default 组织群图片推送必须配置组织级公网 HTTPS AppHomeURL/RedirectURI；上线核对 org、healthy、重启次数并执行真实绑定/推送 | [2026-07-29 Stream 连接错误组织导致群机器人无响应](development-issues/2026.md#2026-07-29-p1-dingtalk-stream-默认绑定错误组织导致群机器人无响应) |
 | `deploy` `upload-and-restart` | 上传失败续传用独立脚本，禁止改 `build-and-deploy.ps1` 行为 | cerebrum Decision Log |
 | `git` `merge` `release` | 跨分支冲突必须按语义单元核对生产代码、配套测试和 `go.mod/go.sum`；禁止按文件整侧选取后直接推送，至少执行编译、全量测试与双远端祖先检查 | [2026-07-23 双远端 master 合并遗漏依赖与安全配套代码](development-issues/2026.md#2026-07-23-p1-双远端-master-合并遗漏依赖与安全配套代码) |
+| `go` `security` `govulncheck` `docker` | Go 标准库出现可达漏洞时，最低工具链版本和发布构建镜像必须同步升级到修复版本；CI、`go.mod`、Dockerfile 禁止版本漂移 | [2026-08-18 Go 1.26.5 标准库漏洞阻塞发布](development-issues/2026.md#2026-08-18-p1-go-1265-标准库漏洞阻塞发布) |
 
 ### AI 协作 / 上下文
 
