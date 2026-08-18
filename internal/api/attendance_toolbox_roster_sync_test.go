@@ -29,6 +29,7 @@ func TestGenerateOrgRosterFromDingTalkDepartmentSync(t *testing.T) {
 		&database.Department{},
 		&database.DepartmentChangeLog{},
 		&database.User{},
+		&database.UserDepartmentMembership{},
 		&database.EmployeeProfile{},
 	); err != nil {
 		t.Fatalf("automigrate roster sync chain: %v", err)
