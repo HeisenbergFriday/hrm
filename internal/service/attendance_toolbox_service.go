@@ -1218,6 +1218,42 @@ func (s *AttendanceToolboxService) loadRosterEmployeesForOrg(orgID string) ([]ro
 		for _, user := range users {
 			userIDs = append(userIDs, user.UserID)
 		}
+
+		// 组织同步后的关系表是主部门真源；只有员工完全没有关系记录时，
+		// 才兼容回退 User.DepartmentID。存在关系但缺少唯一主关系属于数据异常，
+		// 保持空值并由完整性校验 fail-closed。
+		var memberships []database.UserDepartmentMembership
+		if err := database.DB.
+			Where("org_id = ? AND user_id IN ?", orgID, userIDs).
+			Find(&memberships).Error; err != nil {
+			return nil, 0, 0, 0, fmt.Errorf("%w：%w", ErrRosterDeptDataFailed, err)
+		}
+		type membershipState struct {
+			count        int
+			primaryCount int
+			primaryID    string
+		}
+		membershipByUser := make(map[string]membershipState, len(users))
+		for _, membership := range memberships {
+			state := membershipByUser[membership.UserID]
+			state.count++
+			if membership.IsPrimary {
+				state.primaryCount++
+				state.primaryID = strings.TrimSpace(membership.DepartmentID)
+			}
+			membershipByUser[membership.UserID] = state
+		}
+		for index := range users {
+			state, hasMembership := membershipByUser[users[index].UserID]
+			if !hasMembership || state.count == 0 {
+				continue
+			}
+			users[index].DepartmentID = ""
+			if state.primaryCount == 1 {
+				users[index].DepartmentID = state.primaryID
+			}
+		}
+
 		var rows []database.EmployeeProfile
 		if err := database.DB.
 			Where("org_id = ? AND user_id IN ? AND deleted_at IS NULL", orgID, userIDs).

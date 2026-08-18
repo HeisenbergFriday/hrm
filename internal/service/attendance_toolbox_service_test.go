@@ -254,6 +254,80 @@ func TestLoadRosterEmployeesForOrgIsolatesUsersProfilesAndDepartments(t *testing
 	}
 }
 
+func TestLoadRosterEmployeesForOrgUsesPrimaryMembershipBeforeUserDepartment(t *testing.T) {
+	db := withRosterTestDB(t)
+	seedRosterDepartment(t, db, "org-a", "valid-primary", "有效主部门", "0")
+	seedRosterUser(t, db, database.User{
+		OrgID: "org-a", UserID: "member-user", DingTalkUserID: "ding-member", Name: "关系员工",
+		Email: "member@example.test", Mobile: "13800000021", DepartmentID: "stale-department", Status: "active",
+	})
+	if err := db.Create(&database.EmployeeProfile{OrgID: "org-a", UserID: "member-user", EmployeeID: "EA021"}).Error; err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	if err := db.Create(&database.UserDepartmentMembership{
+		OrgID: "org-a", UserID: "member-user", DepartmentID: "valid-primary", IsPrimary: true,
+	}).Error; err != nil {
+		t.Fatalf("seed primary membership: %v", err)
+	}
+
+	employees, missingEmpNo, missingName, missingDeptPath, err := (&AttendanceToolboxService{}).loadRosterEmployeesForOrg("org-a")
+	if err != nil || len(employees) != 1 || missingEmpNo != 0 || missingName != 0 || missingDeptPath != 0 {
+		t.Fatalf("valid primary membership must resolve roster department: employees=%#v missingEmpNo=%d missingName=%d missingDeptPath=%d err=%v", employees, missingEmpNo, missingName, missingDeptPath, err)
+	}
+	if employees[0].Dept1 != "有效主部门" {
+		t.Fatalf("primary membership must override stale User.DepartmentID: %#v", employees[0])
+	}
+}
+
+func TestLoadRosterEmployeesForOrgRejectsMembershipsWithoutUniquePrimary(t *testing.T) {
+	tests := []struct {
+		name        string
+		memberships []database.UserDepartmentMembership
+	}{
+		{
+			name: "no primary",
+			memberships: []database.UserDepartmentMembership{
+				{DepartmentID: "dept-a"},
+			},
+		},
+		{
+			name: "multiple primary",
+			memberships: []database.UserDepartmentMembership{
+				{DepartmentID: "dept-a", IsPrimary: true},
+				{DepartmentID: "dept-b", IsPrimary: true},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := withRosterTestDB(t)
+			seedRosterDepartment(t, db, "org-a", "legacy-valid", "兼容字段部门", "0")
+			seedRosterDepartment(t, db, "org-a", "dept-a", "部门A", "0")
+			seedRosterDepartment(t, db, "org-a", "dept-b", "部门B", "0")
+			seedRosterUser(t, db, database.User{
+				OrgID: "org-a", UserID: "invalid-primary-user", DingTalkUserID: "ding-invalid-primary", Name: "异常关系员工",
+				Email: "invalid-primary@example.test", Mobile: "13800000022", DepartmentID: "legacy-valid", Status: "active",
+			})
+			if err := db.Create(&database.EmployeeProfile{OrgID: "org-a", UserID: "invalid-primary-user", EmployeeID: "EA022"}).Error; err != nil {
+				t.Fatalf("seed profile: %v", err)
+			}
+			for index := range tt.memberships {
+				tt.memberships[index].OrgID = "org-a"
+				tt.memberships[index].UserID = "invalid-primary-user"
+			}
+			if err := db.Create(&tt.memberships).Error; err != nil {
+				t.Fatalf("seed memberships: %v", err)
+			}
+
+			employees, missingEmpNo, missingName, missingDeptPath, err := (&AttendanceToolboxService{}).loadRosterEmployeesForOrg("org-a")
+			if err != nil || len(employees) != 1 || missingEmpNo != 0 || missingName != 0 || missingDeptPath != 1 {
+				t.Fatalf("invalid primary relationship must not fall back to User.DepartmentID: employees=%#v missingEmpNo=%d missingName=%d missingDeptPath=%d err=%v", employees, missingEmpNo, missingName, missingDeptPath, err)
+			}
+		})
+	}
+}
+
 func TestBuildDepartmentPathMapRejectsDanglingAndCyclicPaths(t *testing.T) {
 	db := withRosterTestDB(t)
 	departments := []database.Department{
@@ -391,7 +465,13 @@ func findPython(t *testing.T) string {
 
 func seedRosterDepartment(t *testing.T, db *gorm.DB, orgID, departmentID, name, parentID string) {
 	t.Helper()
-	if err := db.Create(&database.Department{OrgID: orgID, DepartmentID: departmentID, Name: name, ParentID: parentID}).Error; err != nil {
+	if err := db.Create(&database.Department{
+		OrgID:                orgID,
+		DepartmentID:         departmentID,
+		DingTalkDepartmentID: "dt-" + departmentID,
+		Name:                 name,
+		ParentID:             parentID,
+	}).Error; err != nil {
 		t.Fatalf("seed department: %v", err)
 	}
 }
@@ -420,7 +500,7 @@ func openRosterTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&database.User{}, &database.Department{}, &database.EmployeeProfile{}, &database.Organization{}); err != nil {
+	if err := db.AutoMigrate(&database.User{}, &database.Department{}, &database.UserDepartmentMembership{}, &database.EmployeeProfile{}, &database.Organization{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	return db
