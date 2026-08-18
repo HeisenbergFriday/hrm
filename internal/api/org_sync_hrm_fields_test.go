@@ -12,7 +12,7 @@ import (
 )
 
 func TestApplyDingTalkProfileFieldsMapsHRMValues(t *testing.T) {
-	profile := &database.EmployeeProfile{ProbationEndDate: "2026-08-01"}
+	profile := &database.EmployeeProfile{EntryDate: "2026-08-17", ProbationEndDate: "2026-08-01"}
 	applyDingTalkProfileFields(profile, dingtalk.UserInfo{
 		Email:              "employee@example.com",
 		HiredDate:          "2026-06-01",
@@ -38,6 +38,7 @@ func TestApplyDingTalkProfileFieldsMapsHRMValues(t *testing.T) {
 
 func TestApplyDingTalkProfileFieldsDoesNotOverwriteManualValuesWithEmpty(t *testing.T) {
 	profile := &database.EmployeeProfile{
+		EntryDate:          "2024-11-11",
 		ProbationEndDate:   "2026-08-31",
 		EmploymentType:     "正式",
 		EmploymentTypeCode: "manual-code",
@@ -48,6 +49,9 @@ func TestApplyDingTalkProfileFieldsDoesNotOverwriteManualValuesWithEmpty(t *test
 
 	if profile.ProbationEndDate != "2026-08-31" {
 		t.Fatalf("actual regular date must not overwrite probation end date: %#v", profile)
+	}
+	if profile.EntryDate != "2024-11-11" {
+		t.Fatalf("empty DingTalk hired date overwrote manual entry date: %#v", profile)
 	}
 	if profile.EmploymentType != "正式" || profile.EmploymentTypeCode != "manual-code" || profile.JobLevel != "P6" || profile.JobFamily != "技术" {
 		t.Fatalf("empty DingTalk fields overwrote manual values: %#v", profile)

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Button,
@@ -68,7 +68,11 @@ interface SyncStatus {
   external_last_department_update?: string
   cursors?: SyncCursor[]
   last_job?: SyncJob | null
+  active_job?: SyncJob | null
 }
+
+export const externalSyncJobPollingInterval = (status?: string): number | false =>
+  !status || status === 'running' ? 2_000 : false
 
 const statusColor = (status?: string) => {
   switch (status) {
@@ -83,6 +87,30 @@ const statusColor = (status?: string) => {
     default:
       return 'default'
   }
+}
+
+const statusLabel = (status?: string) => {
+  const labels: Record<string, string> = {
+    running: '运行中',
+    success: '成功',
+    partial: '部分成功',
+    failed: '失败',
+  }
+  return status ? labels[status] || status : '—'
+}
+
+const sourceLabel = (source?: string) => {
+  const labels: Record<string, string> = {
+    all: '考勤 + 部门关系',
+    attendance: '考勤',
+    department: '部门关系',
+  }
+  return source ? labels[source] || source : '—'
+}
+
+const triggerLabel = (trigger?: string) => {
+  const labels: Record<string, string> = { manual: '手动', cron: '定时' }
+  return trigger ? labels[trigger] || trigger : '—'
 }
 
 const formatTime = (value?: string) => {
@@ -103,6 +131,8 @@ const AttendanceExternalSync: React.FC = () => {
 
   const [source, setSource] = useState<'all' | 'attendance' | 'department'>('all')
   const [page, setPage] = useState(1)
+  const [pollingJobId, setPollingJobId] = useState<number | null>(null)
+  const startedJobIdRef = useRef<number | null>(null)
   const pageSize = 10
 
   const {
@@ -115,7 +145,6 @@ const AttendanceExternalSync: React.FC = () => {
     queryKey: ['external-attendance-sync-status', orgId],
     queryFn: () => attendanceAPI.externalSync.getStatus(),
     enabled: canView,
-    refetchInterval: 30_000,
   })
 
   const {
@@ -130,6 +159,13 @@ const AttendanceExternalSync: React.FC = () => {
     enabled: canView,
   })
 
+  const { data: polledJobResp } = useQuery({
+    queryKey: ['external-attendance-sync-job', orgId, pollingJobId],
+    queryFn: () => attendanceAPI.externalSync.getJob(pollingJobId!),
+    enabled: canView && pollingJobId != null,
+    refetchInterval: (query) => externalSyncJobPollingInterval((query.state.data as any)?.data?.status),
+  })
+
   const runMutation = useMutation({
     mutationFn: () =>
       attendanceAPI.externalSync.run({
@@ -138,8 +174,12 @@ const AttendanceExternalSync: React.FC = () => {
         full_department_snapshot: source === 'department',
       }),
     onSuccess: (resp: any) => {
-      const job = resp?.data
-      if (job?.status === 'failed') {
+      const job: SyncJob | undefined = resp?.data
+      if (job?.status === 'running') {
+        startedJobIdRef.current = job.id
+        setPollingJobId(job.id)
+        message.info(`同步任务 #${job.id} 已启动`)
+      } else if (job?.status === 'failed') {
         message.error(job.error_summary || '同步失败')
       } else if (job?.status === 'partial') {
         message.warning(job.error_summary || '同步部分成功')
@@ -150,14 +190,61 @@ const AttendanceExternalSync: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['external-attendance-sync-jobs'] })
     },
     onError: (err: any) => {
+      const conflictJob: SyncJob | undefined = err?.response?.status === 409 ? err?.response?.data?.data : undefined
+      if (conflictJob?.id) {
+        setPollingJobId(conflictJob.id)
+        queryClient.invalidateQueries({ queryKey: ['external-attendance-sync-status'] })
+        queryClient.invalidateQueries({ queryKey: ['external-attendance-sync-jobs'] })
+      }
       message.error(err?.response?.data?.message || err?.message || '同步失败')
     },
   })
 
   const status: SyncStatus | undefined = statusResp?.data
   const jobs: SyncJob[] = jobsResp?.data?.list || []
+  const polledJob: SyncJob | undefined = polledJobResp?.data
   const total: number = jobsResp?.data?.total || 0
   const missingManageTip = '你缺少 attendance_manage 权限，需要联系管理员添加'
+  const checkingRunningTask = jobsLoading
+  const reportedActiveJob =
+    status?.active_job ||
+    (status?.last_job?.status === 'running' ? status.last_job : undefined) ||
+    jobs.find((job) => job.status === 'running')
+  const activeJob =
+    polledJob?.status === 'running'
+      ? polledJob
+      : polledJob?.id === reportedActiveJob?.id
+        ? undefined
+        : reportedActiveJob
+  const runningTip = activeJob
+    ? `同步任务 #${activeJob.id} 正在运行，请等待任务完成`
+    : checkingRunningTask
+      ? '正在检查是否存在运行中的同步任务'
+      : undefined
+
+  useEffect(() => {
+    if (activeJob && pollingJobId == null) {
+      setPollingJobId(activeJob.id)
+    }
+  }, [activeJob, pollingJobId])
+
+  useEffect(() => {
+    if (!polledJob || polledJob.status === 'running' || pollingJobId == null) return
+
+    if (startedJobIdRef.current === polledJob.id) {
+      if (polledJob.status === 'success') {
+        message.success(`同步任务 #${polledJob.id} 已完成`)
+      } else if (polledJob.status === 'partial') {
+        message.warning(polledJob.error_summary || `同步任务 #${polledJob.id} 部分成功`)
+      } else {
+        message.error(polledJob.error_summary || `同步任务 #${polledJob.id} 失败`)
+      }
+      startedJobIdRef.current = null
+    }
+    setPollingJobId(null)
+    queryClient.invalidateQueries({ queryKey: ['external-attendance-sync-status'] })
+    queryClient.invalidateQueries({ queryKey: ['external-attendance-sync-jobs'] })
+  }, [polledJob, pollingJobId, queryClient])
 
   const confirmRun = () => {
     const isDepartmentSnapshot = source === 'department'
@@ -177,13 +264,13 @@ const AttendanceExternalSync: React.FC = () => {
   const columns = useMemo(
     () => [
       { title: 'ID', dataIndex: 'id', width: 70 },
-      { title: '来源', dataIndex: 'source', width: 110, render: (v: string) => v || '—' },
-      { title: '触发', dataIndex: 'trigger', width: 90 },
+      { title: '来源', dataIndex: 'source', width: 140, render: (v: string) => sourceLabel(v) },
+      { title: '触发', dataIndex: 'trigger', width: 90, render: (v: string) => triggerLabel(v) },
       {
         title: '状态',
         dataIndex: 'status',
         width: 100,
-        render: (v: string) => <Tag color={statusColor(v)}>{v || '—'}</Tag>,
+        render: (v: string) => <Tag color={statusColor(v)}>{statusLabel(v)}</Tag>,
       },
       { title: '开始时间', dataIndex: 'started_at', render: (v: string) => formatTime(v) },
       { title: '结束时间', dataIndex: 'finished_at', render: (v: string) => formatTime(v) },
@@ -209,7 +296,7 @@ const AttendanceExternalSync: React.FC = () => {
             type="warning"
             showIcon
             message="无访问权限"
-            description="你缺少考勤查看权限，需要联系管理员添加 menu:attendance 或 attendance_manage。"
+            description="你缺少考勤查看或管理权限，请联系管理员开通。"
           />
         </PageCard>
       </PageContainer>
@@ -235,12 +322,12 @@ const AttendanceExternalSync: React.FC = () => {
               <Option value="attendance">仅考勤</Option>
               <Option value="department">仅部门关系</Option>
             </Select>
-            <Tooltip title={canManage ? undefined : missingManageTip}>
+            <Tooltip title={!canManage ? missingManageTip : runningTip}>
               <Button
                 type="primary"
                 icon={<SyncOutlined />}
                 loading={runMutation.isPending}
-                disabled={!canManage}
+                disabled={!canManage || checkingRunningTask || !!activeJob || runMutation.isPending}
                 onClick={confirmRun}
               >
                 立即同步
@@ -327,10 +414,12 @@ const AttendanceExternalSync: React.FC = () => {
                           ? 'success'
                           : status.last_job.status === 'partial'
                             ? 'warning'
+                          : status.last_job.status === 'failed'
+                            ? 'error'
                             : 'info'
                       }
                       showIcon
-                      message={`最近任务 #${status.last_job.id} · ${status.last_job.status}`}
+                      message={`最近任务 #${status.last_job.id} · ${statusLabel(status.last_job.status)}`}
                       description={`新增 ${status.last_job.inserted} / 更新 ${status.last_job.updated} / 跳过 ${status.last_job.skipped} / 失败 ${status.last_job.failed}${
                         status.last_job.error_summary ? ` · ${status.last_job.error_summary}` : ''
                       }`}

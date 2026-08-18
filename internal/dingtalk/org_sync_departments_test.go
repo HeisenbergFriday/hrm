@@ -173,6 +173,35 @@ func TestFetchDeptUsersRejectsIncompleteResponses(t *testing.T) {
 	}
 }
 
+func TestFetchDeptUsersNormalizesHiredDate(t *testing.T) {
+	tests := []struct {
+		name      string
+		rawValue  string
+		wantValue string
+	}{
+		{name: "millisecond number", rawValue: `1731254400000`, wantValue: "2024-11-11"},
+		{name: "millisecond string", rawValue: `"1731254400000"`, wantValue: "2024-11-11"},
+		{name: "date string", rawValue: `"2024-11-11"`, wantValue: "2024-11-11"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stubDingTalkHTTPClient(t, func(*http.Request) (*http.Response, error) {
+				body := `{"errcode":0,"result":{"list":[{"userid":"employee-1","name":"员工","active":true,"dept_id_list":[1],"hired_date":` + test.rawValue + `}],"has_more":false}}`
+				return jsonResponse(http.StatusOK, body), nil
+			})
+
+			users, err := fetchDeptUsers("safe-token", 1)
+			if err != nil {
+				t.Fatalf("fetchDeptUsers() error = %v", err)
+			}
+			if len(users) != 1 || users[0].HiredDate != test.wantValue {
+				t.Fatalf("users = %#v, want hired date %q", users, test.wantValue)
+			}
+		})
+	}
+}
+
 func TestSyncUsersWithDeptsForConfigRequiresEveryDepartmentSource(t *testing.T) {
 	clearTokenCacheForTest(t)
 	cfg := AppConfig{OrgID: "org-a", AppKey: "key-a", AppSecret: "secret-a"}

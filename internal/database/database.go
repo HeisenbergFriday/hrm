@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -50,6 +51,55 @@ func gormConfig() *gorm.Config {
 		Logger:                                   newRequestLogger(baseLogger),
 		DisableForeignKeyConstraintWhenMigrating: true,
 	}
+}
+
+func operationalGORMConfig() *gorm.Config {
+	return &gorm.Config{
+		Logger:                                   logger.Discard,
+		DisableForeignKeyConstraintWhenMigrating: true,
+	}
+}
+
+type operationalDatabaseOpener func(*gorm.Config) (*gorm.DB, error)
+
+// InitOperational connects to the existing application database for operational
+// tools. It deliberately does not create a database, run migrations, or seed
+// data. Connection failures are returned without changing the active DB handle.
+func InitOperational() error {
+	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if dsn == "" {
+		return errors.New("DATABASE_URL is required for operational database access")
+	}
+	return initOperationalDatabase(func(config *gorm.Config) (*gorm.DB, error) {
+		return gorm.Open(mysql.Open(dsn), config)
+	})
+}
+
+func initOperationalDatabase(open operationalDatabaseOpener) error {
+	if open == nil {
+		return errors.New("operational database opener is required")
+	}
+	db, err := open(operationalGORMConfig())
+	if err != nil {
+		return fmt.Errorf("open operational database: %w", err)
+	}
+	if db == nil {
+		return errors.New("open operational database: empty database handle")
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("resolve operational database connection: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := sqlDB.PingContext(ctx); err != nil {
+		_ = sqlDB.Close()
+		return fmt.Errorf("ping operational database: %w", err)
+	}
+
+	registerOrganizationCallbacks(db)
+	DB = db
+	return nil
 }
 
 func Init() error {
@@ -1301,6 +1351,8 @@ func migrate() error {
 		&PerformanceCompanyFinance{},
 		&PerformanceIndicatorLibrary{},
 		&PerformanceIndicatorItem{},
+		&ExternalSyncJob{},
+		&ExternalSyncLock{},
 	); err != nil {
 		return err
 	}

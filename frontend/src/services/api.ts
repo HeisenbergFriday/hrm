@@ -277,12 +277,12 @@ export const attendanceAPI = {
       end_date?: string
       status?: string
     }) => api.get('/attendance/external-sync/daily-results', { params }),
-    // 同步可能运行数分钟；覆盖全局 10s timeout，与后端 Handler 上限对齐
+    // 仅创建后台任务；任务进度由页面通过 getJob 轮询。
     run: (data?: {
       source?: 'all' | 'attendance' | 'department'
       lookback_minutes?: number
       full_department_snapshot?: boolean
-    }) => api.post('/attendance/external-sync/run', data || {}, { timeout: 10 * 60 * 1000 }),
+    }) => api.post('/attendance/external-sync/run', data || {}, { timeout: 15_000 }),
     getJobs: (params?: { page?: number; page_size?: number }) =>
       api.get('/attendance/external-sync/jobs', { params }),
     getJob: (id: number | string) => api.get(`/attendance/external-sync/jobs/${id}`),
@@ -468,7 +468,7 @@ export const attendanceToolboxAPI = {
     timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
   }),
   /** 按当前组织生成标准在职花名册 xlsx（后端读取本组织 active 用户与档案）。 */
-  generateOrgRoster: () => api.post('/attendance/toolbox/roster/generate', {}, {
+  generateOrgRoster: () => api.post<Blob, Blob>('/attendance/toolbox/roster/generate', {}, {
     responseType: 'blob',
     timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
   }),

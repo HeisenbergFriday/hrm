@@ -451,6 +451,19 @@ func NewExternalAttendanceLocalRepository(db *gorm.DB, orgID string) *ExternalAt
 	}
 }
 
+// WithContext returns an org-scoped repository bound to ctx. It is used for
+// execution and terminal writes that must not inherit a canceled HTTP context.
+func (r *ExternalAttendanceLocalRepository) WithContext(ctx context.Context) *ExternalAttendanceLocalRepository {
+	if r == nil {
+		return nil
+	}
+	db := r.db
+	if db != nil && ctx != nil {
+		db = db.Session(&gorm.Session{NewDB: true}).WithContext(ctx)
+	}
+	return NewExternalAttendanceLocalRepository(db, r.orgID)
+}
+
 func (r *ExternalAttendanceLocalRepository) scoped() *gorm.DB {
 	return r.db.Where("org_id = ?", r.orgID)
 }
@@ -497,6 +510,117 @@ func (r *ExternalAttendanceLocalRepository) CreateJob(job *database.ExternalSync
 	return r.db.Create(job).Error
 }
 
+// AcquireJob atomically recovers stale state, acquires the shared org lock,
+// and persists a running job. The unique lock row is the cross-instance gate;
+// the running-job check also protects legacy rows whose lock already expired.
+func (r *ExternalAttendanceLocalRepository) AcquireJob(
+	job *database.ExternalSyncJob,
+	owner string,
+	lockTTL time.Duration,
+	staleBefore time.Time,
+	staleSummary string,
+) (*database.ExternalSyncJob, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("db unavailable")
+	}
+	if job == nil {
+		return nil, fmt.Errorf("job is nil")
+	}
+	if lockTTL <= 0 {
+		lockTTL = 15 * time.Minute
+	}
+	now := time.Now()
+	job.OrgID = r.orgID
+	job.Status = "running"
+	if job.StartedAt.IsZero() {
+		job.StartedAt = now
+	}
+
+	var conflict *database.ExternalSyncJob
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&database.ExternalSyncJob{}).
+			Where("org_id = ? AND status = ? AND started_at < ?", r.orgID, "running", staleBefore).
+			Updates(map[string]interface{}{
+				"status":        "failed",
+				"finished_at":   now,
+				"error_summary": staleSummary,
+			}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("org_id = ? AND scope_key = ? AND expires_at < ?", r.orgID, ExternalSyncLockScope, now).
+			Delete(&database.ExternalSyncLock{}).Error; err != nil {
+			return err
+		}
+
+		var active database.ExternalSyncJob
+		err := tx.Where("org_id = ? AND status = ?", r.orgID, "running").
+			Order("started_at DESC, id DESC").First(&active).Error
+		if err == nil {
+			conflict = &active
+			return ErrExternalSyncLocked
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		lock := &database.ExternalSyncLock{
+			OrgID:     r.orgID,
+			ScopeKey:  ExternalSyncLockScope,
+			Owner:     owner,
+			ExpiresAt: now.Add(lockTTL),
+		}
+		if err := tx.Create(lock).Error; err != nil {
+			if isExternalSyncDuplicateKey(err) {
+				return ErrExternalSyncLocked
+			}
+			return err
+		}
+		return tx.Create(job).Error
+	})
+	return conflict, err
+}
+
+// ActiveJob returns the current non-terminal job for this org, if any.
+func (r *ExternalAttendanceLocalRepository) ActiveJob() (*database.ExternalSyncJob, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("db unavailable")
+	}
+	var job database.ExternalSyncJob
+	err := r.scoped().Where("status = ?", "running").Order("started_at DESC, id DESC").First(&job).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+// RecoverStaleRunningJobs safely marks only jobs older than staleBefore as
+// failed. Existing counters are preserved and no interrupted job is promoted.
+func (r *ExternalAttendanceLocalRepository) RecoverStaleRunningJobs(staleBefore, finishedAt time.Time, summary string) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("db unavailable")
+	}
+	result := r.scoped().Model(&database.ExternalSyncJob{}).
+		Where("status = ? AND started_at < ?", "running", staleBefore).
+		Updates(map[string]interface{}{
+			"status":        "failed",
+			"finished_at":   finishedAt,
+			"error_summary": summary,
+		})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	if result.RowsAffected > 0 {
+		if err := r.db.Where("org_id = ? AND scope_key = ? AND expires_at < ?", r.orgID, ExternalSyncLockScope, finishedAt).
+			Delete(&database.ExternalSyncLock{}).Error; err != nil {
+			return result.RowsAffected, err
+		}
+	}
+	return result.RowsAffected, nil
+}
+
 // HasRunningJob reports whether a non-terminal sync job exists for this org/source.
 func (r *ExternalAttendanceLocalRepository) HasRunningJob(source string) (bool, error) {
 	q := r.scoped().Model(&database.ExternalSyncJob{}).Where("status = ?", "running")
@@ -514,7 +638,7 @@ func (r *ExternalAttendanceLocalRepository) UpdateJob(job *database.ExternalSync
 	if job == nil || job.ID == 0 {
 		return fmt.Errorf("job is invalid")
 	}
-	return r.db.Model(&database.ExternalSyncJob{}).
+	result := r.db.Model(&database.ExternalSyncJob{}).
 		Where("id = ? AND org_id = ?", job.ID, r.orgID).
 		Updates(map[string]interface{}{
 			"status":        job.Status,
@@ -526,7 +650,14 @@ func (r *ExternalAttendanceLocalRepository) UpdateJob(job *database.ExternalSync
 			"skipped":       job.Skipped,
 			"failed":        job.Failed,
 			"error_summary": job.ErrorSummary,
-		}).Error
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("external sync terminal update affected %d rows", result.RowsAffected)
+	}
+	return nil
 }
 
 func (r *ExternalAttendanceLocalRepository) GetJob(id uint) (*database.ExternalSyncJob, error) {
@@ -710,8 +841,15 @@ func (r *ExternalAttendanceLocalRepository) ReleaseSyncLock(scope, owner string)
 		return nil
 	}
 	_ = scope
-	return r.db.Where("org_id = ? AND scope_key = ? AND owner = ?", r.orgID, ExternalSyncLockScope, owner).
-		Delete(&database.ExternalSyncLock{}).Error
+	result := r.db.Where("org_id = ? AND scope_key = ? AND owner = ?", r.orgID, ExternalSyncLockScope, owner).
+		Delete(&database.ExternalSyncLock{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("external sync lock release affected %d rows", result.RowsAffected)
+	}
+	return nil
 }
 
 // UpsertAttendanceRaw inserts or updates staging only when incoming source_updated_at is newer/equal.

@@ -19,6 +19,10 @@ const (
 	externalSyncSourceAttendance = "attendance"
 	externalSyncSourceDepartment = "department"
 	externalSyncSourceAll        = "all"
+	externalSyncDefaultTimeout   = 10 * time.Minute
+	externalSyncTerminalTimeout  = 5 * time.Second
+	externalSyncRecoveryGrace    = time.Minute
+	externalSyncStaleSummary     = "任务执行中断或服务重启，已由系统安全标记为失败"
 )
 
 // Sentinel errors for HTTP mapping.
@@ -44,6 +48,11 @@ type ExternalAttendanceSyncService struct {
 	affectedAttendancePairs       []attendanceUserDatePair
 	attendanceBusinessWriteFailed bool
 	retryableOvertimeRecalculator func([]repository.UserDatePair) (int, error)
+	// taskTimeout is the maximum execution time for a sync task
+	taskTimeout       time.Duration
+	logf              func(string, ...interface{})
+	syncAttendanceFn  func(context.Context, *database.ExternalSyncJob, time.Duration) error
+	syncDepartmentsFn func(context.Context, *database.ExternalSyncJob, time.Duration, bool) error
 }
 
 type attendanceUserDatePair struct {
@@ -70,6 +79,15 @@ type ExternalSyncStatusView struct {
 	ExternalLastDepartmentUpdate *time.Time                    `json:"external_last_department_update,omitempty"`
 	Cursors                      []database.ExternalSyncCursor `json:"cursors"`
 	LastJob                      *database.ExternalSyncJob     `json:"last_job,omitempty"`
+	ActiveJob                    *database.ExternalSyncJob     `json:"active_job,omitempty"`
+}
+
+// ExternalSyncPreparedRun is persisted before asynchronous work starts.
+// Lock ownership stays private so clients cannot release another worker's lock.
+type ExternalSyncPreparedRun struct {
+	Job     *database.ExternalSyncJob
+	owner   string
+	options ExternalSyncRunOptions
 }
 
 func NewExternalAttendanceSyncService(
@@ -83,12 +101,14 @@ func NewExternalAttendanceSyncService(
 		lookback = 30 * time.Minute
 	}
 	return &ExternalAttendanceSyncService{
-		source:     source,
-		local:      local,
-		orgID:      database.NormalizeOrganizationID(orgID),
-		lookback:   lookback,
-		pageSize:   200,
-		cfgEnabled: enabled,
+		source:      source,
+		local:       local,
+		orgID:       database.NormalizeOrganizationID(orgID),
+		lookback:    lookback,
+		pageSize:    200,
+		cfgEnabled:  enabled,
+		taskTimeout: externalSyncDefaultTimeout,
+		logf:        log.Printf,
 	}
 }
 
@@ -100,7 +120,17 @@ func (s *ExternalAttendanceSyncService) SetRetryableOvertimeRecalculator(fn func
 	}
 }
 
+// SetTaskTimeout sets the maximum execution time for a sync task
+func (s *ExternalAttendanceSyncService) SetTaskTimeout(timeout time.Duration) {
+	if timeout > 0 {
+		s.taskTimeout = timeout
+	}
+}
+
 func (s *ExternalAttendanceSyncService) GetStatus(ctx context.Context) (*ExternalSyncStatusView, error) {
+	if _, err := s.RecoverStaleJobs(ctx); err != nil {
+		return nil, err
+	}
 	view := &ExternalSyncStatusView{
 		OrgID:   s.orgID,
 		OrgName: database.CorpNameForOrg(s.orgID),
@@ -141,33 +171,63 @@ func (s *ExternalAttendanceSyncService) GetStatus(ctx context.Context) (*Externa
 		if job, err := s.local.LatestJob(); err == nil {
 			view.LastJob = job
 		}
+		active, err := s.local.ActiveJob()
+		if err != nil {
+			return nil, err
+		}
+		view.ActiveJob = active
 	}
 	return view, nil
 }
 
 func (s *ExternalAttendanceSyncService) ListJobs(page, pageSize int) ([]database.ExternalSyncJob, int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), externalSyncTerminalTimeout)
+	defer cancel()
+	if _, err := s.RecoverStaleJobs(ctx); err != nil {
+		return nil, 0, err
+	}
 	return s.local.ListJobs(page, pageSize)
 }
 
 func (s *ExternalAttendanceSyncService) GetJob(id uint) (*database.ExternalSyncJob, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), externalSyncTerminalTimeout)
+	defer cancel()
+	if _, err := s.RecoverStaleJobs(ctx); err != nil {
+		return nil, err
+	}
 	return s.local.GetJob(id)
 }
 
-// Run executes an incremental sync for the service org only.
-func (s *ExternalAttendanceSyncService) Run(ctx context.Context, opt ExternalSyncRunOptions) (*database.ExternalSyncJob, error) {
+func (s *ExternalAttendanceSyncService) effectiveTaskTimeout() time.Duration {
+	if s == nil || s.taskTimeout <= 0 {
+		return externalSyncDefaultTimeout
+	}
+	return s.taskTimeout
+}
+
+// RecoverStaleJobs marks only jobs older than the execution limit plus a grace
+// period as failed. It is safe to call repeatedly from startup and read APIs.
+func (s *ExternalAttendanceSyncService) RecoverStaleJobs(ctx context.Context) (int64, error) {
 	if s == nil || s.local == nil {
-		return nil, fmt.Errorf("external sync service not initialized")
+		return 0, fmt.Errorf("external sync service not initialized")
+	}
+	now := time.Now()
+	staleBefore := now.Add(-(s.effectiveTaskTimeout() + externalSyncRecoveryGrace))
+	return s.local.WithContext(ctx).RecoverStaleRunningJobs(staleBefore, now, externalSyncStaleSummary)
+}
+
+// PrepareRun atomically acquires the database gate and persists the running
+// task before the handler returns 202.
+func (s *ExternalAttendanceSyncService) PrepareRun(opt ExternalSyncRunOptions) (*ExternalSyncPreparedRun, *database.ExternalSyncJob, error) {
+	if s == nil || s.local == nil {
+		return nil, nil, fmt.Errorf("external sync service not initialized")
 	}
 	if !s.cfgEnabled {
-		return nil, ErrExternalSyncDisabled
+		return nil, nil, ErrExternalSyncDisabled
 	}
 	if !database.IsKnownExternalOrg(s.orgID) {
-		return nil, fmt.Errorf("org %s is not configured for external attendance sync", s.orgID)
+		return nil, nil, fmt.Errorf("org %s is not configured for external attendance sync", s.orgID)
 	}
-	if s.source == nil {
-		return nil, ErrExternalSyncNotConfig
-	}
-
 	source := strings.TrimSpace(opt.Source)
 	if source == "" {
 		source = externalSyncSourceAll
@@ -175,24 +235,9 @@ func (s *ExternalAttendanceSyncService) Run(ctx context.Context, opt ExternalSyn
 	switch source {
 	case externalSyncSourceAttendance, externalSyncSourceDepartment, externalSyncSourceAll:
 	default:
-		return nil, fmt.Errorf("invalid source %q", source)
+		return nil, nil, fmt.Errorf("invalid source %q", source)
 	}
-
-	owner := fmt.Sprintf("%s-%d-%s", s.orgID, time.Now().UnixNano(), defaultStr(opt.OperatorUserID, "system"))
-	if err := s.local.AcquireSyncLock(source, owner, 15*time.Minute); err != nil {
-		if errors.Is(err, repository.ErrExternalSyncLocked) {
-			return nil, ErrExternalSyncLocked
-		}
-		return nil, err
-	}
-	defer func() {
-		_ = s.local.ReleaseSyncLock(source, owner)
-	}()
-
-	lookback := s.lookback
-	if opt.Lookback > 0 {
-		lookback = opt.Lookback
-	}
+	opt.Source = source
 
 	now := time.Now()
 	job := &database.ExternalSyncJob{
@@ -203,42 +248,165 @@ func (s *ExternalAttendanceSyncService) Run(ctx context.Context, opt ExternalSyn
 		StartedAt:      now,
 		OperatorUserID: opt.OperatorUserID,
 	}
-	if err := s.local.CreateJob(job); err != nil {
-		return nil, err
+	owner := fmt.Sprintf("%s-%d-%s", s.orgID, now.UnixNano(), defaultStr(opt.OperatorUserID, "system"))
+	timeout := s.effectiveTaskTimeout()
+	conflict, err := s.local.AcquireJob(
+		job,
+		owner,
+		timeout+externalSyncRecoveryGrace,
+		now.Add(-(timeout + externalSyncRecoveryGrace)),
+		externalSyncStaleSummary,
+	)
+	if err != nil {
+		if errors.Is(err, repository.ErrExternalSyncLocked) {
+			if conflict == nil {
+				conflict, _ = s.local.ActiveJob()
+			}
+			return nil, conflict, ErrExternalSyncLocked
+		}
+		return nil, nil, err
+	}
+	return &ExternalSyncPreparedRun{Job: job, owner: owner, options: opt}, nil, nil
+}
+
+// Run executes an incremental sync synchronously. HTTP callers use PrepareRun
+// plus RunPrepared so the accepted response is not tied to task completion.
+func (s *ExternalAttendanceSyncService) Run(ctx context.Context, opt ExternalSyncRunOptions) (*database.ExternalSyncJob, error) {
+	prepared, conflict, err := s.PrepareRun(opt)
+	if err != nil {
+		return conflict, err
+	}
+	return s.RunPrepared(ctx, prepared)
+}
+
+// RunPrepared executes a persisted task under a hard timeout. The cloned
+// repository is bound to the execution context; terminal writes use a separate
+// context in executePrepared.
+func (s *ExternalAttendanceSyncService) RunPrepared(ctx context.Context, prepared *ExternalSyncPreparedRun) (*database.ExternalSyncJob, error) {
+	if s == nil || s.local == nil || prepared == nil || prepared.Job == nil || prepared.owner == "" {
+		return nil, fmt.Errorf("external sync prepared run is invalid")
+	}
+	if s.source == nil {
+		err := s.FailPreparedRun(ctx, prepared, "外部考勤数据源初始化失败")
+		return prepared.Job, errors.Join(ErrExternalSyncNotConfig, err)
+	}
+	runCtx, cancel := context.WithTimeout(ctx, s.effectiveTaskTimeout())
+	defer cancel()
+	runner := *s
+	runner.local = s.local.WithContext(runCtx)
+	return runner.executePrepared(runCtx, prepared)
+}
+
+// FailPreparedRun is the asynchronous entry point's last-resort recovery when
+// an unexpected panic escapes RunPrepared itself.
+func (s *ExternalAttendanceSyncService) FailPreparedRun(ctx context.Context, prepared *ExternalSyncPreparedRun, summary string) error {
+	if s == nil || s.local == nil || prepared == nil || prepared.Job == nil {
+		return fmt.Errorf("external sync prepared run is invalid")
+	}
+	job := prepared.Job
+	finished := time.Now()
+	job.Status = "failed"
+	job.FinishedAt = &finished
+	job.ErrorSummary = joinErrorSummary([]string{summary}, job.ErrorSummary)
+	terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), externalSyncTerminalTimeout)
+	defer cancel()
+	terminalLocal := s.local.WithContext(terminalCtx)
+	var result error
+	if err := terminalLocal.UpdateJob(job); err != nil {
+		s.log("org=%s job=%d stage=panic_terminal_persist result=failed error_type=%T", s.orgID, job.ID, err)
+		result = errors.Join(result, err)
+	}
+	if err := terminalLocal.ReleaseSyncLock(job.Source, prepared.owner); err != nil {
+		s.log("org=%s job=%d stage=panic_lock_release result=failed error_type=%T", s.orgID, job.ID, err)
+		result = errors.Join(result, err)
+	}
+	return result
+}
+
+func (s *ExternalAttendanceSyncService) executePrepared(ctx context.Context, prepared *ExternalSyncPreparedRun) (job *database.ExternalSyncJob, returnErr error) {
+	job = prepared.Job
+	opt := prepared.options
+	lookback := s.lookback
+	if opt.Lookback > 0 {
+		lookback = opt.Lookback
 	}
 
 	s.approveParseFailures = 0
 	s.affectedAttendancePairs = nil
 	s.attendanceBusinessWriteFailed = false
 	var runErrs []string
-	if source == externalSyncSourceAttendance || source == externalSyncSourceAll {
-		if err := s.syncAttendance(ctx, job, lookback); err != nil {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			runErrs = append(runErrs, "internal:任务执行异常终止")
+			returnErr = fmt.Errorf("external sync panic: %T", recovered)
+			s.log("org=%s job=%d stage=execute result=panic panic_type=%T", s.orgID, job.ID, recovered)
+		}
+		if s.approveParseFailures > 0 {
+			runErrs = append(runErrs, fmt.Sprintf("approve_list parse failures: %d", s.approveParseFailures))
+		}
+		finished := time.Now()
+		job.FinishedAt = &finished
+		applyExternalSyncJobStatus(job, runErrs)
+		if job.Status == "failed" && returnErr == nil {
+			returnErr = errors.New(job.ErrorSummary)
+		}
+
+		terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), externalSyncTerminalTimeout)
+		defer cancel()
+		terminalLocal := s.local.WithContext(terminalCtx)
+		if err := terminalLocal.UpdateJob(job); err != nil {
+			s.log("org=%s job=%d stage=terminal_persist result=failed error_type=%T", s.orgID, job.ID, err)
+			returnErr = errors.Join(returnErr, fmt.Errorf("persist external sync terminal state: %w", err))
+		}
+		if err := terminalLocal.ReleaseSyncLock(job.Source, prepared.owner); err != nil {
+			s.log("org=%s job=%d stage=lock_release result=failed error_type=%T", s.orgID, job.ID, err)
+			returnErr = errors.Join(returnErr, fmt.Errorf("release external sync lock: %w", err))
+		}
+	}()
+
+	if job.Source == externalSyncSourceAttendance || job.Source == externalSyncSourceAll {
+		if err := s.runStage(job.ID, "attendance", func() error {
+			if s.syncAttendanceFn != nil {
+				return s.syncAttendanceFn(ctx, job, lookback)
+			}
+			return s.syncAttendance(ctx, job, lookback)
+		}); err != nil {
 			runErrs = append(runErrs, "attendance:"+sanitizeExternalErr(err))
 		} else if !s.attendanceBusinessWriteFailed {
-			if err := s.recalculateAffectedOvertime(); err != nil {
+			if err := s.runStage(job.ID, "overtime_recalc", s.recalculateAffectedOvertime); err != nil {
 				runErrs = append(runErrs, "overtime_recalc:"+sanitizeSyncError(err))
 			}
 		}
 	}
-	if source == externalSyncSourceDepartment || source == externalSyncSourceAll {
-		if err := s.syncDepartments(ctx, job, lookback, opt.FullDepartmentSnapshot); err != nil {
+	if job.Source == externalSyncSourceDepartment || job.Source == externalSyncSourceAll {
+		if err := s.runStage(job.ID, "department", func() error {
+			if s.syncDepartmentsFn != nil {
+				return s.syncDepartmentsFn(ctx, job, lookback, opt.FullDepartmentSnapshot)
+			}
+			return s.syncDepartments(ctx, job, lookback, opt.FullDepartmentSnapshot)
+		}); err != nil {
 			runErrs = append(runErrs, "department:"+sanitizeExternalErr(err))
 		}
 	}
-
-	finished := time.Now()
-	job.FinishedAt = &finished
-	if s.approveParseFailures > 0 {
-		runErrs = append(runErrs, fmt.Sprintf("approve_list parse failures: %d", s.approveParseFailures))
-	}
-	applyExternalSyncJobStatus(job, runErrs)
-	if err := s.local.UpdateJob(job); err != nil {
-		log.Printf("[ExternalAttendanceSync] update job failed org=%s job=%d: %v", s.orgID, job.ID, err)
-	}
-	if job.Status == "failed" {
-		return job, fmt.Errorf("%s", job.ErrorSummary)
-	}
 	return job, nil
+}
+
+func (s *ExternalAttendanceSyncService) runStage(jobID uint, stage string, fn func() error) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.log("org=%s job=%d stage=%s result=panic panic_type=%T", s.orgID, jobID, stage, recovered)
+			err = fmt.Errorf("任务执行异常终止（%s panic）", stage)
+		}
+	}()
+	return fn()
+}
+
+func (s *ExternalAttendanceSyncService) log(format string, args ...interface{}) {
+	if s != nil && s.logf != nil {
+		s.logf("[ExternalAttendanceSync] "+format, args...)
+		return
+	}
+	log.Printf("[ExternalAttendanceSync] "+format, args...)
 }
 
 // applyExternalSyncJobStatus classifies a finished job:
@@ -307,6 +475,9 @@ func (s *ExternalAttendanceSyncService) syncAttendance(ctx context.Context, job 
 	highKey := ""
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		rows, err := s.source.ListAttendanceSince(ctx, corpID, cursorTime, afterKey, s.pageSize)
 		if err != nil {
 			return err
@@ -721,6 +892,9 @@ func (s *ExternalAttendanceSyncService) syncDepartments(ctx context.Context, job
 	deptStageFailed := 0
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		rows, err := s.source.ListDepartmentsSince(ctx, corpName, cursorTime, afterKey, s.pageSize)
 		if err != nil {
 			return err

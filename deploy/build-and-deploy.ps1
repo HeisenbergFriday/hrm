@@ -133,8 +133,8 @@ if (-not $SkipConfigUpload -and (Test-Path $ConfigFile)) {
     }
 }
 
-# Step 1: Build Go backend and DingTalk Stream worker
-Write-Step "[1/8] Building Go backend and DingTalk Stream worker..."
+# Step 1: Build Go backend, DingTalk Stream worker, and organization sync tool
+Write-Step "[1/8] Building Go backend, DingTalk Stream worker, and organization sync tool..."
 $env:CGO_ENABLED = "0"
 $env:GOOS = "linux"
 $env:GOARCH = "amd64"
@@ -148,7 +148,12 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to build DingTalk Stream worker"
     exit 1
 }
-Write-Success "Backend and DingTalk Stream worker built"
+go build -o sync_org_data ./tools/ops/sync_org_data
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to build organization sync tool"
+    exit 1
+}
+Write-Success "Backend, DingTalk Stream worker, and organization sync tool built"
 
 # Step 2: Build React frontend
 Write-Host ""
@@ -184,11 +189,12 @@ ENV APP_ENV=production \
     ATTENDANCE_TOOLBOX_DIR=/app/tools/attendance_toolbox/python
 COPY peopleops /app/peopleops
 COPY dingtalk_stream /app/dingtalk_stream
+COPY sync_org_data /app/sync_org_data
 COPY frontend/dist /app/frontend/dist
 COPY internal/config/holidays.json /app/internal/config/holidays.json
 COPY tools/attendance_toolbox /app/tools/attendance_toolbox
 RUN mkdir -p /app/uploads \
-    && chmod +x /app/peopleops /app/dingtalk_stream
+    && chmod +x /app/peopleops /app/dingtalk_stream /app/sync_org_data
 EXPOSE 8080
 VOLUME ["/app/uploads"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
@@ -201,6 +207,7 @@ $dockerignore = @"
 *
 !peopleops
 !dingtalk_stream
+!sync_org_data
 !frontend
 !frontend/dist
 !frontend/dist/**
@@ -260,7 +267,13 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "DingTalk Stream worker is missing or not executable in image"
     exit 1
 }
-Write-Success "Docker image built; attendance toolbox and DingTalk Stream worker verified"
+Write-Step "Verifying organization sync tool in image..."
+docker run --rm --entrypoint /bin/sh peopleops-hr:test -c "test -x /app/sync_org_data"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Organization sync tool is missing or not executable in image"
+    exit 1
+}
+Write-Success "Docker image built; attendance toolbox, DingTalk Stream worker, and organization sync tool verified"
 
 # Step 5: Export to tar
 Write-Host ""
@@ -380,6 +393,7 @@ Remove-Item "Dockerfile.deploy" -Force -ErrorAction SilentlyContinue
 Remove-Item "Dockerfile.deploy.dockerignore" -Force -ErrorAction SilentlyContinue
 Remove-Item "peopleops" -Force -ErrorAction SilentlyContinue
 Remove-Item "dingtalk_stream" -Force -ErrorAction SilentlyContinue
+Remove-Item "sync_org_data" -Force -ErrorAction SilentlyContinue
 Write-Success "Cleaned"
 
 # Done

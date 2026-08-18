@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +15,11 @@ import (
 	"peopleops/internal/service"
 
 	"github.com/gin-gonic/gin"
+)
+
+var (
+	launchExternalAttendanceSyncBackground = func(task func()) { go task() }
+	externalAttendanceExecutionTimeout     = 10 * time.Minute
 )
 
 // ExternalAttendanceSyncStatus GET /api/v1/attendance/external-sync/status
@@ -75,7 +81,10 @@ func ExternalAttendanceSyncRun(c *gin.Context) {
 		return
 	}
 
-	svc := newExternalSyncService(c, orgID)
+	executionCtx, cancelExecution := context.WithTimeout(context.WithoutCancel(c.Request.Context()), externalAttendanceExecutionTimeout)
+	backgroundContext := c.Copy()
+	middleware.RebindRequestContext(backgroundContext, executionCtx)
+	svc := newExternalSyncControlService(backgroundContext, orgID)
 	operator := ""
 	if authCtx, err := middleware.GetAuthContext(c); err == nil && authCtx != nil {
 		operator = authCtx.UserID
@@ -90,10 +99,9 @@ func ExternalAttendanceSyncRun(c *gin.Context) {
 		opt.Lookback = time.Duration(req.LookbackMinutes) * time.Minute
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
-	defer cancel()
-	job, err := svc.Run(ctx, opt)
+	prepared, conflict, err := svc.PrepareRun(opt)
 	if err != nil {
+		cancelExecution()
 		switch {
 		case errors.Is(err, service.ErrExternalSyncDisabled):
 			c.JSON(http.StatusServiceUnavailable, Response{Code: 503, Message: err.Error()})
@@ -102,19 +110,40 @@ func ExternalAttendanceSyncRun(c *gin.Context) {
 			c.JSON(http.StatusServiceUnavailable, Response{Code: 503, Message: err.Error()})
 			return
 		case errors.Is(err, service.ErrExternalSyncLocked):
-			c.JSON(http.StatusConflict, Response{Code: 409, Message: "a sync job is already running for this org/source"})
+			c.JSON(http.StatusConflict, Response{
+				Code:    http.StatusConflict,
+				Message: "当前组织已有外部同步任务运行中，请等待任务完成",
+				Data:    conflict,
+			})
 			return
-		case job == nil:
-			c.JSON(http.StatusBadRequest, Response{Code: 400, Message: err.Error()})
+		default:
+			log.Printf("[ExternalAttendanceSync] org=%s stage=prepare result=failed error_type=%T", orgID, err)
+			c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "创建同步任务失败，请稍后重试"})
 			return
 		}
 	}
-	msg := "success"
-	if err != nil {
-		msg = err.Error()
-	}
 
-	c.JSON(http.StatusOK, Response{Code: 200, Message: msg, Data: job})
+	c.JSON(http.StatusAccepted, Response{Code: http.StatusAccepted, Message: "同步任务已启动", Data: prepared.Job})
+	launchExternalAttendanceSyncBackground(func() {
+		defer cancelExecution()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if recoverErr := svc.FailPreparedRun(executionCtx, prepared, "任务执行异常终止（panic）"); recoverErr != nil {
+					log.Printf("[ExternalAttendanceSync] org=%s job=%d stage=async_recovery result=persist_failed error_type=%T", orgID, prepared.Job.ID, recoverErr)
+				}
+				log.Printf("[ExternalAttendanceSync] org=%s job=%d stage=async_entry result=panic panic_type=%T", orgID, prepared.Job.ID, recovered)
+			}
+		}()
+		runner := newExternalSyncService(backgroundContext, orgID)
+		job, runErr := runner.RunPrepared(executionCtx, prepared)
+		if runErr != nil {
+			status := prepared.Job.Status
+			if job != nil {
+				status = job.Status
+			}
+			log.Printf("[ExternalAttendanceSync] org=%s job=%d stage=background result=%s error_type=%T", orgID, prepared.Job.ID, status, runErr)
+		}
+	})
 }
 
 // ExternalAttendanceSyncJobs GET /api/v1/attendance/external-sync/jobs
@@ -123,7 +152,7 @@ func ExternalAttendanceSyncJobs(c *gin.Context) {
 	if !ok {
 		return
 	}
-	svc := newExternalSyncService(c, orgID)
+	svc := newExternalSyncControlService(c, orgID)
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	if page < 1 {
@@ -159,7 +188,7 @@ func ExternalAttendanceSyncJobDetail(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "invalid job id"})
 		return
 	}
-	svc := newExternalSyncService(c, orgID)
+	svc := newExternalSyncControlService(c, orgID)
 	job, err := svc.GetJob(uint(id64))
 	if err != nil {
 		c.JSON(http.StatusNotFound, Response{Code: 404, Message: "job not found"})
@@ -211,7 +240,7 @@ func ExternalAttendanceDailyResults(c *gin.Context) {
 		pageSize = 100
 	}
 
-	svc := newExternalSyncService(c, orgID)
+	svc := newExternalSyncControlService(c, orgID)
 	status := strings.ToLower(strings.TrimSpace(c.DefaultQuery("status", "all")))
 	allowedStatuses := map[string]bool{
 		"all": true, "normal": true, "exception": true, "approval": true,
@@ -246,6 +275,17 @@ func ExternalAttendanceDailyResults(c *gin.Context) {
 		"end_date":   endDate,
 		"summary":    summary,
 	}})
+}
+
+func newExternalSyncControlService(c *gin.Context, orgID string) *service.ExternalAttendanceSyncService {
+	cfg := database.LoadExternalAttendanceConfig()
+	requestDB := middleware.RequestDB(c)
+	local := repository.NewExternalAttendanceLocalRepository(requestDB, orgID)
+	lookback := time.Duration(cfg.LookbackMinutes) * time.Minute
+	svc := service.NewExternalAttendanceSyncService(nil, local, orgID, lookback, cfg.Enabled)
+	attendanceSvc := service.NewAttendanceServiceWithOrgID(requestDB, orgID)
+	svc.SetRetryableOvertimeRecalculator(attendanceSvc.RecalculateRetryableOvertime)
+	return svc
 }
 
 func newExternalSyncService(c *gin.Context, orgID string) *service.ExternalAttendanceSyncService {

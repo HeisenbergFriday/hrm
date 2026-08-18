@@ -20,9 +20,11 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
+COPY tools/ops/sync_org_data/ ./tools/ops/sync_org_data/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -ldflags="-s -w" -o /out/peopleops ./cmd/main.go && \
-    go build -trimpath -ldflags="-s -w" -o /out/dingtalk_stream ./cmd/dingtalk_stream
+    go build -trimpath -ldflags="-s -w" -o /out/dingtalk_stream ./cmd/dingtalk_stream && \
+    go build -trimpath -ldflags="-s -w" -o /out/sync_org_data ./tools/ops/sync_org_data
 
 FROM python:3.12-slim AS runtime
 WORKDIR /app
@@ -52,6 +54,7 @@ ENV APP_ENV=production \
 
 COPY --from=backend-builder /out/peopleops /app/peopleops
 COPY --from=backend-builder /out/dingtalk_stream /app/dingtalk_stream
+COPY --from=backend-builder /out/sync_org_data /app/sync_org_data
 COPY --from=frontend-builder /src/frontend/dist /app/frontend/dist
 COPY tools/attendance_toolbox /app/tools/attendance_toolbox
 

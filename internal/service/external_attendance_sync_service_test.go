@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
 	"peopleops/internal/repository"
+
+	"gorm.io/gorm"
 )
 
 func TestBuildAttendanceSourceRowKeyStable(t *testing.T) {
@@ -230,6 +233,181 @@ func TestJoinErrorSummaryTruncates(t *testing.T) {
 	msg := joinErrorSummary([]string{long}, "")
 	if len(msg) > 1000 {
 		t.Fatalf("len=%d", len(msg))
+	}
+}
+
+func newExternalSyncLifecycleService(t *testing.T) (*ExternalAttendanceSyncService, *gorm.DB) {
+	t.Helper()
+	db := openLeaveJobsDB(t)
+	if err := db.AutoMigrate(&database.ExternalSyncJob{}, &database.ExternalSyncLock{}); err != nil {
+		t.Fatalf("migrate external sync task tables: %v", err)
+	}
+	svc := NewExternalAttendanceSyncService(
+		&repository.ExternalAttendanceSourceRepository{},
+		repository.NewExternalAttendanceLocalRepository(db, "xiaotie"),
+		"xiaotie",
+		time.Minute,
+		true,
+	)
+	return svc, db
+}
+
+func TestExternalSyncRunSuccessPersistsTerminalStateAndCounts(t *testing.T) {
+	svc, db := newExternalSyncLifecycleService(t)
+	svc.syncAttendanceFn = func(_ context.Context, job *database.ExternalSyncJob, _ time.Duration) error {
+		job.Inserted, job.Updated, job.Skipped = 2, 3, 4
+		return nil
+	}
+
+	job, err := svc.Run(context.Background(), ExternalSyncRunOptions{Source: "attendance"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if job.Status != "success" || job.FinishedAt == nil {
+		t.Fatalf("job terminal state = %#v", job)
+	}
+	var persisted database.ExternalSyncJob
+	if err := db.First(&persisted, job.ID).Error; err != nil {
+		t.Fatalf("load job: %v", err)
+	}
+	if persisted.Status != "success" || persisted.Inserted != 2 || persisted.Updated != 3 || persisted.Skipped != 4 || persisted.FinishedAt == nil {
+		t.Fatalf("persisted job = %#v", persisted)
+	}
+}
+
+func TestExternalSyncRunBusinessErrorAndContextCancelFail(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "business error", err: errors.New("source unavailable")},
+		{name: "context canceled", err: context.Canceled},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, db := newExternalSyncLifecycleService(t)
+			svc.syncAttendanceFn = func(_ context.Context, _ *database.ExternalSyncJob, _ time.Duration) error { return tt.err }
+			job, runErr := svc.Run(context.Background(), ExternalSyncRunOptions{Source: "attendance"})
+			if runErr == nil || job.Status != "failed" || job.FinishedAt == nil {
+				t.Fatalf("job=%#v err=%v", job, runErr)
+			}
+			var persisted database.ExternalSyncJob
+			if err := db.First(&persisted, job.ID).Error; err != nil {
+				t.Fatalf("load job: %v", err)
+			}
+			if persisted.Status != "failed" || persisted.FinishedAt == nil || persisted.ErrorSummary == "" {
+				t.Fatalf("persisted job=%#v", persisted)
+			}
+		})
+	}
+}
+
+func TestExternalSyncRunPanicIsRecovered(t *testing.T) {
+	svc, db := newExternalSyncLifecycleService(t)
+	svc.syncAttendanceFn = func(context.Context, *database.ExternalSyncJob, time.Duration) error { panic("boom") }
+
+	job, err := svc.Run(context.Background(), ExternalSyncRunOptions{Source: "attendance"})
+	if err == nil || job.Status != "failed" || job.FinishedAt == nil || !strings.Contains(job.ErrorSummary, "panic") {
+		t.Fatalf("job=%#v err=%v", job, err)
+	}
+	var persisted database.ExternalSyncJob
+	if err := db.First(&persisted, job.ID).Error; err != nil {
+		t.Fatalf("load job: %v", err)
+	}
+	if persisted.Status != "failed" || !strings.Contains(persisted.ErrorSummary, "panic") {
+		t.Fatalf("persisted panic job=%#v", persisted)
+	}
+}
+
+func TestExternalSyncAllContinuesAfterChildFailure(t *testing.T) {
+	svc, _ := newExternalSyncLifecycleService(t)
+	svc.syncAttendanceFn = func(context.Context, *database.ExternalSyncJob, time.Duration) error {
+		return errors.New("attendance failed")
+	}
+	svc.syncDepartmentsFn = func(_ context.Context, job *database.ExternalSyncJob, _ time.Duration, _ bool) error {
+		job.Inserted = 1
+		return nil
+	}
+
+	job, err := svc.Run(context.Background(), ExternalSyncRunOptions{Source: "all"})
+	if err != nil {
+		t.Fatalf("partial all should not return fatal error: %v", err)
+	}
+	if job.Status != "partial" || job.Inserted != 1 || !strings.Contains(job.ErrorSummary, "attendance") {
+		t.Fatalf("job=%#v", job)
+	}
+}
+
+func TestExternalSyncDuplicateSubmissionUsesDatabaseGate(t *testing.T) {
+	svc, db := newExternalSyncLifecycleService(t)
+	first, conflict, err := svc.PrepareRun(ExternalSyncRunOptions{Source: "attendance"})
+	if err != nil || first == nil || conflict != nil {
+		t.Fatalf("first prepare: prepared=%#v conflict=%#v err=%v", first, conflict, err)
+	}
+	second, conflict, err := svc.PrepareRun(ExternalSyncRunOptions{Source: "department"})
+	if !errors.Is(err, ErrExternalSyncLocked) || second != nil || conflict == nil || conflict.ID != first.Job.ID {
+		t.Fatalf("duplicate prepare: prepared=%#v conflict=%#v err=%v", second, conflict, err)
+	}
+	var count int64
+	if err := db.Model(&database.ExternalSyncJob{}).Where("status = ?", "running").Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("running count=%d err=%v", count, err)
+	}
+}
+
+func TestExternalSyncRecoversStaleRunningJobAsFailed(t *testing.T) {
+	svc, db := newExternalSyncLifecycleService(t)
+	svc.SetTaskTimeout(time.Minute)
+	started := time.Now().Add(-10 * time.Minute)
+	job := &database.ExternalSyncJob{OrgID: "xiaotie", Trigger: "manual", Source: "all", Status: "running", StartedAt: started}
+	if err := db.Create(job).Error; err != nil {
+		t.Fatalf("create stale job: %v", err)
+	}
+	if _, err := svc.RecoverStaleJobs(context.Background()); err != nil {
+		t.Fatalf("recover stale: %v", err)
+	}
+	var recovered database.ExternalSyncJob
+	if err := db.First(&recovered, job.ID).Error; err != nil {
+		t.Fatalf("load stale job: %v", err)
+	}
+	if recovered.Status != "failed" || recovered.FinishedAt == nil || !strings.Contains(recovered.ErrorSummary, "任务执行中断或服务重启") {
+		t.Fatalf("recovered job=%#v", recovered)
+	}
+}
+
+func TestExternalSyncTerminalPersistFailureIsLogged(t *testing.T) {
+	svc, db := newExternalSyncLifecycleService(t)
+	var logs []string
+	svc.logf = func(format string, args ...interface{}) { logs = append(logs, fmt.Sprintf(format, args...)) }
+	prepared, _, err := svc.PrepareRun(ExternalSyncRunOptions{Source: "attendance"})
+	if err != nil || prepared == nil {
+		t.Fatalf("prepare: prepared=%#v err=%v", prepared, err)
+	}
+	callbackName := "test_external_sync_terminal_failure"
+	if err := db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "ExternalSyncJob" {
+			_ = tx.AddError(errors.New("terminal write blocked"))
+		}
+	}); err != nil {
+		t.Fatalf("register callback: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
+	svc.syncAttendanceFn = func(_ context.Context, job *database.ExternalSyncJob, _ time.Duration) error {
+		job.Inserted = 1
+		return nil
+	}
+	job, err := svc.RunPrepared(context.Background(), prepared)
+	if err == nil || job == nil || job.Status != "success" {
+		t.Fatalf("job=%#v err=%v", job, err)
+	}
+	matched := false
+	for _, line := range logs {
+		if strings.Contains(line, "stage=terminal_persist") {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		t.Fatalf("terminal persist failure was not logged: %v", logs)
 	}
 }
 

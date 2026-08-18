@@ -52,6 +52,10 @@ func main() {
 	performanceJobs := service.NewPerformanceJobScheduler(database.DB)
 	performanceJobs.Start()
 
+	// 启动外部考勤增量同步，并在启动时收敛超时遗留任务。
+	externalAttendanceJobs := service.NewExternalAttendanceJobScheduler(database.DB)
+	externalAttendanceJobs.Start()
+
 	// 启动服务器
 	port := os.Getenv("PORT")
 	if port == "" {

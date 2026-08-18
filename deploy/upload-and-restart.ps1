@@ -41,7 +41,7 @@
     Skip /health polling after restart (not recommended).
 
 .PARAMETER CleanupLocal
-    After success, delete local tar and leftover Dockerfile.deploy / peopleops binary
+    After success, delete local tar and leftover Dockerfile.deploy / runtime binaries
     (same cleanup set as build-and-deploy.ps1). Default: keep local tar for retries.
 
 .EXAMPLE
@@ -280,6 +280,7 @@ if ($CleanupLocal) {
     Remove-Item "Dockerfile.deploy.dockerignore" -Force -ErrorAction SilentlyContinue
     Remove-Item "peopleops" -Force -ErrorAction SilentlyContinue
     Remove-Item "dingtalk_stream" -Force -ErrorAction SilentlyContinue
+    Remove-Item "sync_org_data" -Force -ErrorAction SilentlyContinue
     Write-Success "Local tar and deploy leftovers removed"
 } else {
     Write-Host ""

@@ -3,10 +3,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import AttendanceExternalSync from './AttendanceExternalSync'
+import AttendanceExternalSync, { externalSyncJobPollingInterval } from './AttendanceExternalSync'
 
 const mockGetStatus = vi.fn()
 const mockGetJobs = vi.fn()
+const mockGetJob = vi.fn()
 const mockRun = vi.fn()
 
 vi.mock('../services/api', () => ({
@@ -14,6 +15,7 @@ vi.mock('../services/api', () => ({
     externalSync: {
       getStatus: (...args: unknown[]) => mockGetStatus(...args),
       getJobs: (...args: unknown[]) => mockGetJobs(...args),
+      getJob: (...args: unknown[]) => mockGetJob(...args),
       run: (...args: unknown[]) => mockRun(...args),
     },
   },
@@ -43,6 +45,7 @@ describe('AttendanceExternalSync', () => {
   beforeEach(() => {
     mockGetStatus.mockReset()
     mockGetJobs.mockReset()
+    mockGetJob.mockReset()
     mockRun.mockReset()
     mockGetStatus.mockResolvedValue({
       data: {
@@ -58,6 +61,7 @@ describe('AttendanceExternalSync', () => {
       },
     })
     mockGetJobs.mockResolvedValue({ data: { list: [], total: 0 } })
+    mockGetJob.mockResolvedValue({ data: { status: 'success', id: 1 } })
     mockRun.mockResolvedValue({ data: { status: 'success' } })
   })
 
@@ -79,5 +83,64 @@ describe('AttendanceExternalSync', () => {
         full_department_snapshot: false,
       })
     })
+  })
+
+  it('disables immediate sync while an existing task is running', async () => {
+    const user = userEvent.setup()
+    mockGetStatus.mockResolvedValue({
+      data: {
+        org_id: 'xiaotie',
+        org_name: '测试企业',
+        enabled: true,
+        source_healthy: true,
+        active_job: { id: 853, status: 'running' },
+        last_job: { id: 853, status: 'running' },
+      },
+    })
+    mockGetJobs.mockResolvedValue({ data: { list: [{ id: 853, status: 'running' }], total: 1 } })
+    renderPage()
+
+    const runButton = await screen.findByRole('button', { name: /立即同步/ })
+    await waitFor(() => expect(runButton).toBeDisabled())
+    await user.hover(runButton)
+    expect(await screen.findByText('同步任务 #853 正在运行，请等待任务完成')).toBeInTheDocument()
+    expect(mockRun).not.toHaveBeenCalled()
+  })
+
+  it('stops polling after a terminal result and refreshes the page state', async () => {
+    mockGetStatus
+      .mockResolvedValueOnce({
+        data: {
+          org_id: 'xiaotie',
+          org_name: '测试企业',
+          enabled: true,
+          source_healthy: true,
+          active_job: { id: 854, status: 'running' },
+          last_job: { id: 854, status: 'running' },
+        },
+      })
+      .mockResolvedValue({
+        data: {
+          org_id: 'xiaotie',
+          org_name: '测试企业',
+          enabled: true,
+          source_healthy: true,
+          active_job: null,
+          last_job: { id: 854, status: 'success', inserted: 2, updated: 1, skipped: 0, failed: 0 },
+        },
+      })
+    mockGetJobs
+      .mockResolvedValueOnce({ data: { list: [{ id: 854, status: 'running' }], total: 1 } })
+      .mockResolvedValue({ data: { list: [{ id: 854, status: 'success' }], total: 1 } })
+    mockGetJob.mockResolvedValue({ data: { id: 854, status: 'success', inserted: 2, updated: 1, skipped: 0, failed: 0 } })
+    renderPage()
+
+    await waitFor(() => expect(mockGetJob).toHaveBeenCalledWith(854))
+    await waitFor(() => expect(screen.getByRole('button', { name: /立即同步/ })).not.toBeDisabled())
+    expect(externalSyncJobPollingInterval('running')).toBe(2000)
+    expect(externalSyncJobPollingInterval()).toBe(2000)
+    expect(externalSyncJobPollingInterval('success')).toBe(false)
+    expect(mockGetStatus.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(mockGetJobs.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 })

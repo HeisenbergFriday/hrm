@@ -21,8 +21,6 @@ import (
 	"peopleops/internal/middleware"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func main() {
@@ -33,29 +31,18 @@ func main() {
 	timeout := flag.Duration("timeout", 15*time.Minute, "同步执行上限")
 	flag.Parse()
 
-	normalizedOrgID := database.NormalizeOrganizationID(strings.TrimSpace(*orgID))
-	modeCount := 0
-	for _, enabled := range []bool{*confirm, *diagnoseCounts, *listOrgs} {
-		if enabled {
-			modeCount++
-		}
-	}
-	if modeCount != 1 || (!*listOrgs && normalizedOrgID == "") {
-		fmt.Fprintln(os.Stderr, "必须在 -confirm-sync、-diagnose-counts、-list-orgs 中选择一个；同步或诊断人数时还需提供 -org")
-		os.Exit(2)
-	}
-	if *timeout <= 0 {
-		fmt.Fprintln(os.Stderr, "-timeout 必须大于 0")
+	normalizedOrgID, err := validateOptions(*orgID, *confirm, *diagnoseCounts, *listOrgs, *timeout)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 
 	if err := config.Load(); err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
-	if err := database.Init(); err != nil {
-		log.Fatalf("初始化数据库失败: %v", err)
+	if err := database.InitOperational(); err != nil {
+		log.Fatalf("连接运维数据库失败: %v", err)
 	}
-	database.DB = database.DB.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)})
 	if *listOrgs {
 		if err := listOrganizations(); err != nil {
 			log.Fatalf("列出组织失败: %v", err)
@@ -94,6 +81,23 @@ func main() {
 	if recorder.Code != http.StatusOK && recorder.Code != http.StatusMultiStatus {
 		os.Exit(1)
 	}
+}
+
+func validateOptions(orgID string, confirm, diagnoseCounts, listOrgs bool, timeout time.Duration) (string, error) {
+	orgID = strings.TrimSpace(orgID)
+	modeCount := 0
+	for _, enabled := range []bool{confirm, diagnoseCounts, listOrgs} {
+		if enabled {
+			modeCount++
+		}
+	}
+	if modeCount != 1 || (!listOrgs && orgID == "") {
+		return "", fmt.Errorf("必须在 -confirm-sync、-diagnose-counts、-list-orgs 中选择一个；同步或诊断人数时还需提供 -org")
+	}
+	if timeout <= 0 {
+		return "", fmt.Errorf("-timeout 必须大于 0")
+	}
+	return orgID, nil
 }
 
 type organizationDiagnostic struct {

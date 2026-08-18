@@ -23,6 +23,7 @@ func NewExternalAttendanceJobScheduler(db *gorm.DB) *ExternalAttendanceJobSchedu
 
 // Start launches the background loop. No-op when disabled or DSN missing.
 func (s *ExternalAttendanceJobScheduler) Start() {
+	s.recoverInterruptedJobs()
 	cfg := database.LoadExternalAttendanceConfig()
 	if !cfg.Enabled {
 		log.Println("[ExternalAttendanceJobs] disabled (EXTERNAL_ATTENDANCE_SYNC_ENABLED=false)")
@@ -38,6 +39,26 @@ func (s *ExternalAttendanceJobScheduler) Start() {
 	}
 	go s.loop(interval, cfg)
 	log.Printf("[ExternalAttendanceJobs] started interval=%s", interval)
+}
+
+func (s *ExternalAttendanceJobScheduler) recoverInterruptedJobs() {
+	if s == nil || s.db == nil {
+		return
+	}
+	for _, mapping := range database.ExternalCorpMappings {
+		local := repository.NewExternalAttendanceLocalRepository(s.db, mapping.OrgID)
+		svc := NewExternalAttendanceSyncService(nil, local, mapping.OrgID, 0, false)
+		ctx, cancel := context.WithTimeout(context.Background(), externalSyncTerminalTimeout)
+		recovered, err := svc.RecoverStaleJobs(ctx)
+		cancel()
+		if err != nil {
+			log.Printf("[ExternalAttendanceJobs] org=%s stage=startup_recovery result=failed error_type=%T", mapping.OrgID, err)
+			continue
+		}
+		if recovered > 0 {
+			log.Printf("[ExternalAttendanceJobs] org=%s stage=startup_recovery result=success recovered=%d", mapping.OrgID, recovered)
+		}
+	}
 }
 
 func (s *ExternalAttendanceJobScheduler) loop(interval time.Duration, cfg database.ExternalAttendanceConfig) {

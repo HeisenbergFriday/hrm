@@ -2,11 +2,19 @@ package api
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"peopleops/internal/database"
 
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func newExternalSyncCtx(t *testing.T, method, target, body, orgID string) (*gin.Context, *httptest.ResponseRecorder) {
@@ -88,6 +96,54 @@ func TestExternalAttendanceSyncRun_EmptyBodyAllowedWhenDisabled(t *testing.T) {
 	}
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestExternalAttendanceSyncRun_AcceptsOnceAndRejectsDuplicate(t *testing.T) {
+	dsn := fmt.Sprintf("file:external-sync-handler-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if sqlDB, sqlErr := db.DB(); sqlErr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+	if err := db.AutoMigrate(&database.ExternalSyncJob{}, &database.ExternalSyncLock{}); err != nil {
+		t.Fatalf("migrate task tables: %v", err)
+	}
+	previousDB := database.DB
+	database.DB = db
+	t.Cleanup(func() { database.DB = previousDB })
+
+	previousLauncher := launchExternalAttendanceSyncBackground
+	previousTimeout := externalAttendanceExecutionTimeout
+	launched := 0
+	launchExternalAttendanceSyncBackground = func(func()) { launched++ }
+	externalAttendanceExecutionTimeout = time.Second
+	t.Cleanup(func() {
+		launchExternalAttendanceSyncBackground = previousLauncher
+		externalAttendanceExecutionTimeout = previousTimeout
+	})
+	t.Setenv("EXTERNAL_ATTENDANCE_SYNC_ENABLED", "true")
+	t.Setenv("EXTERNAL_ATTENDANCE_DATABASE_URL", "configured-for-control-plane-test")
+
+	firstCtx, firstRec := newExternalSyncCtx(t, http.MethodPost, "/api/v1/attendance/external-sync/run", `{"source":"all"}`, "xiaotie")
+	ExternalAttendanceSyncRun(firstCtx)
+	if firstRec.Code != http.StatusAccepted || !strings.Contains(firstRec.Body.String(), `"status":"running"`) {
+		t.Fatalf("first response code=%d body=%s", firstRec.Code, firstRec.Body.String())
+	}
+	if launched != 1 {
+		t.Fatalf("background launch count=%d want 1", launched)
+	}
+
+	secondCtx, secondRec := newExternalSyncCtx(t, http.MethodPost, "/api/v1/attendance/external-sync/run", `{"source":"attendance"}`, "xiaotie")
+	ExternalAttendanceSyncRun(secondCtx)
+	if secondRec.Code != http.StatusConflict || !strings.Contains(secondRec.Body.String(), "已有外部同步任务运行中") {
+		t.Fatalf("second response code=%d body=%s", secondRec.Code, secondRec.Body.String())
+	}
+	var count int64
+	if err := db.Model(&database.ExternalSyncJob{}).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("job count=%d err=%v", count, err)
 	}
 }
 

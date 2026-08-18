@@ -1981,14 +1981,16 @@ func normalizeDingTalkDate(value string) string {
 	}
 	if ts, err := strconv.ParseInt(value, 10, 64); err == nil && ts > 0 {
 		if ts > 1_000_000_000_000 {
-			return time.UnixMilli(ts).Format("2006-01-02")
+			return time.UnixMilli(ts).In(dingTalkDateLocation).Format("2006-01-02")
 		}
 		if ts > 1_000_000_000 {
-			return time.Unix(ts, 0).Format("2006-01-02")
+			return time.Unix(ts, 0).In(dingTalkDateLocation).Format("2006-01-02")
 		}
 	}
 	return value
 }
+
+var dingTalkDateLocation = time.FixedZone("UTC+8", 8*60*60)
 
 type VacationType struct {
 	LeaveCode     string  `json:"leave_code"`
@@ -3505,10 +3507,9 @@ func fetchDeptUsers(accessToken string, deptID int64) ([]UserInfo, error) {
 			}
 			logDingTalkUserFieldDiagnostic(user.UserID, m, user.Position, user.PositionSource, user.ManagerUserID, user.ManagerSource)
 
-			// hired_date 是毫秒时间戳，转成 YYYY-MM-DD
-			if ts, ok := m["hired_date"].(float64); ok && ts > 0 {
-				user.HiredDate = time.UnixMilli(int64(ts)).Format("2006-01-02")
-			}
+			// hired_date 在不同钉钉响应中可能是数字、数字字符串或日期字符串。
+			// 统一按 HR 业务时区 UTC+8 归一化，避免容器/CI 的宿主时区改变日期。
+			user.HiredDate = normalizeDingTalkDate(stringValue(m["hired_date"]))
 
 			// 澶勭悊绌?email 鐨勬儏鍐碉紝鐢熸垚鍞竴 email
 			if user.Email == "" {
