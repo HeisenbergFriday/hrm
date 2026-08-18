@@ -147,11 +147,8 @@ interface DetailData {
 
 const getPositionDiagnosticText = (employee?: Employee) => {
   const diagnostic = employee?.extension?.dingtalk_position_sync
-  if (!diagnostic) return '钉钉岗位字段未返回或尚未执行新版同步'
-  const api = diagnostic.api ? `接口：${diagnostic.api}` : ''
-  const reason = diagnostic.failure_reason ? `原因：${diagnostic.failure_reason}` : ''
-  const fields = Array.isArray(diagnostic.raw_field_keys) ? `字段：${diagnostic.raw_field_keys.join(', ')}` : ''
-  return [api, reason, fields].filter(Boolean).join('\n') || '暂无诊断信息'
+  if (!diagnostic) return '岗位信息尚未同步，请先同步组织数据。'
+  return '钉钉未返回岗位信息，请重新同步组织数据；如仍未显示，请联系管理员。'
 }
 
 const EmployeeDetail: React.FC = () => {

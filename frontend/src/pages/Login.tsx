@@ -220,7 +220,7 @@ const Login: React.FC = () => {
         corpId,
         onSuccess: async (result: { code: string }) => {
           try {
-            setInAppStatus('已拿到授权码，正在请求后端登录...')
+            setInAppStatus('授权成功，正在登录...')
             const response = await axios.post('/api/v1/auth/dingtalk/in-app', {
               code: result.code,
               org_id: effectiveOrgID || undefined,

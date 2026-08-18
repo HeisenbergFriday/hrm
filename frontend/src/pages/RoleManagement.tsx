@@ -593,7 +593,7 @@ const RoleManagement: React.FC = () => {
           />
           <Divider style={{ margin: '16px 0' }} />
           <Alert
-            message="勾选并保存后，对应角色会获得这些后端接口操作权限。权限字典缺失时，系统会在加载列表时自动补齐内置权限。"
+            message="勾选并保存后，对应角色将获得所选功能的操作权限。"
             type="info"
             icon={<InfoCircleOutlined />}
             showIcon

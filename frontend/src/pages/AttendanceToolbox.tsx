@@ -1625,7 +1625,7 @@ const AttendanceToolbox: React.FC = () => {
                 type="info"
                 showIcon
                 message="使用说明"
-                description="文件会上传到人事系统后端，由内置 Python 计算引擎生成结果。必填文件齐备后可在底部一键计算并下载。"
+                description="准备好必填文件后，可在底部一键计算并下载结果。"
               />
             ),
           }]}

@@ -48,48 +48,30 @@ const connectedEntries = [
   {
     key: 'employee-profile',
     title: '员工档案',
-    description: '保留查询 / 新建 / 编辑，只维护 EmployeeProfile 可维护字段。',
+    description: '查询、新建和维护员工档案信息。',
     path: '/employee-profile',
     icon: <ProfileOutlined />,
   },
   {
     key: 'employee-flow',
     title: '入转调离',
-    description: '保留入职、调岗、离职的查询与新建，不开放编辑和删除。',
+    description: '查询和新建员工入职、调岗、离职记录。',
     path: '/employee-flow',
     icon: <SwapOutlined />,
   },
   {
     key: 'employees',
     title: '组织花名册',
-    description: '查看同步后的成员主数据，不在这里开放用户主数据 CRUD。',
+    description: '查看组织同步后的员工信息。',
     path: '/employees',
     icon: <UserOutlined />,
   },
   {
     key: 'department-tree',
     title: '组织架构',
-    description: '查看部门树与成员分布，不新增部门 CRUD。',
+    description: '查看部门结构和成员分布。',
     path: '/department-tree',
     icon: <ApartmentOutlined />,
-  },
-]
-
-const pendingEntries = [
-  {
-    key: 'department-crud',
-    title: '部门维护',
-    description: '本轮不新增部门创建、编辑、删除能力。',
-  },
-  {
-    key: 'user-master-data',
-    title: '用户主数据维护',
-    description: 'User.name / email / mobile / department_id / position / avatar / status 继续保持只读。',
-  },
-  {
-    key: 'org-relationships',
-    title: '岗位 / 职级 / 汇报关系',
-    description: '未接入独立 CRUD，后续再按已开放接口落地。',
   },
 ]
 
@@ -127,13 +109,6 @@ const Organization: React.FC = () => {
         </Button>
       }
     >
-      <Alert
-        style={{ marginBottom: 'var(--space-4)' }}
-        type="info"
-        showIcon
-        message="本轮只收口组织模块真实数据与员工档案 / 入转调离入口。部门 CRUD、用户主数据 CRUD、岗位 / 职级 / 汇报关系 CRUD 继续保持未接入。"
-      />
-
       <Tabs
         defaultActiveKey="dashboard"
         items={[
@@ -209,25 +184,6 @@ const Organization: React.FC = () => {
                   ))}
                 </Row>
               </>
-            ),
-          },
-          {
-            key: 'pending',
-            label: '待接入能力',
-            children: (
-              <Row gutter={[16, 16]}>
-                {pendingEntries.map((entry) => (
-                  <Col xs={24} md={8} key={entry.key}>
-                    <PageCard>
-                      <Title level={5} style={{ marginTop: 0, marginBottom: 'var(--space-2)' }}>
-                        {entry.title}
-                      </Title>
-                      <Paragraph type="secondary">{entry.description}</Paragraph>
-                      <Button disabled>待接入</Button>
-                    </PageCard>
-                  </Col>
-                ))}
-              </Row>
             ),
           },
         ]}

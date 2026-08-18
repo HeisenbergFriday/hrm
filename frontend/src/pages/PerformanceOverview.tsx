@@ -4378,7 +4378,7 @@ const PerformanceOverview: React.FC = () => {
         onCancel={() => setDistributionModalVisible(false)}
         width={560}
       >
-        <Alert showIcon type="info" style={{ marginBottom: 16 }} message="前端校验比例总和需等于 100%，但以后端校验为准。" />
+        <Alert showIcon type="info" style={{ marginBottom: 16 }} message="各等级比例总和必须等于 100%。" />
 
         {/* 可视化分布预览 */}
         {(() => {

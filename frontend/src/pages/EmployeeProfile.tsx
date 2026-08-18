@@ -378,7 +378,6 @@ const EmployeeProfilePage: React.FC = () => {
   return (
     <PageContainer
       title="员工档案"
-      subtitle="仅维护 EmployeeProfile 档案字段。User.name / email / mobile / department_id / position / avatar / status 在这里保持只读，不会进入创建或编辑 payload。"
       extra={
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           <Button icon={<ReloadOutlined />} onClick={() => void profilesQuery.refetch()} loading={profilesQuery.isFetching}>
@@ -392,13 +391,6 @@ const EmployeeProfilePage: React.FC = () => {
         </div>
       }
     >
-
-      <Alert
-        style={{ marginBottom: 16 }}
-        type="info"
-        showIcon
-        message="本页不提供删除能力。user_id 只作为档案关联字段；档案编辑不会更新钉钉同步主数据，也不会提交 profile_status。"
-      />
 
       <PageCard>
         <Search

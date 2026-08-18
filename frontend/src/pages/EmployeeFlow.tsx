@@ -670,15 +670,7 @@ const EmployeeFlow: React.FC = () => {
     <PageContainer
       className="employee-flow-page"
       title="入转调离"
-      subtitle="本页只保留查询与新建。状态、审批人、审批时间、审批意见以及流程结果字段仅用于展示，不会进入创建 payload。"
     >
-      <Alert
-        style={{ marginBottom: 16 }}
-        type="info"
-        showIcon
-        message="入职 / 调岗 / 离职均不提供编辑和删除。创建 payload 只提交各自台账 struct 的字段；不会提交 status、approver_id、approver_name、approval_time、approval_comment、onboarding_process、exit_process。"
-      />
-
       <Tabs className="employee-flow-tabs" activeKey={activeTab} onChange={handleTabChange}>
         <Tabs.TabPane tab="入职" key="onboarding" icon={<UserAddOutlined />}>
           <PageCard

@@ -225,7 +225,7 @@ const Home: React.FC = () => {
       {hasPermissionLimitedError ? (
         <Alert
           message="部分首页数据未展示"
-          description="当前账号已登录成功，但部分统计接口返回了 403，说明是权限不足，不是网络问题。"
+          description="当前账号无权查看部分统计数据，如有需要请联系管理员开通权限。"
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
