@@ -89,7 +89,7 @@ update_when:
 
 | 标签 | 约束摘要 | 条目 / 文档 |
 |---|---|---|
-| `attendance` `frontend` `timezone` `test` | 考勤时间必须显式按业务时区 UTC+8 格式化；禁止依赖浏览器、Node 或 CI 宿主机时区 | [2026-07-24 考勤时间展示依赖宿主时区](development-issues/2026.md#2026-07-24-p2-考勤时间展示依赖宿主时区导致-ci-失败) |
+| `attendance` `approval` `timezone` `test` | 考勤与审批时间必须显式按业务时区 UTC+8 构造和格式化；测试数据也禁止使用 `time.Local` 或依赖浏览器、Node、Go/CI 宿主机时区 | [2026-07-24 考勤时间展示依赖宿主时区](development-issues/2026.md#2026-07-24-p2-考勤时间展示依赖宿主时区导致-ci-失败) |
 | `week-schedule` `notification-copy` `date-aware` | 作息表通知必须定位最近周六并读取实际日历状态；周五写“明天”、周六写“今天”、周一至周四写“本周六”、周日写“下周六”；是否上班置于首行，大/小周仅作补充 | [2026-07-29 作息表推送只判断明天导致周六提醒不灵活](development-issues/2026.md#2026-07-29-p2-作息表推送只判断明天导致周六上班提醒不灵活) |
 
 ### 测试 / 验证
