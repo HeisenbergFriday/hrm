@@ -94,6 +94,8 @@ update_when:
 - `Approval`：审批实例，`process_id` 保存钉钉审批实例 ID。
 - `ApprovalTemplate`：审批模板，`template_id` 保存钉钉模板标识。模板页/详情页同步时传显式 `process_code`；实例页/统计页允许省略以触发全量同步。
 
+模板目录查询以当前 JWT 组织的 `dingtalk.ConfigForOrgID(orgID).ProcessCodes` 为配置兜底：当 `approval_templates` 没有对应记录时，仍返回配置流程模板（已有数据库模板的表单/节点信息优先）。审批实例同步写入的 `extension.process_code` 是实例与模板目录的稳定关联键，模板筛选必须同时兼容 `process_code` 与历史 `template_id`。
+
 `Approval.Content` 和 `Approval.Extension` 使用 MySQL JSON 字段保存审批表单内容与本地扩展信息。
 
 审批同步按 `org_id + process_id` upsert，重复同步不得新增重复记录；`extension.result`、`extension.process_code`、`extension.source=dingtalk_sync` 必须保留并与已有扩展字段合并。Stream 已写入的同一实例再次全量同步时更新原记录。

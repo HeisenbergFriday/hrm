@@ -1,6 +1,6 @@
 ---
 purpose: 项目整体架构、数据流、核心设计约束
-last_updated: 2026-07-29
+last_updated: 2026-08-17
 source_of_truth:
   - go.mod（后端技术栈）
   - frontend/package.json（前端技术栈）
@@ -75,6 +75,10 @@ update_when:
 3. **落业务表**：映射本地用户后 upsert `attendances` / `user_department_relations`
 4. **推进 cursor**：成功完成后写入 `(cursor_time, cursor_tie_key)`；之后 cron 用 cursor + lookback 增量
 5. **串行锁**：同一 org 下 attendance/department/all 共用 `scope_key=external-attendance`
+6. **短启动**：`POST /attendance/external-sync/run` 在本地事务内创建 DB 锁与 running job 后返回 202；Doris 连接和数据处理不阻塞启动响应
+7. **后台与终态上下文**：执行上下文通过 `context.WithoutCancel` 脱离客户端取消并受 10 分钟硬上限约束；终态状态、结束时间、统计、错误摘要和解锁使用独立 5 秒上下文
+8. **原子门闩与恢复**：任务创建事务同时恢复超时 running、清理过期锁、检查活动任务、插入唯一锁和 job；启动与读接口幂等把超过上限加宽限期的 running 标为 failed，禁止标记成功
+9. **分阶段容错与前端轮询**：attendance/department 子阶段分别 recovery，`all` 的一个子阶段异常不阻断另一阶段和总任务收尾；前端按 job ID 轮询，终态停止并刷新状态/列表
 
 ### 审批异步同步
 
@@ -252,7 +256,7 @@ type Response struct {
 - **缺配置 fail-closed**：非 default 企业缺少 App 凭证或 `DingTalkAdminUserID` 时，排班同步/班次创建/假期写钉钉须直接报错，禁止写库后 partial 成功、禁止静默用 default 企业 token。
 - **双上下文**：`requestmeta.TenantID`（严格）与 `RequestInfo.OrgID`（兼容）均可能携带 org；绩效等服务构造时优先 Tenant，再回退 RequestInfo；异步 goroutine 必须两者都注入。
 - **全局表**（有意不绑业务 org）：`organizations`、`permissions`、`role_permissions`；`Permission.Code` 等全局唯一。业务唯一键见 `docs/org_composite_unique_index_migration.md`。
-- **相关复盘**：`docs/DEVELOPMENT_ISSUES.md`（2026-07-20 钉钉多组织登录更新用户缺少组织作用域）。
+- **相关复盘**：`docs/development-issues/2026.md`（2026-07-20 钉钉多组织登录更新用户缺少组织作用域）。
 ### 审计日志
 - 记录所有操作日志，写入 `OperationLog`
 - 支持按用户、操作类型、时间范围查询

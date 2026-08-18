@@ -1,6 +1,6 @@
 ---
 purpose: 组织与员工模块业务规则说明
-last_updated: 2026-07-28
+last_updated: 2026-08-18
 source_of_truth:
   - internal/api/handlers.go（组织相关 handler）
   - internal/service/user_service.go（用户服务）
@@ -382,6 +382,8 @@ Body：
 ```json
 {}
 ```
+
+服务器内运维工具为镜像中的 `/app/sync_org_data`。写同步必须显式传入 `-org <org_id> -confirm-sync`，并沿用本接口的租户边界、同组织门闩、完整源数据校验和 15 分钟上限。每日自动任务先用 `-list-orgs` 只读获取组织，再逐组织串行执行；禁止并发同步同一组织，也禁止打印容器环境变量或钉钉凭证。
 
 Response（成功 HTTP 200，部分失败 HTTP 207，全部失败 HTTP 500）：
 ```json

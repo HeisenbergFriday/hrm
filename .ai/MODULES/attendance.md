@@ -1,6 +1,6 @@
 ---
 purpose: 考勤模块业务规则说明
-last_updated: 2026-08-05
+last_updated: 2026-08-17
 source_of_truth:
   - internal/api/handlers.go（考勤相关 handler）
   - internal/api/attendance_toolbox_handlers.go（考勤工具箱上传计算 handler）
@@ -71,6 +71,12 @@ Doris 分页兼容：当前源库不接受 `LIMIT ?` 参数占位符；页大小
 锁：attendance / department / all 共用同一串行锁 `scope_key=external-attendance`（按 org 唯一）。
 
 Job 状态：`success`（无阶段错误且 Failed=0）/ `partial`（有成功且有失败或阶段错误）/ `failed`（零成功且有失败或阶段错误）；`approve_list` 解析失败会写入 `ErrorSummary`。
+
+任务生命周期：`POST /attendance/external-sync/run` 只在本地事务内创建 `running` 任务和唯一 DB 锁，成功返回 `202`；Doris 初始化与同步在后台执行。后台上下文脱离客户端取消但有 10 分钟硬上限，终态写入与解锁使用独立 5 秒上下文。无论 success、业务错误、panic、超时或取消，都必须保留当前新增/更新/跳过/失败统计，写入 `finished_at` 与安全错误摘要。
+
+并发与恢复：同一 org 的 attendance/department/all 继续共用 `scope_key=external-attendance`。任务创建、超时 running 恢复、过期锁清理、活动任务检查、锁插入与 job 插入必须依赖数据库事务和唯一键，不能依赖进程内 map。启动时及状态/任务查询前，超过执行上限加宽限期的 running 任务幂等标记为 failed，摘要明确包含“任务执行中断或服务重启”。
+
+前端轮询：页面从 `status.active_job` 或任务列表识别活动任务，只轮询 `GET /attendance/external-sync/jobs/:id`；任务进入 `success/partial/failed` 后停止轮询，并刷新数据源状态和任务列表。活动任务存在时「立即同步」保持可见但禁用，Tooltip 显示任务 ID 和等待原因。
 
 部门完整快照：仅 `full_department_snapshot=true` 且本阶段零失败时才失活缺失关系。
 
@@ -277,7 +283,7 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - `build-and-deploy.ps1 -SkipConfigUpload` keeps the existing server env file, so new/changed process-code values require a deployment without this switch (or an explicit config upload/restart).
 结构化工作流：返回 `run_id` + 文件元数据/统计/日志；结果绑定 `user_id + org_id`，磁盘目录仅 `rootDir/<runID>`。
 
-- `quick`：钉钉同步 → 同请求内生成请假/加班；`run_leave`/`run_overtime` 为 true 时后端自动合并对应 `flow_keys`
+- `quick`：钉钉同步 → 同请求内生成请假/加班；`run_leave`/`run_overtime` 为 true 时后端自动合并对应 `flow_keys`。API 为兼容调用方保留；当前工具箱不展示独立“钉钉同步”页签，钉钉拉取仅从请假、加班和固定配置中的按需入口执行。
 - 下载 / 预览：
   - `GET /api/v1/attendance/toolbox/runs/:run_id`
   - `GET /api/v1/attendance/toolbox/runs/:run_id/files/:file_key`
@@ -287,7 +293,7 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - 环境变量：`ATTENDANCE_TOOLBOX_RUN_TTL_SECONDS`（默认 2h，夹在 5m–24h）、`ATTENDANCE_TOOLBOX_RUN_MAX_BYTES`（默认 512MB）
 - run 读取/下载权限按模块收紧：`attendance_manage` / `attendance_toolbox_operate` 可读任意模块结果；仅持 `attendance_toolbox_dingtalk_sync` 的用户只可读/下载**自己同 org** 的 `dingtalk_sync` 结果，禁止借此访问 leave/overtime 等其他模块结果。路由中间件放行三种权限，模块边界由 handler `toolboxRunModuleAccessible` 判断。
 
-请假、异动等钉钉审批数据的页面自动回填必须走 structured workflow，按 `kind=export + flow_key` 下载唯一业务文件；`kind=audit` / `kind=meta` 只用于诊断或手动下载，禁止作为上传输入，也不得因审计文件存在而把结果误判为不可回填的 ZIP。手动“钉钉同步”仍可下载包含业务表和审计表的完整 ZIP。
+请假、加班、异动等钉钉审批数据的页面自动回填必须走 structured workflow，按 `kind=export + flow_key` 下载唯一业务文件；`kind=audit` / `kind=meta` 只用于诊断或 API 调用方下载，禁止作为上传输入，也不得因审计文件存在而把结果误判为不可回填的 ZIP。工具箱不展示独立总同步页签；底层 structured/blob API 和各业务模块按需拉取入口继续保留兼容。
 
 花名册不属于钉钉审批流程：必须调用本地组织数据接口 `/api/v1/attendance/toolbox/roster/generate`，禁止再次使用 `position_transfer` 或其他 structured workflow 导出表充当花名册。花名册与异动流程的权限、数据来源和自动回填状态必须相互独立。
 
@@ -303,6 +309,7 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - 完整性：任一待输出员工缺少 `EmployeeID`、姓名或有效部门路径（包括主部门缺失、跨组织、父级断裂、循环、部门空名称）时，接口整体返回包含对应缺失人数的 400；禁止跳过后静默生成不完整文件。`EmployeeID`、姓名、有效部门路径三者均为组织生成接口的必备字段，且不得使用 `UserID`、`DingTalkUserID`、工号或其他字段伪造姓名，也不得使用姓名、`UserID`、`DingTalkUserID` 兜底业务工号。根节点兼容不得扩大为“任意不存在父级均合法”。
 - 输出：xlsx 固定 12 列：工号、姓名、合同主体、一级部门、二级部门、三级部门、岗位、员工类型、人员分类、入职日期、离职日期、转正日期；其中工号、姓名和真实部门路径是加班入口契约，其他无权威来源字段保持空。超过三级的组织路径保留距离叶子最近的三级业务部门，顺序不得重排或猜测。
 - 回填：前端自动生成后可将同一份富花名册回填到 `overtime_roster` 与 `final_active`；自动请求必须逐上传位保存请求开始时的空状态和用户修改版本，只填请求开始与响应时均为空、且期间未被用户选择/删除/替换的位置。手动点击生成可替换请求开始时已有但期间未变化的位置；请求期间的用户操作始终优先。生成失败不得改动现有文件。不得把仅姓名文件自动回填到 `overtime_roster`。最终汇总仍可从用户上传的钉钉月度汇总表补充/纠正身份字段，手工仅姓名花名册只作为最终汇总兼容输入，不是组织生成接口的输出契约。
+- 自动修复：仅当生成错误明确包含“缺少有效主部门”或“部门层级无法解析”，且当前用户拥有 `attendance_manage` 时，前端调用统一 `confirmOrgSync` 显示确认框；确认后复用 `/org/sync/start` + 轮询链路，同步成功或部分成功后携带原上传位快照自动重试花名册一次。其他完整性错误、缺权限、同步失败及重试失败均不得继续触发，禁止无限循环或绕过组织同步确认。
 - 重名：生成文件以权威工号区分同名员工；Python 部门映射只有在姓名全文件唯一时才建立姓名回退键，重名时只允许按工号命中，禁止首条覆盖或按姓名误映射。
 - 成功：返回 xlsx、`Content-Disposition`、`X-Content-Type-Options: nosniff`；无有效在职员工，或缺业务工号、姓名、有效部门路径时返回 400，数据查询、runner 失败或无输出返回 500。
 - 路由测试：必须调用生产使用的 `registerAttendanceToolboxRoutes` 共享注册逻辑验证 `POST` 路径和权限矩阵；禁止在测试中重复注册路径、中间件与 handler。
@@ -413,8 +420,9 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 `frontend/src/pages/AttendanceToolbox.tsx`
 
 功能：
-- 六个页签：钉钉同步、请假明细、加班明细、补贴扣款、最终汇总、兼职汇总
-- 请假明细页签可选择日期范围，直接按当前组织的钉钉请假审批流程拉取“请假系统导出表”并自动回填；手动上传继续作为兜底。月结操作默认选择上一个完整自然月（例如 7 月 2 日操作默认 6 月 1 日至 6 月 30 日），钉钉同步页签使用相同默认值；用户仍可手动调整。该数据是审批实例级源表，不等同于考勤查询使用的外部同步每日聚合结果，禁止从每日结果反向拼接审批导出表。
+- 五个页签：请假明细、加班明细、补贴扣款、最终汇总、兼职汇总；不再设置独立“钉钉同步”总页签。
+- 请假与加班明细页签分别提供日期范围，只按当前组织对应的 `leave` / `overtime` 审批流程拉取各自源表并自动回填；手动上传继续作为兜底。月结操作默认选择上一个完整自然月（例如 7 月 2 日操作默认 6 月 1 日至 6 月 30 日），用户仍可手动调整。审批实例级源表不等同于考勤查询使用的外部同步每日聚合结果，禁止从每日结果反向拼接审批导出表。
+- 最终汇总的在职花名册来自当前组织本地数据，岗位异动可单独按 `position_transfer` 拉取；补贴使用人工导出的月度汇总表；兼职使用专用月度打卡接口。`attendance_correction` 当前不属于五个产物页的输入，不得为了同步完整性附带拉取。
 - 上传 Excel 后由 HR 后端调用 `tools/attendance_toolbox/python/runner.py`
 - 结果直接下载，不再跳转到外部 Streamlit 工具
 - 特殊名单、成都作息名单、产研部门关键字、晚走补贴人员、兼职特殊人员名单进入页面时直接展示原工具默认值，用户可按需修改或清空

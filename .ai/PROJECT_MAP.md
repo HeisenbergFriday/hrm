@@ -1,6 +1,6 @@
 ---
 purpose: 项目目录结构、模块职责、代码入口索引
-last_updated: 2026-07-23
+last_updated: 2026-08-15
 source_of_truth:
   - 项目实际目录结构
   - internal/api/router.go（后端路由）
@@ -128,7 +128,14 @@ D:\ai项目
 ├─ uploads\                         # 上传文件目录
 ├─ .ai\                             # AI 协作文档
 │  ├─ DESIGN_SYSTEM.md              # 设计规范
-│  ├─ AI_WORKFLOW.md                # AI 工作流
+│  ├─ AI_WORKFLOW.md                # AI 工作流总览与阶段导航
+│  ├─ workflow\                     # 分阶段流程，按当前阶段读取
+│  │  ├─ requirements.md
+│  │  ├─ design.md
+│  │  ├─ development.md
+│  │  ├─ testing.md
+│  │  ├─ release.md
+│  │  └─ retrospective.md
 │  ├─ PROJECT_MAP.md                # 项目结构索引
 │  ├─ ARCHITECTURE.md               # 架构设计
 │  ├─ CONVENTIONS.md                # 编码规范
@@ -157,6 +164,25 @@ D:\ai项目
 | 年假与调休 | 资格计算、季度发放、补发、消费台账、同步钉钉假期 | `.ai/MODULES/leave-overtime.md` |
 | 加班匹配 | 审批与打卡匹配、调休台账、补发余额、重新同步到钉钉 | `.ai/MODULES/leave-overtime.md` |
 | 下班时间配置 | 员工级班次配置与钉钉落地 | `.ai/MODULES/shift-config.md` |
+
+---
+
+## 近期关键变更路由（按需读取）
+
+本节承接过去放在根协作规则中的业务变更提示。只有任务涉及对应模块时才读取相关模块文档和代码，不作为默认上下文。
+
+| 模块/主题 | 当前关键点 | 优先入口 |
+|---|---|---|
+| 绩效管理 | 已覆盖指标库、活动、目标设定/审批、自评、主管评分、员工/主管/HR 确认、锁定归档；自动评分支持区间插值、达标制和比率制；数据权限控制可见行，功能权限控制按钮 | `.ai/MODULES/performance.md`、`internal/service/performance_service.go`、`internal/service/scoring_engine.go`、`frontend/src/pages/Performance*.tsx` |
+| 绩效主管关系 | `User` 包含 `manager_user_id` / `manager_name`，支撑绩效主管链路 | `internal/database/models.go`、绩效模块文档 |
+| 排班同步 | 全员显式推送，包含默认班次员工；休息日写入 `ShiftID=0` | `.ai/MODULES/week-schedule.md`、`internal/service/week_schedule_service.go` |
+| 钉钉企业消息 | 已有基础发送和不可通知账号过滤；绩效通知已处理发送、跳过和部分失败日志，真实成功/失败、幂等及异常仍需联调 | `internal/dingtalk/dingtalk.go`、绩效模块文档 |
+| 考勤同步 | 使用 CST 固定时区，并支持 `force` 强制重新拉取 | `.ai/MODULES/attendance.md`、`internal/service/attendance_service.go`、`internal/api/handlers.go` |
+| 加班/调休 | 状态分为匹配、本地余额、钉钉同步三段；匹配结果按 `user_id + work_date` 建模，并有同步历史和考勤过滤 | `.ai/MODULES/leave-overtime.md`、`internal/service/overtime_matching_service.go`、`internal/service/compensatory_leave_service.go` |
+| 年假 | 发放与消费具有幂等和事务语义 | `.ai/MODULES/leave-overtime.md`、`internal/service/annual_leave_grant_service.go` |
+| 权限与路由 | 前端 `RouteGuard` 和菜单配置负责路由/菜单；后端权限服务支持菜单和按钮权限，仓储包含角色与部门层级查询 | `.ai/MODULES/auth.md`、`frontend/src/config/menu.tsx`、`internal/service/permission_service.go` |
+| 前端 Hook | `Home.tsx` 的查询 Hook 必须位于条件返回之前，通过 `enabled` 控制执行 | `.ai/CONVENTIONS.md`、`frontend/src/pages/Home.tsx` |
+| 绩效测试 | 覆盖后端 API/service/repository、前端 helper/component/page 和 Playwright smoke；E2E 使用 mocked test server | `.ai/MODULES/performance.md`、`frontend/playwright.config.ts`、`.ai/COMMANDS.md` |
 
 ---
 
@@ -333,7 +359,8 @@ D:\ai项目
 
 | 文档 | 说明 |
 |---|---|
-| `docs/DEVELOPMENT_ISSUES.md` | 开发问题复盘日志：开发前必读防复发索引，开发后新增/更新可复用根因记录 |
+| `docs/DEVELOPMENT_ISSUES.md` | 开发问题复盘索引、写入规则与年度归档导航；日常只读本文件和命中的条目 |
+| `docs/development-issues/2026.md` | 2026 年完整问题条目归档；禁止日常任务默认全文读取 |
 | `docs/org_composite_unique_index_migration.md` | 多租户复合唯一索引迁移说明 |
 | `docs/钉钉登录问题诊断指南.md` / `docs/钉钉登录问题修复总结.md` | 历史钉钉登录排查与修复纪要（细节约束以 `.ai/MODULES/auth.md` 与问题日志为准） |
 
@@ -347,5 +374,5 @@ D:\ai项目
 - `tools/ops/resync_comp_time/main.go`：重新同步调休
 - `tools/setup/create_freedom_leave/main.go`：创建自由假期
 - `tools/setup/create_vacation/main.go`：创建假期
-- `tools/hooks/pre-commit`：Git pre-commit hook（检测结构性变更时提醒更新 CLAUDE.md）
+- `tools/hooks/pre-commit`：Git pre-commit hook（结构性新增/删除/重命名时提醒更新 PROJECT_MAP 或模块文档）
 - `tools/install-hooks.sh`：一键安装 hooks

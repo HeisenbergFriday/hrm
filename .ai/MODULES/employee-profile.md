@@ -1,6 +1,6 @@
 ---
 purpose: 员工档案与入转调离模块说明
-last_updated: 2026-05-26
+last_updated: 2026-08-18
 source_of_truth:
   - internal/api/router.go
   - internal/api/handlers.go
@@ -57,6 +57,7 @@ update_when:
 - `job_family` 当前前端选项为 `管理 / 专业 / 技术`。
 - `job_level` 是自由文本。
 - `planned_regular_date` 与 `actual_regular_date` 会被组织详情和台账复用。
+- 组织同步时，`entry_date` 取钉钉通讯录 `hired_date`；该值兼容毫秒数字、数字字符串和日期字符串，并固定按 UTC+8 归一化。钉钉返回空值时不得覆盖本地人工值。
 
 ### EmployeeOnboarding
 

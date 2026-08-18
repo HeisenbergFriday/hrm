@@ -1,6 +1,6 @@
 ---
 purpose: 开发、测试、构建、lint 命令
-last_updated: 2026-07-20
+last_updated: 2026-08-15
 source_of_truth:
   - frontend/package.json（前端命令）
   - README.md（项目说明）
@@ -129,7 +129,7 @@ npm update
 bash tools/install-hooks.sh
 ```
 
-安装后，每次 `git commit` 时会自动检查结构性变更，提醒更新 CLAUDE.md。
+安装后，每次 `git commit` 时会检查结构性新增、删除或重命名，并提醒按需更新 `.ai/PROJECT_MAP.md` 或对应 `.ai/MODULES/<module>.md`。普通业务修改不应因此更新 `AGENTS.md` 或 `CLAUDE.md`。
 
 ---
 
@@ -169,6 +169,7 @@ go run ./tools/ops/dingtalk_attendance_preflight -user <测试员工user_id> -pr
 说明：
 - 工具不会发起或审批流程，也不会修改排班、打卡记录或假期余额。
 - PowerShell 不能使用 `\` 续行；请使用一整行命令，或使用 PowerShell 反引号续行。
+
 - 未传 `-user` 时会尝试使用 `DINGTALK_PREFLIGHT_USER_ID` 或 `DINGTALK_ADMIN_USER_ID`。
 - 未传 `-process-code` 时会尝试使用 `DINGTALK_ATTENDANCE_APPROVAL_PROCESS_CODE` 或 `DINGTALK_OVERTIME_PROCESS_CODE`。
 - 可增加 `-json` 输出结构化检查结果。
@@ -230,6 +231,22 @@ go run main.go
 ```bash
 go run tools/ops/resync_comp_time/main.go
 ```
+
+### 服务器内组织同步
+```bash
+# 只读列出容器可同步的组织
+docker exec peopleops-hr-test /app/sync_org_data -list-orgs
+
+# 明确指定一个组织执行全量同步；必须显式确认写操作
+docker exec peopleops-hr-test /app/sync_org_data -org <org_id> -confirm-sync -timeout 15m
+```
+
+说明：
+- `sync_org_data` 随应用镜像发布，复用容器内已有数据库与钉钉配置，不读取或输出环境变量原文。
+- 工具使用只连接数据库的运维入口：连接前静默 SQL，不建库、不执行迁移或 seed；数据库缺失或连接失败时直接失败。
+- `-list-orgs` 只查询现有组织与人数并向标准输出写 JSON；不得输出迁移日志、SQL、DSN 或用户标识。
+- 定时任务应先执行 `-list-orgs`，再逐组织同步；禁止把空组织归一到 `default` 后继续写入。
+- 同一组织已有同步运行时由应用门闩拒绝，不得绕过或并发重试。
 
 ---
 

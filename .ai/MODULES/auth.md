@@ -427,7 +427,7 @@ api.interceptors.response.use(
 原因与回归：
 
 - 实体字段 `User.OrgID` **不能**代替仓储/服务构造时的组织绑定。
-- tenant-scoped repository 在缺少 orgID 时 fail-closed，会报 `repository: orgID required for tenant-scoped operation`（见 `docs/DEVELOPMENT_ISSUES.md` 2026-07-20 条目）。
+- tenant-scoped repository 在缺少 orgID 时 fail-closed，会报 `repository: orgID required for tenant-scoped operation`（见 `docs/development-issues/2026.md` 2026-07-20 条目）。
 - 空组织继续 fail-closed；跨组织实体继续拒绝。
 - 回归点：登录路径更新用户、缺 org 写、跨 org 写、`TestUserRepository_*` 与 `Test.*(DingTalk|Dingtalk)`。
 
