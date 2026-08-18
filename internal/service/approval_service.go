@@ -2,6 +2,7 @@ package service
 
 import (
 	"peopleops/internal/database"
+	"peopleops/internal/dingtalk"
 	"peopleops/internal/repository"
 
 	"gorm.io/gorm"
@@ -10,13 +11,18 @@ import (
 type ApprovalService struct {
 	approvalRepo *repository.ApprovalRepository
 	templateRepo *repository.ApprovalTemplateRepository
+	orgID        string
+	configForOrg func(string) (dingtalk.Config, error)
 }
 
 // NewApprovalService binds org from the DB request/tenant context (fail-closed when missing).
 func NewApprovalService(db *gorm.DB) *ApprovalService {
+	orgID, _ := database.RequireOrganizationIDFromDB(db)
 	return &ApprovalService{
 		approvalRepo: repository.NewApprovalRepository(db),
 		templateRepo: repository.NewApprovalTemplateRepository(db),
+		orgID:        orgID,
+		configForOrg: dingtalk.ConfigForOrgID,
 	}
 }
 
@@ -24,11 +30,25 @@ func NewApprovalServiceWithOrgID(db *gorm.DB, orgID string) *ApprovalService {
 	return &ApprovalService{
 		approvalRepo: repository.NewApprovalRepositoryWithOrgID(db, orgID),
 		templateRepo: repository.NewApprovalTemplateRepositoryWithOrgID(db, orgID),
+		orgID:        orgID,
+		configForOrg: dingtalk.ConfigForOrgID,
 	}
 }
 
 func (s *ApprovalService) GetTemplates() ([]database.ApprovalTemplate, int64, error) {
-	return s.templateRepo.FindAll()
+	templates, _, err := s.templateRepo.FindAll()
+	if err != nil {
+		return nil, 0, err
+	}
+	if s.configForOrg == nil {
+		return templates, int64(len(templates)), nil
+	}
+	config, err := s.configForOrg(s.orgID)
+	if err != nil {
+		return templates, int64(len(templates)), nil
+	}
+	templates = mergeConfiguredApprovalTemplates(s.orgID, templates, config.ProcessCodes)
+	return templates, int64(len(templates)), nil
 }
 
 func (s *ApprovalService) GetInstances(page, pageSize int, filters map[string]string) ([]database.Approval, int64, error) {

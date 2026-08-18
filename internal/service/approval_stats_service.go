@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"peopleops/internal/database"
+	"peopleops/internal/dingtalk"
 	"peopleops/internal/repository"
 
 	"gorm.io/gorm"
@@ -35,12 +36,16 @@ type ApprovalStatsResult struct {
 type ApprovalStatsService struct {
 	approvalRepo *repository.ApprovalRepository
 	templateRepo *repository.ApprovalTemplateRepository
+	orgID        string
+	configForOrg func(string) (dingtalk.Config, error)
 }
 
 func NewApprovalStatsServiceWithOrgID(db *gorm.DB, orgID string) *ApprovalStatsService {
 	return &ApprovalStatsService{
 		approvalRepo: repository.NewApprovalRepositoryWithOrgID(db, orgID),
 		templateRepo: repository.NewApprovalTemplateRepositoryWithOrgID(db, orgID),
+		orgID:        orgID,
+		configForOrg: dingtalk.ConfigForOrgID,
 	}
 }
 
@@ -52,6 +57,11 @@ func (s *ApprovalStatsService) Get(filters map[string]string) (ApprovalStatsResu
 	templates, _, err := s.templateRepo.FindAll()
 	if err != nil {
 		return ApprovalStatsResult{}, err
+	}
+	if s.configForOrg != nil {
+		if config, configErr := s.configForOrg(s.orgID); configErr == nil {
+			templates = mergeConfiguredApprovalTemplates(s.orgID, templates, config.ProcessCodes)
+		}
 	}
 	templateNames := make(map[string]string, len(templates))
 	for _, template := range templates {

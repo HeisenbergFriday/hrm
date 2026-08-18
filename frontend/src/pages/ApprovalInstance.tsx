@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input, Tooltip } from 'antd'
 import { FileTextOutlined, SyncOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
@@ -93,6 +93,10 @@ const ApprovalInstance: React.FC = () => {
     queryFn: () => approvalAPI.getTemplates(),
   })
 
+  const templateNameByID = useMemo(() => new Map<string, string>(
+    (templatesData?.data?.items || []).map((template: { template_id: string; name: string }) => [template.template_id, template.name]),
+  ), [templatesData?.data?.items])
+
   const syncMutation = useMutation<ApprovalSyncAPIResponse, Error, boolean>({
     mutationFn: (resume) => resume
       ? approvalAPI.resumeSync()
@@ -175,6 +179,10 @@ const ApprovalInstance: React.FC = () => {
       title: '审批模板',
       dataIndex: 'template_name',
       key: 'template_name',
+      render: (templateName: string, record: ApprovalInstance) => {
+        const resolvedTemplateID = record.template_id || record.extension?.process_code || record.extension?.template_id
+        return templateName || templateNameByID.get(resolvedTemplateID) || resolvedTemplateID || '—'
+      },
     },
     {
       title: '发起人',

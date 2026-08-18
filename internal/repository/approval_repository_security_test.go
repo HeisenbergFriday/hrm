@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql/driver"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,36 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func TestApprovalFindAllFiltersByProcessCode(t *testing.T) {
+	dsn := fmt.Sprintf("file:approval-template-filter-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if sqlDB, sqlErr := db.DB(); sqlErr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+	if err := db.AutoMigrate(&database.Approval{}); err != nil {
+		t.Fatalf("migrate approvals: %v", err)
+	}
+	now := time.Now()
+	approvals := []database.Approval{
+		{OrgID: "org-a", ProcessID: "a-1", Title: "请假审批", ApplicantID: "u1", ApplicantName: "甲", Status: "RUNNING", CreateTime: now, Extension: map[string]interface{}{"process_code": "PROC-A"}},
+		{OrgID: "org-a", ProcessID: "b-1", Title: "加班审批", ApplicantID: "u2", ApplicantName: "乙", Status: "RUNNING", CreateTime: now, Extension: map[string]interface{}{"process_code": "PROC-B"}},
+	}
+	if err := db.Create(&approvals).Error; err != nil {
+		t.Fatalf("create approvals: %v", err)
+	}
+
+	items, total, err := NewApprovalRepositoryWithOrgID(db, "org-a").FindAll(1, 10, map[string]string{"template_id": "PROC-A"})
+	if err != nil {
+		t.Fatalf("FindAll() error = %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].ProcessID != "a-1" {
+		t.Fatalf("filtered approvals total=%d items=%#v", total, items)
+	}
+}
 
 func TestMergeApprovalExtensionAppliesPatchWithoutDroppingExistingFields(t *testing.T) {
 	base := map[string]interface{}{

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Typography, Table, Spin, Empty, Alert, Button, Tag, Modal, Descriptions, Space } from 'antd'
-import { FileOutlined, EditOutlined, DeleteOutlined, EyeOutlined, SyncOutlined } from '@ant-design/icons'
+import { FileOutlined, EyeOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { approvalAPI } from '../services/api'
 import { hasPermission } from '../utils/permission'
@@ -10,6 +10,18 @@ import StatusTag from '../components/StatusTag'
 import { formatDateTime } from '../utils/format'
 
 const { Title, Text } = Typography
+
+const CATEGORY_LABELS: Record<string, string> = {
+  leave: '请假',
+  overtime: '加班',
+  attendance_correction: '补卡',
+  punch_fix: '补卡',
+  position_transfer: '转岗',
+  expense: '报销',
+  business_trip: '出差',
+  outing: '外出',
+  other: '其他',
+}
 
 interface ApprovalTemplate {
   id: string
@@ -77,7 +89,7 @@ const ApprovalTemplate: React.FC = () => {
       dataIndex: 'category',
       key: 'category',
       render: (category: string) => (
-        <Tag>{category}</Tag>
+        <Tag>{CATEGORY_LABELS[category] || '其他'}</Tag>
       ),
     },
     {
@@ -159,7 +171,7 @@ const ApprovalTemplate: React.FC = () => {
           <Table
             columns={columns}
             dataSource={templatesData.data.items as ApprovalTemplate[]}
-            rowKey="id"
+            rowKey="template_id"
             pagination={{
               showTotal: (total: number) => `共 ${total} 个模板`,
             }}

@@ -112,6 +112,29 @@ describe('ApprovalInstance 标题搜索', () => {
       expect(lastCall.title).toBeUndefined()
     })
   })
+
+  it('实例只保存 process_code 时仍显示对应审批模板名称', async () => {
+    mockGetInstances.mockResolvedValue({
+      data: {
+        items: [{
+          id: '1',
+          process_id: 'instance-1',
+          title: '张三提交的请假',
+          applicant_name: '张三',
+          status: 'RUNNING',
+          create_time: '2026-08-17T09:00:00+08:00',
+          finish_time: null,
+          extension: { process_code: 'PROC-LEAVE' },
+        }],
+        total: 1,
+      },
+    })
+    mockGetTemplates.mockResolvedValue({ data: { items: [{ template_id: 'PROC-LEAVE', name: '请假审批' }] } })
+
+    renderPage()
+
+    expect(await screen.findByText('请假审批')).toBeInTheDocument()
+  })
 })
 
 describe('ApprovalInstance 审批同步', () => {

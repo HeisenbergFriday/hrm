@@ -198,7 +198,7 @@ func (r *ApprovalRepository) FindAll(page, pageSize int, filters map[string]stri
 		query = query.Where("status = ?", v)
 	}
 	if v, ok := filters["template_id"]; ok && v != "" {
-		query = query.Where("extension->>'$.template_id' = ? OR extension LIKE ?", v, "%"+v+"%")
+		query = query.Where("extension->>'$.process_code' = ? OR extension->>'$.template_id' = ?", v, v)
 	}
 	if v, ok := filters["applicant_id"]; ok && v != "" {
 		query = query.Where("applicant_id = ?", v)
