@@ -18,6 +18,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { EditOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import { unwrapApiData, unwrapApiItems } from '../utils/apiResponse'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import {
@@ -71,15 +72,6 @@ const emptySummary: PerformanceFollowupSummary = {
   processing: 0,
   completed: 0,
   closed: 0,
-}
-
-function unwrapData<T>(res: any, fallback: T): T {
-  return (res?.data || res || fallback) as T
-}
-
-function unwrapItems<T>(res: any): T[] {
-  const data = unwrapData<any>(res, {})
-  return data?.items || []
 }
 
 function formatDateTime(value?: string) {
@@ -136,7 +128,7 @@ const PerformanceInterviews: React.FC = () => {
     try {
       setBaseLoading(true)
       const res = await performanceAPI.getActivities({ page: 1, page_size: 200 })
-      setActivities(unwrapItems<PerformanceActivity>(res))
+      setActivities(unwrapApiItems<PerformanceActivity>(res))
     } catch (error) {
       message.error('加载绩效活动失败')
     } finally {
@@ -151,7 +143,7 @@ const PerformanceInterviews: React.FC = () => {
     }
     try {
       const res = await performanceAPI.getParticipants(activityId, { page: 1, page_size: 500 })
-      setParticipants(unwrapItems<PerformanceParticipant>(res))
+      setParticipants(unwrapApiItems<PerformanceParticipant>(res))
     } catch (error) {
       setParticipants([])
       message.error('加载参与人失败')
@@ -169,7 +161,7 @@ const PerformanceInterviews: React.FC = () => {
         status: values.status,
         employee_keyword: values.employee_keyword?.trim(),
       })
-      const data = unwrapData<PerformanceFollowupListResponse<PerformanceInterviewRecord>>(res, {
+      const data = unwrapApiData<PerformanceFollowupListResponse<PerformanceInterviewRecord>>(res, {
         items: [],
         total: 0,
         summary: emptySummary,
