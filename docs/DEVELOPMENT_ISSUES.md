@@ -1,6 +1,6 @@
 ---
 purpose: 开发问题复盘日志——沉淀已定位根因且有复用价值的缺陷与防复发约束，供开发前查阅、开发后更新
-last_updated: 2026-08-18
+last_updated: 2026-08-20
 source_of_truth:
   - 本文件（防复发索引、写入规则与归档导航）
   - docs/development-issues/2026.md（2026 年完整问题条目）
@@ -61,6 +61,7 @@ update_when:
 | `attendance-toolbox` `roster` `org-sync` `auto-repair` | 部门路径错误可在 `attendance_manage` 权限和统一确认框后复用异步组织同步，成功/部分成功后按原文件快照重试一次；其他错误、缺权限或重试失败禁止自动循环 | 同上 |
 | `attendance-toolbox` `playwright` `locator` | 页面存在重复 placeholder/文案时，E2E 必须先用 tabpanel、form 或可访问名称缩小作用域；禁止使用全页面模糊定位 | [2026-07-30 考勤工具箱 E2E 重复日期占位符](development-issues/2026.md#2026-07-30-p2-考勤工具箱-e2e-重复日期占位符导致-strict-mode-失败) |
 | `attendance-toolbox` `date-boundary` `probation` | 日期区间条件必须使用闭区间语义，覆盖月初、月末、节假日和闰年边界；禁止对工作日使用严格大于/小于导致边界漏算 | [2026-08-02 当月转正天数少算一天](development-issues/2026.md#2026-08-02-p1-当月转正天数少算一天日期区间左边界漏算) |
+| `attendance-toolbox` `leave` `cross-month` `duration-allocation` | 普通数字小时制跨相邻月份请假以系统时长为总账；日/月分摊合计必须守恒，结束月仅吸收小于 8 小时的边界差；特殊假期保持原口径，无法守恒时明确提示人工核对；最终汇总复用同一日分摊 | [2026-08-20 跨月请假结束月时长漏算](development-issues/2026.md#2026-08-20-p1-跨月请假结束月时长漏算或少算) |
 | `attendance-toolbox` `subsidy` `data-source` `column-alias` | 补贴扣款真实数据来源是"考勤统计→报表管理→月度汇总表（补贴及扣款）"人工导出 Excel，不是钉钉审批流程；列名必须精确匹配，禁止使用"迟到""早退"等宽泛别名；A1 日期强校验仅作用于 `_is_all_people_monthly_summary` 已识别的钉钉原始报表，且统计范围必须精确覆盖处理月份的完整自然月，系统模板和历史兼容格式不要求 A1 日期 | [2026-08-03 补贴扣款数据来源纠正](development-issues/2026.md#2026-08-03-p2-补贴扣款数据来源纠正) |
 
 ### API / 路由契约

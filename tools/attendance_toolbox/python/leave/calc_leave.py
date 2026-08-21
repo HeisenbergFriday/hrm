@@ -650,6 +650,105 @@ def calc_from_system_duration(sys_val):
     return (final_h, _round2(final_h / 8), None) if final_h else (0, 0, None)
 
 
+def allocate_adjacent_cross_month_system_daily_hours(dt_start, dt_end, sys_val):
+    """将普通数字小时制请假按日分摊，并保证合计等于系统时长。
+
+    仅处理跨相邻两个月的数字小时记录。日期/时间用于生成基础日分摊，
+    系统时长作为总账；不超过 8 小时的差额从结束日向前校正。
+    差异过大时返回人工核对提示，交回原作息算法处理。
+    """
+    if parse_day_text(sys_val) is not None:
+        return None, None
+    try:
+        system_hours = _round_to_half_hour(_round2(float(sys_val)))
+    except (TypeError, ValueError):
+        return None, None
+
+    if system_hours < 0 or dt_start > dt_end:
+        return None, "跨月系统时长或日期区间异常，需人工确认"
+
+    start_month = date(dt_start.year, dt_start.month, 1)
+    end_month = date(dt_end.year, dt_end.month, 1)
+    if _next_month_start(start_month.year, start_month.month) != end_month:
+        return None, None
+
+    daily_hours = []
+    cur = dt_start.date()
+    end_date = dt_end.date()
+    while cur <= end_date:
+        is_boundary = cur in {dt_start.date(), end_date}
+        is_standard_workday = cur.weekday() < 5 or cur in _EXTRA_WORKDAYS
+        hours = 0.0
+        if is_boundary or is_standard_workday:
+            if cur == dt_start.date():
+                hours = working_hours_on_day(
+                    (dt_start.hour, dt_start.minute),
+                    WORK_END,
+                )
+            elif cur == end_date:
+                hours = working_hours_on_day(
+                    WORK_START,
+                    (dt_end.hour, dt_end.minute),
+                )
+            else:
+                hours = 8.0
+        daily_hours.append([cur, _round_to_half_hour(hours) if hours else 0.0])
+        cur += timedelta(days=1)
+
+    base_total = _round2(sum(hours for _, hours in daily_hours))
+    remaining = _round2(system_hours - base_total)
+    if abs(remaining) >= 8.0:
+        return None, "跨月系统时长与日期区间差异达到8小时，需人工确认"
+
+    # 差额统一从结束日向前吸收，使结束月份承担边界时间和半小时舍入差。
+    if remaining > 0:
+        for item in reversed(daily_hours):
+            room = _round2(8.0 - item[1])
+            if room <= 0:
+                continue
+            delta = min(room, remaining)
+            item[1] = _round2(item[1] + delta)
+            remaining = _round2(remaining - delta)
+            if remaining <= 0:
+                break
+    elif remaining < 0:
+        amount_to_remove = -remaining
+        for item in reversed(daily_hours):
+            if item[1] <= 0:
+                continue
+            delta = min(item[1], amount_to_remove)
+            item[1] = _round2(item[1] - delta)
+            amount_to_remove = _round2(amount_to_remove - delta)
+            if amount_to_remove <= 0:
+                break
+        remaining = -amount_to_remove
+
+    if abs(remaining) > 0.01:
+        return None, "跨月系统时长无法完成月度分摊，需人工确认"
+
+    allocated_total = _round2(sum(hours for _, hours in daily_hours))
+    if abs(allocated_total - system_hours) > 0.01:
+        return None, "跨月分摊合计与系统时长不一致，需人工确认"
+    return {leave_date: hours for leave_date, hours in daily_hours}, "跨月按系统时长分摊"
+
+
+def allocate_adjacent_cross_month_system_hours(dt_start, dt_end, sys_val):
+    """将普通数字小时制请假的日分摊汇总为月度时长。"""
+    daily_hours, remark = allocate_adjacent_cross_month_system_daily_hours(
+        dt_start,
+        dt_end,
+        sys_val,
+    )
+    if daily_hours is None:
+        return None, remark
+
+    monthly_hours = {}
+    for leave_date, hours in daily_hours.items():
+        month_key = (leave_date.year, leave_date.month)
+        monthly_hours[month_key] = _round2(monthly_hours.get(month_key, 0.0) + hours)
+    return monthly_hours, "跨月按系统时长分摊"
+
+
 def calc_final_fields(row, schedule_ctx, is_chengdu=False, is_all_month_scheduled=False):
     """
     row: (工号, 姓名, 一级部门, 二级部门, 三级部门,
@@ -756,15 +855,26 @@ def calc_final_fields(row, schedule_ctx, is_chengdu=False, is_all_month_schedule
             final_days = std_days
         return (final_h, final_days, None) if final_h else (0, 0, None)
 
+    monthly_allocation, allocation_remark = allocate_adjacent_cross_month_system_hours(
+        dt_start,
+        dt_end,
+        sys_val,
+    )
+    if monthly_allocation is not None:
+        month_key = (month_start.year, month_start.month)
+        final_h = monthly_allocation.get(month_key, 0.0)
+        final_days = _round2(final_h / 8) if final_h else 0
+        return final_h, final_days, allocation_remark
+
     # sys 为数值或其他文本 → 按作息表工作日计算本月部分
     final_h = calc_target_month_working_hours(dt_start, dt_end, working_days, month_start, month_end)
     final_h = _round_to_half_hour(final_h)
 
     if final_h == 0:
-        return 0, 0, None
+        return 0, 0, allocation_remark
 
     final_days = _round2(final_h / 8)
-    return final_h, final_days, None
+    return final_h, final_days, allocation_remark
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
