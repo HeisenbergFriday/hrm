@@ -47,6 +47,7 @@ import {
   departmentAPI,
   performanceAPI,
 } from '../services/api'
+import { unwrapApiData, unwrapApiList } from '../utils/apiResponse'
 import './PerformanceReports.css'
 
 const { Text } = Typography
@@ -91,15 +92,6 @@ const STATUS_OPTIONS = Object.entries(PARTICIPANT_STATUS_LABELS).map(([value, me
 }))
 
 const LEVEL_OPTIONS = ['S', 'A', 'B', 'C', 'D'].map(level => ({ value: level, label: level }))
-
-function unwrapData<T>(res: any, fallback: T): T {
-  return (res?.data || res || fallback) as T
-}
-
-function unwrapList<T>(res: any, key: string): T[] {
-  const data = unwrapData<any>(res, {})
-  return data?.[key] || data?.items || []
-}
 
 function compactFilters(values: ReportFormValues): PerformanceReportFilters {
   return {
@@ -473,7 +465,7 @@ const PerformanceReports: React.FC = () => {
     setReportLoading(true)
     try {
       const res = await performanceAPI.getReport(activityId, filters)
-      setReport(unwrapData<PerformanceReport | null>(res, null))
+      setReport(unwrapApiData<PerformanceReport | null>(res, null))
     } catch (err: any) {
       message.error(err?.response?.data?.message || '获取绩效报表失败')
       setReport(null)
@@ -489,8 +481,8 @@ const PerformanceReports: React.FC = () => {
         performanceAPI.getActivities({ page: 1, page_size: 100 }),
         departmentAPI.getDepartments(),
       ])
-      const nextActivities = unwrapList<PerformanceActivity>(activityRes, 'items')
-      const nextDepartments = unwrapList<DepartmentOption>(departmentRes, 'departments')
+      const nextActivities = unwrapApiList<PerformanceActivity>(activityRes, 'items')
+      const nextDepartments = unwrapApiList<DepartmentOption>(departmentRes, 'departments')
       setActivities(nextActivities)
       setDepartments(nextDepartments)
       const firstActivityID = nextActivities[0]?.id

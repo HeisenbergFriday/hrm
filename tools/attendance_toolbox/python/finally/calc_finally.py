@@ -1576,6 +1576,23 @@ def parse_leave_day_details(
         if not calc_leave.has_time_component(row["raw_end"]):
             dt_end = dt_end.replace(hour=18, minute=30)
 
+        if (
+            not calc_leave.is_natural_day_leave(matched)
+            and not calc_leave.is_expected_attendance_day_leave(matched)
+        ):
+            cross_month_daily_hours, _ = (
+                calc_leave.allocate_adjacent_cross_month_system_daily_hours(
+                    dt_start,
+                    dt_end,
+                    row.get("sys_hours"),
+                )
+            )
+            if cross_month_daily_hours is not None:
+                for leave_date, hours in cross_month_daily_hours.items():
+                    if month_start <= leave_date <= month_end and hours > 0:
+                        result[key][leave_date][matched] += _round2(hours / 8)
+                continue
+
         is_cd = _is_chengdu(
             row["dept1"],
             row["dept2"],
