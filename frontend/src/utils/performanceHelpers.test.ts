@@ -83,6 +83,13 @@ describe('getDepartmentOption', () => {
     const dept = { name: '技术部' }
     expect(getDepartmentOption(dept)).toBeNull()
   })
+
+  it('should trim department id', () => {
+    expect(getDepartmentOption({ department_id: ' D001 ', name: '技术部' })).toEqual({
+      value: 'D001',
+      label: '技术部（D001）',
+    })
+  })
 })
 
 describe('getUserOption', () => {

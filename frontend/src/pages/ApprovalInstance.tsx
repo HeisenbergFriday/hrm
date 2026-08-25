@@ -7,7 +7,7 @@ import { approvalAPI, getPendingApprovalSyncRequestID, type ApprovalSyncAPIRespo
 import { hasPermission } from '../utils/permission'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
-import StatusTag from '../components/StatusTag'
+import ApprovalStatusTag from '../components/ApprovalStatusTag'
 import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
 import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
@@ -140,30 +140,6 @@ const ApprovalInstance: React.FC = () => {
     syncMutation.mutate(false)
   }
 
-  const getStatusTag = (status: string) => {
-    switch ((status || '').toLowerCase()) {
-      case 'completed':
-      case 'approved':
-      case 'agree':
-        return <StatusTag color="green">已完成</StatusTag>
-      case 'in_progress':
-      case 'running':
-        return <StatusTag color="blue">审批中</StatusTag>
-      case 'rejected':
-      case 'refuse':
-        return <StatusTag color="red">已拒绝</StatusTag>
-      case 'terminated':
-        return <StatusTag color="red">已终止</StatusTag>
-      case 'canceled':
-      case 'cancelled':
-        return <StatusTag color="red">已取消</StatusTag>
-      case 'pending':
-        return <StatusTag color="orange">待处理</StatusTag>
-      default:
-        return <StatusTag>{status || '—'}</StatusTag>
-    }
-  }
-
   const columns = [
     {
       title: '审批标题',
@@ -193,7 +169,7 @@ const ApprovalInstance: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string) => getStatusTag(status),
+      render: (status: string) => <ApprovalStatusTag status={status} />,
     },
     {
       title: '发起时间',

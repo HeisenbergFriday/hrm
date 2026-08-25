@@ -7,7 +7,7 @@ import { approvalAPI } from '../services/api'
 import { hasPermission } from '../utils/permission'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
-import StatusTag from '../components/StatusTag'
+import ApprovalStatusTag from '../components/ApprovalStatusTag'
 import { formatDateTime } from '../utils/format'
 
 const { Title, Text, Paragraph } = Typography
@@ -36,30 +36,6 @@ const ApprovalDetail: React.FC = () => {
       refetch()
     },
   })
-
-  const getStatusTag = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'completed':
-      case 'agree':
-      case 'approved':
-        return <StatusTag color="green">已完成</StatusTag>
-      case 'in_progress':
-      case 'running':
-        return <StatusTag color="blue">审批中</StatusTag>
-      case 'rejected':
-      case 'refuse':
-        return <StatusTag color="red">已拒绝</StatusTag>
-      case 'terminated':
-        return <StatusTag color="red">已终止</StatusTag>
-      case 'canceled':
-      case 'cancelled':
-        return <StatusTag color="red">已取消</StatusTag>
-      case 'pending':
-        return <StatusTag color="orange">待处理</StatusTag>
-      default:
-        return <StatusTag>{status}</StatusTag>
-    }
-  }
 
   const unitMap: Record<string, string> = {
     hour: '小时', hours: '小时', day: '天', days: '天',
@@ -202,7 +178,7 @@ const ApprovalDetail: React.FC = () => {
                 <Title level={5}>{approvalData.data.approval.title}</Title>
                 <Text type="secondary">模板：{approvalData.data.approval.template_name}</Text>
               </div>
-              {getStatusTag(approvalData.data.approval.status)}
+              <ApprovalStatusTag status={approvalData.data.approval.status} emptyLabel="" />
             </div>
 
             <Descriptions bordered column={1} style={{ marginBottom: 'var(--space-6)' }}>

@@ -59,7 +59,7 @@ export function getListFromResponse(res: any, keys: string[]): any[] {
 }
 
 export function getDepartmentOption(department: any) {
-  const value = String(department.department_id || department.id || '')
+  const value = String(department.department_id || department.id || '').trim()
   const name = department.name || department.department_name || value
   return value ? { value, label: `${name}（${value}）` } : null
 }
@@ -84,7 +84,7 @@ export function getImportedUserOption(user: any) {
   return { value, label: `${name}（${value}${employeeIDText}）${departmentName}` }
 }
 
-export function mergeSelectOptions(baseOptions: any[], extraOptions: any[]) {
+export function mergeSelectOptions<T extends { value: string | number }>(baseOptions: T[], extraOptions: T[]): T[] {
   const merged = [...baseOptions]
   const seen = new Set(baseOptions.map(option => String(option.value)))
 

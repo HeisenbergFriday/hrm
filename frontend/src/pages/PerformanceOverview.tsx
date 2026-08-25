@@ -11,7 +11,6 @@ import SelfReviewHistoryDrawer from '../components/SelfReviewHistoryDrawer'
 import PerformanceParticipantTable from '../components/PerformanceParticipantTable'
 import PerformanceActivityDetailDrawer from '../components/PerformanceActivityDetailDrawer'
 import type { ColumnsType } from 'antd/es/table'
-import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
 import {
   performanceAPI,
@@ -51,6 +50,20 @@ import {
 import { getCycleLabel, formatDateTime } from '../utils/format'
 import { hasPermission } from '../utils/permission'
 import { useAuthStore } from '../store/authStore'
+import {
+  MANAGER_CONFIG_STATUS_LABELS,
+  MANAGER_SOURCE_LABELS,
+  formatDateRange,
+  formatRangeEnd,
+  formatRangeStart,
+  getDepartmentOption,
+  getImportedUserOption,
+  getListFromResponse,
+  getUserOption,
+  mergeSelectOptions,
+  normalizeIDArray,
+  normalizeImportedManagerAssignments,
+} from '../utils/performanceHelpers'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -166,21 +179,6 @@ function resolvePreferredPerformanceView(canUseHRView: boolean, canUseManagerVie
   return 'employee'
 }
 
-function normalizeIDArray(value?: string[] | string): string[] {
-  if (Array.isArray(value)) return value.filter(Boolean)
-  if (!value) return []
-  return String(value).split(',').map(item => item.trim()).filter(Boolean)
-}
-
-function getListFromResponse(res: any, keys: string[]): any[] {
-  const data = res?.data || res
-  if (Array.isArray(data)) return data
-  for (const key of keys) {
-    if (Array.isArray(data?.[key])) return data[key]
-  }
-  return []
-}
-
 const FLOW_TEMPLATE_LABELS: Record<string, string> = {
   old: '小铁文娱流程模版',
   new: '沐腾科技流程模版',
@@ -243,48 +241,8 @@ function getActivityTemplateDisplay(
   }
 }
 
-function getDepartmentOption(department: any) {
-  const value = String(department.department_id || department.id || '').trim()
-  const name = department.name || department.department_name || value
-  return value ? { value, label: `${name}（${value}）` } : null
-}
-
-function getUserOption(user: any) {
-  // 参与范围必须使用 User.UserID；禁止 fallback 到数据库自增 id / employee_id。
-  const value = String(user?.user_id || '').trim()
-  if (!value) return null
-  const name = user.name || user.user_name || user.employee_name || value
-  const departmentName = user.department_name ? ` - ${user.department_name}` : ''
-  return { value, label: `${name}（${value}）${departmentName}` }
-}
-
 function extractErrorMessage(err: any, fallback: string) {
   return err?.response?.data?.message || err?.response?.data?.error || err?.message || fallback
-}
-
-function getImportedUserOption(user: any) {
-  // 导入接口应输出 User.UserID；参与范围 Select 禁止 fallback employee_id / 数据库 id。
-  const value = String(user?.user_id || '').trim()
-  if (!value) return null
-  const employeeID = String(user?.employee_id || '').trim()
-  const name = String(user?.name || user?.user_name || user?.employee_name || value).trim()
-  const employeeIDText = employeeID && employeeID !== value ? ` / ${employeeID}` : ''
-  const departmentName = user?.department_name ? ` - ${user.department_name}` : ''
-  return { value, label: `${name}（${value}${employeeIDText}）${departmentName}` }
-}
-
-function mergeSelectOptions(baseOptions: SelectOption[], extraOptions: SelectOption[]) {
-  const merged = [...baseOptions]
-  const seen = new Set(baseOptions.map(option => String(option.value)))
-
-  extraOptions.forEach(option => {
-    const key = String(option.value)
-    if (!key || seen.has(key)) return
-    seen.add(key)
-    merged.push(option)
-  })
-
-  return merged
 }
 
 function getImportedUserOptions(
@@ -300,31 +258,6 @@ function getImportedUserOptions(
     return option ? [option] : []
   })
   return mergeSelectOptions(detailOptions, fallbackOptions)
-}
-
-function normalizeImportedManagerAssignments(
-  assignments?: PerformanceActivityManagerAssignment[] | null,
-  employeeIDs?: string[],
-): PerformanceActivityManagerAssignment[] {
-  const allowedEmployeeIDs = employeeIDs ? new Set(normalizeIDArray(employeeIDs)) : null
-  const byUserID = new Map<string, PerformanceActivityManagerAssignment>()
-  ;(assignments || []).forEach(assignment => {
-    const userID = String(assignment.user_id || '').trim()
-    const managerUserID = String(assignment.assessment_manager_user_id || '').trim()
-    if (!userID || !managerUserID) return
-    if (allowedEmployeeIDs && !allowedEmployeeIDs.has(userID)) return
-    byUserID.set(userID, {
-      ...assignment,
-      user_id: userID,
-      employee_id: String(assignment.employee_id || '').trim() || undefined,
-      assessment_manager_user_id: managerUserID,
-      assessment_manager_employee_id: String(assignment.assessment_manager_employee_id || '').trim() || undefined,
-      assessment_manager_name: String(assignment.assessment_manager_name || '').trim(),
-      assessment_manager_source: assignment.assessment_manager_source || 'IMPORT',
-      manager_override_reason: String(assignment.manager_override_reason || '').trim() || undefined,
-    })
-  })
-  return Array.from(byUserID.values())
 }
 
 function getAssessmentCandidateOption(candidate: AssessmentManagerCandidate): AssessmentManagerSelectOption | null {
@@ -487,14 +420,6 @@ function getManagerEvaluationBlockedReason(record: PerformanceParticipant) {
   return ''
 }
 
-function formatRangeStart(range?: [Dayjs, Dayjs]) {
-  return range?.[0]?.format('YYYY-MM-DD') || ''
-}
-
-function formatRangeEnd(range?: [Dayjs, Dayjs]) {
-  return range?.[1]?.format('YYYY-MM-DD') || ''
-}
-
 // 状态映射
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   draft: { label: '草稿', color: 'default' },
@@ -619,22 +544,6 @@ function shouldLoadHRDeadlineDetail(status?: string) {
   return String(status || '').trim() === 'hr_confirmation'
 }
 
-const MANAGER_SOURCE_LABELS: Record<AssessmentManagerSource, string> = {
-  DIRECT_MANAGER: '直属主管',
-  DEPARTMENT_HEAD: '部门负责人',
-  CENTER_HEAD: '中心负责人',
-  MANUAL: '手动指定',
-  IMPORT: '导入指定',
-  EMPTY: '暂未配置',
-  SYSTEM: '系统兼容',
-}
-
-const MANAGER_CONFIG_STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  CONFIGURED: { label: '已配置', color: 'green' },
-  PENDING: { label: '待配置考核上级', color: 'orange' },
-  INVALID: { label: '考核上级不可用', color: 'red' },
-}
-
 const ADJUSTABLE_MANAGER_SOURCES: AssessmentManagerSource[] = [
   'DIRECT_MANAGER',
   'DEPARTMENT_HEAD',
@@ -756,11 +665,6 @@ function getActivityFlow(activity?: PerformanceActivity | null) {
   if (isMutengGoalSettingActivity(activity)) return MUTENG_GOAL_SETTING_ACTIVITY_FLOW
   if (isSeparatedMutengReviewActivity(activity)) return MUTENG_REVIEW_SCORING_ACTIVITY_FLOW
   return activity?.flow_type === 'new' ? MUTENG_ACTIVITY_FLOW : LEGACY_ACTIVITY_FLOW
-}
-
-function formatDateRange(start?: string, end?: string) {
-  if (!start && !end) return '-'
-  return `${start || '-'} ~ ${end || '-'}`
 }
 
 function getActivityStepIndex(status?: string, activity?: PerformanceActivity | null) {
