@@ -34,6 +34,10 @@ var (
 	tokenMu            sync.Mutex
 	tokenByOrg         = make(map[string]accessTokenCacheEntry)
 	dingTalkHTTPClient = &http.Client{Timeout: 30 * time.Second}
+	deptUserFetchRetry = deptUserFetchRetryConfig{
+		MaxAttempts: 3,
+		Delays:      []time.Duration{100 * time.Millisecond, 300 * time.Millisecond},
+	}
 )
 
 const (
@@ -50,6 +54,11 @@ type SyncError struct {
 	Code        string
 	SafeMessage string
 	detail      string
+}
+
+type deptUserFetchRetryConfig struct {
+	MaxAttempts int
+	Delays      []time.Duration
 }
 
 func (e *SyncError) Error() string {
@@ -1530,7 +1539,7 @@ func SyncUsersWithDeptsForOrg(orgID string, depts []DeptInfo) ([]UserInfo, error
 	userMap := make(map[string]UserInfo) // 鍘婚噸
 
 	for _, dept := range depts {
-		users, err := fetchDeptUsers(accessToken, dept.DeptID)
+		users, err := fetchDeptUsersWithRetry(accessToken, dept.DeptID)
 		if err != nil {
 			logrus.Warnf("dingtalk department users fetch failed: dept_id=%d err=%s", dept.DeptID, safeDingTalkErrorForLog(err))
 			return nil, newSyncError(ErrorCodeUserSourceIncomplete, "钉钉员工源数据不完整，已停止同步以避免误停用历史员工", err)
@@ -1583,7 +1592,7 @@ func SyncUsersWithDeptsForConfig(cfg AppConfig, depts []DeptInfo) ([]UserInfo, e
 	userMap := make(map[string]UserInfo) // 去重
 
 	for _, dept := range depts {
-		users, err := fetchDeptUsers(accessToken, dept.DeptID)
+		users, err := fetchDeptUsersWithRetry(accessToken, dept.DeptID)
 		if err != nil {
 			logrus.Warnf("dingtalk department users fetch failed: dept_id=%d err=%s", dept.DeptID, safeDingTalkErrorForLog(err))
 			return nil, newSyncError(ErrorCodeUserSourceIncomplete, "钉钉员工源数据不完整，已停止同步以避免误停用历史员工", err)
@@ -3545,6 +3554,52 @@ func fetchDeptUsers(accessToken string, deptID int64) ([]UserInfo, error) {
 	}
 
 	return allUsers, nil
+}
+
+func fetchDeptUsersWithRetry(accessToken string, deptID int64) ([]UserInfo, error) {
+	attempts := deptUserFetchRetry.MaxAttempts
+	if attempts <= 0 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		users, err := fetchDeptUsers(accessToken, deptID)
+		if err == nil {
+			if attempt > 1 {
+				logrus.Infof("dingtalk department users fetch recovered: dept_id=%d attempt=%d", deptID, attempt)
+			}
+			return users, nil
+		}
+		lastErr = err
+		if attempt == attempts || !isRetryableDeptUserFetchError(err) {
+			break
+		}
+		logrus.Warnf("dingtalk department users fetch retrying: dept_id=%d attempt=%d err=%s", deptID, attempt, safeDingTalkErrorForLog(err))
+		sleepDeptUserFetchRetryDelay(attempt)
+	}
+	return nil, lastErr
+}
+
+func isRetryableDeptUserFetchError(err error) bool {
+	switch SyncErrorCode(err) {
+	case ErrorCodeNetworkFailed, ErrorCodeResponseInvalid:
+		return true
+	default:
+		return false
+	}
+}
+
+func sleepDeptUserFetchRetryDelay(attempt int) {
+	if attempt <= 0 || len(deptUserFetchRetry.Delays) == 0 {
+		return
+	}
+	index := attempt - 1
+	if index >= len(deptUserFetchRetry.Delays) {
+		index = len(deptUserFetchRetry.Delays) - 1
+	}
+	if delay := deptUserFetchRetry.Delays[index]; delay > 0 {
+		time.Sleep(delay)
+	}
 }
 
 func mergeDingTalkDepartmentIDs(groups ...[]int64) []int64 {

@@ -46,6 +46,13 @@ func clearTokenCacheForTest(t *testing.T) {
 	})
 }
 
+func setDeptUserFetchRetryForTest(t *testing.T, config deptUserFetchRetryConfig) {
+	t.Helper()
+	original := deptUserFetchRetry
+	deptUserFetchRetry = config
+	t.Cleanup(func() { deptUserFetchRetry = original })
+}
+
 func TestGetAccessTokenFailureUsesSafeCode(t *testing.T) {
 	clearTokenCacheForTest(t)
 	stubDingTalkHTTPClient(t, func(*http.Request) (*http.Response, error) {
@@ -170,6 +177,49 @@ func TestFetchDeptUsersRejectsIncompleteResponses(t *testing.T) {
 				t.Fatalf("error code = %q, want %q", SyncErrorCode(err), ErrorCodeResponseInvalid)
 			}
 		})
+	}
+}
+
+func TestFetchDeptUsersWithRetryRecoversFromTransientIncompleteResponse(t *testing.T) {
+	setDeptUserFetchRetryForTest(t, deptUserFetchRetryConfig{MaxAttempts: 3})
+	attempts := 0
+	stubDingTalkHTTPClient(t, func(*http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return jsonResponse(http.StatusOK, `{"errcode":0}`), nil
+		}
+		return jsonResponse(http.StatusOK, `{"errcode":0,"result":{"list":[{"userid":"employee-1","name":"员工","active":true,"dept_id_list":[1]}],"has_more":false}}`), nil
+	})
+
+	users, err := fetchDeptUsersWithRetry("safe-token", 1)
+	if err != nil {
+		t.Fatalf("fetchDeptUsersWithRetry() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if len(users) != 1 || users[0].UserID != "employee-1" {
+		t.Fatalf("users = %#v, want recovered employee source", users)
+	}
+}
+
+func TestFetchDeptUsersWithRetryStillFailsClosedAfterPersistentIncompleteResponses(t *testing.T) {
+	setDeptUserFetchRetryForTest(t, deptUserFetchRetryConfig{MaxAttempts: 3})
+	attempts := 0
+	stubDingTalkHTTPClient(t, func(*http.Request) (*http.Response, error) {
+		attempts++
+		return jsonResponse(http.StatusOK, `{"errcode":0}`), nil
+	})
+
+	users, err := fetchDeptUsersWithRetry("safe-token", 1)
+	if err == nil || users != nil {
+		t.Fatalf("persistent incomplete source must fail closed: users=%#v err=%v", users, err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+	if SyncErrorCode(err) != ErrorCodeResponseInvalid {
+		t.Fatalf("error code = %q, want %q", SyncErrorCode(err), ErrorCodeResponseInvalid)
 	}
 }
 

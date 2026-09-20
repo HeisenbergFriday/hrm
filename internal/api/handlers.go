@@ -4822,6 +4822,8 @@ func GetApprovalInstances(c *gin.Context) {
 		"title":        strings.TrimSpace(c.Query("title")),
 		"start_date":   c.Query("start_date"),
 		"end_date":     c.Query("end_date"),
+		"sort_field":   c.Query("sort_field"),
+		"sort_order":   c.Query("sort_order"),
 	}
 
 	db := middleware.RequestDB(c)

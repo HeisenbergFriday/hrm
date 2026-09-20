@@ -148,9 +148,6 @@ func (s *OvertimeMatchingService) MatchApprovedOvertimeForUser(userID, startDate
 		filteredApprovals = append(filteredApprovals, a)
 	}
 
-	// 打印日志
-	fmt.Printf("[OvertimeMatch] 本次查询到的审批数量: %d\n", len(filteredApprovals))
-
 	for _, a := range filteredApprovals {
 		if err := s.MatchApproval(a.ID); err != nil {
 			return fmt.Errorf("审批%d匹配失败: %w", a.ID, err)
@@ -183,9 +180,6 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 
 	// 获取审批日期（取开始时间的日期部分）
 	approvalDate := approvalStart.Format("2006-01-02")
-	// 计算审批时长
-	approvalDurationMinutes := int(approvalEnd.Sub(approvalStart).Minutes())
-
 	// 检查是否已经存在该员工当天的匹配记录（幂等控制，含软删除记录避免唯一索引冲突）
 	var existingMatch database.OvertimeMatchResult
 	reactivating := false
@@ -198,20 +192,14 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 			}
 		} else if !force && isOvertimeRollbackState(&existingMatch) {
 			reactivating = true
-			fmt.Printf("[OvertimeMatch] 审批恢复，重新计算并执行绝对余额校准: user_id=%s, work_date=%s, status=%s\n",
-				approval.ApplicantID, approvalDate, existingMatch.MatchStatus)
 		} else if !force && !isOvertimeRetryableMatchStatus(existingMatch.MatchStatus) {
 			// 已存在有效匹配记录，直接返回
-			fmt.Printf("[OvertimeMatch] 跳过已存在的匹配记录: user_id=%s, work_date=%s\n", approval.ApplicantID, approvalDate)
 			return s.ensureExistingMatchSettled(&existingMatch)
 		} else if force {
 			// 强制重新匹配，物理删除旧记录（软删除同样会保留索引冲突）
-			fmt.Printf("[OvertimeMatch] 强制重新匹配，删除旧记录: user_id=%s, work_date=%s\n", approval.ApplicantID, approvalDate)
 			if delErr := s.scopedDB().Unscoped().Delete(&existingMatch).Error; delErr != nil {
 				return delErr
 			}
-		} else {
-			fmt.Printf("[OvertimeMatch] 重算可重试匹配记录: user_id=%s, work_date=%s, status=%s\n", approval.ApplicantID, approvalDate, existingMatch.MatchStatus)
 		}
 	} else if err != gorm.ErrRecordNotFound {
 		return err
@@ -231,15 +219,8 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 	// 过滤有效打卡记录
 	validAttendances := s.filterValidAttendances(attendances)
 
-	// 打印日志
-	fmt.Printf("[OvertimeMatch] 处理审批: user_id=%s, work_date=%s, approval_duration=%d分钟\n", approval.ApplicantID, approvalDate, approvalDurationMinutes)
-	fmt.Printf("[OvertimeMatch] 查询到的打卡记录数量: %d\n", len(attendances))
-	fmt.Printf("[OvertimeMatch] 过滤后的有效打卡数量: %d\n", len(validAttendances))
-
 	// 过滤出加班时间窗口内的打卡记录（允许前后2小时缓冲，覆盖提前到岗/略有延迟离开的场景）
 	overtimeWindowAttendances := s.filterAttendancesInOvertimeWindow(validAttendances, approvalStart, approvalEnd)
-	fmt.Printf("[OvertimeMatch] 加班时间窗口(%s~%s)内有效打卡数量: %d\n",
-		approvalStart.Format("15:04"), approvalEnd.Format("15:04"), len(overtimeWindowAttendances))
 
 	if len(overtimeWindowAttendances) == 0 {
 		var msg string
@@ -301,13 +282,6 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 	// 应用加班规则（不足最低阈值时补足到阈值）
 	effectiveOvertimeMinutes := s.applyOvertimeRules(rawEffectiveMinutes)
 
-	// 打印日志
-	fmt.Printf("[OvertimeMatch] 最早有效打卡时间: %s\n", checkin.Format("2006-01-02 15:04:05"))
-	fmt.Printf("[OvertimeMatch] 最晚有效打卡时间: %s\n", checkout.Format("2006-01-02 15:04:05"))
-	fmt.Printf("[OvertimeMatch] 打卡跨度分钟: %d\n", actualClockSpanMinutes)
-	fmt.Printf("[OvertimeMatch] 休息扣除分钟: %d\n", breakDeductMinutes)
-	fmt.Printf("[OvertimeMatch] 最终调休分钟: %d\n", effectiveOvertimeMinutes)
-
 	status := "matched"
 	reason := fmt.Sprintf("加班窗口[%s~%s]；打卡 %s~%s；实际打卡%d分钟，扣除休息%d分钟，有效调休%d分钟",
 		approvalStart.Format("15:04"), approvalEnd.Format("15:04"),
@@ -353,12 +327,10 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 		if err := compSvc.CreditFromOvertime(match.ID); err != nil {
 			_ = s.matchRepo.UpdateLocalBalanceStatus(match.ID, "failed")
 			_ = s.matchRepo.UpdateStatus(match.ID, "local_balance_failed", "本系统调休余额增加失败："+err.Error())
-			fmt.Printf("[OvertimeMatch] 本系统调休余额增加失败: %s\n", err.Error())
 			return fmt.Errorf("credit compensatory leave: %w", err)
 		}
 		_ = s.matchRepo.UpdateLocalBalanceStatus(match.ID, "success")
 		match.LocalBalanceStatus = "success"
-		fmt.Printf("[OvertimeMatch] 本系统调休余额增加成功\n")
 	}
 	if reactivating || isRollbackUncertain(match) {
 		requiresAbsolute, err := s.reactivationRequiresAbsoluteBalance(match)
@@ -725,14 +697,10 @@ func (s *OvertimeMatchingService) isOvertimeApproval(a *database.Approval) bool 
 }
 
 func (s *OvertimeMatchingService) extractApprovalTimeWindow(a *database.Approval) (time.Time, time.Time) {
-	return s.extractApprovalTimeWindowWithLogging(a, true)
+	return s.extractApprovalTimeWindowQuiet(a)
 }
 
 func (s *OvertimeMatchingService) extractApprovalTimeWindowQuiet(a *database.Approval) (time.Time, time.Time) {
-	return s.extractApprovalTimeWindowWithLogging(a, false)
-}
-
-func (s *OvertimeMatchingService) extractApprovalTimeWindowWithLogging(a *database.Approval, shouldLog bool) (time.Time, time.Time) {
 	var startStr, endStr string
 
 	// 第一优先：从顶层 Content 中按常见 key 直接取值
@@ -771,17 +739,8 @@ func (s *OvertimeMatchingService) extractApprovalTimeWindowWithLogging(a *databa
 		}
 	}
 
-	if shouldLog {
-		fmt.Printf("[OvertimeMatch] 审批ID: %d, 标题: %s\n", a.ID, a.Title)
-		fmt.Printf("[OvertimeMatch] 提取的开始时间: %s, 结束时间: %s\n", startStr, endStr)
-	}
-
 	start := parseApprovalTime(startStr)
 	end := parseApprovalTime(endStr)
-
-	if shouldLog {
-		fmt.Printf("[OvertimeMatch] 解析后的开始时间: %v, 结束时间: %v\n", start, end)
-	}
 
 	return start, end
 }

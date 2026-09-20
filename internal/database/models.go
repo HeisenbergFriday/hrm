@@ -134,20 +134,22 @@ type Attendance struct {
 
 // Approval 审批模型
 type Approval struct {
-	ID            uint                   `gorm:"primaryKey" json:"id"`
-	OrgID         string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_approvals_org_process,priority:1;index" json:"org_id"`
-	ProcessID     string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_approvals_org_process,priority:2" json:"process_id"` // 钉钉审批实例 ID
-	Title         string                 `gorm:"type:varchar(256);not null" json:"title"`
-	ApplicantID   string                 `gorm:"type:varchar(64);not null" json:"applicant_id"`
-	ApplicantName string                 `gorm:"type:varchar(128);not null" json:"applicant_name"`
-	Status        string                 `gorm:"type:varchar(32);not null" json:"status"`
-	CreateTime    time.Time              `gorm:"not null" json:"create_time"`
-	FinishTime    time.Time              `json:"finish_time"`
-	Content       map[string]interface{} `gorm:"type:json;serializer:json" json:"content"` // JSON格式
-	Extension     map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
-	CreatedAt     time.Time              `json:"created_at"`
-	UpdatedAt     time.Time              `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt         `gorm:"index" json:"-"`
+	ID                uint                   `gorm:"primaryKey" json:"id"`
+	OrgID             string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_approvals_org_process,priority:1;index" json:"org_id"`
+	ProcessID         string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_approvals_org_process,priority:2" json:"process_id"` // 钉钉审批实例 ID
+	Title             string                 `gorm:"type:varchar(256);not null" json:"title"`
+	ApplicantID       string                 `gorm:"type:varchar(64);not null" json:"applicant_id"`
+	ApplicantName     string                 `gorm:"type:varchar(128);not null" json:"applicant_name"`
+	Status            string                 `gorm:"type:varchar(32);not null" json:"status"`
+	CreateTime        time.Time              `gorm:"not null" json:"create_time"`
+	FinishTime        time.Time              `json:"finish_time"`
+	Content           map[string]interface{} `gorm:"type:json;serializer:json" json:"content"` // JSON格式
+	Extension         map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
+	BusinessStartTime string                 `gorm:"-" json:"business_start_time,omitempty"`
+	BusinessEndTime   string                 `gorm:"-" json:"business_end_time,omitempty"`
+	CreatedAt         time.Time              `json:"created_at"`
+	UpdatedAt         time.Time              `json:"updated_at"`
+	DeletedAt         gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
 // DingTalkEventLog 钉钉 Stream 事件处理日志（按 org_id + event_id 幂等）。

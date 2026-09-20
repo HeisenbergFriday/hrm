@@ -2,11 +2,13 @@ package database
 
 import (
 	"context"
+	"errors"
 	"log"
 	"peopleops/internal/requestmeta"
 	"strings"
 	"time"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
@@ -35,17 +37,38 @@ func (l *requestLogger) Error(ctx context.Context, msg string, data ...interface
 }
 
 func (l *requestLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	elapsed := time.Since(begin)
+	isSlow := elapsed >= time.Second
 	info := requestmeta.FromContext(ctx)
 	if info == nil {
-		l.base.Trace(ctx, begin, fc, err)
+		if (err == nil && !isSlow) || errors.Is(err, gorm.ErrRecordNotFound) {
+			return
+		}
+		sql, rows := fc()
+		if err == nil {
+			log.Printf("[sql-slow] table=%s elapsed=%s rows=%d", sqlTableName(sql), elapsed, rows)
+			return
+		}
+		log.Printf("[sql-error] table=%s elapsed=%s rows=%d err=%v",
+			sqlTableName(sql), elapsed, rows, err)
 		return
 	}
 
-	sql, rows := fc()
 	count := info.SQLCount.Add(1)
-	elapsed := time.Since(begin)
-	log.Printf("[sql] request_id=%s table=%s sql_count=%d route=%s elapsed=%s rows=%d err=%v sql=%s",
-		info.RequestID, sqlTableName(sql), count, info.Route, elapsed, rows, err, sql)
+	if (err == nil && !isSlow) || errors.Is(err, gorm.ErrRecordNotFound) {
+		return
+	}
+
+	// Keep database failures diagnosable without copying complete SQL
+	// statements, which may contain large payloads or sensitive values.
+	sql, rows := fc()
+	if err == nil {
+		log.Printf("[sql-slow] request_id=%s table=%s sql_count=%d route=%s elapsed=%s rows=%d",
+			info.RequestID, sqlTableName(sql), count, info.Route, elapsed, rows)
+		return
+	}
+	log.Printf("[sql-error] request_id=%s table=%s sql_count=%d route=%s elapsed=%s rows=%d err=%v",
+		info.RequestID, sqlTableName(sql), count, info.Route, elapsed, rows, err)
 }
 
 func sqlTableName(sql string) string {
