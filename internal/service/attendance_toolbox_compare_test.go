@@ -13,10 +13,9 @@ import (
 
 // TestCompareAppSourceScript_Live runs the source compare against D:\app when present.
 //
-// Current intentional state is pinned per file below. The three identical files have
-// byte-equivalent normalized business source. finally/calc_finally.py differs only by
-// the allowlisted toolbox path/excel_compat adapter. Leave, overtime fill, and subsidy
-// contain HR business behavior that does not canonicalize to the D:\app source.
+// Current intentional state is pinned per file below. Five files have byte-equivalent
+// normalized business source. Overtime fill and subsidy contain HR business behavior
+// that does not canonicalize to the D:\app source.
 //
 // compare_app_source.py exits 1 when any business_divergence remains; that is expected
 // until D:\app is back-ported or divergences are deliberately reclassified.
@@ -82,8 +81,8 @@ func TestCompareAppSourceScript_Live(t *testing.T) {
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatalf("parse temporary manifest: %v", err)
 	}
-	if manifest.PairCount != 7 || manifest.EqualCount != 3 || manifest.AdapterOnlyCount != 1 || manifest.BusinessDivergenceCount != 3 {
-		t.Fatalf("manifest counts = total %d, equal %d, adapter_only %d, business_divergence %d; want 7/3/1/3",
+	if manifest.PairCount != 7 || manifest.EqualCount != 5 || manifest.AdapterOnlyCount != 0 || manifest.BusinessDivergenceCount != 2 {
+		t.Fatalf("manifest counts = total %d, equal %d, adapter_only %d, business_divergence %d; want 7/5/0/2",
 			manifest.PairCount, manifest.EqualCount, manifest.AdapterOnlyCount, manifest.BusinessDivergenceCount)
 	}
 
@@ -95,11 +94,11 @@ func TestCompareAppSourceScript_Live(t *testing.T) {
 		kind   string
 		reason string
 	}{
-		"leave/calc_leave.py":               {"business_divergence", "toolbox contains HR leave-calculation behavior absent from D:\\app"},
+		"leave/calc_leave.py":               {"equal", "normalized business source is identical"},
 		"overtime/fill_overtime_fields.py":  {"business_divergence", "toolbox contains HR overtime field and operations-group business rules"},
 		"overtime/rules_engine.py":          {"equal", "normalized business source is identical"},
 		"subsidy/calc_subsidy_deduction.py": {"business_divergence", "toolbox contains HR subsidy eligibility and source-validation rules"},
-		"finally/calc_finally.py":           {"adapter_only", "canonical source differs only by allowlisted path and excel_compat adapters"},
+		"finally/calc_finally.py":           {"equal", "normalized business source is identical"},
 		"parttime/calc_parttime_summary.py": {"equal", "normalized business source is identical"},
 		"dingtalk_sync.py":                  {"equal", "normalized business source is identical"},
 	}

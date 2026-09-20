@@ -272,8 +272,14 @@ class FinalRosterContractEndToEndTest(unittest.TestCase):
             roster_path = root / "roster.xlsx"
             roster = Workbook()
             roster.active.title = "在职花名册"
-            roster.active.append(["姓名"])
-            roster.active.append(["张三"])
+            roster.active.append([
+                "工号", "姓名", "合同主体", "员工类型", "人员分类",
+                "入职日期", "离职日期", "转正日期",
+            ])
+            roster.active.append([
+                "MT0001", "张三", "本地公司", "全职", "当月离职",
+                "2025-01-01", "2026-06-30", "2025-04-01",
+            ])
             roster.save(roster_path)
             roster.close()
 
@@ -310,8 +316,12 @@ class FinalRosterContractEndToEndTest(unittest.TestCase):
                 ("总部", "产品技术部", "后端组"),
             )
             self.assertEqual(values["岗位"], "工程师")
-            for field in ("合同主体", "员工类型", "人员分类", "入职日期", "离职日期", "转正日期"):
-                self.assertIsNone(values[field], field)
+            self.assertEqual(values["合同主体"], "本地公司")
+            self.assertEqual(values["员工类型"], "全职")
+            self.assertEqual(values["人员分类"], "当月离职")
+            self.assertEqual(values["入职日期"].date(), date(2025, 1, 1))
+            self.assertEqual(values["离职日期"].date(), date(2026, 6, 30))
+            self.assertEqual(values["转正日期"].date(), date(2025, 4, 1))
 
 
 if __name__ == "__main__":

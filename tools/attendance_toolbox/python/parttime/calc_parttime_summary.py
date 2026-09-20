@@ -159,13 +159,11 @@ DEFAULT_SPECIAL_DEFAULT_NAMES = tuple(
             "刘芮",
             "汤颖",
             "周代林",
-            "常雨凡",
-            "王心英",
             "陈富庆",
         )
     )
 )
-DEFAULT_SPECIAL_CHENGDU_NAMES = {"王心英"}
+DEFAULT_SPECIAL_CHENGDU_NAMES: set[str] = set()
 
 SCHEDULE_PLACEHOLDER_NAMES = {"张三", "李四", "王五"}
 
@@ -356,6 +354,107 @@ def _find_col(header_values: list[Any], *keywords: str) -> int | None:
     return None
 
 
+ATTENDANCE_DETAIL_NAME_HEADERS = ("姓名", "员工姓名", "人员姓名")
+ATTENDANCE_DETAIL_CODE_HEADERS = ("工号", "员工工号", "员工编号")
+ATTENDANCE_DETAIL_GROUP_HEADERS = ("考勤组", "考勤组名称")
+ATTENDANCE_DETAIL_DEPARTMENT_HEADERS = ("部门", "部门名称", "所属部门")
+ATTENDANCE_DETAIL_POSITION_HEADERS = ("职位", "岗位", "岗位名称")
+
+
+def _find_header_row_by_aliases(
+    ws,
+    required_alias_groups: tuple[tuple[str, ...], ...],
+    max_rows: int = 10,
+) -> tuple[int | None, list[Any]]:
+    required_keys = tuple(tuple(_field_key(alias) for alias in aliases) for aliases in required_alias_groups)
+    for row_idx in range(1, min(max_rows, ws.max_row) + 1):
+        values = [ws.cell(row_idx, col_idx).value for col_idx in range(1, ws.max_column + 1)]
+        texts = [_field_key(value) for value in values]
+        if all(any(text in aliases for text in texts) for aliases in required_keys):
+            return row_idx, values
+    return None, []
+
+
+def _find_col_by_aliases(header_values: list[Any], aliases: tuple[str, ...]) -> int | None:
+    alias_keys = tuple(_field_key(alias) for alias in aliases)
+    for idx, value in enumerate(header_values):
+        if _field_key(value) in alias_keys:
+            return idx + 1
+    return None
+
+
+def _parse_day_header_value(value: Any) -> int | None:
+    if isinstance(value, datetime):
+        return value.day
+    if isinstance(value, date):
+        return value.day
+    if isinstance(value, int):
+        return value if 1 <= value <= 31 else None
+    if isinstance(value, float) and value.is_integer():
+        day = int(value)
+        return day if 1 <= day <= 31 else None
+
+    text = _field_key(value)
+    if not text:
+        return None
+    if text.isdigit():
+        day = int(text)
+        return day if 1 <= day <= 31 else None
+
+    month_day_match = re.search(r"(?:\d{1,2}[-/.月])(\d{1,2})(?:日)?$", text)
+    if month_day_match:
+        day = int(month_day_match.group(1))
+        return day if 1 <= day <= 31 else None
+
+    day_match = re.fullmatch(r"(\d{1,2})日", text)
+    if day_match:
+        day = int(day_match.group(1))
+        return day if 1 <= day <= 31 else None
+    return None
+
+
+def _find_day_columns(
+    ws,
+    header_row_idx: int,
+    *,
+    allow_positional_fallback: bool = True,
+) -> list[tuple[int, int]]:
+    columns: list[tuple[int, int]] = []
+    seen_columns: set[int] = set()
+    for row_idx in (header_row_idx + 1, header_row_idx):
+        for col_idx in range(1, ws.max_column + 1):
+            if col_idx in seen_columns:
+                continue
+            day = _parse_day_header_value(ws.cell(row_idx, col_idx).value)
+            if day is None:
+                continue
+            columns.append((day, col_idx))
+            seen_columns.add(col_idx)
+
+    if columns or not allow_positional_fallback:
+        return columns
+    return [(offset, col_idx) for offset, col_idx in enumerate(range(7, ws.max_column + 1), start=1)]
+
+
+def _find_attendance_detail_header(ws) -> tuple[int | None, list[Any]]:
+    header_row_idx, header_values = _find_header_row_by_aliases(
+        ws,
+        (ATTENDANCE_DETAIL_NAME_HEADERS, ATTENDANCE_DETAIL_CODE_HEADERS),
+    )
+    if header_row_idx is not None:
+        return header_row_idx, header_values
+
+    # 兼容人工整理的简易打卡矩阵：只有姓名和 1～31 日，没有工号。
+    for row_idx in range(1, min(10, ws.max_row) + 1):
+        values = [ws.cell(row_idx, col_idx).value for col_idx in range(1, ws.max_column + 1)]
+        if _find_col_by_aliases(values, ATTENDANCE_DETAIL_NAME_HEADERS) is None:
+            continue
+        explicit_day_headers = sum(_parse_day_header_value(value) is not None for value in values)
+        if explicit_day_headers >= 3:
+            return row_idx, values
+    return None, []
+
+
 def _find_company_col(header_values: list[Any]) -> int | None:
     return _find_col(header_values, "所属公司", "合同主体", "主体", "公司")
 
@@ -450,7 +549,9 @@ def _build_default_day_maps(
             "chengdu": {day: _make_daily_entry(value) for day, value in weekday_day_map.items()},
         }
 
-    ctx = calc_leave.load_schedule_context(default_schedule_path)
+    # 用户上传的作息表常用公式递推后续周的日期。兼职固定人员
+    # 必须按 Excel 已计算的日期结果读取，否则只能识别首周的工作日。
+    ctx = calc_leave.load_schedule_context(default_schedule_path, data_only=True)
     if ctx["year"] != year or ctx["month"] != month:
         raise ValueError(
             f"默认作息表月份与兼职汇总不一致：作息表 {ctx['year']}-{ctx['month']:02d}，"
@@ -885,25 +986,29 @@ def parse_attendance_detail(path: str) -> SourceMap:
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = wb[wb.sheetnames[0]]
 
-    header_row_idx, header_values = _find_header_row(ws, ("姓名", "工号"))
+    header_row_idx, header_values = _find_attendance_detail_header(ws)
     if header_row_idx is None:
         wb.close()
         raise ValueError(f"未找到考勤明细表头：{path}")
 
-    day_header_row_idx = header_row_idx + 1
-    col_name = _find_col(header_values, "姓名")
-    col_group = _find_col(header_values, "考勤组")
-    col_department = _find_col(header_values, "部门")
-    col_code = _find_col(header_values, "工号")
-    col_position = _find_col(header_values, "职位")
+    col_name = _find_col_by_aliases(header_values, ATTENDANCE_DETAIL_NAME_HEADERS)
+    col_group = _find_col_by_aliases(header_values, ATTENDANCE_DETAIL_GROUP_HEADERS)
+    col_department = _find_col_by_aliases(header_values, ATTENDANCE_DETAIL_DEPARTMENT_HEADERS)
+    col_code = _find_col_by_aliases(header_values, ATTENDANCE_DETAIL_CODE_HEADERS)
+    col_position = _find_col_by_aliases(header_values, ATTENDANCE_DETAIL_POSITION_HEADERS)
     if col_name is None:
         wb.close()
         raise ValueError(f"考勤明细缺少姓名列：{path}")
 
-    day_columns = list(range(7, ws.max_column + 1))
+    day_columns = _find_day_columns(ws, header_row_idx)
+    has_scope_columns = any([col_group, col_department, col_code, col_position])
+    first_data_row_idx = header_row_idx + 1
+    first_candidate_name = _normalize_name(ws.cell(first_data_row_idx, col_name).value)
+    if not first_candidate_name or first_candidate_name in {"日期", "星期", "周几"}:
+        first_data_row_idx += 1
     result: SourceMap = {}
     intern_exemption_remaining: dict[str, list[int]] = {}
-    for row_idx in range(day_header_row_idx + 1, ws.max_row + 1):
+    for row_idx in range(first_data_row_idx, ws.max_row + 1):
         name = _normalize_name(ws.cell(row_idx, col_name).value)
         if not name:
             continue
@@ -914,7 +1019,7 @@ def parse_attendance_detail(path: str) -> SourceMap:
         is_intern_row = _is_intern_attendance_row(attendance_group, department, position)
         has_intern_exemption = _has_intern_monthly_exemption(_normalize_text(position))
         remaining = intern_exemption_remaining.setdefault(name, [MONTHLY_EXEMPT_MINUTES]) if has_intern_exemption else None
-        if not _is_attendance_row_in_scope(
+        if has_scope_columns and not _is_attendance_row_in_scope(
             attendance_group=attendance_group,
             department=department,
             employee_code=employee_code,
@@ -922,14 +1027,18 @@ def parse_attendance_detail(path: str) -> SourceMap:
         ):
             continue
         day_map: DailyMap = {}
-        for offset, col_idx in enumerate(day_columns, start=1):
+        for day, col_idx in day_columns:
             daily_value = _parse_daily_text_value(
                 ws.cell(row_idx, col_idx).value,
                 monthly_exemption_remaining=remaining,
                 count_outing_as_present=is_intern_row,
             )
+            if daily_value is None and not has_scope_columns:
+                marker_value = _parse_schedule_marker(ws.cell(row_idx, col_idx).value)
+                if marker_value is not None:
+                    daily_value = _make_daily_entry(marker_value)
             if daily_value is not None:
-                day_map[offset] = daily_value
+                day_map[day] = daily_value
         _merge_daily_maps(result, name, day_map)
 
     wb.close()
@@ -1357,6 +1466,61 @@ def _merge_unscheduled_punch_days(
     return merged
 
 
+def _fixed_schedule_anomaly_note(entry: DailyEntry | None) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    raw_text = _normalize_text(entry.get("raw_text"))
+    if not raw_text:
+        return ""
+    late_minutes, early_minutes, is_absent = _extract_attendance_anomalies(raw_text)
+    is_missing_punch = "缺卡" in raw_text
+    if not any((late_minutes, early_minutes, is_absent, is_missing_punch)):
+        return ""
+    return _format_minutes_note(
+        late_minutes,
+        early_minutes,
+        is_absent,
+        is_missing_punch,
+    )
+
+
+def _merge_fixed_schedule_anomalies(
+    schedule_day_map: DailyMap,
+    *attendance_day_maps: DailyMap,
+) -> DailyMap:
+    """固定人员的出勤值只由作息表决定，打卡源只补充异常提醒。"""
+    merged = {day: dict(entry) for day, entry in schedule_day_map.items()}
+    for day, scheduled_entry in merged.items():
+        anomaly_notes: list[str] = []
+        anomaly_comments: list[str] = []
+        for attendance_day_map in attendance_day_maps:
+            attendance_entry = attendance_day_map.get(day)
+            note = _fixed_schedule_anomaly_note(attendance_entry)
+            if not note:
+                continue
+            anomaly_notes.append(note)
+            raw_text = _normalize_text(attendance_entry.get("raw_text"))
+            comment = "固定人员按作息表计 1 天出勤，打卡异常仅提醒、不扣减"
+            if raw_text:
+                comment = f"{comment}\n源记录：{raw_text}"
+            anomaly_comments.append(comment)
+
+        if not anomaly_notes:
+            continue
+        scheduled_entry["note"] = _merge_note(
+            _entry_note(scheduled_entry),
+            "、".join(dict.fromkeys(anomaly_notes)),
+        )
+        scheduled_entry["comment"] = _merge_note(
+            _entry_comment(scheduled_entry),
+            "\n".join(dict.fromkeys(anomaly_comments)),
+        )
+        scheduled_entry["alert"] = True
+        scheduled_entry["deducted"] = False
+        scheduled_entry["unscheduled_punch"] = False
+    return merged
+
+
 def _resolve_row_days(
     row: dict[str, Any],
     attendance_detail: SourceMap,
@@ -1373,7 +1537,15 @@ def _resolve_row_days(
     fallback_day_map = default_day_maps.get(default_schedule_key) or default_day_maps["main"]
 
     if name in special_default_name_set:
-        return dict(fallback_day_map), SOURCE_SPECIAL_DEFAULT_WEEKDAYS, warnings
+        return (
+            _merge_fixed_schedule_anomalies(
+                fallback_day_map,
+                _lookup_source_day_map(monthly_summary, name) or {},
+                _lookup_source_day_map(attendance_detail, name) or {},
+            ),
+            SOURCE_SPECIAL_DEFAULT_WEEKDAYS,
+            warnings,
+        )
 
     schedule_sources = [
         source_name

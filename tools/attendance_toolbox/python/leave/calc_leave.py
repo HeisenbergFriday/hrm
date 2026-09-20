@@ -468,11 +468,11 @@ def _parse_schedule_block(ws, title_row_idx: int) -> dict | None:
     }
 
 
-def load_schedule_context(schedule_file: str) -> dict:
+def load_schedule_context(schedule_file: str, *, data_only: bool = False) -> dict:
     if not os.path.exists(schedule_file):
         raise FileNotFoundError(f"未找到作息表文件：{schedule_file}")
 
-    wb = load_workbook(schedule_file)
+    wb = load_workbook(schedule_file, data_only=data_only)
     blocks = []
     for ws in wb.worksheets:
         for row_idx in range(1, ws.max_row + 1):
