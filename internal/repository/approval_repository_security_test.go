@@ -45,6 +45,65 @@ func TestApprovalFindAllFiltersByProcessCode(t *testing.T) {
 	}
 }
 
+func TestApprovalOrderUsesWhitelistedFieldAndDirection(t *testing.T) {
+	tests := []struct {
+		name    string
+		filters map[string]string
+		want    string
+	}{
+		{name: "default create time descending", filters: nil, want: "create_time DESC, id DESC"},
+		{name: "finish time ascending", filters: map[string]string{"sort_field": "finish_time", "sort_order": "asc"}, want: "finish_time ASC, id ASC"},
+		{name: "unknown values fall back safely", filters: map[string]string{"sort_field": "updated_at", "sort_order": "DROP TABLE approvals"}, want: "create_time DESC, id DESC"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := approvalOrder(tt.filters); got != tt.want {
+				t.Fatalf("approvalOrder() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApprovalFindAllSortsByCreateTime(t *testing.T) {
+	dsn := fmt.Sprintf("file:approval-create-time-sort-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if sqlDB, sqlErr := db.DB(); sqlErr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+	if err := db.AutoMigrate(&database.Approval{}); err != nil {
+		t.Fatalf("migrate approvals: %v", err)
+	}
+	loc := dingtalk.ApprovalBusinessLocation()
+	approvals := []database.Approval{
+		{OrgID: "org-a", ProcessID: "older", Title: "较早", ApplicantID: "u1", Status: "RUNNING", CreateTime: time.Date(2026, 8, 1, 9, 0, 0, 0, loc)},
+		{OrgID: "org-a", ProcessID: "newer", Title: "较晚", ApplicantID: "u2", Status: "RUNNING", CreateTime: time.Date(2026, 8, 2, 9, 0, 0, 0, loc)},
+	}
+	if err := db.Create(&approvals).Error; err != nil {
+		t.Fatalf("create approvals: %v", err)
+	}
+
+	repo := NewApprovalRepositoryWithOrgID(db, "org-a")
+	desc, _, err := repo.FindAll(1, 10, map[string]string{"sort_order": "desc"})
+	if err != nil {
+		t.Fatalf("descending FindAll() error = %v", err)
+	}
+	if len(desc) != 2 || desc[0].ProcessID != "newer" || desc[1].ProcessID != "older" {
+		t.Fatalf("descending order = %#v", desc)
+	}
+
+	asc, _, err := repo.FindAll(1, 10, map[string]string{"sort_order": "asc"})
+	if err != nil {
+		t.Fatalf("ascending FindAll() error = %v", err)
+	}
+	if len(asc) != 2 || asc[0].ProcessID != "older" || asc[1].ProcessID != "newer" {
+		t.Fatalf("ascending order = %#v", asc)
+	}
+}
+
 func TestMergeApprovalExtensionAppliesPatchWithoutDroppingExistingFields(t *testing.T) {
 	base := map[string]interface{}{
 		"local_match_ref": "match-1",
@@ -187,18 +246,20 @@ func TestApprovalFindAllDateFilterUsesUTC8Location(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 	loc := dingtalk.ApprovalBusinessLocation()
-	// Create an approval at 2026-08-05 10:00 UTC+8
-	approvalTime := time.Date(2026, 8, 5, 10, 0, 0, 0, loc)
+	// Keep create_time on a different date so the test proves the filter uses
+	// business time rather than approval creation time.
+	approvalTime := time.Date(2026, 8, 1, 10, 0, 0, 0, loc)
 	if err := db.Create(&database.Approval{
 		OrgID: "org-a", ProcessID: "tz-filter-1", Title: "测试", ApplicantID: "u1",
 		ApplicantName: "用户", Status: "COMPLETED", CreateTime: approvalTime,
+		Content: map[string]interface{}{"开始时间": "2026-08-05 10:00", "结束时间": "2026-08-05 18:00"},
 	}).Error; err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	repo := NewApprovalRepositoryWithOrgID(db, "org-a")
 
-	// Filter start_date=2026-08-05 should match (record at 10:00 UTC+8 >= 00:00 UTC+8)
+	// Filter start_date=2026-08-05 should match by business start time.
 	results, total, err := repo.FindAll(1, 10, map[string]string{"start_date": "2026-08-05"})
 	if err != nil {
 		t.Fatalf("FindAll: %v", err)
@@ -207,13 +268,13 @@ func TestApprovalFindAllDateFilterUsesUTC8Location(t *testing.T) {
 		t.Fatalf("start_date=2026-08-05: total=%d len=%d, want 1 (record at 10:00 UTC+8)", total, len(results))
 	}
 
-	// Filter end_date=2026-08-04 should NOT match (record at 2026-08-05 > 2026-08-04 + 1 day)
+	// Filter end_date=2026-08-04 should NOT match by business end time.
 	_, total, err = repo.FindAll(1, 10, map[string]string{"end_date": "2026-08-04"})
 	if err != nil {
 		t.Fatalf("FindAll: %v", err)
 	}
 	if total != 0 {
-		t.Fatalf("end_date=2026-08-04: total=%d, want 0 (record is 2026-08-05)", total)
+		t.Fatalf("end_date=2026-08-04: total=%d, want 0 (business end is 2026-08-05)", total)
 	}
 
 	// Filter end_date=2026-08-05 should match
@@ -289,5 +350,82 @@ func TestApprovalFindAllEmptyTitleDoesNotFilter(t *testing.T) {
 	}
 	if !strings.Contains(lower, "org_id = ?") {
 		t.Fatalf("expected org_id filter to remain in SQL, got %s", sql)
+	}
+}
+
+func TestApprovalFindAllSortsByBusinessTimeBeforePagination(t *testing.T) {
+	dsn := fmt.Sprintf("file:approval-business-time-sort-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if sqlDB, sqlErr := db.DB(); sqlErr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+	if err := db.AutoMigrate(&database.Approval{}); err != nil {
+		t.Fatalf("migrate approvals: %v", err)
+	}
+
+	approvals := []database.Approval{
+		{
+			OrgID: "org-a", ProcessID: "business-late", Title: "请假审批",
+			ApplicantID: "u1", Status: "COMPLETED", CreateTime: time.Now(),
+			Content: map[string]interface{}{
+				"开始时间": "2026-09-18 09:00", "结束时间": "2026-09-18 18:00",
+			},
+		},
+		{
+			OrgID: "org-a", ProcessID: "business-early", Title: "请假审批",
+			ApplicantID: "u2", Status: "COMPLETED", CreateTime: time.Now(),
+			Content: map[string]interface{}{
+				"开始时间 / 结束时间": []interface{}{"2026-09-16 09:00", "2026-09-16 17:00"},
+			},
+		},
+		{
+			OrgID: "org-a", ProcessID: "business-missing", Title: "补卡审批",
+			ApplicantID: "u3", Status: "COMPLETED", CreateTime: time.Now(),
+		},
+	}
+	if err := db.Create(&approvals).Error; err != nil {
+		t.Fatalf("create approvals: %v", err)
+	}
+
+	repo := NewApprovalRepositoryWithOrgID(db, "org-a")
+	asc, total, err := repo.FindAll(1, 2, map[string]string{
+		"sort_field": "business_start_time", "sort_order": "asc",
+	})
+	if err != nil {
+		t.Fatalf("ascending FindAll() error = %v", err)
+	}
+	if total != 3 || len(asc) != 2 {
+		t.Fatalf("ascending total=%d items=%d, want total=3 items=2", total, len(asc))
+	}
+	if asc[0].ProcessID != "business-early" || asc[1].ProcessID != "business-late" {
+		t.Fatalf("business start ascending order = %#v", []string{asc[0].ProcessID, asc[1].ProcessID})
+	}
+	if asc[0].BusinessStartTime != "2026-09-16 09:00:00" || asc[0].BusinessEndTime != "2026-09-16 17:00:00" {
+		t.Fatalf("combined business times = %q, %q", asc[0].BusinessStartTime, asc[0].BusinessEndTime)
+	}
+
+	desc, _, err := repo.FindAll(1, 10, map[string]string{
+		"sort_field": "business_end_time", "sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("descending FindAll() error = %v", err)
+	}
+	if len(desc) != 3 || desc[0].ProcessID != "business-late" || desc[1].ProcessID != "business-early" || desc[2].ProcessID != "business-missing" {
+		ids := make([]string, 0, len(desc))
+		for _, item := range desc {
+			ids = append(ids, item.ProcessID)
+		}
+		t.Fatalf("business end descending order = %#v", ids)
+	}
+
+	detail, err := repo.FindByID(fmt.Sprint(approvals[0].ID))
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if detail.BusinessStartTime != "2026-09-18 09:00:00" || detail.BusinessEndTime != "2026-09-18 18:00:00" {
+		t.Fatalf("detail business times = %q, %q", detail.BusinessStartTime, detail.BusinessEndTime)
 	}
 }

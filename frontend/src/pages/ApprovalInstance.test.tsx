@@ -11,6 +11,8 @@ const mockSync = vi.fn()
 const mockResumeSync = vi.fn()
 const mockPendingRequestID = vi.fn()
 const mockHasPermission = vi.fn()
+const mockNavigate = vi.fn()
+const mockLocation = { pathname: '/approval-instances', search: '' }
 
 vi.mock('../services/api', () => ({
   approvalAPI: {
@@ -23,7 +25,8 @@ vi.mock('../services/api', () => ({
 }))
 
 vi.mock('react-router-dom', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mockNavigate,
+  useLocation: () => mockLocation,
 }))
 
 vi.mock('../utils/permission', () => ({
@@ -72,6 +75,9 @@ describe('ApprovalInstance 标题搜索', () => {
     mockPendingRequestID.mockReturnValue('')
     mockHasPermission.mockReset()
     mockHasPermission.mockReturnValue(true)
+    mockNavigate.mockReset()
+    mockLocation.search = ''
+    window.sessionStorage.clear()
     mockGetInstances.mockResolvedValue({ data: { items: [], total: 0 } })
     mockGetTemplates.mockResolvedValue({ data: { items: [] } })
   })
@@ -134,6 +140,120 @@ describe('ApprovalInstance 标题搜索', () => {
     renderPage()
 
     expect(await screen.findByText('请假审批')).toBeInTheDocument()
+  })
+
+  it('从带查询参数的列表地址进入时恢复筛选、分页和排序', async () => {
+    mockLocation.search = '?status=completed&category=leave&start_date=2026-08-01&end_date=2026-08-31&title=%E8%AF%B7%E5%81%87&page=3&page_size=20&sort_field=finish_time&sort_order=asc'
+
+    renderPage()
+
+    await waitFor(() => {
+      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
+      expect(lastCall).toEqual(expect.objectContaining({
+        status: 'completed',
+        category: 'leave',
+        title: '请假',
+        start_date: '2026-08-01',
+        end_date: '2026-08-31',
+        page: 3,
+        page_size: 20,
+        sort_field: 'finish_time',
+        sort_order: 'asc',
+      }))
+    })
+
+    expect(screen.getByDisplayValue('请假')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('业务开始日期')).toHaveValue('2026-08-01')
+    expect(screen.getByPlaceholderText('业务结束日期')).toHaveValue('2026-08-31')
+  })
+
+  it('点击下一页后请求下一页数据并保留页码', async () => {
+    const user = userEvent.setup()
+    mockGetInstances.mockResolvedValue({
+      data: {
+        items: Array.from({ length: 10 }, (_, index) => ({
+          id: 'approval-' + (index + 1),
+          process_id: 'process-' + (index + 1),
+          title: '请假申请' + (index + 1),
+          applicant_name: '张三',
+          status: 'COMPLETED',
+          create_time: '2026-08-17T09:00:00+08:00',
+          finish_time: null,
+          extension: {},
+        })),
+        total: 25,
+      },
+    })
+
+    renderPage()
+    await screen.findByText('请假申请1')
+
+    const pageTwo = screen.getByTitle('2').querySelector('a')
+    expect(pageTwo).not.toBeNull()
+    await user.click(pageTwo as HTMLElement)
+
+    await waitFor(() => {
+      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
+      expect(lastCall.page).toBe(2)
+      expect(lastCall.page_size).toBe(10)
+    })
+    expect(mockNavigate).toHaveBeenCalledWith(
+      { pathname: '/approval-instances', search: '?page=2' },
+      { replace: true },
+    )
+  })
+
+  it('点击结束时间排序并把当前列表地址传给详情页', async () => {
+    const user = userEvent.setup()
+    mockGetInstances.mockResolvedValue({
+      data: {
+        items: [{
+          id: 'approval-1',
+          process_id: 'process-1',
+          title: '请假申请',
+          applicant_name: '张三',
+          status: 'COMPLETED',
+          create_time: '2026-08-17T09:00:00+08:00',
+          finish_time: null,
+          extension: {},
+        }],
+        total: 1,
+      },
+    })
+
+    renderPage()
+    await screen.findByText('请假申请')
+
+    expect(screen.getByRole('columnheader', { name: '审批完成时间' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '业务开始时间' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '业务结束时间' })).toBeInTheDocument()
+
+    const finishTimeHeader = screen.getByRole('columnheader', { name: /审批完成时间/ })
+    await user.click(finishTimeHeader)
+    await waitFor(() => {
+      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
+      expect(lastCall.sort_field).toBe('finish_time')
+      expect(lastCall.sort_order).toBe('asc')
+    })
+
+    await user.click(screen.getByRole('columnheader', { name: /审批完成时间/ }))
+    await waitFor(() => {
+      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
+      expect(lastCall.sort_field).toBe('finish_time')
+      expect(lastCall.sort_order).toBe('desc')
+    })
+
+    await user.click(screen.getByRole('columnheader', { name: '业务开始时间' }))
+    await waitFor(() => {
+      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
+      expect(lastCall.sort_field).toBe('business_start_time')
+      expect(lastCall.sort_order).toBe('asc')
+    })
+
+    await user.click(screen.getByRole('button', { name: '查看详情' }))
+    expect(mockNavigate).toHaveBeenCalledWith('/approval-detail/approval-1', {
+      state: { from: '/approval-instances?sort_field=business_start_time&sort_order=asc' },
+    })
   })
 })
 

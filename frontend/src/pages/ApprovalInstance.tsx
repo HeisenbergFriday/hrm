@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input, Tooltip } from 'antd'
+import type { TableProps } from 'antd'
 import { FileTextOutlined, SyncOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { approvalAPI, getPendingApprovalSyncRequestID, type ApprovalSyncAPIResponse } from '../services/api'
 import { hasPermission } from '../utils/permission'
 import PageContainer from '../components/PageContainer'
@@ -25,6 +26,7 @@ dayjs.locale('zh-cn')
 const { Title, Text } = Typography
 const { Option } = Select
 const { RangePicker } = DatePicker
+const APPROVAL_SORT_DIRECTIONS: Array<'ascend' | 'descend'> = ['ascend', 'descend', 'ascend']
 
 interface ApprovalInstance {
   id: string
@@ -37,18 +39,100 @@ interface ApprovalInstance {
   status: string
   create_time: string
   finish_time: string | null
+  business_start_time?: string
+  business_end_time?: string
   extension: any
+}
+
+type ApprovalInstanceSortOrder = 'ascend' | 'descend'
+type ApprovalInstanceSortField = 'create_time' | 'finish_time' | 'business_start_time' | 'business_end_time'
+
+interface ApprovalInstanceListState {
+  status: string
+  templateID: string
+  category: string
+  startDate: string
+  endDate: string
+  searchText: string
+  page: number
+  pageSize: number
+  sortField: ApprovalInstanceSortField
+  sortOrder: ApprovalInstanceSortOrder
+}
+
+const parsePositiveInteger = (value: string | null, fallback: number) => {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const readListState = (search: string): ApprovalInstanceListState => {
+  const params = new URLSearchParams(search)
+  const requestedSortField = params.get('sort_field')
+  const sortField: ApprovalInstanceSortField = requestedSortField === 'finish_time'
+    || requestedSortField === 'business_start_time'
+    || requestedSortField === 'business_end_time'
+    ? requestedSortField
+    : 'create_time'
+  return {
+    status: params.get('status') || '',
+    templateID: params.get('template_id') || '',
+    category: params.get('category') || '',
+    startDate: params.get('start_date') || '',
+    endDate: params.get('end_date') || '',
+    searchText: params.get('title') || '',
+    page: parsePositiveInteger(params.get('page'), 1),
+    pageSize: parsePositiveInteger(params.get('page_size'), 10),
+    sortField,
+    sortOrder: params.get('sort_order') === 'asc' ? 'ascend' : 'descend',
+  }
+}
+
+const parseDate = (value: string) => {
+  if (!value) return null
+  const parsed = dayjs(value)
+  return parsed.isValid() ? parsed : null
+}
+
+const formatBusinessTime = (value?: string | null) => {
+  if (!value) return '-'
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return dayjs(value).format('YYYY年M月D日')
+  }
+  return formatDateTime(value)
+}
+
+const buildListSearch = (state: ApprovalInstanceListState) => {
+  const params = new URLSearchParams()
+  if (state.status) params.set('status', state.status)
+  if (state.templateID) params.set('template_id', state.templateID)
+  if (state.category) params.set('category', state.category)
+  if (state.startDate) params.set('start_date', state.startDate)
+  if (state.endDate) params.set('end_date', state.endDate)
+  if (state.searchText.trim()) params.set('title', state.searchText.trim())
+  if (state.page !== 1) params.set('page', String(state.page))
+  if (state.pageSize !== 10) params.set('page_size', String(state.pageSize))
+  if (state.sortField !== 'create_time') params.set('sort_field', state.sortField)
+  if (state.sortOrder !== 'descend') params.set('sort_order', 'asc')
+  const search = params.toString()
+  return search ? `?${search}` : ''
 }
 
 const ApprovalInstance: React.FC = () => {
   const navigate = useNavigate()
-  const [status, setStatus] = useState<string>('')
-  const [templateID, setTemplateID] = useState<string>('')
-  const [category, setCategory] = useState<string>('')
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null]>([null, null])
-  const [searchText, setSearchText] = useState('')
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const location = useLocation()
+  const initialListState = readListState(location.search)
+  const [status, setStatus] = useState<string>(initialListState.status)
+  const [templateID, setTemplateID] = useState<string>(initialListState.templateID)
+  const [category, setCategory] = useState<string>(initialListState.category)
+  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null]>([
+    parseDate(initialListState.startDate),
+    parseDate(initialListState.endDate),
+  ])
+  const [searchText, setSearchText] = useState(initialListState.searchText)
+  const [page, setPage] = useState(initialListState.page)
+  const [pageSize, setPageSize] = useState(initialListState.pageSize)
+  const [sortField, setSortField] = useState<ApprovalInstanceSortField>(initialListState.sortField)
+  const [sortOrder, setSortOrder] = useState<ApprovalInstanceSortOrder>(initialListState.sortOrder)
   const [syncNotice, setSyncNotice] = useState<ApprovalSyncNotice | null>(null)
   const syncInFlightRef = useRef(false)
 
@@ -62,15 +146,35 @@ const ApprovalInstance: React.FC = () => {
     { value: 'other', label: '其他' },
   ]
 
-  // 防抖搜索：输入停顿 300ms 后触发查询，并把分页重置到第一页
-  const [debouncedSearch, setDebouncedSearch] = useState('')
+  // 防抖搜索：输入停顿 300ms 后触发查询。
+  const [debouncedSearch, setDebouncedSearch] = useState(initialListState.searchText)
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setDebouncedSearch(searchText.trim())
-      setPage(1)
     }, 300)
     return () => window.clearTimeout(timer)
   }, [searchText])
+
+  const startDate = dateRange[0]?.format('YYYY-MM-DD') || ''
+  const endDate = dateRange[1]?.format('YYYY-MM-DD') || ''
+
+  useEffect(() => {
+    const nextSearch = buildListSearch({
+      status,
+      templateID,
+      category,
+      startDate,
+      endDate,
+      searchText,
+      page,
+      pageSize,
+      sortField,
+      sortOrder,
+    })
+    if (location.search !== nextSearch) {
+      navigate({ pathname: location.pathname, search: nextSearch }, { replace: true })
+    }
+  }, [category, endDate, location.pathname, location.search, navigate, page, pageSize, searchText, sortField, sortOrder, startDate, status, templateID])
 
   const queryParams = {
     page,
@@ -79,8 +183,10 @@ const ApprovalInstance: React.FC = () => {
     template_id: templateID || undefined,
     category: templateID ? undefined : (category || undefined),
     title: debouncedSearch || undefined,
-    start_date: dateRange[0]?.format('YYYY-MM-DD') || undefined,
-    end_date: dateRange[1]?.format('YYYY-MM-DD') || undefined,
+    start_date: startDate || undefined,
+    end_date: endDate || undefined,
+    sort_field: sortField,
+    sort_order: sortOrder === 'ascend' ? 'asc' as const : 'desc' as const,
   }
 
   const { data: instancesData, isLoading, isError, refetch, error } = useQuery({
@@ -92,6 +198,35 @@ const ApprovalInstance: React.FC = () => {
     queryKey: ['approval-templates'],
     queryFn: () => approvalAPI.getTemplates(),
   })
+
+  const restoredScrollKeyRef = useRef('')
+  useEffect(() => {
+    if (isLoading || !instancesData) return
+    const listSearch = buildListSearch({
+      status,
+      templateID,
+      category,
+      startDate,
+      endDate,
+      searchText,
+      page,
+      pageSize,
+      sortField,
+      sortOrder,
+    })
+    const storageKey = `approval-instances-scroll:${location.pathname}${listSearch}`
+    if (restoredScrollKeyRef.current === storageKey) return
+    const storedScrollY = window.sessionStorage.getItem(storageKey)
+    if (storedScrollY === null) {
+      restoredScrollKeyRef.current = storageKey
+      return
+    }
+    const scrollY = Number(storedScrollY)
+    if (!Number.isFinite(scrollY) || scrollY < 0) return
+    restoredScrollKeyRef.current = storageKey
+    window.sessionStorage.removeItem(storageKey)
+    window.requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: 'auto' }))
+  }, [category, endDate, instancesData, isLoading, location.pathname, page, pageSize, searchText, sortField, sortOrder, startDate, status, templateID])
 
   const templateNameByID = useMemo(() => new Map<string, string>(
     (templatesData?.data?.items || []).map((template: { template_id: string; name: string }) => [template.template_id, template.name]),
@@ -128,7 +263,53 @@ const ApprovalInstance: React.FC = () => {
   }, [resumeSync])
 
   const handleViewDetail = (id: string) => {
-    navigate(`/approval-detail/${id}`)
+    const returnTo = `${location.pathname}${buildListSearch({
+      status,
+      templateID,
+      category,
+      startDate,
+      endDate,
+      searchText,
+      page,
+      pageSize,
+      sortField,
+      sortOrder,
+    })}`
+    window.sessionStorage.setItem(`approval-instances-scroll:${returnTo}`, String(window.scrollY))
+    navigate(`/approval-detail/${id}`, { state: { from: returnTo } })
+  }
+
+  const handlePaginationChange = (nextPage: number, nextPageSize: number) => {
+    if (nextPageSize !== pageSize) {
+      setPageSize(nextPageSize)
+      setPage(1)
+      return
+    }
+    setPage(nextPage)
+  }
+
+  const handleTableChange: TableProps<ApprovalInstance>['onChange'] = (_pagination, _filters, sorter, extra) => {
+    if (extra.action !== 'sort') return
+    const nextSorter = Array.isArray(sorter) ? sorter[0] : sorter
+    const nextSorterField = nextSorter?.field ?? nextSorter?.columnKey
+    if (nextSorterField === 'create_time' || nextSorterField === 'finish_time' || nextSorterField === 'business_start_time' || nextSorterField === 'business_end_time') {
+      const nextSortField = nextSorterField as ApprovalInstanceSortField
+      const requestedOrder = nextSorter.order === 'ascend' || nextSorter.order === 'descend'
+        ? nextSorter.order
+        : undefined
+      const nextSortOrder = nextSortField === sortField
+        ? (requestedOrder && requestedOrder !== sortOrder
+          ? requestedOrder
+          : (sortOrder === 'ascend' ? 'descend' : 'ascend'))
+        : requestedOrder
+      if (nextSortOrder) {
+        if (nextSortField !== sortField || nextSortOrder !== sortOrder) {
+          setSortField(nextSortField)
+          setSortOrder(nextSortOrder)
+          setPage(1)
+        }
+      }
+    }
   }
 
   const handleSync = () => {
@@ -175,13 +356,37 @@ const ApprovalInstance: React.FC = () => {
       title: '发起时间',
       dataIndex: 'create_time',
       key: 'create_time',
+      sorter: true,
+      sortDirections: APPROVAL_SORT_DIRECTIONS,
+      sortOrder: sortField === 'create_time' ? sortOrder : undefined,
       render: (v: string) => formatDateTime(v),
     },
     {
-      title: '结束时间',
+      title: '审批完成时间',
       dataIndex: 'finish_time',
       key: 'finish_time',
+      sorter: true,
+      sortDirections: APPROVAL_SORT_DIRECTIONS,
+      sortOrder: sortField === 'finish_time' ? sortOrder : undefined,
       render: (finishTime: string | null) => finishTime ? formatDateTime(finishTime) : '-',
+    },
+    {
+      title: '业务开始时间',
+      dataIndex: 'business_start_time',
+      key: 'business_start_time',
+      sorter: true,
+      sortDirections: APPROVAL_SORT_DIRECTIONS,
+      sortOrder: sortField === 'business_start_time' ? sortOrder : undefined,
+      render: (value: string | null | undefined) => formatBusinessTime(value),
+    },
+    {
+      title: '业务结束时间',
+      dataIndex: 'business_end_time',
+      key: 'business_end_time',
+      sorter: true,
+      sortDirections: APPROVAL_SORT_DIRECTIONS,
+      sortOrder: sortField === 'business_end_time' ? sortOrder : undefined,
+      render: (value: string | null | undefined) => formatBusinessTime(value),
     },
     {
       title: '操作',
@@ -208,7 +413,8 @@ const ApprovalInstance: React.FC = () => {
             placeholder="状态"
             style={{ width: 120 }}
             allowClear
-            onChange={setStatus}
+            value={status || undefined}
+            onChange={(v) => { setStatus(v || ''); setPage(1) }}
           >
             <Option value="completed">已完成</Option>
             <Option value="in_progress">处理中</Option>
@@ -241,8 +447,9 @@ const ApprovalInstance: React.FC = () => {
             ))}
           </Select>
           <RangePicker
-            onChange={setDateRange}
-            placeholder={['开始日期', '结束日期']}
+            value={dateRange}
+            onChange={(range) => { setDateRange(range || [null, null]); setPage(1) }}
+            placeholder={['业务开始日期', '业务结束日期']}
             format="YYYY-MM-DD"
             locale={datePickerZhCN}
           />
@@ -252,7 +459,7 @@ const ApprovalInstance: React.FC = () => {
             prefix={<SearchOutlined />}
             allowClear
             value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
+            onChange={(e) => { setSearchText(e.target.value); setPage(1) }}
           />
           <Space>
             <Button type="primary" onClick={() => refetch()}>
@@ -313,11 +520,9 @@ const ApprovalInstance: React.FC = () => {
               showSizeChanger: true,
               showQuickJumper: true,
               showTotal: (total: number) => `共 ${total} 条记录`,
-              onChange: (newPage, newPageSize) => {
-                setPage(newPage)
-                setPageSize(newPageSize)
-              },
+              onChange: handlePaginationChange,
             }}
+            onChange={handleTableChange}
           />
         ) : (
           <Empty description="暂无审批实例" />
