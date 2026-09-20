@@ -152,12 +152,13 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
                 if info.filename == "xl/worksheets/sheet1.xml":
                     xml = data.decode("utf-8")
                     for coordinate, cached_value in cached_values.items():
-                        pattern = rf'(<c r="{coordinate}"[^>]*>.*?<f>.*?</f><v>).*?(</v>)'
+                        pattern = rf'(<c r="{coordinate}"[^>]*>.*?<f>.*?</f>)(?:<v\s*/>|<v\b[^>]*>.*?</v>)'
                         xml, count = re.subn(
                             pattern,
-                            rf"\g<1>{cached_value}\g<2>",
+                            rf"\g<1><v>{cached_value}</v>",
                             xml,
                             count=1,
+                            flags=re.DOTALL,
                         )
                         if count != 1:
                             raise AssertionError(f"未能写入公式缓存值: {coordinate}")
