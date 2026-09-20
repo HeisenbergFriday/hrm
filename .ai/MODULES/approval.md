@@ -86,6 +86,8 @@ update_when:
 - `title`（标题模糊搜索，后端按 `title LIKE %关键词%` 过滤，前端审批实例页 300ms 防抖触发）
 - `start_date`
 - `end_date`
+- `sort_field`（`create_time`、`finish_time`、`business_start_time` 或 `business_end_time`，默认 `create_time`；业务时间从 `Approval.Content` 的各审批类型表单字段提取）
+- `sort_order`（`asc` 或 `desc`，默认 `desc`；排序在全量结果上执行后再分页）
 
 ## 数据模型
 
@@ -96,7 +98,7 @@ update_when:
 
 模板目录查询以当前 JWT 组织的 `dingtalk.ConfigForOrgID(orgID).ProcessCodes` 为配置兜底：当 `approval_templates` 没有对应记录时，仍返回配置流程模板（已有数据库模板的表单/节点信息优先）。审批实例同步写入的 `extension.process_code` 是实例与模板目录的稳定关联键，模板筛选必须同时兼容 `process_code` 与历史 `template_id`。
 
-`Approval.Content` 和 `Approval.Extension` 使用 MySQL JSON 字段保存审批表单内容与本地扩展信息。
+`Approval.Content` 和 `Approval.Extension` 使用 MySQL JSON 字段保存审批表单内容与本地扩展信息。审批实例接口响应中的 `business_start_time` 和 `business_end_time` 是从表单 JSON 提取的临时展示字段，不新增数据库列；缺失时返回空值。业务时间排序先读取全部过滤结果、提取并排序，再执行分页，缺失时间排在有时间记录之后。
 
 审批同步按 `org_id + process_id` upsert，重复同步不得新增重复记录；`extension.result`、`extension.process_code`、`extension.source=dingtalk_sync` 必须保留并与已有扩展字段合并。Stream 已写入的同一实例再次全量同步时更新原记录。
 

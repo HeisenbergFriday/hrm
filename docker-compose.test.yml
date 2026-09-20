@@ -3,6 +3,11 @@ services:
     image: mysql:5.7
     container_name: peopleops-hr-test-mysql
     restart: unless-stopped
+    logging: &peopleops_logging
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: "10"
     env_file:
       - ./deploy/peopleops.test.env
     command:
@@ -22,6 +27,7 @@ services:
     image: redis:7-alpine
     container_name: peopleops-hr-test-redis
     restart: unless-stopped
+    logging: *peopleops_logging
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - ./redis-data:/data
@@ -35,6 +41,9 @@ services:
     image: ${PEOPLEOPS_TEST_IMAGE:-peopleops-hr:test}
     container_name: peopleops-hr-test
     restart: unless-stopped
+    logging: *peopleops_logging
+    environment:
+      LOG_DIR: /app/logs
     depends_on:
       mysql:
         condition: service_healthy
@@ -46,6 +55,7 @@ services:
       - "18080:8080"
     volumes:
       - ./uploads:/app/uploads
+      - ./logs:/app/logs
 
   # 钉钉 Stream 长连接：增量同步审批事件 + 群聊 @机器人绑定作息表。
   # 与主服务共用同一镜像（内含 dingtalk_stream 二进制）和同一 env_file，
@@ -54,6 +64,9 @@ services:
     image: ${PEOPLEOPS_TEST_IMAGE:-peopleops-hr:test}
     container_name: peopleops-hr-test-dingtalk-stream
     restart: unless-stopped
+    logging: *peopleops_logging
+    environment:
+      LOG_DIR: /app/logs
     depends_on:
       mysql:
         condition: service_healthy
@@ -61,6 +74,8 @@ services:
         condition: service_healthy
     env_file:
       - ./deploy/peopleops.test.env
+    volumes:
+      - ./logs:/app/logs
     # stream 进程不监听 HTTP，不能用镜像默认的 :8080/health 健康检查；
     # 改为检查主进程（PID 1）是否存活，配合 restart: unless-stopped 与日志监控。
     healthcheck:

@@ -45,6 +45,12 @@ docker load -i peopleops-latest.tar
 docker compose -f docker-compose.prod.yml up -d
 ```
 
+### 日志保留（无需 sudo）
+
+People 主服务和 DingTalk Stream 会把日志写入部署目录的 `logs/`，按自然日生成文件。应用在启动、跨日写入和每天零点自动删除 7 天前的文件，不依赖 sudo、cron 或宿主机 logrotate。Docker 同时保留约 1GB 的 stdout 轮转作为兜底。
+
+查看应用日志：`tail -f logs/peopleops-$(date +%F).log`；查看 Stream 日志：`tail -f logs/peopleops-dingtalk-stream-$(date +%F).log`。
+
 检查运行状态：
 
 ```bash

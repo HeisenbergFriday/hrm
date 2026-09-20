@@ -3,12 +3,20 @@ services:
     image: ${PEOPLEOPS_IMAGE:-peopleops:latest}
     container_name: peopleops
     restart: unless-stopped
+    logging: &peopleops_logging
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: "10"
+    environment:
+      LOG_DIR: /app/logs
     env_file:
       - ./deploy/peopleops.env
     ports:
       - "8080:8080"
     volumes:
       - ./uploads:/app/uploads
+      - ./logs:/app/logs
 
   # 钉钉 Stream 长连接：增量同步审批事件 + 群聊 @机器人绑定作息表。
   # 与主服务共用同一镜像（内含 dingtalk_stream 二进制）和同一 env_file，
@@ -17,8 +25,13 @@ services:
     image: ${PEOPLEOPS_IMAGE:-peopleops:latest}
     container_name: peopleops-dingtalk-stream
     restart: unless-stopped
+    logging: *peopleops_logging
+    environment:
+      LOG_DIR: /app/logs
     env_file:
       - ./deploy/peopleops.env
+    volumes:
+      - ./logs:/app/logs
     # stream 进程不监听 HTTP，不能用镜像默认的 :8080/health 健康检查；
     # 改为检查主进程（PID 1）是否存活，配合 restart: unless-stopped 与日志监控。
     healthcheck:
