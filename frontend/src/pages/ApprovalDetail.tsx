@@ -1,8 +1,8 @@
 import React from 'react'
-import { Typography, Descriptions, Timeline, Button, Spin, Alert, Divider, Empty, Image, message } from 'antd'
+import { Typography, Descriptions, Timeline, Button, Spin, Alert, Empty, Image, message, Card, Row, Col, Space } from 'antd'
 import { ArrowLeftOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, FileSearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { approvalAPI } from '../services/api'
 import { hasPermission } from '../utils/permission'
 import PageContainer from '../components/PageContainer'
@@ -23,7 +23,11 @@ interface FlowNode {
 
 const ApprovalDetail: React.FC = () => {
   const navigate = useNavigate()
+  const location = useLocation()
   const { id } = useParams<{ id: string }>()
+  const returnTo = typeof location.state?.from === 'string' && location.state.from.startsWith('/approval-instances')
+    ? location.state.from
+    : '/approval-instances'
 
   const { data: approvalData, isLoading, isError, refetch, error } = useQuery({
     queryKey: ['approval-detail', id],
@@ -54,6 +58,19 @@ const ApprovalDetail: React.FC = () => {
     if (typeof v === 'string') return unitMap[v] || v
     if (typeof v === 'object') return JSON.stringify(v)
     return String(v)
+  }
+
+  const isMeaningfulValue = (value: unknown): boolean => {
+    if (value === null || value === undefined) return false
+    if (typeof value === 'string') return value.trim() !== ''
+    if (Array.isArray(value)) return value.some(isMeaningfulValue)
+    if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0
+    return true
+  }
+
+  const formatBusinessTime = (value?: string | null): string => {
+    if (!value) return '—'
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : formatDateTime(value)
   }
 
   const isImageUrl = (v: unknown): v is string => {
@@ -146,7 +163,7 @@ const ApprovalDetail: React.FC = () => {
       extra={
         <Button
           icon={<ArrowLeftOutlined />}
-          onClick={() => navigate('/approval-instances')}
+          onClick={() => navigate(returnTo, { replace: true })}
         >
           返回列表
         </Button>
@@ -173,72 +190,127 @@ const ApprovalDetail: React.FC = () => {
           </div>
         ) : approvalData?.data?.approval ? (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
-              <div>
-                <Title level={5}>{approvalData.data.approval.title}</Title>
-                <Text type="secondary">模板：{approvalData.data.approval.template_name}</Text>
-              </div>
-              <ApprovalStatusTag status={approvalData.data.approval.status} emptyLabel="" />
-            </div>
+            {(() => {
+              const approval = approvalData.data.approval
+              const contentEntries = Object.entries(approval.content || {})
+                .filter(([key, value]) => isMeaningfulValue(key) && isMeaningfulValue(value))
+              const flowHistory = approval.flow_history || []
+              const templateLabel = approval.template_name
+                || approval.extension?.process_code
+                || approval.template_id
+                || '—'
 
-            <Descriptions bordered column={1} style={{ marginBottom: 'var(--space-6)' }}>
-              <Descriptions.Item label="发起人">{approvalData.data.approval.applicant_name}</Descriptions.Item>
-              <Descriptions.Item label="发起时间">{formatDateTime(approvalData.data.approval.create_time)}</Descriptions.Item>
-              {approvalData.data.approval.finish_time && (
-                <Descriptions.Item label="结束时间">{formatDateTime(approvalData.data.approval.finish_time)}</Descriptions.Item>
-              )}
-            </Descriptions>
+              return (
+                <>
+                  <Card
+                    bordered={false}
+                    style={{
+                      background: 'var(--color-bg-layout)',
+                      marginBottom: 'var(--space-5)',
+                    }}
+                  >
+                    <Row justify="space-between" align="middle" gutter={[16, 16]}>
+                      <Col flex="1 1 360px">
+                        <Space direction="vertical" size={4}>
+                          <Title level={4} style={{ margin: 0 }}>{approval.title || '审批详情'}</Title>
+                          <Text type="secondary">审批模板：{templateLabel}</Text>
+                        </Space>
+                      </Col>
+                      <Col>
+                        <ApprovalStatusTag status={approval.status} emptyLabel="" />
+                      </Col>
+                    </Row>
+                    <Descriptions
+                      column={{ xs: 1, sm: 2, md: 3 }}
+                      size="small"
+                      style={{ marginTop: 'var(--space-5)' }}
+                    >
+                      <Descriptions.Item label="申请人">{approval.applicant_name || '—'}</Descriptions.Item>
+                      <Descriptions.Item label="发起时间">{formatDateTime(approval.create_time)}</Descriptions.Item>
+                      <Descriptions.Item label="审批完成时间">
+                        {approval.finish_time ? formatDateTime(approval.finish_time) : '—'}
+                      </Descriptions.Item>
+                    </Descriptions>
+                  </Card>
 
-            <Title level={5}>审批内容</Title>
-            <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 'var(--radius-xs)', padding: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
-              {Object.entries(approvalData.data.approval.content || {}).map(([key, value]) => {
-                const parsedKey = tryParseJSON(key)
-                const labelText = Array.isArray(parsedKey) ? parsedKey.map(stringifyCell).join(' / ') : String(key)
-                return (
-                  <div key={key} style={{ marginBottom: 'var(--space-3)' }}>
-                    <Text strong>{labelText}：</Text>
-                    {renderContentValue(key, value)}
-                  </div>
-                )
-              })}
-            </div>
+                  <Card title="业务时间" size="small" style={{ marginBottom: 'var(--space-5)' }}>
+                    <Descriptions column={{ xs: 1, sm: 2 }} size="small">
+                      <Descriptions.Item label="业务开始时间">
+                        {formatBusinessTime(approval.business_start_time)}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="业务结束时间">
+                        {formatBusinessTime(approval.business_end_time)}
+                      </Descriptions.Item>
+                    </Descriptions>
+                  </Card>
 
-            <Title level={5}>审批流程</Title>
-            <Timeline
-              items={approvalData.data.approval.flow_history?.map((node: FlowNode, index: number) => ({
-                color: node.action === 'approved' ? 'green' : node.action === 'rejected' ? 'red' : 'blue',
-                children: (
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <Text strong>{node.node_name}</Text>
-                      <Text style={{ marginLeft: 'var(--space-3)' }}>{node.approver_name}</Text>
-                      {getActionIcon(node.action)}
-                      <Text style={{ marginLeft: 'var(--space-2)', color: node.action === 'approved' ? 'var(--color-success)' : node.action === 'rejected' ? 'var(--color-error)' : 'var(--color-primary)' }}>
-                        {getActionText(node.action)}
-                      </Text>
-                    </div>
-                    {node.comment && (
-                      <Paragraph style={{ marginTop: 'var(--space-2)', marginBottom: 0 }}>
-                        备注：{node.comment}
-                      </Paragraph>
+                  <Card title="审批内容" size="small" style={{ marginBottom: 'var(--space-5)' }}>
+                    {contentEntries.length > 0 ? (
+                      <Descriptions bordered column={{ xs: 1, sm: 2 }} size="small">
+                        {contentEntries.map(([key, value]) => {
+                          const parsedKey = tryParseJSON(key)
+                          const labelText = Array.isArray(parsedKey)
+                            ? parsedKey.map(stringifyCell).join(' / ')
+                            : String(key)
+                          return (
+                            <Descriptions.Item key={key} label={labelText}>
+                              {renderContentValue(key, value)}
+                            </Descriptions.Item>
+                          )
+                        })}
+                      </Descriptions>
+                    ) : (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无有效审批内容" />
                     )}
-                    <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>{formatDateTime(node.time)}</Text>
-                  </div>
-                ),
-              })) || []}
-            />
+                  </Card>
 
-            <Divider />
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Button
-                icon={<SyncOutlined />}
-                onClick={handleSync}
-                loading={syncMutation.isPending}
-                disabled={!hasPermission('approval:sync')}
-              >
-                同步数据
-              </Button>
-            </div>
+                  <Card title="审批流程" size="small" style={{ marginBottom: 'var(--space-5)' }}>
+                    {flowHistory.length > 0 ? (
+                      <Timeline
+                        items={flowHistory.map((node: FlowNode) => ({
+                          color: node.action === 'approved' ? 'green' : node.action === 'rejected' ? 'red' : 'blue',
+                          children: (
+                            <div>
+                              <Space size={8} wrap>
+                                <Text strong>{node.node_name || '审批节点'}</Text>
+                                {node.approver_name && <Text>{node.approver_name}</Text>}
+                                {getActionIcon(node.action)}
+                                <Text type={node.action === 'approved' ? 'success' : node.action === 'rejected' ? 'danger' : 'secondary'}>
+                                  {getActionText(node.action)}
+                                </Text>
+                              </Space>
+                              {node.comment && (
+                                <Paragraph style={{ marginTop: 'var(--space-2)', marginBottom: 0 }}>
+                                  备注：{node.comment}
+                                </Paragraph>
+                              )}
+                              {node.time && (
+                                <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
+                                  {formatDateTime(node.time)}
+                                </Text>
+                              )}
+                            </div>
+                          ),
+                        }))}
+                      />
+                    ) : (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无审批流程记录" />
+                    )}
+                  </Card>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <Button
+                      icon={<SyncOutlined />}
+                      onClick={handleSync}
+                      loading={syncMutation.isPending}
+                      disabled={!hasPermission('approval:sync')}
+                    >
+                      同步数据
+                    </Button>
+                  </div>
+                </>
+              )
+            })()}
           </div>
         ) : (
           <Empty description="审批详情不存在" />

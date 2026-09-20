@@ -373,19 +373,11 @@ describe('AttendanceToolbox', () => {
   }
 
   async function openRosterAndTransferControls(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
-    const rosterCards = (await screen.findAllByText('花名册'))
-      .map((node) => node.closest('.ant-card'))
-      .filter((node): node is HTMLElement => Boolean(node))
-    const transferCards = (await screen.findAllByText('异动流程'))
-      .map((node) => node.closest('.ant-card'))
-      .filter((node): node is HTMLElement => Boolean(node))
-    const rosterCard = rosterCards.find((card) => within(card).queryByRole('button', { name: /组织数据生成/ }))
-    const transferCard = transferCards.find((card) => within(card).queryByRole('button', { name: /钉钉同步/ }))
-    if (!rosterCard || !transferCard) throw new Error('未找到花名册/异动流程权限控件')
+    await user.click(screen.getByRole('tab', { name: /最终汇总/ }))
+    const finalPanel = document.querySelector('.ant-tabs-tabpane-active') as HTMLElement
     return {
-      rosterButton: within(rosterCard).getByRole('button', { name: /组织数据生成/ }),
-      transferButton: within(transferCard).getByRole('button', { name: /钉钉同步/ }),
+      rosterButton: within(finalPanel).getByRole('button', { name: /(?:从组织数据生成|重新生成|重试生成)在职花名册/ }),
+      transferButton: within(finalPanel).getByRole('button', { name: /(?:从钉钉同步|重新同步|重试同步)异动流程表/ }),
     }
   }
 
@@ -399,6 +391,18 @@ describe('AttendanceToolbox', () => {
     expect(await screen.findByText('梁伯林')).toBeInTheDocument()
     expect(screen.getByText('陈秋宇')).toBeInTheDocument()
     expect(screen.getAllByText('费婷玉').length).toBeGreaterThan(0)
+  })
+
+  it('keeps roster and transfer status in fixed config without duplicate action buttons', async () => {
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+
+    const fixedConfigItem = screen.getByText('固定配置（名单 / 同步源）').closest('.ant-collapse-item') as HTMLElement
+    expect(within(fixedConfigItem).queryByRole('button', { name: /组织数据生成|钉钉同步/ })).not.toBeInTheDocument()
+    expect(within(fixedConfigItem).getByText('自动生成')).toBeInTheDocument()
+    expect(within(fixedConfigItem).getByText('自动同步')).toBeInTheDocument()
   })
 
   it('blocks leave calculation when required files are missing', async () => {
@@ -621,6 +625,38 @@ describe('AttendanceToolbox', () => {
     // 异动流程仍独立使用 position_transfer
     expect(screen.getAllByText('异动流程_钉钉自动同步.xlsx').length).toBeGreaterThan(0)
     expect(mockRunDingtalkSync).not.toHaveBeenCalled()
+  })
+
+  it('re-generates roster and re-syncs transfer from file cards without expanding fixed config', async () => {
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(1))
+
+    await user.click(screen.getByRole('tab', { name: /最终汇总/ }))
+    const finalPanel = document.querySelector('.ant-tabs-tabpane-active') as HTMLElement
+
+    await user.click(within(finalPanel).getByRole('button', { name: '重新生成在职花名册' }))
+    await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(2))
+
+    await user.click(within(finalPanel).getByRole('button', { name: '重新同步异动流程表' }))
+    await waitFor(() => expect(mockRunDingtalkSyncStructured).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows disabled source actions on file cards when permissions are missing', async () => {
+    mockPermissions = []
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await user.click(screen.getByRole('tab', { name: /最终汇总/ }))
+    const finalPanel = document.querySelector('.ant-tabs-tabpane-active') as HTMLElement
+
+    expect(within(finalPanel).getByRole('button', { name: '从组织数据生成在职花名册' })).toBeDisabled()
+    expect(within(finalPanel).getByRole('button', { name: '从钉钉同步异动流程表' })).toBeDisabled()
+    expect(mockGenerateOrgRoster).not.toHaveBeenCalled()
+    expect(mockRunDingtalkSyncStructured).not.toHaveBeenCalled()
   })
 
   it('auto roster response preserves a user upload made during the request and fills the other empty slot', async () => {
@@ -862,7 +898,6 @@ describe('AttendanceToolbox', () => {
     const { rosterButton, transferButton } = await openRosterAndTransferControls(user)
     expect(rosterButton).toBeDisabled()
     expect(transferButton).toBeEnabled()
-    expect(screen.getByText(/当前账号无操作权限/)).toBeInTheDocument()
     await user.hover(rosterButton.parentElement as HTMLElement)
     expect(await screen.findByText('你缺少考勤工具箱操作权限，需要联系管理员添加')).toBeInTheDocument()
   })
@@ -1120,10 +1155,11 @@ describe('AttendanceToolbox', () => {
     await user.click(screen.getByText('固定配置（名单 / 同步源）'))
     await user.click(await screen.findByRole('button', { name: /从钉钉抓取/ }))
     await waitFor(() => expect(mockParttimeMonthlyPunch).toHaveBeenCalledTimes(1))
-    expect(mockParttimeMonthlyPunch).toHaveBeenCalledWith({ month: '2026-07' })
+    const expectedMonth = dayjs().subtract(1, 'month').format('YYYY-MM')
+    expect(mockParttimeMonthlyPunch).toHaveBeenCalledWith({ month: expectedMonth })
     // 回填到兼职汇总的「考勤明细」上传位。
     await user.click(screen.getByRole('tab', { name: /兼职汇总/ }))
-    expect(await screen.findByText(/兼职月度打卡记录_202607\.xlsx/)).toBeInTheDocument()
+    expect(await screen.findByText(new RegExp(`兼职月度打卡记录_${expectedMonth.replace('-', '')}\\.xlsx`))).toBeInTheDocument()
   })
 
   it('抓取失败后显示错误并允许重试（req 6），手动上传仍可用（req 7）', async () => {
