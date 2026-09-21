@@ -6,7 +6,7 @@ calc_finally.py
   生成最终考勤汇总表。
 
 输入：
-  1. 在职花名册.xlsx + 离职花名册.xlsx（可选）→ 员工基本信息
+  1. 在职花名册.xlsx + 离职花名册.xlsx（可选）→ 最终表员工名单
   2. 异动流程表.xlsx（可选）→ 异动日期
   3. 作息表.xlsx → 应出勤天数 / 法定节假日 / 公司福利假
   4. 请假明细表.xlsx → 各类请假天数
@@ -33,15 +33,18 @@ from openpyxl.utils import get_column_letter
 
 # ── 确保可以导入兄弟模块 ──────────────────────────────────────────────────
 _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BASE not in sys.path:
+    sys.path.insert(0, _BASE)
 _leave_path = os.path.join(_BASE, "leave")
 if _leave_path not in sys.path:
     sys.path.insert(0, _leave_path)
 
 import calc_leave  # noqa: E402  # 复用作息表解析
+from excel_compat import load_workbook_compat  # noqa: E402
 
 # ── 输出列定义 ────────────────────────────────────────────────────────────
 OUTPUT_HEADERS = [
-    "序号", "月份", "工号", "姓名", "合同主体",
+    "序号", "月份", "工号", "姓名", "考勤组", "合同主体",
     "一级部门", "二级部门", "三级部门", "岗位",
     "员工类型", "人员分类",
     "入职日期", "离职日期", "转正日期", "异动日期",
@@ -116,6 +119,11 @@ def _clean_name(val) -> str:
     s = str(val).strip()
     s = re.sub(r"[（(]已?离职[）)]", "", s).strip()
     return s
+
+
+def _normalize_name_key(val) -> str:
+    """姓名匹配键：清理离职后缀并忽略首尾及内部空白。"""
+    return re.sub(r"\s+", "", _clean_name(val))
 
 
 def _is_rest_premium_excluded(emp_no: str, name: str) -> bool:
@@ -317,14 +325,35 @@ def _shift_year_month(year: int, month: int, offset: int) -> tuple[int, int]:
     return month_index // 12, month_index % 12 + 1
 
 
-def _in_resign_keep_window(resign_date: date | None, year: int, month: int) -> bool:
-    """Keep active employees and resigned employees in previous/current/next month."""
+def _in_resign_keep_window(
+    resign_date: date | None,
+    year: int,
+    month: int,
+    hire_date: date | None = None,
+) -> bool:
+    """Keep employees who overlapped the target month (plus a one-month edge).
+
+    Historical stats must not depend on whether the person is still active today.
+    Rule:
+      - no resign date → always keep
+      - still employed during the target month (resign_date >= month_start) → keep
+      - resigned in previous/current/next month of the target → keep (edge buffer
+        for late payroll adjustments)
+      - otherwise drop (left long before the target month)
+    """
     if not resign_date:
         return True
+    month_start, month_end = _month_bounds(year, month)
+    # Active for any day of the target month.
+    if resign_date >= month_start:
+        if hire_date and hire_date > month_end:
+            return False
+        return True
+    # One-month lookback buffer after resignation (legacy ±1 month behavior).
     for offset in (-1, 0, 1):
         window_year, window_month = _shift_year_month(year, month, offset)
-        month_start, month_end = _month_bounds(window_year, window_month)
-        if month_start <= resign_date <= month_end:
+        w_start, w_end = _month_bounds(window_year, window_month)
+        if w_start <= resign_date <= w_end:
             return True
     return False
 
@@ -340,9 +369,46 @@ def calc_statutory_holiday_days(
     month_start: date,
     month_end: date,
 ) -> int:
-    """按员工在本月的在职区间统计应计法定节假日天数。"""
-    return calc_active_day_count(
-        statutory_holidays, hire_date, resign_date, month_start, month_end
+    """Count paid statutory holidays inside the employee active window.
+
+    The hire date is inclusive; the resignation date is exclusive.
+    """
+    if not statutory_holidays:
+        return 0
+
+    active_start = max(month_start, hire_date) if hire_date else month_start
+    active_end = month_end
+    if resign_date:
+        active_end = min(month_end, resign_date - timedelta(days=1))
+    if active_start > active_end:
+        return 0
+
+    return sum(1 for day in statutory_holidays if active_start <= day <= active_end)
+
+
+def calc_maternity_statutory_overlap_days(
+    leave_day_detail: dict[date, dict[str, float]] | None,
+    statutory_holidays: set[date],
+    hire_date: date | None,
+    resign_date: date | None,
+    month_start: date,
+    month_end: date,
+) -> int:
+    """统计本月在职区间内同时落在产假的法定节假日，避免重复计薪。"""
+    if not leave_day_detail or not statutory_holidays:
+        return 0
+    active_start = max(month_start, hire_date) if hire_date else month_start
+    active_end = (
+        min(month_end, resign_date - timedelta(days=1))
+        if resign_date else month_end
+    )
+    if active_start > active_end:
+        return 0
+    return sum(
+        1
+        for day in statutory_holidays
+        if active_start <= day <= active_end
+        and float((leave_day_detail.get(day) or {}).get("产假") or 0) > 0
     )
 
 
@@ -517,6 +583,7 @@ def _find_header_row(ws, *keywords, max_rows: int = 10) -> tuple[int | None, lis
     """
     在前 max_rows 行中查找包含任一关键字的行作为表头。
     返回 (行号 1-based, [单元格值列表])。
+    使用子串匹配，保持请假、加班等模块的全局兼容性。
     """
     for r in range(1, min(max_rows, ws.max_row) + 1):
         vals = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
@@ -539,6 +606,37 @@ def _find_col(header_vals: list, *keywords) -> int | None:
             if kw and kw in text:
                 return idx
     return None
+
+
+def _find_col_exact(header_vals: list, *keywords) -> int | None:
+    """在表头行值列表中查找与任一关键字精确匹配的列索引（0-based）。
+    用于花名册身份列（工号/姓名），避免"发起人工号"误匹配"工号"。"""
+    keyword_vals = [_field_key(kw) for kw in keywords]
+    for idx, val in enumerate(header_vals):
+        if val is None:
+            continue
+        text = _field_key(val)
+        for kw in keyword_vals:
+            if kw and kw == text:
+                return idx
+    return None
+
+
+def _find_roster_header_row(ws, max_rows: int = 10) -> tuple[int | None, list]:
+    """查找具有精确姓名列的花名册表头。
+
+    该规则只服务于 ``parse_roster``，不得改变请假、加班等解析器依赖的
+    ``_find_header_row`` 子串匹配行为。
+    """
+    name_headers = ("姓名", "员工姓名")
+    for row_idx in range(1, min(max_rows, ws.max_row) + 1):
+        header_vals = [
+            ws.cell(row_idx, col_idx).value
+            for col_idx in range(1, ws.max_column + 1)
+        ]
+        if _find_col_exact(header_vals, *name_headers) is not None:
+            return row_idx, header_vals
+    return None, []
 
 
 def _find_col_excluding(header_vals: list, keywords: tuple[str, ...], excludes: tuple[str, ...]) -> int | None:
@@ -595,7 +693,8 @@ def _fixed_monthly_rest_attendance_days(month_end: date) -> int:
 
 def _parse_schedule_color_days(path: str, target_color: str) -> tuple[set[date], set[date]]:
     """按颜色解析作息表中的日期集合，返回 (主作息, 成都作息)。"""
-    wb = openpyxl.load_workbook(path)
+    # 作息表第三周起常用 Excel 公式递推日期；颜色日期识别也必须读取已计算的缓存值。
+    wb = openpyxl.load_workbook(path, data_only=True)
     main_days = None
     chengdu_days = None
 
@@ -665,7 +764,12 @@ def _parse_schedule_summary_days(path: str, summary_label: str) -> tuple[int | N
             if summary_label not in label:
                 continue
 
-            value = _to_float(ws.cell(row_idx, 3).value)
+            value = None
+            # 历史模板中主作息的数值可在 D 列，成都模板通常在 C 列；按标签后的前几列扫描首个数值。
+            for col_idx in range(3, min(ws.max_column, 6) + 1):
+                value = _to_float(ws.cell(row_idx, col_idx).value)
+                if value is not None:
+                    break
             if value is None:
                 continue
 
@@ -699,6 +803,15 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
         col_start = _find_col(header_vals, "开始时间")
         col_end = _find_col(header_vals, "结束时间")
         col_sys_hours = _find_col(header_vals, "系统时长", "时长", "请假时长")
+        col_final_hours = _find_col(
+            header_vals,
+            "最终请假时长",
+            "最终请假时长（小时）",
+            "最终请假时长(小时)",
+            "最终时长（小时）",
+            "最终时长(小时)",
+            "最终小时",
+        )
         col_days = _find_col(
             header_vals,
             "最终请假天数",
@@ -752,6 +865,10 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
                 "raw_start": raw_start,
                 "raw_end": raw_end,
                 "sys_hours": ws.cell(r, col_sys_hours + 1).value if col_sys_hours is not None else None,
+                "final_hours": (
+                    ws.cell(r, col_final_hours + 1).value
+                    if col_final_hours is not None else None
+                ),
                 "raw_days": raw_days,
             }
 
@@ -789,6 +906,11 @@ def parse_roster(
     解析在职花名册 + 离职花名册，返回员工列表。
     每个员工 dict 键：emp_no, name, contract_entity, dept1, dept2, dept3,
                      position, emp_type, category, hire_date, resign_date, confirm_date
+
+    字段契约（输入端与解析端必须一致）：
+      - 姓名列识别：精确的姓名 / 员工姓名（必需）
+      - 工号及其他旧版扩展字段均为可选，仅用于兼容和匹配。
+      - 在职源无可用表头或有效员工为 0 时，必须中止并返回明确中文错误。
     """
     employees: list[dict] = []
     paths: list[tuple[str, bool]] = [(active_path, False)]
@@ -796,20 +918,28 @@ def parse_roster(
         paths.append((resigned_path, True))
 
     seen_emp_nos: set[str] = set()
+    seen_name_indexes: dict[str, list[int]] = defaultdict(list)
 
     for path, is_resigned_roster in paths:
-        wb = openpyxl.load_workbook(path, data_only=True)
+        wb = load_workbook_compat(path, data_only=True)
         matched_sheets = 0
+        file_valid_employees = 0
+        file_skipped_blank_row = 0
+        file_skipped_duplicate = 0
+        file_missing_contract = 0
+        file_missing_emp_no = 0
+        file_source_rows = 0
 
         for ws in wb.worksheets:
-            # 查找表头行
-            header_row_idx, header_vals = _find_header_row(ws, "工号", "姓名")
+            # 花名册局部使用精确身份列表头，禁止把审批流程的发起人/申请人字段当成员工身份列。
+            header_row_idx, header_vals = _find_roster_header_row(ws)
             if header_row_idx is None:
                 continue
 
             # 列映射。兼容钉钉员工导出的 1级部门/2级部门/3级部门 命名。
-            col_emp_no = _find_col(header_vals, "工号", "员工工号")
-            col_name = _find_col(header_vals, "姓名", "员工姓名")
+            # 工号和姓名使用精确匹配，避免"发起人工号"等流程字段误匹配。
+            col_emp_no = _find_col_exact(header_vals, "员工编号", "员工工号", "工号")
+            col_name = _find_col_exact(header_vals, "员工姓名", "姓名")
             col_contract = _find_col(header_vals, "合同主体", "所属公司", "公司主体", "主体")
             col_dept1 = _find_col(header_vals, "一级部门", "1级部门", "一级组织", "1级组织")
             col_dept2 = _find_col(header_vals, "二级部门", "2级部门", "二级组织", "2级组织")
@@ -818,7 +948,7 @@ def parse_roster(
             col_dept5 = _find_col(header_vals, "五级部门", "5级部门", "五级组织", "5级组织")
             col_dept6 = _find_col(header_vals, "六级部门", "6级部门", "六级组织", "6级组织")
             col_dept_single = _find_col(
-                header_vals, "部门路径", "完整部门", "主部门", "所属部门", "发起人部门", "部门"
+                header_vals, "部门路径", "完整部门", "主部门", "所属部门", "部门"
             )
             if col_dept_single in {col_dept1, col_dept2, col_dept3}:
                 col_dept_single = None
@@ -848,6 +978,7 @@ def parse_roster(
             print(
                 "[花名册] 其他列识别 "
                 f"{source_label}: "
+                f"工号={col_emp_no + 1 if col_emp_no is not None else '-'}, "
                 f"岗位={col_position + 1 if col_position is not None else '-'}, "
                 f"员工类型={col_emp_type + 1 if col_emp_type is not None else '-'}, "
                 f"人员分类={col_category + 1 if col_category is not None else '-'}, "
@@ -861,7 +992,7 @@ def parse_roster(
                     missing.append("员工类型")
                 if col_category is None:
                     missing.append("人员分类")
-                print(f"[花名册] {source_label} 缺少 {'、'.join(missing)}，最终表会按日期规则兜底推导")
+                print(f"[花名册] {source_label} 缺少 {'、'.join(missing)}，最终表对应字段保持为空")
 
             def _cell(row_idx: int, col_idx: int | None):
                 if col_idx is None:
@@ -878,19 +1009,21 @@ def parse_roster(
                 "离职日期": 0,
                 "转正日期": 0,
             }
-            skipped_blank_contract = 0
 
             for r in range(header_row_idx + 1, ws.max_row + 1):
                 emp_no = _normalize_emp_no(_cell(r, col_emp_no))
                 name = _clean_name(_cell(r, col_name))
 
-                if not emp_no and not name:
+                # 花名册只以姓名限定人员；无有效姓名的行一律跳过。
+                if not name:
+                    file_skipped_blank_row += 1
                     continue
 
-                contract_entity = _first_text(_cell(r, col_contract))
+                file_source_rows += 1
 
-                # 离职花名册中已有的工号，只更新离职日期
+                # 同工号已存在：离职花名册只更新离职日期，不重复添加
                 if emp_no and emp_no in seen_emp_nos:
+                    file_skipped_duplicate += 1
                     if is_resigned_roster:
                         resign_val = _to_date(_cell(r, col_resign))
                         if resign_val:
@@ -900,9 +1033,20 @@ def parse_roster(
                                     break
                     continue
 
+                name_key = _normalize_name_key(name)
+                existing_indexes = seen_name_indexes.get(name_key, [])
+                existing_without_emp_no = any(not employees[index]["emp_no"] for index in existing_indexes)
+                if existing_indexes and (not emp_no or existing_without_emp_no):
+                    raise ValueError(
+                        f"花名册存在重复姓名“{name}”（至少 {len(existing_indexes) + 1} 条），"
+                        "且无法全部通过工号唯一识别，请处理重名后重试。"
+                    )
+
+                contract_entity = _first_text(_cell(r, col_contract))
                 if not contract_entity:
-                    skipped_blank_contract += 1
-                    continue
+                    file_missing_contract += 1
+                if not emp_no:
+                    file_missing_emp_no += 1
 
                 # 部门解析
                 dept1 = _first_text(_cell(r, col_dept1))
@@ -959,6 +1103,8 @@ def parse_roster(
                 if emp["confirm_date"]:
                     optional_nonempty["转正日期"] += 1
                 employees.append(emp)
+                seen_name_indexes[name_key].append(len(employees) - 1)
+                file_valid_employees += 1
                 if emp_no:
                     seen_emp_nos.add(emp_no)
 
@@ -970,15 +1116,188 @@ def parse_roster(
                 f"[花名册] {source_label} 其他字段非空："
                 + "，".join(f"{name} {count} 条" for name, count in optional_nonempty.items())
             )
-            if skipped_blank_contract:
-                print(f"[花名册] {source_label} 已跳过合同主体为空 {skipped_blank_contract} 行")
 
         wb.close()
-        if matched_sheets == 0:
-            print(f"[花名册] 未找到表头行: {path}")
 
-    print(f"[花名册] 共解析 {len(employees)} 名员工")
+        label = "离职" if is_resigned_roster else "在职"
+        print(
+            f"[花名册] {label}源 {os.path.basename(path)}: "
+            f"匹配工作表 {matched_sheets}，"
+            f"源数据 {file_source_rows} 行，"
+            f"有效员工 {file_valid_employees} 人，"
+            f"空行跳过 {file_skipped_blank_row}，"
+            f"重复跳过 {file_skipped_duplicate}，"
+            f"缺工号 {file_missing_emp_no}，"
+            f"缺合同主体 {file_missing_contract}"
+        )
+
+        # 零在职保护（仅对在职源生效）：
+        # 只要有效在职员工为 0，或未识别到可用花名册表头，就必须中止。
+        if not is_resigned_roster:
+            if matched_sheets == 0:
+                raise ValueError(
+                    f"在职花名册未找到可用表头：文件 {os.path.basename(path)} 的所有工作表中"
+                    f"均未找到精确表头\"姓名\"或\"员工姓名\"。"
+                    f"请确认上传的是花名册而非其他类型文件。"
+                )
+            if file_valid_employees == 0:
+                raise ValueError(
+                    f"在职花名册解析为 0 人：文件 {os.path.basename(path)} 有 {file_source_rows} 行数据，"
+                    f"但有效姓名为 0（"
+                    f"重复跳过 {file_skipped_duplicate}，"
+                    f"缺合同主体 {file_missing_contract}）。"
+                    f"请检查花名册是否包含精确表头 姓名/员工姓名，以及至少一条非空姓名。"
+                )
+
+    active_count = sum(1 for e in employees if not e.get("resign_date"))
+    resigned_count = len(employees) - active_count
+    print(f"[花名册] 汇总: 合并去重后 {len(employees)} 人（在职 {active_count}，离职 {resigned_count}）")
     return employees
+
+
+def parse_attendance_identity(path: str) -> list[dict]:
+    """从钉钉月度考勤/补贴核对业务表提取员工身份与组织字段。"""
+    wb = load_workbook_compat(path, data_only=True)
+    records: list[dict] = []
+    matched_sheets = 0
+    try:
+        for ws in wb.worksheets:
+            header_row_idx, header_vals = _find_roster_header_row(ws)
+            if header_row_idx is None:
+                continue
+            col_name = _find_col_exact(header_vals, "姓名", "员工姓名")
+            col_emp_no = _find_col_exact(header_vals, "工号", "员工工号", "员工编号")
+            col_group = _find_col_exact(header_vals, "考勤组", "考勤组名称")
+            col_dept1 = _find_col_exact(header_vals, "一级部门", "1级部门", "一级组织", "1级组织")
+            col_dept2 = _find_col_exact(header_vals, "二级部门", "2级部门", "二级组织", "2级组织")
+            col_dept3 = _find_col_exact(header_vals, "三级部门", "3级部门", "三级组织", "3级组织")
+            col_department = _find_col_exact(header_vals, "部门", "所属部门", "部门名称", "部门路径")
+            col_position = _find_col_exact(header_vals, "岗位", "岗位名称", "职位")
+            if col_name is None:
+                continue
+            matched_sheets += 1
+
+            def _cell(row_idx: int, col_idx: int | None):
+                return ws.cell(row_idx, col_idx + 1).value if col_idx is not None else None
+
+            for row_idx in range(header_row_idx + 1, ws.max_row + 1):
+                name = _clean_name(_cell(row_idx, col_name))
+                if not name or name in {"姓名", "合计"}:
+                    continue
+                dept1 = _first_text(_cell(row_idx, col_dept1))
+                dept2 = _first_text(_cell(row_idx, col_dept2))
+                dept3 = _first_text(_cell(row_idx, col_dept3))
+                if not any((dept1, dept2, dept3)) and col_department is not None:
+                    dept1, dept2, dept3 = _split_department_text(_cell(row_idx, col_department))
+                records.append({
+                    "emp_no": _normalize_emp_no(_cell(row_idx, col_emp_no)),
+                    "name": name,
+                    "attendance_group": _first_text(_cell(row_idx, col_group)),
+                    "dept1": dept1,
+                    "dept2": dept2,
+                    "dept3": dept3,
+                    "position": _first_text(_cell(row_idx, col_position)),
+                    "source_sheet": ws.title,
+                    "source_row": row_idx,
+                })
+    finally:
+        wb.close()
+    if matched_sheets == 0:
+        raise ValueError(
+            f"钉钉月度考勤记录未找到精确表头\"姓名\"或\"员工姓名\"：{os.path.basename(path)}"
+        )
+    if not records:
+        raise ValueError(f"钉钉月度考勤记录有效员工为 0：{os.path.basename(path)}")
+    return records
+
+
+def apply_attendance_identity(employees: list[dict], attendance_records: list[dict]) -> list[dict]:
+    """用钉钉考勤身份补充/纠正花名册身份字段，并保留花名册人事主数据。"""
+    identity_fields = (
+        "attendance_group", "dept1", "dept2", "dept3", "position",
+    )
+
+    # 打卡明细可能同一员工有多行；先按业务工号收敛为一个身份记录。
+    # 没有工号的行无法证明属于同一员工，保留为独立身份供后续歧义检查。
+    identities: list[dict] = []
+    by_emp_no: dict[str, dict] = {}
+    for record in attendance_records:
+        emp_no = _normalize_emp_no(record.get("emp_no"))
+        if emp_no:
+            identity = by_emp_no.get(emp_no)
+            if identity is None:
+                identity = dict(record)
+                identity["emp_no"] = emp_no
+                by_emp_no[emp_no] = identity
+                identities.append(identity)
+            else:
+                if not _clean_name(identity.get("name")):
+                    identity["name"] = _clean_name(record.get("name"))
+                for field in identity_fields:
+                    if not _first_text(identity.get(field)):
+                        identity[field] = _first_text(record.get(field))
+            continue
+
+        identity = dict(record)
+        identity["emp_no"] = ""
+        identities.append(identity)
+
+    by_name: dict[str, list[dict]] = defaultdict(list)
+    for identity in identities:
+        name_key = _normalize_name_key(identity.get("name"))
+        if name_key:
+            by_name[name_key].append(identity)
+
+    enriched_employees: list[dict] = []
+    for employee in employees:
+        roster_emp_no = _normalize_emp_no(employee.get("emp_no"))
+        roster_name = _clean_name(employee.get("name"))
+        matched = by_emp_no.get(roster_emp_no) if roster_emp_no else None
+        if matched is not None:
+            # 精确工号是最高优先级；即使存在其他同名身份也不得改走姓名匹配。
+            candidates = [matched]
+        else:
+            # 花名册无工号或旧工号未命中时，都必须按规范化姓名回退。
+            candidates = by_name.get(_normalize_name_key(roster_name), [])
+        if len(candidates) > 1:
+            raise ValueError(
+                f"钉钉考勤记录中姓名“{roster_name}”匹配到 {len(candidates)} 个员工身份，"
+                "无法唯一对应花名册员工。"
+            )
+
+        enriched = {
+            "emp_no": roster_emp_no,
+            "name": roster_name,
+            "attendance_group": None,
+            "contract_entity": None,
+            "dept1": None,
+            "dept2": None,
+            "dept3": None,
+            "position": None,
+            "emp_type": None,
+            "type_hint": "",
+            "category": None,
+            "hire_date": None,
+            "resign_date": None,
+            "confirm_date": None,
+            **employee,
+        }
+        enriched["emp_no"] = roster_emp_no
+        enriched["name"] = roster_name
+        if candidates:
+            record = candidates[0]
+            attendance_emp_no = _normalize_emp_no(record.get("emp_no"))
+            attendance_name = _clean_name(record.get("name"))
+            if attendance_emp_no:
+                enriched["emp_no"] = attendance_emp_no
+            if attendance_name:
+                enriched["name"] = attendance_name
+            for field in identity_fields:
+                attendance_value = _first_text(record.get(field))
+                if attendance_value:
+                    enriched[field] = attendance_value
+        enriched_employees.append(enriched)
+    return enriched_employees
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1118,7 +1437,8 @@ def parse_schedule(path: str) -> dict:
     - main_attendance_days, chengdu_attendance_days (int)
     - holidays (int)：法定节假日+公司福利假合计
     """
-    ctx = calc_leave.load_schedule_context(path)
+    # 用户作息表后半月日期使用 Excel 公式递推，必须读取缓存的计算结果，否则主作息会被误识为仅 6 天。
+    ctx = calc_leave.load_schedule_context(path, data_only=True)
 
     year  = ctx["year"]
     month = ctx["month"]
@@ -1191,14 +1511,27 @@ def parse_leave_summary(
     汇总时直接使用请假明细中的“最终请假天数”。
     """
     result: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    hours_fallback_rows = 0
     for row in _collect_deduped_leave_rows(path):
         emp_no = row["emp_no"]
         name = row["name"]
         leave_type = row["leave_type"]
         days = _to_float(row["raw_days"])
+        # Defensive: prefer final hours → days when day column is missing/blank.
+        # Only fall back when days is None (not when explicitly 0), so true zero
+        # outside-month rows stay zero. Prefer 最终请假时长 over 系统时长.
+        if days is None:
+            final_hours = _to_float(row.get("final_hours"))
+            sys_hours = _to_float(row.get("sys_hours"))
+            hours = final_hours if final_hours and final_hours > 0 else sys_hours
+            if hours and hours > 0:
+                days = _overtime_days_from_hours(hours)
+                hours_fallback_rows += 1
 
         key = emp_no or name
         if not key or not leave_type or days is None:
+            continue
+        if days == 0:
             continue
 
         # 标准化请假类型
@@ -1211,6 +1544,8 @@ def parse_leave_summary(
             result[key][matched] += days
 
     print(f"[请假明细] 共解析 {len(result)} 名员工的请假数据")
+    if hours_fallback_rows:
+        print(f"[请假明细] 其中 {hours_fallback_rows} 行按系统时长小时折算天数（天数字段为空/0）")
     return dict(result)
 
 
@@ -1279,12 +1614,20 @@ def parse_leave_day_details(
             schedule_ctx["chengdu_working_days"]
             if is_cd else schedule_ctx["main_working_days"]
         )
+        if matched == "产假":
+            expected_key = (
+                "chengdu_expected_attendance_days"
+                if is_cd else "main_expected_attendance_days"
+            )
+            day_calendar = schedule_ctx.get(expected_key) or working_days
+        else:
+            day_calendar = working_days
 
         cur = max(dt_start.date(), month_start)
         end = min(dt_end.date(), month_end)
         while cur <= end:
             hours = calc_leave.calc_target_month_working_hours(
-                dt_start, dt_end, working_days, cur, cur,
+                dt_start, dt_end, day_calendar, cur, cur,
             )
             day_value = _round2(hours / 8) if hours else None
             if day_value:
@@ -1715,23 +2058,24 @@ def calc_probation_days(
     month_start: date,
     month_end: date,
 ) -> float | None:
-    """
-    当月转正天数：转正日期在当月内时，
-    从转正当日（闭区间）到月末的工作日数，加上转正后发生的法定节假日天数。
+    """Count post-confirmation days for an employee confirmed this month.
+
+    Uses a closed interval [confirm_date, month_end]: the confirmation day
+    itself is included if it is a working day or a statutory holiday.
     """
     if not confirm_date:
         return None
     if not (month_start <= confirm_date <= month_end):
         return None
 
-    count = sum(
-        1 for d in working_days if confirm_date <= d <= month_end
-    )
-    count += sum(
-        1
-        for d in statutory_holidays
-        if confirm_date <= d <= month_end and d.weekday() < 5
-    )
+    countable_days = {
+        day for day in working_days
+        if confirm_date < day <= month_end
+    } | {
+        day for day in statutory_holidays
+        if confirm_date <= day <= month_end
+    }
+    count = len(countable_days)
     return count if count > 0 else None
 
 
@@ -1866,7 +2210,9 @@ def generate(
 
     window_employees = [
         emp for emp in employees
-        if _in_resign_keep_window(emp.get("resign_date"), year, month)
+        if _in_resign_keep_window(
+            emp.get("resign_date"), year, month, emp.get("hire_date"),
+        )
     ]
     skipped_resigned_outside_window = len(employees) - len(window_employees)
     excluded_final_table_employees = [
@@ -1923,20 +2269,23 @@ def generate(
 
         leave_data = _lookup_leave(emp)
         leave_day_detail = _lookup_leave_detail(emp)
+        holidays = max(
+            0,
+            holidays - calc_maternity_statutory_overlap_days(
+                leave_day_detail, statutory_holidays,
+                emp["hire_date"], emp["resign_date"],
+                month_start, month_end,
+            ),
+        )
         ot_data    = _lookup_overtime(emp)
         absent     = _lookup_absent(emp)
         absent_day_detail = _lookup_absent_days(emp)
-        display_emp_type = _derive_emp_type(emp, month_end)
-        display_category = _clean_final_status_label(
-            emp["category"] or _derive_category(emp, month_start, month_end)
-        )
-        if display_emp_type and display_emp_type != emp["emp_type"]:
-            normalized_emp_type_count += 1
-        if not emp["category"] and display_category:
-            derived_field_counts["人员分类"] += 1
+        # 员工类型、人员分类和日期不是月度考勤数据字段；缺失时必须保持为空。
+        display_emp_type = _clean_final_status_label(emp.get("emp_type"))
+        display_category = _clean_final_status_label(emp.get("category"))
         display_dept1 = emp["dept1"]
-        display_dept2 = emp["dept2"] or display_dept1
-        display_dept3 = emp["dept3"] or display_dept1
+        display_dept2 = emp["dept2"]
+        display_dept3 = emp["dept3"]
 
         entry_leave_absence = calc_entry_leave_absence_audit(
             emp["hire_date"],
@@ -1979,6 +2328,7 @@ def generate(
             "月份": f"{month}月",
             "工号": emp["emp_no"],
             "姓名": emp["name"],
+            "考勤组": emp.get("attendance_group"),
             "合同主体": emp["contract_entity"],
             "一级部门": display_dept1,
             "二级部门": display_dept2,

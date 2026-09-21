@@ -1,6 +1,6 @@
 ---
 purpose: 考勤模块业务规则说明
-last_updated: 2026-08-20
+last_updated: 2026-09-02
 source_of_truth:
   - internal/api/handlers.go（考勤相关 handler）
   - internal/api/attendance_toolbox_handlers.go（考勤工具箱上传计算 handler）
@@ -283,7 +283,7 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - `build-and-deploy.ps1 -SkipConfigUpload` keeps the existing server env file, so new/changed process-code values require a deployment without this switch (or an explicit config upload/restart).
 结构化工作流：返回 `run_id` + 文件元数据/统计/日志；结果绑定 `user_id + org_id`，磁盘目录仅 `rootDir/<runID>`。
 
-- `quick`：钉钉同步 → 同请求内生成请假/加班；`run_leave`/`run_overtime` 为 true 时后端自动合并对应 `flow_keys`。API 为兼容调用方保留；当前工具箱不展示独立“钉钉同步”页签，钉钉拉取仅从请假、加班和固定配置中的按需入口执行。
+- `quick`：钉钉同步 → 同请求内生成请假/加班；`run_leave`/`run_overtime` 为 true 时后端自动合并对应 `flow_keys`。API 为兼容调用方保留；当前工具箱不展示独立“钉钉同步”页签。花名册生成与异动流程同步只从对应文件上传卡片执行，固定配置仅展示其状态；请假、加班仍使用各模块入口，兼职月度打卡仍在固定配置选择月份后按需抓取。
 - 下载 / 预览：
   - `GET /api/v1/attendance/toolbox/runs/:run_id`
   - `GET /api/v1/attendance/toolbox/runs/:run_id/files/:file_key`
@@ -308,7 +308,7 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - 员工范围：仅当前组织 `status=active` 且未软删除的用户；业务工号必须取 `EmployeeProfile.EmployeeID`，部门路径必须取该用户当前主部门在本组织中的真实父子层级。所有用户、档案、部门查询均显式绑定 JWT `org_id`。钉钉根父级兼容空值、字面量 `0` 和当前组织的 `database.ScopedExternalID(orgID, "0")` 历史值；外组织 scoped 根不得视为合法根。
 - 完整性：任一待输出员工缺少 `EmployeeID`、姓名或有效部门路径（包括主部门缺失、跨组织、父级断裂、循环、部门空名称）时，接口整体返回包含对应缺失人数的 400；禁止跳过后静默生成不完整文件。`EmployeeID`、姓名、有效部门路径三者均为组织生成接口的必备字段，且不得使用 `UserID`、`DingTalkUserID`、工号或其他字段伪造姓名，也不得使用姓名、`UserID`、`DingTalkUserID` 兜底业务工号。根节点兼容不得扩大为“任意不存在父级均合法”。
 - 输出：xlsx 固定 12 列：工号、姓名、合同主体、一级部门、二级部门、三级部门、岗位、员工类型、人员分类、入职日期、离职日期、转正日期；其中工号、姓名和真实部门路径是加班入口契约，其他无权威来源字段保持空。超过三级的组织路径保留距离叶子最近的三级业务部门，顺序不得重排或猜测。
-- 回填：前端自动生成后可将同一份富花名册回填到 `overtime_roster` 与 `final_active`；自动请求必须逐上传位保存请求开始时的空状态和用户修改版本，只填请求开始与响应时均为空、且期间未被用户选择/删除/替换的位置。手动点击生成可替换请求开始时已有但期间未变化的位置；请求期间的用户操作始终优先。生成失败不得改动现有文件。不得把仅姓名文件自动回填到 `overtime_roster`。最终汇总仍可从用户上传的钉钉月度汇总表补充/纠正身份字段，手工仅姓名花名册只作为最终汇总兼容输入，不是组织生成接口的输出契约。
+- 回填：前端自动生成后可将同一份富花名册回填到 `overtime_roster` 与 `final_active`；自动请求必须逐上传位保存请求开始时的空状态和用户修改版本，只填请求开始与响应时均为空、且期间未被用户选择/删除/替换的位置。手动点击生成可替换请求开始时已有但期间未变化的位置；请求期间的用户操作始终优先。生成失败不得改动现有文件。不得把仅姓名文件自动回填到 `overtime_roster`。最终汇总仍可从用户上传的钉钉月度汇总表补充/纠正工号、姓名、考勤组、部门和岗位，但只能使用月度表中的非空值；合同主体、员工类型、人员分类、入职日期、离职日期和转正日期以花名册为准，禁止在身份合并时清空。手工仅姓名花名册只作为最终汇总兼容输入，不是组织生成接口的输出契约。
 - 自动修复：仅当生成错误明确包含“缺少有效主部门”或“部门层级无法解析”，且当前用户拥有 `attendance_manage` 时，前端调用统一 `confirmOrgSync` 显示确认框；确认后复用 `/org/sync/start` + 轮询链路，同步成功或部分成功后携带原上传位快照自动重试花名册一次。其他完整性错误、缺权限、同步失败及重试失败均不得继续触发，禁止无限循环或绕过组织同步确认。
 - 重名：生成文件以权威工号区分同名员工；Python 部门映射只有在姓名全文件唯一时才建立姓名回退键，重名时只允许按工号命中，禁止首条覆盖或按姓名误映射。
 - 成功：返回 xlsx、`Content-Disposition`、`X-Content-Type-Options: nosniff`；无有效在职员工，或缺业务工号、姓名、有效部门路径时返回 400，数据查询、runner 失败或无输出返回 500。
@@ -439,6 +439,8 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
   - 列名匹配使用精确关键字（如“15-30分钟迟到扣款”、“旷工天数”），禁止使用宽泛别名（如“迟到”、“早退”）以免误匹配次数/分钟数列。
 - **补贴扣款无自动拉取功能**：不新增 `/attendance/toolbox/subsidy/sync` 接口，不新增数据库表或字段。重复上传同一月份时，新文件替换旧文件，不累计。
 - 兼职汇总中，同一日同时包含外出/出差与事假时，事假优先且该日不计出勤；组合状态判断必须早于外出/出差计出勤的提前返回。纯外出/出差仍按原规则处理。
+- 兼职默认作息表可以用 Excel 公式续算日期，固定人员计算必须读取公式已计算值；当前固定名单为王心英、刘芮、汤颖、周代林、陈富庆，统一按主作息表生成出勤值和总天数。迟到、早退、缺卡、旷工仍须标注并写入提醒，但不扣减固定人员的作息出勤值。
+- 兼职考勤明细支持标准工号格式，也支持人工整理的“姓名 + 1～31 日”简易矩阵；无工号格式必须至少识别 3 个日期列才能通过校验，`√`、正数、“班”等非空出勤标记计 1 天。
 - 大文件上传时显示警告提示
 - 运行日志可折叠查看（需后端支持返回 log 字段）
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -12,12 +13,14 @@ import (
 	"peopleops/internal/config"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
+	appLogging "peopleops/internal/logging"
 	"peopleops/internal/service"
 
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/chatbot"
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/client"
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/logger"
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/payload"
+	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
 
@@ -25,6 +28,8 @@ func main() {
 	if err := config.Load(); err != nil {
 		log.Printf("加载配置警告: %v", err)
 	}
+	closeLogs := configureStreamLogging()
+	defer closeLogs()
 
 	db, err := openStreamDB()
 	if err != nil {
@@ -90,6 +95,37 @@ func main() {
 	log.Printf("钉钉 Stream 已连接。审批事件将增量同步，未绑定群聊首次 @机器人发送任意非空内容即可绑定。")
 	<-ctx.Done()
 	log.Printf("收到退出信号，正在关闭钉钉 Stream 连接")
+}
+
+func configureStreamLogging() func() {
+	levelName := strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL")))
+	if levelName == "" {
+		levelName = "warn"
+	}
+	level, levelErr := logrus.ParseLevel(levelName)
+	if levelErr != nil {
+		log.Printf("无效的 LOG_LEVEL=%q，将使用 warn", levelName)
+		level = logrus.WarnLevel
+	}
+	logrus.SetLevel(level)
+
+	logDir := strings.TrimSpace(os.Getenv("LOG_DIR"))
+	if logDir == "" {
+		logDir = "logs"
+	}
+	writer, err := appLogging.NewDailyWriter(logDir, "peopleops-dingtalk-stream", 7)
+	if err != nil {
+		log.Printf("初始化按日日志失败: %v，将继续写入容器日志", err)
+		return func() {}
+	}
+	output := io.MultiWriter(os.Stdout, writer)
+	log.SetOutput(output)
+	logrus.SetOutput(output)
+	return func() {
+		if err := writer.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "关闭按日日志失败: %v\n", err)
+		}
+	}
 }
 
 func openStreamDB() (*gorm.DB, error) {

@@ -1521,6 +1521,56 @@ const AttendanceToolbox: React.FC = () => {
     )
   }
 
+  const renderFileSourceAction = (field: FileField, hasFile: boolean) => {
+    const isRosterField = field.name === 'overtime_roster' || field.name === 'final_active'
+    const isTransferField = field.name === 'final_transfer'
+    if (!isRosterField && !isTransferField) return null
+
+    const loading = isRosterField ? rosterSync.loading : transferSync.loading
+    const error = isRosterField ? rosterSync.error : transferSync.error
+    const allowed = isRosterField ? canOperate : canDingtalkSync
+    const permissionHint = isRosterField
+      ? '你缺少考勤工具箱操作权限，需要联系管理员添加'
+      : '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加'
+    const actionLabel = isRosterField
+      ? error
+        ? '重试生成'
+        : hasFile
+          ? '重新生成'
+          : '从组织数据生成'
+      : error
+        ? '重试同步'
+        : hasFile
+          ? '重新同步'
+          : '从钉钉同步'
+    const accessibleLabel = `${actionLabel}${field.label}`
+
+    return (
+      <Tooltip title={!allowed ? permissionHint : undefined}>
+        <span style={{ display: 'inline-block', marginLeft: 'auto' }}>
+          <Button
+            type="link"
+            size="small"
+            icon={<SyncOutlined />}
+            aria-label={accessibleLabel}
+            loading={loading}
+            disabled={!allowed}
+            onClick={() => {
+              if (isRosterField) {
+                void generateRosterFromOrgData()
+                return
+              }
+              void syncTransferFromDingtalk()
+            }}
+            style={{ height: 24, padding: '0 4px' }}
+          >
+            {actionLabel}
+          </Button>
+        </span>
+      </Tooltip>
+    )
+  }
+
   const renderFileUploadCard = (field: FileField) => {
     const files = fileLists[field.name] || []
     const hasFile = files.length > 0
@@ -1552,16 +1602,19 @@ const AttendanceToolbox: React.FC = () => {
         styles={{ body: { padding: '16px' } }}
       >
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {hasFile ? (
-              <Badge count={<CheckOutlined style={{ color: '#fff', fontSize: 10 }} />} offset={[-4, 4]}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              {hasFile ? (
+                <Badge count={<CheckOutlined style={{ color: '#fff', fontSize: 10 }} />} offset={[-4, 4]}>
+                  <Text strong>{field.label}</Text>
+                </Badge>
+              ) : (
                 <Text strong>{field.label}</Text>
-              </Badge>
-            ) : (
-              <Text strong>{field.label}</Text>
-            )}
-            {field.required && <Tag color="error" style={{ fontSize: 11, lineHeight: '18px', height: 18 }}>必填</Tag>}
-            {field.multiple && <Tag color="blue" style={{ fontSize: 11, lineHeight: '18px', height: 18 }}>可多选</Tag>}
+              )}
+              {field.required && <Tag color="error" style={{ fontSize: 11, lineHeight: '18px', height: 18 }}>必填</Tag>}
+              {field.multiple && <Tag color="blue" style={{ fontSize: 11, lineHeight: '18px', height: 18 }}>可多选</Tag>}
+            </div>
+            {renderFileSourceAction(field, hasFile)}
           </div>
 
           <Dragger
@@ -2238,29 +2291,12 @@ const AttendanceToolbox: React.FC = () => {
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Space size={4}>
                   <Text strong style={{ fontSize: 12 }}>花名册</Text>
-                  <Tag color="blue" style={{ fontSize: 11 }}>可生成</Tag>
-                  {rosterSync.loading
-                    ? <SyncOutlined spin />
-                    : (
-                      <Tooltip title={!canOperate ? '你缺少考勤工具箱操作权限，需要联系管理员添加' : undefined}>
-                        <span style={{ display: 'inline-block' }}>
-                          <Button
-                            type="link"
-                            size="small"
-                            icon={<SyncOutlined />}
-                            disabled={!canOperate}
-                            onClick={() => void generateRosterFromOrgData()}
-                            style={{ fontSize: 11, height: 22, padding: '0 4px' }}
-                          >
-                            {rosterSync.error ? '重试生成' : '从组织数据生成'}
-                          </Button>
-                        </span>
-                      </Tooltip>
-                    )}
+                  <Tag color="blue" style={{ fontSize: 11 }}>自动生成</Tag>
+                  {rosterSync.loading && <SyncOutlined spin />}
                 </Space>
                 <Text type="secondary" style={{ fontSize: 11 }}>
                   {canOperate
-                    ? '页面加载时会自动从本地组织数据生成花名册（使用最近一次组织同步数据）；失败后可手动重试，也可以继续上传本地花名册'
+                    ? '页面加载时会使用最近一次组织同步数据自动生成，也可上传本地花名册'
                     : '当前账号无操作权限，请上传本地花名册，或联系管理员开通权限'}
                 </Text>
                 {rosterSync.lastSyncAt && (
@@ -2286,29 +2322,12 @@ const AttendanceToolbox: React.FC = () => {
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Space size={4}>
                   <Text strong style={{ fontSize: 12 }}>异动流程</Text>
-                  <Tag color="blue" style={{ fontSize: 11 }}>可同步</Tag>
-                  {transferSync.loading
-                    ? <SyncOutlined spin />
-                    : (
-                      <Tooltip title={!canDingtalkSync ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加' : undefined}>
-                        <span style={{ display: 'inline-block' }}>
-                          <Button
-                            type="link"
-                            size="small"
-                            icon={<SyncOutlined />}
-                            disabled={!canDingtalkSync}
-                            onClick={() => void syncTransferFromDingtalk()}
-                            style={{ fontSize: 11, height: 22, padding: '0 4px' }}
-                          >
-                            {transferSync.error ? '重试同步' : '从钉钉同步'}
-                          </Button>
-                        </span>
-                      </Tooltip>
-                    )}
+                  <Tag color="blue" style={{ fontSize: 11 }}>自动同步</Tag>
+                  {transferSync.loading && <SyncOutlined spin />}
                 </Space>
                 <Text type="secondary" style={{ fontSize: 11 }}>
                   {canDingtalkSync
-                    ? '页面加载时会自动尝试同步；失败后可手动重试，也可以继续上传本地异动流程表'
+                    ? '页面加载时会自动尝试同步，也可上传本地异动流程表'
                     : '当前账号无钉钉同步权限，请上传本地异动流程表，或联系管理员开通权限'}
                 </Text>
                 {transferSync.lastSyncAt && (

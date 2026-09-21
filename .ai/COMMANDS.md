@@ -276,6 +276,15 @@ docker run -d -p 8080:8080 --env-file .env peopleops:latest
 docker logs -f <container-id>
 ```
 
+People Compose 部署同时把应用日志写入部署目录 `logs/`，按 UTC+8 自然日仅保留 7 天：
+
+```bash
+tail -f logs/peopleops-$(date +%F).log
+tail -f logs/peopleops-dingtalk-stream-$(date +%F).log
+```
+
+`docker logs` 由 `100m × 10` 轮转限制兜底；固定 7 天以 `logs/` 中的按日文件为准。
+
 ---
 
 ## 常见问题

@@ -43,8 +43,13 @@ func generateRandomPassword(length int) string {
 var DB *gorm.DB
 
 func gormConfig() *gorm.Config {
-	baseLogger := logger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), logger.Config{
-		LogLevel:                  logger.Info,
+	baseLogger := logger.New(log.New(log.Writer(), "\r\n", log.LstdFlags), logger.Config{
+		// Normal SQL statements are counted per request but are not written to
+		// the container log. Errors still pass through the logger below.
+		// Suppress successful SQL while retaining failed statements for the
+		// request logger's sanitized error summary.
+		LogLevel:                  logger.Error,
+		SlowThreshold:             time.Second,
 		IgnoreRecordNotFoundError: true,
 	})
 	return &gorm.Config{

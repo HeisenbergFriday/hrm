@@ -242,6 +242,30 @@ class RdDeptMatchTests(unittest.TestCase):
         )
 
 
+class ScheduleFormulaParsingTests(unittest.TestCase):
+    def test_parse_schedule_reads_cached_formula_dates_and_summary_columns(self):
+        context = {
+            "year": 2026,
+            "month": 8,
+            "month_start": date(2026, 8, 1),
+            "month_end": date(2026, 8, 31),
+            "next_month_start": date(2026, 9, 1),
+            "next_month_label": "九月考勤",
+            "main_working_days": {date(2026, 8, day) for day in range(1, 25)},
+            "chengdu_working_days": {date(2026, 8, day) for day in range(1, 22)},
+            "main_expected_attendance_days": set(),
+            "chengdu_expected_attendance_days": set(),
+        }
+        with patch.object(fin.calc_leave, "load_schedule_context", return_value=context) as load_context:
+            with patch.object(fin, "_parse_schedule_summary_days", return_value=(24, 21)):
+                with patch.object(fin, "_parse_schedule_color_days", return_value=(set(), set())):
+                    result = fin.parse_schedule("formula-schedule.xlsx")
+
+        load_context.assert_called_once_with("formula-schedule.xlsx", data_only=True)
+        self.assertEqual(result["main_attendance_days"], 24)
+        self.assertEqual(result["chengdu_attendance_days"], 21)
+
+
 class MaternityLeaveTypeTests(unittest.TestCase):
     def test_maternity_is_expected_attendance_day_leave(self):
         self.assertTrue(calc_leave.is_expected_attendance_day_leave("产假"))
@@ -692,7 +716,7 @@ class AttendanceIdentityContractTests(unittest.TestCase):
         wb.close()
         return path
 
-    def test_attendance_fields_override_legacy_roster_fields(self):
+    def test_attendance_identity_overrides_identity_and_preserves_roster_profile(self):
         roster_path = _write_roster([
             ["工号", "姓名", "合同主体", "一级部门", "二级部门", "三级部门", "岗位", "员工类型", "入职日期"],
             ["OLD001", "张三", "本地公司", "旧一级", "旧二级", "旧三级", "旧岗位", "旧类型", "2020-01-01"],
@@ -713,9 +737,9 @@ class AttendanceIdentityContractTests(unittest.TestCase):
         self.assertEqual((employee["dept1"], employee["dept2"], employee["dept3"]), ("总部", "研发中心", "平台部"))
         self.assertEqual(employee["position"], "后端工程师")
         self.assertEqual(employee["attendance_group"], "总部考勤组")
-        self.assertIsNone(employee["contract_entity"])
-        self.assertIsNone(employee["emp_type"])
-        self.assertIsNone(employee["hire_date"])
+        self.assertEqual(employee["contract_entity"], "本地公司")
+        self.assertEqual(employee["emp_type"], "旧类型")
+        self.assertEqual(employee["hire_date"], date(2020, 1, 1))
 
     def test_stale_roster_emp_no_uses_new_dingtalk_identity_by_name(self):
         employees = [{"emp_no": "OLD001", "name": "张三"}]
@@ -769,7 +793,7 @@ class AttendanceIdentityContractTests(unittest.TestCase):
         self.assertIn("张三", str(ctx.exception))
         self.assertIn("2 个员工身份", str(ctx.exception))
 
-    def test_unmatched_employee_is_retained_with_empty_identity_fields(self):
+    def test_unmatched_employee_retains_roster_identity_fields(self):
         employees = [{
             "emp_no": "OLD001",
             "name": "张三",
@@ -787,10 +811,14 @@ class AttendanceIdentityContractTests(unittest.TestCase):
 
         self.assertEqual(len(enriched), 1)
         self.assertEqual(enriched[0]["name"], "张三")
-        for field in ("emp_no", "attendance_group", "dept1", "dept2", "dept3", "position"):
-            self.assertFalse(enriched[0][field], field)
+        self.assertEqual(enriched[0]["emp_no"], "OLD001")
+        self.assertEqual(enriched[0]["attendance_group"], "旧考勤组")
+        self.assertEqual(enriched[0]["dept1"], "旧部门")
+        self.assertEqual(enriched[0]["dept2"], "旧二级部门")
+        self.assertEqual(enriched[0]["dept3"], "旧三级部门")
+        self.assertEqual(enriched[0]["position"], "旧岗位")
 
-    def test_legacy_roster_profile_fields_never_enter_enriched_result(self):
+    def test_roster_profile_fields_are_preserved_after_attendance_match(self):
         employees = [{
             "emp_no": "OLD001",
             "name": "张三",
@@ -807,11 +835,12 @@ class AttendanceIdentityContractTests(unittest.TestCase):
             [{"emp_no": "NEW001", "name": "张三"}],
         )
 
-        for field in (
-            "contract_entity", "emp_type", "category",
-            "hire_date", "resign_date", "confirm_date",
-        ):
-            self.assertIsNone(enriched[0][field], field)
+        self.assertEqual(enriched[0]["contract_entity"], "旧合同主体")
+        self.assertEqual(enriched[0]["emp_type"], "旧员工类型")
+        self.assertEqual(enriched[0]["category"], "旧人员分类")
+        self.assertEqual(enriched[0]["hire_date"], date(2020, 1, 1))
+        self.assertEqual(enriched[0]["resign_date"], date(2026, 1, 1))
+        self.assertEqual(enriched[0]["confirm_date"], date(2020, 4, 1))
 
     def test_name_only_roster_rejects_ambiguous_attendance_match(self):
         employees = [{"emp_no": "", "name": "张三"}]

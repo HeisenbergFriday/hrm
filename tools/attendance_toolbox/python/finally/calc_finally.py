@@ -693,7 +693,8 @@ def _fixed_monthly_rest_attendance_days(month_end: date) -> int:
 
 def _parse_schedule_color_days(path: str, target_color: str) -> tuple[set[date], set[date]]:
     """按颜色解析作息表中的日期集合，返回 (主作息, 成都作息)。"""
-    wb = openpyxl.load_workbook(path)
+    # 作息表第三周起常用 Excel 公式递推日期；颜色日期识别也必须读取已计算的缓存值。
+    wb = openpyxl.load_workbook(path, data_only=True)
     main_days = None
     chengdu_days = None
 
@@ -763,7 +764,12 @@ def _parse_schedule_summary_days(path: str, summary_label: str) -> tuple[int | N
             if summary_label not in label:
                 continue
 
-            value = _to_float(ws.cell(row_idx, 3).value)
+            value = None
+            # 历史模板中主作息的数值可在 D 列，成都模板通常在 C 列；按标签后的前几列扫描首个数值。
+            for col_idx in range(3, min(ws.max_column, 6) + 1):
+                value = _to_float(ws.cell(row_idx, col_idx).value)
+                if value is not None:
+                    break
             if value is None:
                 continue
 
@@ -1206,7 +1212,7 @@ def parse_attendance_identity(path: str) -> list[dict]:
 
 
 def apply_attendance_identity(employees: list[dict], attendance_records: list[dict]) -> list[dict]:
-    """用钉钉考勤身份覆盖花名册扩展字段；花名册只保留名单作用。"""
+    """用钉钉考勤身份补充/纠正花名册身份字段，并保留花名册人事主数据。"""
     identity_fields = (
         "attendance_group", "dept1", "dept2", "dept3", "position",
     )
@@ -1259,9 +1265,8 @@ def apply_attendance_identity(employees: list[dict], attendance_records: list[di
                 "无法唯一对应花名册员工。"
             )
 
-        enriched = dict(employee)
-        enriched.update({
-            "emp_no": "",
+        enriched = {
+            "emp_no": roster_emp_no,
             "name": roster_name,
             "attendance_group": None,
             "contract_entity": None,
@@ -1275,18 +1280,22 @@ def apply_attendance_identity(employees: list[dict], attendance_records: list[di
             "hire_date": None,
             "resign_date": None,
             "confirm_date": None,
-        })
+            **employee,
+        }
+        enriched["emp_no"] = roster_emp_no
+        enriched["name"] = roster_name
         if candidates:
             record = candidates[0]
-            enriched.update({
-                "emp_no": _normalize_emp_no(record.get("emp_no")),
-                "name": _clean_name(record.get("name")) or roster_name,
-                "attendance_group": _first_text(record.get("attendance_group")),
-                "dept1": _first_text(record.get("dept1")),
-                "dept2": _first_text(record.get("dept2")),
-                "dept3": _first_text(record.get("dept3")),
-                "position": _first_text(record.get("position")),
-            })
+            attendance_emp_no = _normalize_emp_no(record.get("emp_no"))
+            attendance_name = _clean_name(record.get("name"))
+            if attendance_emp_no:
+                enriched["emp_no"] = attendance_emp_no
+            if attendance_name:
+                enriched["name"] = attendance_name
+            for field in identity_fields:
+                attendance_value = _first_text(record.get(field))
+                if attendance_value:
+                    enriched[field] = attendance_value
         enriched_employees.append(enriched)
     return enriched_employees
 
@@ -1428,7 +1437,8 @@ def parse_schedule(path: str) -> dict:
     - main_attendance_days, chengdu_attendance_days (int)
     - holidays (int)：法定节假日+公司福利假合计
     """
-    ctx = calc_leave.load_schedule_context(path)
+    # 用户作息表后半月日期使用 Excel 公式递推，必须读取缓存的计算结果，否则主作息会被误识为仅 6 天。
+    ctx = calc_leave.load_schedule_context(path, data_only=True)
 
     year  = ctx["year"]
     month = ctx["month"]

@@ -9,6 +9,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+import openpyxl
+
 
 ROOT = Path(__file__).resolve().parent
 PARTTIME_ROOT = ROOT / "parttime"
@@ -19,6 +21,7 @@ if str(PARTTIME_ROOT) not in sys.path:
 
 import calc_parttime_summary as parttime  # noqa: E402
 import parttime_monthly_punch as punch  # noqa: E402
+import runner  # noqa: E402
 
 
 @contextmanager
@@ -86,6 +89,73 @@ class ParttimeMonthlyPunchRenderTests(unittest.TestCase):
         self.assertEqual(parttime._entry_value(parsed["张三"].get(2)), 1.0)
         # 旷工日记为 0 出勤。
         self.assertEqual(parttime._entry_value(parsed["张三"].get(15)), 0.0)
+
+    def test_parser_accepts_safe_aliases_and_locates_day_columns(self) -> None:
+        with temporary_workdir() as workdir:
+            path = workdir / "考勤明细_别名.xlsx"
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "考勤明细"
+            ws.append(["考勤时间：2026-07-01 至 2026-07-31"])
+            ws.append(["员工姓名", "员工编号", "部门名称", "岗位名称", "1", "07-02", "15", "29"])
+            ws.append([None, None, None, None, None, None, None, None])
+            ws.append([
+                "实习生甲",
+                "JZ001",
+                "研发部",
+                "实习生",
+                "正常 (09:00,18:00)",
+                "旷工",
+                "正常 (09:00,18:00)",
+                "正常 (09:00,18:00)",
+            ])
+            wb.save(path)
+            wb.close()
+
+            parsed = parttime.parse_attendance_detail(str(path))
+            validation = runner._check_parttime_detail_headers(str(path))
+
+        self.assertIn("实习生甲", parsed)
+        self.assertEqual(parttime._entry_value(parsed["实习生甲"].get(1)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed["实习生甲"].get(2)), 0.0)
+        self.assertEqual(parttime._entry_value(parsed["实习生甲"].get(15)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed["实习生甲"].get(29)), 1.0)
+        self.assertTrue(validation["ok"], validation)
+
+    def test_parser_accepts_simple_name_day_matrix_without_employee_code(self) -> None:
+        with temporary_workdir() as workdir:
+            path = workdir / "员工考勤表.xlsx"
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "考勤表"
+            ws.append(["姓名", "1", "15", "29", "出勤天数", "所属组织"])
+            ws.append(["员工甲", "√", "√", "√", 3, "南京地铁"])
+            ws.append(["员工乙", 1, None, 1, 2, "南京地铁"])
+            wb.save(path)
+            wb.close()
+
+            parsed = parttime.parse_attendance_detail(str(path))
+            validation = runner._check_parttime_detail_headers(str(path))
+
+        self.assertEqual(parttime._entry_value(parsed["员工甲"].get(1)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed["员工甲"].get(15)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed["员工甲"].get(29)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed["员工乙"].get(29)), 1.0)
+        self.assertTrue(validation["ok"], validation)
+
+    def test_parser_rejects_wide_name_only_sheet_without_day_headers(self) -> None:
+        with temporary_workdir() as workdir:
+            path = workdir / "非考勤宽表.xlsx"
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.append(["姓名", "字段1", "字段2", "字段3", "字段4", "字段5", "字段6"])
+            ws.append(["员工甲", 1, 2, 3, 4, 5, 6])
+            wb.save(path)
+            wb.close()
+
+            validation = runner._check_parttime_detail_headers(str(path))
+
+        self.assertFalse(validation["ok"], validation)
 
     def test_unmatched_default_position_keeps_row_in_scope(self) -> None:
         # 空 职位 应默认填充为「兼职」，使行能通过兼职汇总的范围过滤。

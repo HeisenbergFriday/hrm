@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"peopleops/internal/api"
@@ -8,8 +10,12 @@ import (
 	"peopleops/internal/config"
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
+	appLogging "peopleops/internal/logging"
 	"peopleops/internal/middleware"
 	"peopleops/internal/service"
+	"strings"
+
+	"github.com/sirupsen/logrus"
 )
 
 func main() {
@@ -17,6 +23,8 @@ func main() {
 	if err := config.Load(); err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
+	closeLogs := configureLogging()
+	defer closeLogs()
 
 	// 校验 JWT_SECRET
 	if err := middleware.ValidateJWTSecret(); err != nil {
@@ -66,4 +74,38 @@ func main() {
 	if err := router.Run(":" + port); err != nil {
 		log.Fatalf("启动服务器失败: %v", err)
 	}
+}
+
+func configureLogging() func() {
+	logDir := strings.TrimSpace(os.Getenv("LOG_DIR"))
+	if logDir == "" {
+		logDir = "logs"
+	}
+	writer, err := appLogging.NewDailyWriter(logDir, "peopleops", 7)
+	if err != nil {
+		log.Printf("初始化按日日志失败: %v，将继续写入容器日志", err)
+	} else {
+		output := io.MultiWriter(os.Stdout, writer)
+		log.SetOutput(output)
+		logrus.SetOutput(output)
+	}
+
+	levelName := strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL")))
+	if levelName == "" {
+		levelName = "warn"
+	}
+	level, err := logrus.ParseLevel(levelName)
+	if err != nil {
+		log.Printf("无效的 LOG_LEVEL=%q，将使用 warn", levelName)
+		level = logrus.WarnLevel
+	}
+	logrus.SetLevel(level)
+	if writer != nil {
+		return func() {
+			if err := writer.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "关闭按日日志失败: %v\n", err)
+			}
+		}
+	}
+	return func() {}
 }

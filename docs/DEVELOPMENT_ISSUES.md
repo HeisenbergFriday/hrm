@@ -1,6 +1,6 @@
 ---
 purpose: 开发问题复盘日志——沉淀已定位根因且有复用价值的缺陷与防复发约束，供开发前查阅、开发后更新
-last_updated: 2026-08-20
+last_updated: 2026-09-16
 source_of_truth:
   - 本文件（防复发索引、写入规则与归档导航）
   - docs/development-issues/2026.md（2026 年完整问题条目）
@@ -52,9 +52,11 @@ update_when:
 |---|---|---|
 | `attendance-toolbox` `run-store` | 结果绑定 `user_id+org_id`；磁盘仅 `rootDir/<runID>`；禁止返回服务器绝对路径 | `.ai/MODULES/attendance.md` |
 | `attendance-toolbox` `permission` | 计算/审计/模板需 `attendance_toolbox_operate`；钉钉同步需 `attendance_toolbox_dingtalk_sync`；一键联动 AND | `.ai/MODULES/attendance.md` 权限矩阵 |
-| `attendance-toolbox` `dingtalk-sync` `frontend-refresh` | 工具箱不展示独立“钉钉同步”页签；钉钉拉取仅从请假、加班和固定配置按需入口执行，导航配置与回归测试必须一致 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
+| `attendance-toolbox` `dingtalk-sync` `frontend-refresh` | 工具箱不展示独立“钉钉同步”页签；花名册生成与异动流程同步只保留对应文件卡片入口，固定配置仅展示状态；兼职月度打卡仍在固定配置按月份抓取；导航配置与回归测试必须一致 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
 | `attendance-toolbox` `parttime` `leave-priority` | 兼职汇总同一日同时含外出/出差与事假时，必须先按事假处理并停止出勤计算；组合状态判断必须早于外出计出勤的提前返回 | [2026-08-01 外出/出差与事假并存误计出勤](development-issues/2026.md#2026-08-01-p1-外出出差与事假并存误计出勤) |
 | `attendance-toolbox` `parttime` `status-mapping` `roster` | 钉钉月度打卡明确返回的 `NotSigned`、`Absenteeism/Absent`、`SeriousLate`（含下划线/大小写变体）必须转换为可见状态；标准化花名册不得丢失实习生职位和部门；完全没有源记录的日期仍保持空白，禁止默认补出勤 | [2026-08-18 兼职月度打卡异常状态被静默丢弃](development-issues/2026.md#2026-08-18-p1-兼职月度打卡异常状态被静默丢弃) |
+| `attendance-toolbox` `parttime` `schedule-formula` `fixed-staff` | 公式续算日期的作息表必须读取 Excel 已计算值；固定人员出勤由作息表决定，打卡异常只提醒不扣减；简易“姓名+1～31日”矩阵可在无工号时识别 | [2026-09-01 兼职作息公式与固定人员规则导致出勤漏算](development-issues/2026.md#2026-09-01-p1-兼职作息公式与固定人员规则导致出勤漏算) |
+| `attendance-toolbox` `final` `roster` `identity-merge` | 最终汇总以花名册为人事主数据；钉钉月度考勤仅用非空值补充/纠正工号、姓名、考勤组、部门和岗位，禁止清空合同主体、人员类型及入/离职/转正日期 | [2026-09-02 最终表考勤身份覆盖清空花名册人事字段](development-issues/2026.md#2026-09-02-p1-最终表考勤身份覆盖清空花名册人事字段) |
 | `attendance-toolbox` `dingtalk` `approval` `time-window` | `processinstance/listids` 禁止直接提交超长或未来时间范围；客户端必须按最多 120 天连续分片、结束时间预留时钟偏差，并跨片去重、全局执行条数上限 | [2026-08-01 钉钉审批查询时间范围非法](development-issues/2026.md#2026-08-01-p1-钉钉审批查询时间范围非法导致工具箱同步失败) |
 | `attendance-toolbox` `structured-result` `auto-fill` | 自动回填必须从 structured run 按 `kind=export + flow_key` 下载业务表；审计/元数据不得上传，也不得因多文件而改走 ZIP 或重跑同步 | [2026-08-01 自动回填误判多文件](development-issues/2026.md#2026-08-01-p1-自动回填将审计文件计入结果导致同步成功后仍报错) |
 | `attendance-toolbox` `roster` `data-contract` `multi-tenant` | 自动回填到加班入口的组织花名册必须使用当前 org 的 `EmployeeProfile.EmployeeID`、真实姓名与有效部门路径；当前 org 的 `<org>:0` 是兼容历史数据的根哨兵，外组织同形值仍属悬空；缺工号/姓名/路径整体 400；仅姓名文件不得自动回填加班；自动响应不得覆盖请求期间的用户选择/删除/替换；禁止审批字段/position_transfer 充当花名册 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
@@ -72,6 +74,7 @@ update_when:
 | `org-sync` `frontend` `timeout` `api-contract` `multi-tenant` `security` | 用户/部门/全量组织同步共享同组织门闩；JWT `org_id` 唯一可信；超过网关时限的全量同步必须短请求启动+轮询；执行上下文脱离客户端取消，终态用独立短上下文持久化；HTTP 207 必须刷新已成功数据；响应/状态不得回显原始错误 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](development-issues/2026.md#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
 | `approval-sync` `whitelist` `async-boundary` `timeout` `partial` `multi-tenant` `idempotency` | 审批同步范围只取当前 JWT 企业 `ConfigForOrgID(orgID).ProcessCodes`；`Prepare` 禁止外部调用；任务与 running 状态先落库、HTTP 202 先写出，再调度后台外部调用；逐流程失败隔离，审批及下游入账均须幂等 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](development-issues/2026.md#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
 | `approval-template` `approval-sync` `process-code` `multi-tenant` | 模板列表必须以当前组织配置的 `ProcessCodes` 补齐目录；数据库模板优先保留表单/节点详情；实例与模板关联统一使用 `extension.process_code`，禁止只查询未被写入的 `approval_templates` 表 | [2026-08-17 审批实例存在但模板目录为空](development-issues/2026.md#2026-08-17-p1-审批实例存在但模板目录为空) |
+| `approval-instance` `frontend` `api-contract` `pagination` `navigation` `business-time` `detail-ui` | 审批实例列表进入详情再返回时，筛选、关键词、分页、排序和滚动位置必须可恢复；发起时间、审批完成时间、业务开始/结束时间排序必须传白名单字段到后端，在全量结果上排序后再分页；业务时间从表单 JSON 提取并返回；详情页必须分区展示概览、业务时间、表单内容和审批流程并隐藏空值 | [2026-09-11 审批实例返回重置列表状态且缺少全量时间排序](development-issues/2026.md#2026-09-11-p2-审批实例返回重置列表状态且缺少全量时间排序) |
 | `approval-sync` `reconciliation` `annual-leave` `overtime` `attendance` `state-reversal` `dingtalk` `concurrency` | 审批逐条对账覆盖有效↔无效冲正/恢复；凌晨 6 点前考勤同时影响打卡日与前一工作日；补偿队列按最久未尝试轮转；钉钉绝对同步失败只标记触发记录，从未外部同步的记录在开关关闭时可仅恢复本地额度 | [2026-08-07 历史审批补同步未触发下游业务对账](development-issues/2026.md#2026-08-07-p1-历史审批补同步未触发下游业务对账) |
 | `org-sync` `department` `stable-id` `transaction` `release` | 钉钉同步必须按租户内稳定外部 ID 匹配历史部门/员工，保留既有本地 ID 与引用；部门写入失败整事务回滚并跳过员工；发布镜像必须来自可追溯干净 Commit | [2026-07-28 组织同步历史 ID 冲突](development-issues/2026.md#2026-07-28-p1-组织同步历史本地-id-与租户前缀-id-冲突导致部门落库失败) |
 | `org-sync` `department-membership` `counting` `multi-tenant` | 完整部门归属写租户隔离关系表；查询仅在无关系时回退主部门；直属人数按完整关系，父级汇总按员工集合去重；**部署 membership 特性后所有已有组织必须重新同步，否则 0 条 membership 导致多部门员工被遗漏** | [2026-07-28 组织同步仅保存主部门导致部门人数偏少](development-issues/2026.md#2026-07-28-p1-组织同步仅保存主部门导致部门人数偏少) |
@@ -103,6 +106,7 @@ update_when:
 
 | 标签 | 约束摘要 | 条目 / 文档 |
 |---|---|---|
+| `deploy` `logging` `docker` `retention` | People 容器必须配置 `json-file` 大小/数量上限；应用日志按 UTC+8 自然日分文件并仅保留今天及前 6 天；正常 SQL 不落完整文本，请求只保留一条摘要，错误/慢 SQL 必须脱敏 | [2026-09-14 People 容器日志无上限导致磁盘告警](development-issues/2026.md#2026-09-14-p1-people-容器日志无上限导致磁盘告警) |
 | `deploy` `test-server` | 测试服隔离目录/端口/Compose 项目名；完整变量见 `deploy/peopleops.test.env.example`，文档不复制密钥 | `deploy/TEST_SERVER_DEPLOY.md` |
 | `dingtalk-stream` `multi-tenant` `credentials` `app-home-url` `fail-closed` | Stream 显式组织必须读取同一组织的 AppKey/Secret；Compose 禁止默认覆盖为 `default`；非 default 组织群图片推送必须配置组织级公网 HTTPS AppHomeURL/RedirectURI；上线核对 org、healthy、重启次数并执行真实绑定/推送 | [2026-07-29 Stream 连接错误组织导致群机器人无响应](development-issues/2026.md#2026-07-29-p1-dingtalk-stream-默认绑定错误组织导致群机器人无响应) |
 | `deploy` `upload-and-restart` | 上传失败续传用独立脚本，禁止改 `build-and-deploy.ps1` 行为 | cerebrum Decision Log |

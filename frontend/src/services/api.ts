@@ -617,6 +617,8 @@ export const approvalAPI = {
     title?: string
     start_date?: string
     end_date?: string
+    sort_field?: 'create_time' | 'finish_time' | 'business_start_time' | 'business_end_time'
+    sort_order?: 'asc' | 'desc'
   }) => api.get('/approvals/instances', { params }),
   getApproval: (id: string) => api.get(`/approvals/${id}`),
   getStats: (params: { template_id?: string; start_date?: string; end_date?: string }) =>

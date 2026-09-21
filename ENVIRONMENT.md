@@ -8,6 +8,8 @@
 |---|---|---|---|
 | `PORT` | 否 | `8080` | Go 服务监听端口 |
 | `DATABASE_URL` | 是 | 无 | MySQL DSN，传给 `gorm.io/driver/mysql` |
+| `LOG_LEVEL` | 否 | `warn` | Logrus 日志级别；可临时设为 `info`/`debug` 进行排障，生产建议保持 `warn` |
+| `LOG_DIR` | 否 | `logs` | 应用按自然日写入日志的目录；Compose 固定为 `/app/logs` 并挂载部署目录 `./logs` |
 | `REDIS_URL` | 否 | 无 | Redis 地址，格式为 `host:port`，例如 `localhost:6379` |
 | `REDIS_PASSWORD` | 否 | 空 | Redis 密码 |
 | `JWT_SECRET` | 是 | 无 | JWT 签名密钥，建议使用 `openssl rand -base64 48` 生成 |

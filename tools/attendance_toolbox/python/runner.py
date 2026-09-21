@@ -732,6 +732,29 @@ def _check_headers(file_path: str, expected: list[str], sheet_index: int = 0) ->
         return {"ok": False, "error": str(exc)}
 
 
+def _check_parttime_detail_headers(file_path: str) -> dict:
+    """检查兼职考勤明细表头，使用与实际解析器一致的安全别名规则。"""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        ws = wb[wb.sheetnames[0]]
+        header_row_idx, headers = part._find_attendance_detail_header(ws)
+        day_columns = part._find_day_columns(ws, header_row_idx) if header_row_idx is not None else []
+        wb.close()
+        missing = []
+        if header_row_idx is None:
+            missing = ["姓名/员工姓名/人员姓名", "工号列或至少 3 个日期列"]
+        else:
+            if part._find_col_by_aliases(headers, part.ATTENDANCE_DETAIL_NAME_HEADERS) is None:
+                missing.append("姓名/员工姓名/人员姓名")
+            has_code = part._find_col_by_aliases(headers, part.ATTENDANCE_DETAIL_CODE_HEADERS) is not None
+            if not has_code and len(day_columns) < 3:
+                missing.append("工号列或至少 3 个日期列")
+        return {"ok": len(missing) == 0, "headers": headers, "missing": missing}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def action_validate(config: dict, output_dir: Path) -> list[dict]:
     module = config.get("validate_module", "")
     results = {}
@@ -761,7 +784,7 @@ def action_validate(config: dict, output_dir: Path) -> list[dict]:
     elif module == "parttime":
         detail_path = path_or_empty(config, "parttime_attendance_detail")
         if detail_path:
-            results["parttime_detail"] = _check_headers(detail_path, EXPECTED_HEADERS["parttime"]["detail"])
+            results["parttime_detail"] = _check_parttime_detail_headers(detail_path)
 
     all_ok = all(r.get("ok", False) for r in results.values()) if results else True
     preview_path = output_dir / "validation_result.json"

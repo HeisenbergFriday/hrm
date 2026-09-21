@@ -1,7 +1,7 @@
 package api
 
 import (
-	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -72,7 +72,9 @@ func registerAttendanceToolboxRoutes(attendance *gin.RouterGroup) {
 
 func SetupRouter() *gin.Engine {
 	router := gin.New()
-	router.Use(querySafeGinLogger(), gin.Recovery())
+	// RequestMetrics emits the single request summary. Gin's access logger
+	// was removed to avoid writing every request twice.
+	router.Use(gin.RecoveryWithWriter(log.Writer()))
 	router.MaxMultipartMemory = 128 << 20 // 128 MiB，考勤数据处理需要上传多份 Excel
 
 	router.Use(securityHeaders())
@@ -600,24 +602,6 @@ func resolveCORSConfig() ([]string, func(string) bool) {
 		"http://127.0.0.1:5173",
 		"http://127.0.0.1:3000",
 	}, nil
-}
-
-// querySafeGinLogger 记录访问日志时使用 URL.EscapedPath()，避免把 query string（可能含 token）写入日志。
-func querySafeGinLogger() gin.HandlerFunc {
-	return gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
-		requestPath := param.Path
-		if param.Request != nil && param.Request.URL != nil {
-			requestPath = param.Request.URL.EscapedPath()
-		}
-		return fmt.Sprintf("[GIN] %v | %3d | %13v | %15s | %-7s %s\n",
-			param.TimeStamp.Format("2006/01/02 - 15:04:05"),
-			param.StatusCode,
-			param.Latency,
-			param.ClientIP,
-			param.Method,
-			requestPath,
-		)
-	})
 }
 
 func registerFrontendRoutes(router *gin.Engine) {
