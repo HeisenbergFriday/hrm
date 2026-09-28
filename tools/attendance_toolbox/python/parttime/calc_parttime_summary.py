@@ -413,26 +413,88 @@ def _parse_day_header_value(value: Any) -> int | None:
     return None
 
 
+WEEKDAY_HEADER_LABELS = {
+    "一",
+    "二",
+    "三",
+    "四",
+    "五",
+    "六",
+    "日",
+    "周一",
+    "周二",
+    "周三",
+    "周四",
+    "周五",
+    "周六",
+    "周日",
+    "星期一",
+    "星期二",
+    "星期三",
+    "星期四",
+    "星期五",
+    "星期六",
+    "星期日",
+    "星期天",
+}
+
+
+def _is_weekday_header(value: Any) -> bool:
+    return _field_key(value) in WEEKDAY_HEADER_LABELS
+
+
 def _find_day_columns(
     ws,
     header_row_idx: int,
     *,
     allow_positional_fallback: bool = True,
 ) -> list[tuple[int, int]]:
-    columns: list[tuple[int, int]] = []
-    seen_columns: set[int] = set()
+    explicit_by_column: dict[int, int] = {}
     for row_idx in (header_row_idx + 1, header_row_idx):
         for col_idx in range(1, ws.max_column + 1):
-            if col_idx in seen_columns:
+            if col_idx in explicit_by_column:
                 continue
             day = _parse_day_header_value(ws.cell(row_idx, col_idx).value)
             if day is None:
                 continue
-            columns.append((day, col_idx))
-            seen_columns.add(col_idx)
+            explicit_by_column[col_idx] = day
 
-    if columns or not allow_positional_fallback:
-        return columns
+    if explicit_by_column:
+        # 钉钉“每月打卡记录”会把周末日期表头显示成“六/日”，但工作日仍
+        # 显示数字。以首个明确日期为锚点，只在相邻的星期标签列中连续补齐，
+        # 遇到其他字段立即停止，避免把“天数”等尾部列误判成日期。
+        inferred_by_column = dict(explicit_by_column)
+        first_column = min(explicit_by_column)
+        first_day = explicit_by_column[first_column]
+
+        current_day = first_day
+        for col_idx in range(first_column - 1, 0, -1):
+            expected_day = current_day - 1
+            if expected_day < 1 or not _is_weekday_header(ws.cell(header_row_idx + 1, col_idx).value):
+                break
+            inferred_by_column[col_idx] = expected_day
+            current_day = expected_day
+
+        current_day = first_day
+        for col_idx in range(first_column + 1, ws.max_column + 1):
+            expected_day = current_day + 1
+            if expected_day > 31:
+                break
+            explicit_day = explicit_by_column.get(col_idx)
+            if explicit_day is not None:
+                if explicit_day != expected_day:
+                    break
+                current_day = explicit_day
+                continue
+            if not _is_weekday_header(ws.cell(header_row_idx + 1, col_idx).value):
+                break
+            inferred_by_column[col_idx] = expected_day
+            current_day = expected_day
+
+        return [(day, col_idx) for col_idx, day in sorted(inferred_by_column.items())]
+
+    if not allow_positional_fallback:
+        return []
     return [(offset, col_idx) for offset, col_idx in enumerate(range(7, ws.max_column + 1), start=1)]
 
 

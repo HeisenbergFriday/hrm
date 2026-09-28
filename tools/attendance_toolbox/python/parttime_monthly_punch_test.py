@@ -122,6 +122,77 @@ class ParttimeMonthlyPunchRenderTests(unittest.TestCase):
         self.assertEqual(parttime._entry_value(parsed["实习生甲"].get(29)), 1.0)
         self.assertTrue(validation["ok"], validation)
 
+    def test_parser_infers_weekend_days_from_dingtalk_weekday_labels(self) -> None:
+        with temporary_workdir() as workdir:
+            path = workdir / "每月打卡记录_20260901-20260927.xlsx"
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "月度汇总"
+            ws.append(["每月打卡记录 统计日期：2026-09-01 至 2026-09-27"])
+            ws.append(["报表生成时间：2026-09-27 10:33"])
+
+            header = ["姓名", "考勤组", "部门", "工号", "职位", "UserId", "考勤结果"]
+            header.extend([None] * 26)
+            header.append("天数")
+            ws.append(header)
+
+            day_headers = [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "1",
+                "2",
+                "3",
+                "4",
+                "六",
+                "日",
+                "7",
+                "8",
+                "9",
+                "10",
+                "11",
+                "六",
+                "日",
+                "14",
+                "15",
+                "16",
+                "17",
+                "18",
+                "六",
+                "日",
+                "21",
+                "22",
+                "23",
+                "24",
+                "25",
+                "六",
+                "日",
+                None,
+            ]
+            ws.append(day_headers)
+
+            values = ["实习生乙", "实习考勤组", "产品部", "SX001", "产品实习生", "uid-1"]
+            values.extend([None] * 28)
+            values[5 + 4] = "标准:正常\n(09:00,18:30)"
+            values[5 + 12] = "标准:正常\n(09:00,18:30)"
+            values[5 + 20] = "标准:正常\n(09:00,18:30)"
+            values[5 + 27] = "休息并打卡\n(09:00,18:30)"
+            ws.append(values)
+            wb.save(path)
+            wb.close()
+
+            parsed = parttime.parse_attendance_detail(str(path))
+            validation = runner._check_parttime_detail_headers(str(path))
+
+        self.assertEqual(parttime._entry_value(parsed["实习生乙"].get(4)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed["实习生乙"].get(12)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed["实习生乙"].get(20)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed["实习生乙"].get(27)), 1.0)
+        self.assertTrue(validation["ok"], validation)
+
     def test_parser_accepts_simple_name_day_matrix_without_employee_code(self) -> None:
         with temporary_workdir() as workdir:
             path = workdir / "员工考勤表.xlsx"
