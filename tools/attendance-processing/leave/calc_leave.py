@@ -1404,7 +1404,56 @@ def find_offsite_duration_override(row: tuple, overrides: dict | None) -> dict |
     return None
 
 
-def calc_offsite_duration_fields(row: tuple, rule: dict):
+def leave_row_overlaps_target_month(row: tuple, schedule_ctx: dict) -> bool:
+    """无法解析日期时保留该行，让后续计算输出明确的解析失败提示。"""
+    dt_start = to_datetime(row[ROW_START])
+    dt_end = to_datetime(row[ROW_END])
+    if dt_start is None or dt_end is None:
+        return True
+    return (
+        dt_start.date() <= schedule_ctx["month_end"]
+        and dt_end.date() >= schedule_ctx["month_start"]
+    )
+
+
+def calc_offsite_duration_fields(
+    row: tuple,
+    rule: dict,
+    schedule_ctx: dict,
+    is_chengdu: bool = False,
+    is_all_month_scheduled: bool = False,
+):
+    dt_start = to_datetime(row[ROW_START])
+    dt_end = to_datetime(row[ROW_END])
+    entirely_in_target_month = bool(
+        dt_start
+        and dt_end
+        and dt_start.date() >= schedule_ctx["month_start"]
+        and dt_end.date() <= schedule_ctx["month_end"]
+    )
+
+    # 同月维持异地不打卡的既有口径；跨月必须先按目标月分摊，
+    # 否则整段系统/上传时长会被重复计入相邻月份。
+    if not entirely_in_target_month:
+        effective_row = list(row[:9])
+        duration_source = "系统"
+        if rule.get("hours") is not None:
+            effective_row[ROW_SYS_DURATION] = rule["hours"]
+            duration_source = "上传"
+        final_h, final_days, remark = calc_final_fields(
+            tuple(effective_row),
+            schedule_ctx,
+            is_chengdu=is_chengdu,
+            is_all_month_scheduled=is_all_month_scheduled,
+        )
+        if remark == "跨月按系统时长分摊":
+            remark = f"异地不打卡-跨月按{duration_source}时长分摊"
+        elif remark:
+            remark = f"异地不打卡-{remark}"
+        else:
+            remark = "异地不打卡-按目标月分摊"
+        return final_h, final_days, remark
+
     if rule.get("hours") is not None:
         final_h, final_days, _ = calc_from_duration_hours(rule["hours"])
         return final_h, final_days, "异地不打卡-按上传时长"
@@ -1816,24 +1865,36 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
         if not row[ROW_EMP_ID] and not row[ROW_EMP_NAME]:  # 工号可空，姓名也空才视为空行
             continue
 
+        # 结果表只保留与作息表目标月份有交集的请假；原始起止时间仍完整保留。
+        if not leave_row_overlaps_target_month(row, schedule_ctx):
+            continue
+
+        is_cd = is_chengdu_row(row, special_chengdu_name_set)
+        employee_name = normalize_employee_name(row[ROW_EMP_NAME]) or ""
+        is_all_month_scheduled = employee_name in warehouse_schedule_name_set
+
         offsite_rule = find_offsite_duration_override(row, offsite_duration_overrides)
         if offsite_rule:
-            final_h, final_days, remark = calc_offsite_duration_fields(row, offsite_rule)
+            final_h, final_days, remark = calc_offsite_duration_fields(
+                row,
+                offsite_rule,
+                schedule_ctx,
+                is_chengdu=is_cd,
+                is_all_month_scheduled=is_all_month_scheduled,
+            )
             offsite_matched += 1
             if offsite_rule.get("hours") is not None:
                 offsite_upload_duration += 1
             else:
                 offsite_system_duration += 1
         else:
-            is_cd = is_chengdu_row(row, special_chengdu_name_set)
             if is_cd and (normalize_employee_name(row[ROW_EMP_NAME]) or "") in special_chengdu_name_set:
                 special_chengdu_matched += 1
-            employee_name = normalize_employee_name(row[ROW_EMP_NAME]) or ""
             final_h, final_days, remark = calc_final_fields(
                 row[:9],
                 schedule_ctx,
                 is_chengdu=is_cd,
-                is_all_month_scheduled=employee_name in warehouse_schedule_name_set,
+                is_all_month_scheduled=is_all_month_scheduled,
             )
             if (
                 str(row[ROW_APPROVAL_ID] or "").startswith(MATERNITY_OVERRIDE_APPROVAL_PREFIX)

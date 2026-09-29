@@ -14,6 +14,7 @@ import (
 func TestApplyDingTalkProfileFieldsMapsHRMValues(t *testing.T) {
 	profile := &database.EmployeeProfile{EntryDate: "2026-08-17", ProbationEndDate: "2026-08-01"}
 	applyDingTalkProfileFields(profile, dingtalk.UserInfo{
+		EmployeeID:         "MT0129",
 		Email:              "employee@example.com",
 		HiredDate:          "2026-06-01",
 		PlannedRegularDate: "2026-09-01",
@@ -34,10 +35,14 @@ func TestApplyDingTalkProfileFieldsMapsHRMValues(t *testing.T) {
 	if profile.EmploymentType != "正式" || profile.EmploymentTypeCode != "A1" || profile.JobLevel != "P6" || profile.JobFamily != "技术" {
 		t.Fatalf("unexpected HRM profile fields: %#v", profile)
 	}
+	if profile.EmployeeID != "MT0129" {
+		t.Fatalf("employee id = %q, want DingTalk business employee number MT0129", profile.EmployeeID)
+	}
 }
 
 func TestApplyDingTalkProfileFieldsDoesNotOverwriteManualValuesWithEmpty(t *testing.T) {
 	profile := &database.EmployeeProfile{
+		EmployeeID:         "MT0099",
 		EntryDate:          "2024-11-11",
 		ProbationEndDate:   "2026-08-31",
 		EmploymentType:     "正式",
@@ -55,6 +60,23 @@ func TestApplyDingTalkProfileFieldsDoesNotOverwriteManualValuesWithEmpty(t *test
 	}
 	if profile.EmploymentType != "正式" || profile.EmploymentTypeCode != "manual-code" || profile.JobLevel != "P6" || profile.JobFamily != "技术" {
 		t.Fatalf("empty DingTalk fields overwrote manual values: %#v", profile)
+	}
+	if profile.EmployeeID != "MT0099" {
+		t.Fatalf("empty DingTalk employee id overwrote manual value: %q", profile.EmployeeID)
+	}
+}
+
+func TestApplyDingTalkProfileFieldsClearsLegacyUserIDButKeepsOtherManualID(t *testing.T) {
+	legacy := &database.EmployeeProfile{OrgID: "org-a", UserID: "org-a:123456", EmployeeID: "123456"}
+	applyDingTalkProfileFields(legacy, dingtalk.UserInfo{UserID: "123456"}, "active")
+	if legacy.EmployeeID != "" {
+		t.Fatalf("legacy UserID must be cleared, got %q", legacy.EmployeeID)
+	}
+
+	manual := &database.EmployeeProfile{OrgID: "org-a", UserID: "org-a:123456", EmployeeID: "HR-001"}
+	applyDingTalkProfileFields(manual, dingtalk.UserInfo{UserID: "123456"}, "active")
+	if manual.EmployeeID != "HR-001" {
+		t.Fatalf("manual employee id must be preserved, got %q", manual.EmployeeID)
 	}
 }
 

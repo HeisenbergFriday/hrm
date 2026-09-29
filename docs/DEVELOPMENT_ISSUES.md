@@ -1,6 +1,6 @@
 ---
 purpose: 开发问题复盘日志——沉淀已定位根因且有复用价值的缺陷与防复发约束，供开发前查阅、开发后更新
-last_updated: 2026-09-16
+last_updated: 2026-09-28
 source_of_truth:
   - 本文件（防复发索引、写入规则与归档导航）
   - docs/development-issues/2026.md（2026 年完整问题条目）
@@ -30,6 +30,7 @@ update_when:
 | `attendance-toolbox` `permission` | 工具箱写 API 必须 `attendance_manage` 或 `attendance_toolbox_operate`（钉钉同步含 dingtalk_sync）；禁止仅凭 `menu:attendance-toolbox` 绕过 | 同上 |
 | `auth` `multi-org` `user-service` | 已解析 `orgID` 后的用户读写必须用 `NewUserServiceWithOrgID`；实体 `User.OrgID` 不能代替仓储构造绑定；空 org fail-closed | [2026-07-20 钉钉多组织登录更新用户缺少组织作用域](development-issues/2026.md#2026-07-20-p1-钉钉多组织登录更新用户时缺少组织作用域) |
 | `auth` `multi-org` `dingtalk-login` `first-login` | 首次自动补用户 `ensureLocalUserForDingTalkLogin` 必须校验非空 org 后用 `NewUserServiceWithOrgID` + `NewPermissionServiceWithOrgID`；禁止 `NormalizeOrganizationID("")` 成 default | [2026-07-20 首次补用户/登出审计/直接GORM fail-open 收口](development-issues/2026.md#2026-07-20-p1p2-org_id-隔离缺口收口首次补用户登出审计直接-gorm-fail-open) |
+| `auth` `multi-org` `organization-switch` `permission` | 登录后切换组织必须受 `organization_switch` 权限保护；目标组织必须同时命中本地已配置用户和 active 钉钉成员关系；切换重新签发目标 org JWT 并收回旧会话，禁止靠 URL 或 body 绕过 | [2026-09-22 组织切换退出重登与可切换范围未收口](development-issues/2026.md#2026-09-22-p1-组织切换退出重登与可切换范围未收口) |
 | `auth` `logout` `audit` | `/auth/logout`、`/auth/me` 必须 `JWTAuth+TenantContext`；登出 `OperationLog` 必须写 JWT `org_id` | 同上 |
 | `auth` `jwt` | JWT 必须携带 `org_id`；缺省返回 `code=token_missing_org_id`，禁止回退 `default` | 见 `.ai/MODULES/auth.md` 认证安全约束 |
 | `auth` `dingtalk-login` | 多企业扫码/免登必须显式或可解析的本地 `org_id`；禁止静默落到 default；仅有 unionId/openId 不得跨企业反查自动选企 | 见 `.ai/MODULES/auth.md` 2026-07 多企业登录隔离 |
@@ -56,15 +57,20 @@ update_when:
 | `attendance-toolbox` `parttime` `leave-priority` | 兼职汇总同一日同时含外出/出差与事假时，必须先按事假处理并停止出勤计算；组合状态判断必须早于外出计出勤的提前返回 | [2026-08-01 外出/出差与事假并存误计出勤](development-issues/2026.md#2026-08-01-p1-外出出差与事假并存误计出勤) |
 | `attendance-toolbox` `parttime` `status-mapping` `roster` | 钉钉月度打卡明确返回的 `NotSigned`、`Absenteeism/Absent`、`SeriousLate`（含下划线/大小写变体）必须转换为可见状态；标准化花名册不得丢失实习生职位和部门；完全没有源记录的日期仍保持空白，禁止默认补出勤 | [2026-08-18 兼职月度打卡异常状态被静默丢弃](development-issues/2026.md#2026-08-18-p1-兼职月度打卡异常状态被静默丢弃) |
 | `attendance-toolbox` `parttime` `schedule-formula` `fixed-staff` | 公式续算日期的作息表必须读取 Excel 已计算值；固定人员出勤由作息表决定，打卡异常只提醒不扣减；简易“姓名+1～31日”矩阵可在无工号时识别 | [2026-09-01 兼职作息公式与固定人员规则导致出勤漏算](development-issues/2026.md#2026-09-01-p1-兼职作息公式与固定人员规则导致出勤漏算) |
+| `attendance-toolbox` `parttime` `day-column` `weekend-header` | 钉钉“每月打卡记录”的周末列可显示“六/日”而非日期数字；必须在连续数字日期锚点内推导周末日期，遇到统计字段立即停止，禁止静默丢弃整月周末 | [2026-09-28 兼职周末表头未识别导致出勤漏计](development-issues/2026.md#2026-09-28-p1-兼职周末表头未识别导致出勤漏计) |
 | `attendance-toolbox` `final` `roster` `identity-merge` | 最终汇总以花名册为人事主数据；钉钉月度考勤仅用非空值补充/纠正工号、姓名、考勤组、部门和岗位，禁止清空合同主体、人员类型及入/离职/转正日期 | [2026-09-02 最终表考勤身份覆盖清空花名册人事字段](development-issues/2026.md#2026-09-02-p1-最终表考勤身份覆盖清空花名册人事字段) |
+| `attendance-toolbox` `final` `roster` `person-union` `completeness` `identity-merge` | 最终汇总人员取在职/离职花名册与目标月月度考勤、请假、加班人员并集；人工考勤汇总表是结果异常时的可选兜底。活动记录必须同时带入姓名；同一正式工号只能输出一人；正式业务工号不得被钉钉 UserID 覆盖，当前主编号优先 MT | [2026-09-22 最终汇总按花名册取人导致人工考勤人员漏出](development-issues/2026.md#2026-09-22-p1-最终汇总按花名册取人导致人工考勤人员漏出) |
+| `attendance-toolbox` `roster` `dingtalk` `hrm` `regularization-date` | 钉钉 HRM 转正日期必须兼容标准/中文字段标识及 snake_case/camelCase 返回结构；同步成功但仅有转正日期时也不得标记为无字段 | [2026-09-22 钉钉 HRM 转正日期未进入同步花名册](development-issues/2026.md#2026-09-22-p1-钉钉-hrm-转正日期未进入同步花名册) |
 | `attendance-toolbox` `dingtalk` `approval` `time-window` | `processinstance/listids` 禁止直接提交超长或未来时间范围；客户端必须按最多 120 天连续分片、结束时间预留时钟偏差，并跨片去重、全局执行条数上限 | [2026-08-01 钉钉审批查询时间范围非法](development-issues/2026.md#2026-08-01-p1-钉钉审批查询时间范围非法导致工具箱同步失败) |
 | `attendance-toolbox` `structured-result` `auto-fill` | 自动回填必须从 structured run 按 `kind=export + flow_key` 下载业务表；审计/元数据不得上传，也不得因多文件而改走 ZIP 或重跑同步 | [2026-08-01 自动回填误判多文件](development-issues/2026.md#2026-08-01-p1-自动回填将审计文件计入结果导致同步成功后仍报错) |
 | `attendance-toolbox` `roster` `data-contract` `multi-tenant` | 自动回填到加班入口的组织花名册必须使用当前 org 的 `EmployeeProfile.EmployeeID`、真实姓名与有效部门路径；当前 org 的 `<org>:0` 是兼容历史数据的根哨兵，外组织同形值仍属悬空；缺工号/姓名/路径整体 400；仅姓名文件不得自动回填加班；自动响应不得覆盖请求期间的用户选择/删除/替换；禁止审批字段/position_transfer 充当花名册 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
 | `attendance-toolbox` `roster` `org-sync` `auto-repair` | 部门路径错误可在 `attendance_manage` 权限和统一确认框后复用异步组织同步，成功/部分成功后按原文件快照重试一次；其他错误、缺权限或重试失败禁止自动循环 | 同上 |
 | `attendance-toolbox` `playwright` `locator` | 页面存在重复 placeholder/文案时，E2E 必须先用 tabpanel、form 或可访问名称缩小作用域；禁止使用全页面模糊定位 | [2026-07-30 考勤工具箱 E2E 重复日期占位符](development-issues/2026.md#2026-07-30-p2-考勤工具箱-e2e-重复日期占位符导致-strict-mode-失败) |
 | `attendance-toolbox` `date-boundary` `probation` | 日期区间条件必须使用闭区间语义，覆盖月初、月末、节假日和闰年边界；禁止对工作日使用严格大于/小于导致边界漏算 | [2026-08-02 当月转正天数少算一天](development-issues/2026.md#2026-08-02-p1-当月转正天数少算一天日期区间左边界漏算) |
-| `attendance-toolbox` `leave` `cross-month` `duration-allocation` | 普通数字小时制跨相邻月份请假以系统时长为总账；日/月分摊合计必须守恒，结束月仅吸收小于 8 小时的边界差；特殊假期保持原口径，无法守恒时明确提示人工核对；最终汇总复用同一日分摊 | [2026-08-20 跨月请假结束月时长漏算](development-issues/2026.md#2026-08-20-p1-跨月请假结束月时长漏算或少算) |
+| `attendance-toolbox` `leave` `cross-month` `duration-allocation` | 目标月以作息表月份为准；结果表只保留与目标月有交集的请假，跨月记录保留原始起止时间但只计算目标月份额；普通员工、异地不打卡及长期/自然日假期必须共用月份边界。数字小时制以系统时长为总账，日/月分摊守恒；最终汇总复用同一日分摊 | [2026-08-20 跨月请假结束月时长漏算](development-issues/2026.md#2026-08-20-p1-跨月请假结束月时长漏算或少算) |
 | `attendance-toolbox` `subsidy` `data-source` `column-alias` | 补贴扣款真实数据来源是"考勤统计→报表管理→月度汇总表（补贴及扣款）"人工导出 Excel，不是钉钉审批流程；列名必须精确匹配，禁止使用"迟到""早退"等宽泛别名；A1 日期强校验仅作用于 `_is_all_people_monthly_summary` 已识别的钉钉原始报表，且统计范围必须精确覆盖处理月份的完整自然月，系统模板和历史兼容格式不要求 A1 日期 | [2026-08-03 补贴扣款数据来源纠正](development-issues/2026.md#2026-08-03-p2-补贴扣款数据来源纠正) |
+
+| `org-sync` `dingtalk` `employee-profile` `employee-id` | 钉钉同步必须读取员工资料中的正式业务工号（如 `job_number=MT0129`）写入 `EmployeeProfile.EmployeeID`；`userid` 只能作为钉钉身份，空工号不得覆盖已有业务工号，新建档案不得用 `userid` 冒充工号 | [2026-09-23 钉钉正式工号未同步导致最终表出现数字 UserID](development-issues/2026.md#2026-09-23-p1-钉钉正式工号未同步导致最终表出现数字-userid) |
 
 ### API / 路由契约
 
@@ -73,6 +79,8 @@ update_when:
 | `employee-profile` `search` `api-contract` `test` | 员工档案搜索必须走 `/employee/profiles` 的 handler → EmployeeService → EmployeeRepository 真实链路；禁止用 `/org/employees` 花名册测试代替；关键词、分页和 URL 状态需做前后端契约回归 | [2026-07-31 员工档案搜索错测花名册链路](development-issues/2026.md#2026-07-31-p1-员工档案搜索错测花名册链路导致页面无法搜索) |
 | `org-sync` `frontend` `timeout` `api-contract` `multi-tenant` `security` | 用户/部门/全量组织同步共享同组织门闩；JWT `org_id` 唯一可信；超过网关时限的全量同步必须短请求启动+轮询；执行上下文脱离客户端取消，终态用独立短上下文持久化；HTTP 207 必须刷新已成功数据；响应/状态不得回显原始错误 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](development-issues/2026.md#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
 | `approval-sync` `whitelist` `async-boundary` `timeout` `partial` `multi-tenant` `idempotency` | 审批同步范围只取当前 JWT 企业 `ConfigForOrgID(orgID).ProcessCodes`；`Prepare` 禁止外部调用；任务与 running 状态先落库、HTTP 202 先写出，再调度后台外部调用；逐流程失败隔离，审批及下游入账均须幂等 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](development-issues/2026.md#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
+| `approval-sync` `overtime` `nullable-time` `mysql` `error-propagation` | 未完成审批和待补卡记录的可空时间必须保持数据库 `NULL`，禁止将 Go 零时间写成 MySQL 零日期；补卡申请创建错误必须向上返回，禁止吞错后仍仅标记可重试 | [2026-09-28 审批同步空时间写成零日期](development-issues/2026.md#2026-09-28-p1-审批同步空时间写成零日期且补卡创建错误被吞掉) |
+| `approval-sync` `approval-detail` `dingtalk` `flow-history` `api-contract` | 审批详情同步必须解析钉钉 `operation_records` 与当前待办 `tasks`，标准化后持久化到 `extension.flow_history`；详情仓储负责恢复顶层 `flow_history`，不能让前端依赖第三方原始结构 | [2026-09-28 审批流程详情始终为空](development-issues/2026.md#2026-09-28-p2-审批同步未保存流程记录导致详情始终为空) |
 | `approval-template` `approval-sync` `process-code` `multi-tenant` | 模板列表必须以当前组织配置的 `ProcessCodes` 补齐目录；数据库模板优先保留表单/节点详情；实例与模板关联统一使用 `extension.process_code`，禁止只查询未被写入的 `approval_templates` 表 | [2026-08-17 审批实例存在但模板目录为空](development-issues/2026.md#2026-08-17-p1-审批实例存在但模板目录为空) |
 | `approval-instance` `frontend` `api-contract` `pagination` `navigation` `business-time` `detail-ui` | 审批实例列表进入详情再返回时，筛选、关键词、分页、排序和滚动位置必须可恢复；发起时间、审批完成时间、业务开始/结束时间排序必须传白名单字段到后端，在全量结果上排序后再分页；业务时间从表单 JSON 提取并返回；详情页必须分区展示概览、业务时间、表单内容和审批流程并隐藏空值 | [2026-09-11 审批实例返回重置列表状态且缺少全量时间排序](development-issues/2026.md#2026-09-11-p2-审批实例返回重置列表状态且缺少全量时间排序) |
 | `approval-sync` `reconciliation` `annual-leave` `overtime` `attendance` `state-reversal` `dingtalk` `concurrency` | 审批逐条对账覆盖有效↔无效冲正/恢复；凌晨 6 点前考勤同时影响打卡日与前一工作日；补偿队列按最久未尝试轮转；钉钉绝对同步失败只标记触发记录，从未外部同步的记录在开关关闭时可仅恢复本地额度 | [2026-08-07 历史审批补同步未触发下游业务对账](development-issues/2026.md#2026-08-07-p1-历史审批补同步未触发下游业务对账) |

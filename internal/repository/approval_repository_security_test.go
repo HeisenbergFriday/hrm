@@ -179,6 +179,43 @@ func TestApprovalUpsertRejectsCrossOrgRecord(t *testing.T) {
 	}
 }
 
+func TestApprovalUpsertKeepsMissingFinishTimeNull(t *testing.T) {
+	dsn := fmt.Sprintf("file:approval-null-finish-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if sqlDB, sqlErr := db.DB(); sqlErr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+	if err := db.AutoMigrate(&database.Approval{}); err != nil {
+		t.Fatalf("migrate approvals: %v", err)
+	}
+
+	existing := database.Approval{
+		OrgID: "org-a", ProcessID: "running-1", Title: "请假审批", ApplicantID: "u1", ApplicantName: "员工甲",
+		Status: "RUNNING", CreateTime: time.Now(),
+	}
+	if err := db.Omit("FinishTime").Create(&existing).Error; err != nil {
+		t.Fatalf("create running approval: %v", err)
+	}
+
+	repo := NewApprovalRepositoryWithOrgID(db, "org-a")
+	if err := repo.UpsertByOrgProcessID(&database.Approval{
+		OrgID: "org-a", ProcessID: "running-1", Status: "RUNNING",
+	}); err != nil {
+		t.Fatalf("upsert running approval: %v", err)
+	}
+
+	var nullFinishCount int64
+	if err := db.Raw("SELECT COUNT(*) FROM approvals WHERE id = ? AND finish_time IS NULL", existing.ID).Scan(&nullFinishCount).Error; err != nil {
+		t.Fatalf("check finish_time: %v", err)
+	}
+	if nullFinishCount != 1 {
+		t.Fatalf("finish_time NULL count = %d, want 1", nullFinishCount)
+	}
+}
+
 func TestApprovalUpsertUpdatesStreamRecordWithoutCrossOrgDuplication(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:approval-upsert-"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
@@ -427,5 +464,46 @@ func TestApprovalFindAllSortsByBusinessTimeBeforePagination(t *testing.T) {
 	}
 	if detail.BusinessStartTime != "2026-09-18 09:00:00" || detail.BusinessEndTime != "2026-09-18 18:00:00" {
 		t.Fatalf("detail business times = %q, %q", detail.BusinessStartTime, detail.BusinessEndTime)
+	}
+}
+
+func TestApprovalFindByIDRestoresFlowHistoryFromExtension(t *testing.T) {
+	dsn := fmt.Sprintf("file:approval-flow-history-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if sqlDB, sqlErr := db.DB(); sqlErr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+	if err := db.AutoMigrate(&database.Approval{}); err != nil {
+		t.Fatalf("migrate approvals: %v", err)
+	}
+	approval := database.Approval{
+		OrgID: "org-a", ProcessID: "flow-detail-1", Title: "请假审批", ApplicantID: "u1",
+		ApplicantName: "员工甲", Status: "RUNNING", CreateTime: time.Now(),
+		Extension: map[string]interface{}{
+			"flow_history": []interface{}{
+				map[string]interface{}{
+					"node_name": "审批节点", "approver_id": "u2", "approver_name": "审批人乙",
+					"action": "approved", "comment": "同意", "time": "2026-08-27 17:05:00",
+				},
+			},
+		},
+	}
+	if err := db.Create(&approval).Error; err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+
+	loaded, err := NewApprovalRepositoryWithOrgID(db, "org-a").FindByID(fmt.Sprint(approval.ID))
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if len(loaded.FlowHistory) != 1 {
+		t.Fatalf("flow history = %#v", loaded.FlowHistory)
+	}
+	node := loaded.FlowHistory[0]
+	if node.ApproverName != "审批人乙" || node.Action != "approved" || node.Comment != "同意" {
+		t.Fatalf("flow node = %#v", node)
 	}
 }

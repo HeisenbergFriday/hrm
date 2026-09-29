@@ -73,3 +73,45 @@ func TestBuildApprovalQueryWindowsRejectsInvalidAndFutureDates(t *testing.T) {
 		})
 	}
 }
+
+func TestParseApprovalInstanceIncludesTasksAndOperationRecords(t *testing.T) {
+	instance := parseApprovalInstance("instance-flow", map[string]interface{}{
+		"title":               "请假审批",
+		"createTime":          float64(1787821200000),
+		"originatorUserId":    "starter-1",
+		"formComponentValues": []interface{}{map[string]interface{}{"name": "请假类型", "value": "年假"}},
+		"tasks": []interface{}{
+			map[string]interface{}{
+				"userId": "approver-1", "taskStatus": "COMPLETED", "taskResult": "AGREE",
+				"createTime": "2026-08-27 17:01:00", "finishTime": float64(1787821500000),
+			},
+			map[string]interface{}{
+				"userid": "approver-2", "task_status": "RUNNING", "task_result": "NONE",
+				"create_time": "2026-08-27 17:06:00",
+			},
+		},
+		"operationRecords": []interface{}{
+			map[string]interface{}{
+				"user_id": "approver-1", "operationType": "EXECUTE_TASK_NORMAL",
+				"operationResult": "AGREE", "operationTime": float64(1787821500000), "comment": "同意",
+			},
+		},
+	})
+
+	if instance.ProcessInstanceID != "instance-flow" || instance.OriginatorUserID != "starter-1" {
+		t.Fatalf("instance identity = %#v", instance)
+	}
+	if instance.CreateTime != "2026-08-27 17:00:00" {
+		t.Fatalf("create time = %q", instance.CreateTime)
+	}
+	if len(instance.FormValues) != 1 || len(instance.Tasks) != 2 || len(instance.OperationRecords) != 1 {
+		t.Fatalf("parsed approval detail = %#v", instance)
+	}
+	if instance.Tasks[0].FinishTime != "2026-08-27 17:05:00" || instance.Tasks[1].Status != "RUNNING" {
+		t.Fatalf("tasks = %#v", instance.Tasks)
+	}
+	record := instance.OperationRecords[0]
+	if record.UserID != "approver-1" || record.Result != "AGREE" || record.Date != "2026-08-27 17:05:00" || record.Remark != "同意" {
+		t.Fatalf("operation record = %#v", record)
+	}
+}

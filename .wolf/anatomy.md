@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-08-01T17:56:01.339Z
-> Files: 119 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-08-15T07:13:01.731Z
+> Files: 135 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../complaint-rate-alert/
 
@@ -47,7 +47,7 @@
 ## .ai/MODULES/
 
 - `approval.md` — 审批模块 (~713 tok)
-- `attendance.md` — 考勤模块 (~3904 tok)
+- `attendance.md` — 考勤模块 (~4273 tok)
 - `auth.md` — 认证模块 (~2909 tok)
 - `org.md` — 组织架构模块 (~2735 tok)
 - `shift-config.md` — 员工下班时间配置 (~532 tok)
@@ -68,6 +68,7 @@
 
 - `agile-sniffing-crown.md` — 组织模块四项验收遗留问题修复与部署计划 (~801 tok)
 - `rippling-herding-ripple.md` — Fix: 组织架构人数与人才驾驶舱员工总数不一致 (~743 tok)
+- `swirling-spinning-reef.md` — 考勤工具箱花名册交付收尾计划 (~1495 tok)
 
 ## C:/Users/吴列德/.claude/projects/d--AITEAM-HR/memory/
 
@@ -88,7 +89,7 @@
 
 ## docs/
 
-- `DEVELOPMENT_ISSUES.md` — 开发问题复盘日志 (~12770 tok)
+- `DEVELOPMENT_ISSUES.md` — 开发问题复盘日志 (~14552 tok)
 
 ## frontend/
 
@@ -117,14 +118,14 @@
 
 - `Approval.tsx` — fetchApprovals — renders table (~1449 tok)
 - `ApprovalDetail.tsx` — ApprovalDetail (~2950 tok)
-- `ApprovalInstance.test.tsx` — mockGetInstances (~688 tok)
-- `ApprovalInstance.tsx` — ApprovalInstance — renders table (~2714 tok)
-- `ApprovalStats.tsx` — ApprovalStats — renders table (~2232 tok)
+- `ApprovalInstance.test.tsx` — mockGetInstances (~2518 tok)
+- `ApprovalInstance.tsx` — ApprovalInstance — renders table (~3224 tok)
+- `ApprovalStats.tsx` — ApprovalStats — renders table (~2833 tok)
 - `Attendance.tsx` — BUSINESS_TIMEZONE_OFFSET_MINUTES (~7809 tok)
 - `AttendanceExport.tsx` — AttendanceExport — renders table, modal (~2649 tok)
 - `AttendanceProcessing.tsx` — processingTabs (~2490 tok)
-- `AttendanceToolbox.test.tsx` — mockRun (~8688 tok)
-- `AttendanceToolbox.tsx` — Recommended month-end order (UI guide only; tabs stay free to switch). (~31136 tok)
+- `AttendanceToolbox.test.tsx` — mockRun (~9335 tok)
+- `AttendanceToolbox.tsx` — Recommended month-end order (UI guide only; tabs stay free to switch). (~30462 tok)
 - `AuditLogs.tsx` — AuditLogs — renders table (~2214 tok)
 - `DepartmentTree.tsx` — departmentEmployeePageSize (~6173 tok)
 - `EmployeeDetail.tsx` — employmentTypeOptions (~7535 tok)
@@ -145,7 +146,7 @@
 
 ## frontend/src/services/
 
-- `api.ts` — 组织全量同步响应（POST /org/sync） (~21860 tok)
+- `api.ts` — 组织全量同步响应（POST /org/sync） (~21279 tok)
 
 ## frontend/src/store/
 
@@ -169,13 +170,15 @@
 
 ## internal/api/
 
+- `approval_sync_handlers_test.go` — Struct: approvalSyncRunnerStub (~4455 tok)
 - `approval_sync_handlers.go` — GetAttendanceApprovalSyncList, GetAttendanceApprovalSyncDetail, GetAttendanceApprovalSyncFailures, R (~1889 tok)
 - `attendance_toolbox_handlers_test.go` — TestRunDingtalkSyncHandler_SingleExportPlusAudit, TestRunDingtalkSyncHandler_MultipleExports_ZIP, Te (~7926 tok)
-- `attendance_toolbox_handlers.go` — GetAttendanceToolboxDefaults, RunAttendanceToolbox, RunDingtalkSync, RunAttendanceToolboxWorkflow, R (~5868 tok)
+- `attendance_toolbox_handlers.go` — GetAttendanceToolboxDefaults, RunAttendanceToolbox, RunDingtalkSync, RunAttendanceToolboxWorkflow, R (~6132 tok)
 - `attendance_toolbox_router_test.go` — TestAttendanceToolboxRouterRegistersStructuredEndpoints, TestAttendanceToolboxRouterCoversFrontendAP (~856 tok)
+- `external_attendance_handlers.go` — ExternalAttendanceSyncStatus, ExternalAttendanceSyncRun, ExternalAttendanceSyncJobs, ExternalAttenda (~2319 tok)
 - `handlers_dingtalk_login_test.go` — TestGenerateAndValidateLoginStateKeepsUnscopedQRLogin, TestGenerateAndValidateLoginStateKeepsOAuthOr (~2722 tok)
-- `handlers.go` — Struct: orgSyncStatusUpdate (~59712 tok)
-- `router.go` — SetupRouter (~11222 tok)
+- `handlers.go` — Struct: orgSyncStatusUpdate (~58990 tok)
+- `router.go` — SetupRouter (~11300 tok)
 - `sync_org_data_test.go` — Struct: orgSyncTestEnvelope (~15265 tok)
 
 ## internal/cache/
@@ -188,7 +191,7 @@
 
 - `database.go` — Struct: envOrganization (~26446 tok)
 - `liede_admin_role_org_isolation_test.go` — TestEnsureRolePresetInOrg_DoesNotReuseOtherOrgRole, TestEnsureUserRoleInOrg_RejectsCrossOrgRole, Tes (~2265 tok)
-- `models.go` — Struct: Organization (~15069 tok)
+- `models.go` — Struct: Organization (~17347 tok)
 - `org_unique_index_migration_test.go` — Struct: orgUniqueTestState (~8062 tok)
 - `organization_process_codes_test.go` — TestOrganizationExtensionWithDingTalkProcessCodesPreservesExistingValues, TestOrganizationFromEnvCon (~315 tok)
 - `process_codes_test.go` — TestNormalizeAndValidateDingTalkProcessCodesFiveKeys, TestValidateDingTalkProcessCodesAllowsMissingT (~982 tok)
@@ -209,11 +212,12 @@
 
 ## internal/repository/
 
-- `approval_repository_security_test.go` — TestMergeApprovalExtensionAppliesPatchWithoutDroppingExistingFields, TestApprovalUpsertLookupUsesOrg (~1223 tok)
-- `approval_repository.go` — Struct: ApprovalRepository (~2496 tok)
+- `approval_repository_security_test.go` — TestMergeApprovalExtensionAppliesPatchWithoutDroppingExistingFields, TestApprovalUpsertLookupUsesOrg (~2441 tok)
+- `approval_repository.go` — Struct: ApprovalRepository (~2990 tok)
 - `approval_sync_failure_repository.go` — Struct: ApprovalSyncFailureRepository (~1855 tok)
 - `collation.go` (~197 tok)
 - `employee_repository.go` — Struct: EmployeeRepository (~6070 tok)
+- `overtime_match_result_repository.go` — Struct: OvertimeMatchResultRepository (~2058 tok)
 - `user_repository_deactivate_missing_test.go` — TestDeactivateUsersMissingFromDingTalk_DeactivatesHistoricalEmployees, TestDeactivateUsersMissingFro (~2572 tok)
 - `user_repository_isolation_test.go` — Struct: captured (~1826 tok)
 - `user_repository.go` — Struct: UserRepository (~3662 tok)
@@ -227,16 +231,22 @@
 - `approval_service.go` — Struct: ApprovalService (~436 tok)
 - `approval_sync_core_test.go` — TestMergeApprovalStatusMonotonic, TestBuildApprovalFromDetailMapsBusinessType, TestBuildApprovalFrom (~1033 tok)
 - `approval_sync_core.go` — Struct: ApprovalDetailBuildInput (~2008 tok)
+- `approval_sync_service_test.go` — Struct: approvalSyncStoreStub (~5838 tok)
 - `approval_sync_service.go` — Struct: ApprovalSyncService (~4455 tok)
 - `attendance_monthly_summary_service_test.go` — Struct: attendanceMonthlyPeopleRepoStub (~2006 tok)
-- `attendance_service.go` — Interface: attendanceRepository (~3470 tok)
+- `attendance_overtime_recalc_test.go` — TestRecalc_AttendanceSyncTriggersRetryableOvertimeRecalc, TestRecalc_IdempotentDoubleAttendanceSync, (~5660 tok)
+- `attendance_service.go` — Interface: attendanceRepository (~1749 tok)
 - `attendance_toolbox_compare_test.go` — TestCompareAppSourceScript_Live, TestCompareAppSourceUnitTests (~971 tok)
-- `attendance_toolbox_service.go` — Struct: AttendanceToolboxService (~8555 tok)
+- `attendance_toolbox_service_test.go` — TestAttendanceToolboxDefaultsPreserveChinese, TestGenerateOrgRosterExcel_RequiresOrg, TestGenerateOr (~3387 tok)
+- `attendance_toolbox_service.go` — Struct: AttendanceToolboxService (~10420 tok)
 - `attendance_toolbox_workflow_test.go` — TestDingtalkSyncResult_BusinessExportsOnlyPositionTransfer, TestDingtalkSyncResult_SingleBusinessExp (~2738 tok)
 - `attendance_toolbox_workflow.go` — Struct: AttendanceToolboxRunResponse (~4501 tok)
 - `dingtalk_stream_service.go` — Interface: dingTalkEventStore (~3743 tok)
+- `external_attendance_sync_service.go` — Struct: ExternalAttendanceSyncService (~8278 tok)
+- `leave_jobs.go` — Struct: LeaveJobScheduler (~4201 tok)
 - `org_service_membership_test.go` — TestOrgServiceDepartmentMembershipListAndTreeCounts, TestOrgServiceDepartmentTreeInactiveEmployee, T (~5509 tok)
 - `org_service.go` — Struct: OrgDataScope (~19945 tok)
+- `overtime_matching_service.go` — Struct: OvertimeMatchingService (~15300 tok)
 - `parttime_monthly_punch_service_test.go` — Struct: recordOrgDS (~1315 tok)
 - `parttime_monthly_punch_service.go` — Interface: ParttimePunchDataSource (~3370 tok)
 - `parttime_monthly_punch_test.go` — TestMatchParttimeMonthlyPunch_EmployeeNoPriority, TestMatchParttimeMonthlyPunch_NameFallback, TestMa (~1559 tok)
@@ -261,26 +271,35 @@
 ## tools/attendance-processing/
 
 
+## tools/attendance-processing/finally/
+
+- `calc_finally.py` — calc_statutory_holiday_days, calc_active_day_count (~20527 tok)
+
 ## tools/attendance_toolbox/python/
 
+- `final_table_bugfix_test.py` — Regression tests for final-table data issues (leave/OT/subsidy path). (~8495 tok)
 - `parttime_monthly_punch_test.py` — Tests for the part-time monthly punch renderer (req: 生成的 Excel 可以正常打开，并包含关键表头和目标月份数据). (~940 tok)
 - `parttime_monthly_punch.py` — Render the part-time "月度打卡记录" grid + audit sheet. (~2204 tok)
-- `runner.py` — path_or_empty, paths, names, names_or_default (~11643 tok)
+- `runner.py` — path_or_empty, paths, names, names_or_default (~12622 tok)
+- `subsidy_all_people_test.py` — -*- coding: utf-8 -*- (~4615 tok)
 
 ## tools/attendance_toolbox/python/finally/
 
+- `calc_finally.py` (~22364 tok)
 
 ## tools/attendance_toolbox/python/leave/
 
 
 ## tools/attendance_toolbox/python/overtime/
 
+- `fill_overtime_fields.py` — parse_args, normalize_name, parse_special_chengdu_names, normalize_header_name (~29829 tok)
 
 ## tools/attendance_toolbox/python/scripts/
 
 
 ## tools/attendance_toolbox/python/subsidy/
 
+- `calc_subsidy_deduction.py` — filter_dates_to_month, resolve_attendance_period (~23650 tok)
 
 ## tools/hooks/
 

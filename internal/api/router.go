@@ -19,6 +19,7 @@ func orgReadMenuKeys() []string {
 		"menu:organization-dashboard",
 		"menu:department-tree",
 		"menu:employees",
+		"menu:people-data-center",
 		"menu:employee-profile",
 		"menu:employee-flow",
 		"menu:talent-analysis",
@@ -104,6 +105,8 @@ func SetupRouter() *gin.Engine {
 			auth.POST("/logout", middleware.JWTAuth(), Logout)
 			auth.GET("/me", middleware.JWTAuth(), GetCurrentUser)
 			auth.GET("/orgs", ListActiveOrganizations)
+			auth.GET("/switchable-orgs", middleware.JWTAuth(), middleware.TenantContext(), middleware.RequirePermission(organizationSwitchPermission), ListSwitchableOrganizations)
+			auth.POST("/switch-org", middleware.JWTAuth(), middleware.TenantContext(), middleware.RequirePermission(organizationSwitchPermission), SwitchOrganization)
 
 			dingtalk := auth.Group("/dingtalk")
 			{
@@ -177,6 +180,24 @@ func SetupRouter() *gin.Engine {
 				org.POST("/sync", middleware.RequirePermission("attendance_manage"), SyncOrgData)
 				org.POST("/sync/start", middleware.RequirePermission("attendance_manage"), StartOrgSyncData)
 				org.GET("/sync/:request_id", middleware.RequirePermission("attendance_manage"), GetOrgSyncResult)
+
+				// Cross-organization read-only mirror: source organization remains the
+				// current JWT org; target is an explicitly configured admin relation.
+				crossSync := org.Group("/cross-sync")
+				{
+					crossSync.POST("/links", middleware.RequirePermission("permission_manage"), CreateCrossOrganizationSyncLink)
+					crossSync.GET("/links", middleware.RequirePermission("permission_manage"), ListCrossOrganizationSyncLinks)
+					crossSync.POST("/run", middleware.RequirePermission("permission_manage"), RunCrossOrganizationSync)
+					crossSync.GET("/runs/:request_id", middleware.RequirePermission("permission_manage"), GetCrossOrganizationSyncRun)
+					crossSync.GET("/employees", middleware.RequirePermissionOrMenu([]string{"permission_manage", "org:read"}, orgReadMenus), ListCrossOrganizationEmployeeMirrors)
+					crossSync.GET("/business", middleware.RequirePermissionOrMenu([]string{"permission_manage", "org:read"}, orgReadMenus), ListCrossOrganizationBusinessMirrors)
+					crossSync.GET("/center/summary", middleware.RequirePermissionOrMenu([]string{"permission_manage", "org:read"}, orgReadMenus), GetPeopleDataCenterSummary)
+					crossSync.GET("/center/employees", middleware.RequirePermissionOrMenu([]string{"permission_manage", "org:read"}, orgReadMenus), ListPeopleDataCenterEmployees)
+					crossSync.GET("/center/business", middleware.RequirePermissionOrMenu([]string{"permission_manage", "org:read"}, orgReadMenus), ListPeopleDataCenterBusiness)
+					crossSync.GET("/center/links", middleware.RequirePermissionOrMenu([]string{"permission_manage", "org:read"}, orgReadMenus), ListPeopleDataCenterInboundLinks)
+					crossSync.POST("/center/sync", middleware.RequirePermission("permission_manage"), StartPeopleDataCenterSync)
+					crossSync.GET("/center/sync/:request_id", middleware.RequirePermissionOrMenu([]string{"permission_manage", "org:read"}, orgReadMenus), GetPeopleDataCenterSyncRun)
+				}
 			}
 
 			attendance := authRequired.Group("/attendance")

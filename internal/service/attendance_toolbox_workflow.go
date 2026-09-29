@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
 )
 
@@ -126,6 +127,9 @@ func (s *AttendanceToolboxService) RunStructured(ctx context.Context, userID, or
 	}
 
 	config := cloneToolboxConfig(extra)
+	// Internal routing context used only to scope the automatic HRM departure
+	// lookup.
+	config["toolbox_org_id"] = orgID
 	if form != nil {
 		spec := structuredToolboxSpec(module)
 		if err := saveAttendanceToolboxFilesForSpec(tempDirPlaceholder{}, form, spec, config); err != nil {
@@ -294,6 +298,13 @@ func (s *AttendanceToolboxService) runToolboxWorkflowEngine(ctx context.Context,
 			return nil, "", err
 		}
 	}
+	if module == "final" && strings.TrimSpace(configString(config, "toolbox_org_id")) != "" &&
+		strings.TrimSpace(configString(config, "final_resign")) == "" {
+		if err := s.attachAutomaticDingTalkResignations(ctx, workdir, config); err != nil {
+			cleanup()
+			return nil, "", err
+		}
+	}
 	configJSON, err := json.Marshal(config)
 	if err != nil {
 		return nil, "", err
@@ -360,6 +371,114 @@ func (s *AttendanceToolboxService) runToolboxWorkflowEngine(ctx context.Context,
 	}
 	cleanup()
 	return outputs, runner.Log, nil
+}
+
+func configString(config map[string]interface{}, key string) string {
+	if value, ok := config[key].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+// attachAutomaticDingTalkResignations obtains departure data only when the
+// user did not upload a manual resignation roster.  The Python final-table
+// parser applies the target-month window after reading the schedule workbook.
+func (s *AttendanceToolboxService) attachAutomaticDingTalkResignations(ctx context.Context, workdir string, config map[string]interface{}) error {
+	orgID := configString(config, "toolbox_org_id")
+	rows, err := dingtalk.ListDingTalkDismissionsForOrg(ctx, orgID)
+	if err != nil {
+		return fmt.Errorf("自动获取钉钉离职花名册失败：%w；如需继续，请上传离职花名册文件", err)
+	}
+	var users []database.User
+	if err := database.DB.Where("org_id = ? AND deleted_at IS NULL", orgID).Find(&users).Error; err != nil {
+		return fmt.Errorf("读取当前组织员工资料失败：%w", err)
+	}
+	var profiles []database.EmployeeProfile
+	if err := database.DB.Where("org_id = ? AND deleted_at IS NULL", orgID).Find(&profiles).Error; err != nil {
+		return fmt.Errorf("读取当前组织员工档案失败：%w", err)
+	}
+	profileByUser := make(map[string]database.EmployeeProfile, len(profiles))
+	for _, profile := range profiles {
+		profileByUser[profile.UserID] = profile
+	}
+	userByID := make(map[string]database.User, len(users)*2)
+	for _, user := range users {
+		userByID[user.UserID] = user
+		if strings.TrimSpace(user.DingTalkUserID) != "" {
+			userByID[user.DingTalkUserID] = user
+		}
+	}
+	deptPathMap, err := s.buildDepartmentPathMap(orgID)
+	if err != nil {
+		return fmt.Errorf("读取当前组织部门路径失败：%w", err)
+	}
+	type automaticResignation struct {
+		EmpNo          string `json:"emp_no,omitempty"`
+		Name           string `json:"name,omitempty"`
+		ContractEntity string `json:"contract_entity,omitempty"`
+		Dept1          string `json:"dept1,omitempty"`
+		Dept2          string `json:"dept2,omitempty"`
+		Dept3          string `json:"dept3,omitempty"`
+		Position       string `json:"position,omitempty"`
+		EmpType        string `json:"emp_type,omitempty"`
+		Category       string `json:"category,omitempty"`
+		HireDate       string `json:"hire_date,omitempty"`
+		ResignDate     string `json:"resign_date,omitempty"`
+		LastWorkDay    string `json:"last_work_day,omitempty"`
+		ConfirmDate    string `json:"confirm_date,omitempty"`
+	}
+	autoRows := make([]automaticResignation, 0, len(rows))
+	for _, row := range rows {
+		user, hasUser := userByID[strings.TrimSpace(row.UserID)]
+		profile, hasProfile := profileByUser[user.UserID]
+		empNo := strings.TrimSpace(row.EmployeeID)
+		if empNo == "" && hasProfile {
+			empNo = strings.TrimSpace(profile.EmployeeID)
+		}
+		// A DingTalk identity is not a business employee number.  Without a
+		// real number, leave it blank and let the final-table diagnostics expose
+		// the missing master-data field rather than emitting a numeric UserID.
+		name := strings.TrimSpace(row.Name)
+		if name == "" && hasUser {
+			name = strings.TrimSpace(user.Name)
+		}
+		effectiveResignDate := strings.TrimSpace(row.ResignDate)
+		if effectiveResignDate == "" {
+			effectiveResignDate = strings.TrimSpace(row.LastWorkDay)
+		}
+		if name == "" || effectiveResignDate == "" {
+			continue
+		}
+		dept1, dept2, dept3 := "", "", ""
+		if hasUser {
+			dept1, dept2, dept3 = rosterDepartmentLevels(deptPathMap[user.DepartmentID])
+		}
+		position := ""
+		if hasUser {
+			position = strings.TrimSpace(user.Position)
+		}
+		item := automaticResignation{
+			EmpNo: empNo, Name: name, Dept1: dept1, Dept2: dept2, Dept3: dept3,
+			Position: position, Category: "离职", ResignDate: effectiveResignDate,
+			LastWorkDay: strings.TrimSpace(row.LastWorkDay),
+		}
+		if hasProfile {
+			item.EmpType = strings.TrimSpace(profile.EmploymentType)
+			item.HireDate = strings.TrimSpace(profile.EntryDate)
+			item.ConfirmDate = strings.TrimSpace(profile.ActualRegularDate)
+		}
+		autoRows = append(autoRows, item)
+	}
+	data, err := json.Marshal(map[string]interface{}{"employees": autoRows})
+	if err != nil {
+		return fmt.Errorf("生成自动离职花名册失败：%w", err)
+	}
+	path := filepath.Join(workdir, "自动离职花名册.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("保存自动离职花名册失败：%w", err)
+	}
+	config["final_auto_resign_json"] = path
+	return nil
 }
 
 // tempDirPlaceholder exists only to make the file-copy validation explicit; actual copying
@@ -455,6 +574,7 @@ func mapLegacyProcessingForm(module string, form *multipart.Form) *multipart.For
 		copyFiles("final_overtime", "overtime", "final_overtime")
 		copyFiles("final_subsidy", "subsidy", "final_subsidy")
 		copyFiles("final_resign", "resigned", "final_resign")
+		copyFiles("final_attendance_roster", "attendance_roster", "final_attendance_roster")
 		copyFiles("final_transfer", "transfer", "final_transfer")
 	case "parttime":
 		copyFiles("parttime_default_schedule", "default_schedule", "parttime_default_schedule")

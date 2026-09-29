@@ -1,6 +1,6 @@
 ---
 purpose: 考勤模块业务规则说明
-last_updated: 2026-09-02
+last_updated: 2026-09-28
 source_of_truth:
   - internal/api/handlers.go（考勤相关 handler）
   - internal/api/attendance_toolbox_handlers.go（考勤工具箱上传计算 handler）
@@ -357,7 +357,10 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 ### 考勤工具箱文件兼容与校验口径
 
 - 花名册/员工信息表兼容 `.xlsx` / `.xls`（`excel_compat` + `xlrd>=2.0,<3`）。最终汇总兼容仅姓名名单；加班 `overtime_roster` 必须包含可用工号与部门列，否则 `run_overtime` 返回包含实际表头的明确错误。
+- 请假明细的目标月以作息表月份为准；输出只保留与目标月有交集的请假。跨月记录保留原始开始/结束时间，但“最终请假时长/天数”只计算目标月份额；普通员工、异地不打卡、自然日及长期假期均遵守同一月份边界，同月异地记录继续采用上传/系统时长。
 - 共享 `_find_header_row` 保持子串匹配，以兼容请假“员工工号/员工姓名/请假类型名称”和加班“2倍加班（小时）”等历史表头；花名册身份列局部精确匹配：姓名仅接受“姓名/员工姓名”，工号仅接受“工号/员工工号/员工编号”，禁止识别发起人、申请人等审批流程字段。部门映射优先工号；姓名仅在全文件唯一时允许回退，重名不得生成姓名映射键。
+- 最终汇总人员底盘取“在职花名册 + 离职花名册 + 目标月月度考勤 + 目标月请假/加班”的并集；人工考勤汇总表是结果异常时才上传的可选兜底来源，上传后继续加入并集。不能因为花名册遗漏、离职时间窗口、兼职/实习筛选而静默丢掉本月有考勤活动的人员。上传人工表时必须校验其中每个人都已进入最终结果，发现缺人就停止生成并报错；未上传时不得阻塞正常生成。
+- 最终汇总身份匹配优先使用业务工号；符合业务工号格式的 `MTxxxx`、`TXBxxxx`、`WBxxxx` 等正式工号不得被钉钉 UserID 覆盖，当前主编号为 `MTxxxx` 时优先于 `WB/TXB`。请假/加班活动来源必须同时保留原始姓名；同一正式工号在各来源合并后只能输出一行并合并缺失字段。纯数字 UserID 不得写入正式工号列。工号无法匹配时，仅允许在姓名全文件唯一的情况下回退，重名不得静默合并；只有数字身份且没有姓名时必须记录为无法识别，禁止伪造员工。
 - 节假日年份按目标月过滤后再校验。
 - 业务真源比对：`tools/attendance_toolbox/python/scripts/compare_app_source.py` 全量生成 `SOURCE_MANIFEST.json`（含 `difference_kind=equal|adapter_only`）；禁止手改 manifest。允许 adapter 差异：`sys.path` 注入、`excel_compat`、`load_workbook_compat`。无 `D:\app` 时本地比对 skip；CI 仍跑仓库内 fixture/hash 测试。 Local golden tests use synthetic Excel inputs to compare leave/overtime/subsidy/final/parttime output fingerprints against `D:\app`; when `D:\app` exists, these parity tests must run with 0 skip.
 
@@ -441,6 +444,7 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - 兼职汇总中，同一日同时包含外出/出差与事假时，事假优先且该日不计出勤；组合状态判断必须早于外出/出差计出勤的提前返回。纯外出/出差仍按原规则处理。
 - 兼职默认作息表可以用 Excel 公式续算日期，固定人员计算必须读取公式已计算值；当前固定名单为王心英、刘芮、汤颖、周代林、陈富庆，统一按主作息表生成出勤值和总天数。迟到、早退、缺卡、旷工仍须标注并写入提醒，但不扣减固定人员的作息出勤值。
 - 兼职考勤明细支持标准工号格式，也支持人工整理的“姓名 + 1～31 日”简易矩阵；无工号格式必须至少识别 3 个日期列才能通过校验，`√`、正数、“班”等非空出勤标记计 1 天。
+- 钉钉“每月打卡记录”的双层日期表头可能把周末写成“六/日”而非日期数字；解析器必须以明确数字日期为锚点，仅在连续相邻的星期标签列中推导日期，遇到“天数”等统计字段立即停止。回归覆盖月初、月中、月末周末，禁止静默丢弃周末源记录。
 - 大文件上传时显示警告提示
 - 运行日志可折叠查看（需后端支持返回 log 字段）
 

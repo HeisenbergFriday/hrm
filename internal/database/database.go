@@ -1301,6 +1301,10 @@ func migrate() error {
 
 	if err := DB.AutoMigrate(
 		&Organization{},
+		&OrganizationSyncLink{},
+		&OrganizationSyncRun{},
+		&OrganizationEmployeeMirror{},
+		&OrganizationBusinessMirror{},
 		&OrganizationUser{},
 		&User{},
 		&UserDepartmentMembership{},
@@ -2179,6 +2183,7 @@ func seed() {
 			{Name: "编辑审批模板", Code: "approval:update", Description: "编辑审批模板"},
 			{Name: "删除审批模板", Code: "approval:delete", Description: "删除审批模板"},
 			{Name: "权限管理", Code: "permission_manage", Description: "权限管理权限"},
+			{Name: "组织切换", Code: "organization_switch", Description: "在已授权且属于钉钉组织的范围内切换当前组织"},
 			// 绩效模块权限
 			{Name: "绩效活动管理", Code: "performance:activity:manage", Description: "创建/编辑/发布/启动/锁定/归档绩效活动"},
 			{Name: "绩效自评提交", Code: "performance:self_eval:submit", Description: "提交绩效自评"},
@@ -2244,7 +2249,7 @@ func seedRolePermissions() {
 
 	// 所有权限码
 	allPermCodes := []string{
-		"user_manage", "department_manage", "attendance_manage", "approval_manage", "permission_manage",
+		"user_manage", "department_manage", "attendance_manage", "approval_manage", "permission_manage", "organization_switch",
 		"approval:sync", "approval:create", "approval:update", "approval:delete",
 		"performance:activity:manage", "performance:self_eval:submit", "performance:manager_eval:submit",
 		"performance:employee_confirm:submit", "performance:manager_confirm:submit", "performance:hr_confirm:submit",
@@ -2542,6 +2547,7 @@ func migratePermissions() {
 	newPerms := []Permission{
 		{Name: "组织数据只读", Code: "org:read", Description: "查看组织架构、花名册等组织数据"},
 		{Name: "审计日志只读", Code: "audit_log:read", Description: "查看操作审计日志"},
+		{Name: "组织切换", Code: "organization_switch", Description: "在已授权且属于钉钉组织的范围内切换当前组织"},
 		{Name: "同步审批", Code: "approval:sync", Description: "同步审批模板/实例数据"},
 		{Name: "创建审批模板", Code: "approval:create", Description: "创建审批模板"},
 		{Name: "编辑审批模板", Code: "approval:update", Description: "编辑审批模板"},
@@ -2577,6 +2583,7 @@ func migratePermissions() {
 	// 4. 给有 permission_manage 的角色补 audit_log:read 和 org:read
 	grantCompatPermission("permission_manage", "audit_log:read", permMap)
 	grantCompatPermission("permission_manage", "org:read", permMap)
+	grantCompatPermission("permission_manage", "organization_switch", permMap)
 	grantCompatPermission("permission_manage", "performance:hidden_result:view", permMap)
 	// 5. 给有 performance:activity:manage 的角色补 org:read（部门负责人需要看部门树）
 	grantCompatPermission("performance:activity:manage", "org:read", permMap)
@@ -2938,7 +2945,7 @@ func normalizeMenuPermissionKeys(keys []string) []string {
 }
 
 var legacyMenuKeysByPermission = map[string][]string{
-	"org:read":                             {"menu:organization-dashboard", "menu:department-tree", "menu:employees"},
+	"org:read":                             {"menu:organization-dashboard", "menu:department-tree", "menu:employees", "menu:people-data-center"},
 	"user_manage":                          {"menu:employee-profile", "menu:employee-flow", "menu:talent-analysis", "menu:sync-log"},
 	"attendance_manage":                    {"menu:attendance", "menu:attendance-export", "menu:attendance-toolbox", "menu:week-schedule", "menu:employee-shift-config", "menu:sync-jobs", "menu:leave-overtime"},
 	"approval_manage":                      {"menu:approval-templates", "menu:approval-instances", "menu:approval-stats", "menu:oa-approval-data"},

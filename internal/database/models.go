@@ -132,6 +132,15 @@ type Attendance struct {
 	DeletedAt gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
+type ApprovalFlowNode struct {
+	NodeName     string `json:"node_name"`
+	ApproverID   string `json:"approver_id"`
+	ApproverName string `json:"approver_name"`
+	Action       string `json:"action"`
+	Comment      string `json:"comment"`
+	Time         string `json:"time"`
+}
+
 // Approval 审批模型
 type Approval struct {
 	ID                uint                   `gorm:"primaryKey" json:"id"`
@@ -147,6 +156,7 @@ type Approval struct {
 	Extension         map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
 	BusinessStartTime string                 `gorm:"-" json:"business_start_time,omitempty"`
 	BusinessEndTime   string                 `gorm:"-" json:"business_end_time,omitempty"`
+	FlowHistory       []ApprovalFlowNode     `gorm:"-" json:"flow_history,omitempty"`
 	CreatedAt         time.Time              `json:"created_at"`
 	UpdatedAt         time.Time              `json:"updated_at"`
 	DeletedAt         gorm.DeletedAt         `gorm:"index" json:"-"`

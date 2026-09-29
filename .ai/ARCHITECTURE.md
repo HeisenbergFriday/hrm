@@ -254,6 +254,15 @@ type Response struct {
 - **钉钉 op_user_id（企业管理员）**：`organizations.ding_talk_admin_user_id`（模型字段 `DingTalkAdminUserID`）为权威来源；`dingtalk.ResolveAdminUserID(orgID)` / `ResolveAdminUserIDFromConfig` 统一解析。非 default 企业**禁止**回退全局 `DINGTALK_ADMIN_USER_ID`；default 企业可在 `DefaultConfig` / `ConfigFromOrganization` 配置解析层兼容环境变量。排班读写、班次创建、年假/调休额度写钉钉均须走该解析，业务层禁止直接 `os.Getenv("DINGTALK_ADMIN_USER_ID")`。
 - **班次 ID 进程缓存**：`ShiftConfigService` 的 `shiftIDCache` key 必须为 `orgID|shiftKey`；提供 `ClearShiftIDCacheForTest` 避免测试互相污染。相同班次名+时间在不同企业不得共享钉钉 `shift_id`。
 - **缺配置 fail-closed**：非 default 企业缺少 App 凭证或 `DingTalkAdminUserID` 时，排班同步/班次创建/假期写钉钉须直接报错，禁止写库后 partial 成功、禁止静默用 default 企业 token。
+
+### 文娱到沐腾只读镜像边界
+
+- **业务不迁移**：文娱继续作为考勤、请假、加班、审批、绩效等业务的执行组织；沐腾第一期只保存查看/汇总用镜像，不写入文娱业务表，也不回写钉钉。
+- **数据流**：钉钉 → 文娱本地组织数据 → 沐腾镜像。员工镜像保存源组织、源用户 ID、源钉钉 ID 和档案快照；业务镜像保存白名单实体类型、源主键和源 JSON 快照。
+- **镜像不是本地业务**：禁止把 `OrganizationEmployeeMirror` 自动转换为沐腾 `User`，禁止把 `OrganizationBusinessMirror` 当作沐腾可执行的审批/考勤/假勤记录；后续页面只能按目标组织查询镜像。
+- **幂等与失败**：员工唯一键为 `target_org_id + source_org_id + source_user_id`；业务唯一键为 `target_org_id + source_org_id + entity_type + source_key`。同步批次记录 running/success/partial/failed，失败不覆盖旧镜像。
+- **白名单**：当前仅允许考勤、审批、年假发放、加班匹配、绩效活动和绩效参与人；新增业务类型必须显式登记表名、字段脱敏和回归测试，不能接受任意表名参数。
+- **权限**：创建同步关系、执行同步和查看批次需要 `permission_manage`；镜像读取需要 `permission_manage`、`org:read` 或组织菜单权限。普通业务接口仍只认 JWT 当前 `org_id`，跨组织目标只能来自已保存的同步关系。
 - **双上下文**：`requestmeta.TenantID`（严格）与 `RequestInfo.OrgID`（兼容）均可能携带 org；绩效等服务构造时优先 Tenant，再回退 RequestInfo；异步 goroutine 必须两者都注入。
 - **全局表**（有意不绑业务 org）：`organizations`、`permissions`、`role_permissions`；`Permission.Code` 等全局唯一。业务唯一键见 `docs/org_composite_unique_index_migration.md`。
 - **相关复盘**：`docs/development-issues/2026.md`（2026-07-20 钉钉多组织登录更新用户缺少组织作用域）。

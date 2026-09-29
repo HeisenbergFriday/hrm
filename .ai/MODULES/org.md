@@ -52,6 +52,8 @@ update_when:
 - 标准字段：计划转正日期 `sys01-planRegularTime`、实际转正日期 `sys01-regularTime`。
 - 可配置字段：员工类型、职级、岗位序列、试用期结束日期，以及 HRM 岗位兜底字段。
 
+通讯录返回的 `job_number`（及兼容的 camelCase/扩展字段写法）是员工业务工号，必须写入 `EmployeeProfile.EmployeeID`；`userid`/`DingTalkUserID` 只用于钉钉身份关联，禁止作为业务工号兜底。钉钉未返回正式工号时，新建档案应留空并由花名册完整性校验阻止输出，已有档案的正式工号不得被空值覆盖。
+
 同步约束：
 - 钉钉返回非空值时才更新 `EmployeeProfile`，空值不得覆盖 HR 已手工维护的数据。
 - `actual_regular_date` 只写实际转正日期，禁止再写入 `probation_end_date`。

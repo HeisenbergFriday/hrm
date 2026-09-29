@@ -63,6 +63,91 @@ export const authAPI = {
   dingtalkLogin: (data: { code: string }) => api.post('/auth/dingtalk/in-app', data),
   logout: () => api.post('/auth/logout'),
   getCurrentUser: () => api.get('/auth/me'),
+  getSwitchableOrganizations: () => api.get('/auth/switchable-orgs'),
+  switchOrganization: (orgID: string) => api.post('/auth/switch-org', { org_id: orgID }),
+}
+
+export type PeopleDataCenterSummary = {
+  employee_total: number
+  active_employee_total: number
+  local_employee_total: number
+  mirror_employee_total: number
+  business_total: number
+  local_business_total: number
+  mirror_business_total: number
+  sync_failure_count: number
+  latest_run?: {
+    status: string
+    started_at: string
+    finished_at?: string
+    failure_count: number
+    employee_count: number
+    business_count: number
+  }
+}
+
+export type PeopleDataCenterEmployee = {
+  id: number
+  source_org_id: string
+  source_user_id: string
+  employee_id: string
+  name: string
+  email: string
+  mobile: string
+  department_name: string
+  position: string
+  status: string
+  last_synced_at: string
+  source_updated_at?: string
+  is_mirror: boolean
+}
+
+export type PeopleDataCenterBusiness = {
+  id: number
+  source_org_id: string
+  entity_type: string
+  source_key: string
+  source_user_id: string
+  payload: Record<string, unknown>
+  source_updated_at?: string
+  last_synced_at: string
+  sync_status: string
+  is_mirror: boolean
+}
+
+export type PeopleDataCenterPage<T> = { items: T[]; total: number; page: number; page_size: number }
+
+export type PeopleDataCenterSyncLink = {
+  source_org_id: string
+  target_org_id: string
+  status: 'active' | 'paused' | string
+  employee_sync: boolean
+  business_sync: boolean
+  business_scopes: string
+}
+
+export type PeopleDataCenterSyncRun = {
+  request_id: string
+  source_org_id: string
+  target_org_id: string
+  status: 'running' | 'success' | 'partial' | 'failed'
+  employee_count: number
+  business_count: number
+  failure_count: number
+  error_message?: string
+  started_at: string
+  finished_at?: string
+}
+
+export const peopleDataCenterAPI = {
+  getSummary: () => api.get<{ code: number; data: PeopleDataCenterSummary }, { code: number; data: PeopleDataCenterSummary }>('/org/cross-sync/center/summary'),
+  getInboundLinks: () => api.get<{ code: number; data: { items: PeopleDataCenterSyncLink[] } }, { code: number; data: { items: PeopleDataCenterSyncLink[] } }>('/org/cross-sync/center/links'),
+  startSync: (sourceOrgID?: string) => api.post<{ code: number; data: PeopleDataCenterSyncRun }, { code: number; data: PeopleDataCenterSyncRun }>('/org/cross-sync/center/sync', sourceOrgID ? { source_org_id: sourceOrgID } : {}),
+  getSyncRun: (requestID: string) => api.get<{ code: number; data: PeopleDataCenterSyncRun }, { code: number; data: PeopleDataCenterSyncRun }>(`/org/cross-sync/center/sync/${encodeURIComponent(requestID)}`),
+  getEmployees: (params: { page: number; page_size: number; keyword?: string; status?: string; source?: 'local' | 'mirror' }) =>
+    api.get<{ code: number; data: PeopleDataCenterPage<PeopleDataCenterEmployee> }, { code: number; data: PeopleDataCenterPage<PeopleDataCenterEmployee> }>('/org/cross-sync/center/employees', { params }),
+  getBusiness: (params: { page: number; page_size: number; entity_type?: string; source?: 'local' | 'mirror' }) =>
+    api.get<{ code: number; data: PeopleDataCenterPage<PeopleDataCenterBusiness> }, { code: number; data: PeopleDataCenterPage<PeopleDataCenterBusiness> }>('/org/cross-sync/center/business', { params }),
 }
 
 export const userAPI = {

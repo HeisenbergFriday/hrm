@@ -741,7 +741,7 @@ class AttendanceIdentityContractTests(unittest.TestCase):
         self.assertEqual(employee["emp_type"], "旧类型")
         self.assertEqual(employee["hire_date"], date(2020, 1, 1))
 
-    def test_stale_roster_emp_no_uses_new_dingtalk_identity_by_name(self):
+    def test_same_rank_dingtalk_emp_no_does_not_replace_roster_identity_by_name(self):
         employees = [{"emp_no": "OLD001", "name": "张三"}]
         records = [{
             "emp_no": "NEW001",
@@ -753,7 +753,7 @@ class AttendanceIdentityContractTests(unittest.TestCase):
 
         enriched = fin.apply_attendance_identity(employees, records)
 
-        self.assertEqual(enriched[0]["emp_no"], "NEW001")
+        self.assertEqual(enriched[0]["emp_no"], "OLD001")
         self.assertEqual(enriched[0]["attendance_group"], "标准考勤组")
         self.assertEqual(enriched[0]["dept1"], "总部")
         self.assertEqual(enriched[0]["position"], "工程师")
@@ -770,13 +770,13 @@ class AttendanceIdentityContractTests(unittest.TestCase):
         self.assertEqual(enriched[0]["emp_no"], "E001")
         self.assertEqual(enriched[0]["dept1"], "精确工号部门")
 
-    def test_unmatched_emp_no_falls_back_to_unique_normalized_name(self):
+    def test_unmatched_emp_no_falls_back_to_unique_name_without_replacing_roster_identity(self):
         employees = [{"emp_no": "LEGACY001", "name": "张 三"}]
         records = [{"emp_no": "CURRENT001", "name": "张三", "dept1": "总部"}]
 
         enriched = fin.apply_attendance_identity(employees, records)
 
-        self.assertEqual(enriched[0]["emp_no"], "CURRENT001")
+        self.assertEqual(enriched[0]["emp_no"], "LEGACY001")
         self.assertEqual(enriched[0]["name"], "张三")
         self.assertEqual(enriched[0]["dept1"], "总部")
 

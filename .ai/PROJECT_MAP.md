@@ -38,7 +38,8 @@ D:\ai项目
 │  │  ├─ leave_handlers.go          # 年假/调休/加班/排班 handler
 │  │  ├─ performance_handlers.go    # 绩效相关 handler
 │  │  ├─ external_approval_handlers.go # 沐腾 OA 审批数据 handler
-│  │  └─ supplementary_handlers.go  # 补卡申请 handler
+│  │  ├─ supplementary_handlers.go  # 补卡申请 handler
+│  │  └─ cross_org_sync_handlers.go # 文娱到沐腾只读镜像同步 handler
 │  ├─ cache\                        # Redis 初始化
 │  ├─ config\                       # 配置与 holidays.json
 │  ├─ database\                     # GORM 初始化、迁移、模型
@@ -76,6 +77,7 @@ D:\ai项目
 │  │  └─ week_schedule_repository.go
 │  └─ service\                      # 业务逻辑层
 │     ├─ user_service.go
+│     ├─ cross_org_sync_service.go   # 跨组织只读镜像同步
 │     ├─ attendance_service.go
 │     ├─ attendance_toolbox_service.go # 考勤 Excel 工具箱服务
 │     ├─ attendance_record_filter.go
@@ -164,6 +166,7 @@ D:\ai项目
 | 年假与调休 | 资格计算、季度发放、补发、消费台账、同步钉钉假期 | `.ai/MODULES/leave-overtime.md` |
 | 加班匹配 | 审批与打卡匹配、调休台账、补发余额、重新同步到钉钉 | `.ai/MODULES/leave-overtime.md` |
 | 下班时间配置 | 员工级班次配置与钉钉落地 | `.ai/MODULES/shift-config.md` |
+| 跨组织同步 | 文娱员工与人事业务到沐腾的只读镜像 | `.ai/MODULES/cross-org-sync.md` |
 
 ---
 
@@ -197,6 +200,7 @@ D:\ai项目
 | `/departments` | 部门 CRUD | `handlers.go` |
 | `/sync` | 钉钉同步（部门、用户、状态） | `handlers.go` |
 | `/org` | 组织架构（概览、部门树、员工列表、员工详情、同步） | `handlers.go` |
+| `/org/cross-sync` | 文娱到沐腾的同步关系、同步执行、员工/业务镜像 | `cross_org_sync_handlers.go` |
 | `/attendance` | 考勤记录、统计、导出、最近同步时间 | `handlers.go` |
 | `/approvals` | 审批模板、审批实例、审批详情、审批同步、沐腾 OA 数据 | `handlers.go` + `external_approval_handlers.go` |
 | `/permission` | 角色、权限 | `handlers.go` |

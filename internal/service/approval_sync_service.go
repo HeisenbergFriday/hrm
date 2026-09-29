@@ -292,7 +292,8 @@ func (s *ApprovalSyncService) syncProcess(ctx context.Context, processCode, star
 				applicantName = strings.TrimSpace(resolved)
 			}
 		}
-		approval := approvalFromDingTalk(s.orgID, processCode, applicantName, instance)
+		flowHistory := buildApprovalFlowHistory(instance, s.resolveName)
+		approval := approvalFromDingTalk(s.orgID, processCode, applicantName, instance, flowHistory)
 		if err := s.store.UpsertByOrgProcessID(approval); err != nil {
 			processResult.FailCount++
 			continue
@@ -352,7 +353,7 @@ func (s *ApprovalSyncService) syncProcess(ctx context.Context, processCode, star
 	return processResult
 }
 
-func approvalFromDingTalk(orgID, processCode, applicantName string, instance dingtalk.ApprovalInstance) *database.Approval {
+func approvalFromDingTalk(orgID, processCode, applicantName string, instance dingtalk.ApprovalInstance, flowHistory []database.ApprovalFlowNode) *database.Approval {
 	location := dingtalk.ApprovalBusinessLocation()
 	createTime, _ := time.ParseInLocation("2006-01-02 15:04:05", instance.CreateTime, location)
 	finishTime, _ := time.ParseInLocation("2006-01-02 15:04:05", instance.FinishTime, location)
@@ -364,6 +365,14 @@ func approvalFromDingTalk(orgID, processCode, applicantName string, instance din
 		}
 		content[name] = formValue["value"]
 	}
+	extension := map[string]interface{}{
+		"result":       instance.Result,
+		"process_code": processCode,
+		"source":       "dingtalk_sync",
+	}
+	if len(flowHistory) > 0 {
+		extension["flow_history"] = flowHistory
+	}
 	return &database.Approval{
 		OrgID:         orgID,
 		ProcessID:     strings.TrimSpace(instance.ProcessInstanceID),
@@ -374,12 +383,128 @@ func approvalFromDingTalk(orgID, processCode, applicantName string, instance din
 		CreateTime:    createTime,
 		FinishTime:    finishTime,
 		Content:       content,
-		Extension: map[string]interface{}{
-			"result":       instance.Result,
-			"process_code": processCode,
-			"source":       "dingtalk_sync",
-		},
+		Extension:     extension,
 	}
+}
+
+func buildApprovalFlowHistory(instance dingtalk.ApprovalInstance, resolveName func(string) (string, error)) []database.ApprovalFlowNode {
+	nodes := make([]database.ApprovalFlowNode, 0, len(instance.OperationRecords)+len(instance.Tasks))
+	seen := make(map[string]struct{}, cap(nodes))
+	nameCache := make(map[string]string)
+	resolveApproverName := func(userID string) string {
+		userID = strings.TrimSpace(userID)
+		if name, ok := nameCache[userID]; ok {
+			return name
+		}
+		name := userID
+		if userID != "" && resolveName != nil {
+			if resolved, err := resolveName(userID); err == nil && strings.TrimSpace(resolved) != "" {
+				name = strings.TrimSpace(resolved)
+			}
+		}
+		nameCache[userID] = name
+		return name
+	}
+	appendNode := func(node database.ApprovalFlowNode) {
+		node.ApproverID = strings.TrimSpace(node.ApproverID)
+		node.ApproverName = resolveApproverName(node.ApproverID)
+		node.Comment = strings.TrimSpace(node.Comment)
+		node.Time = strings.TrimSpace(node.Time)
+		key := strings.Join([]string{node.ApproverID, node.Action, node.Time, node.Comment}, "\x00")
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		nodes = append(nodes, node)
+	}
+
+	for _, record := range instance.OperationRecords {
+		action := approvalOperationAction(record.OperationType, record.Result)
+		if action == "" {
+			continue
+		}
+		approverID := record.UserID
+		if action == "submitted" && strings.TrimSpace(approverID) == "" {
+			approverID = instance.OriginatorUserID
+		}
+		appendNode(database.ApprovalFlowNode{
+			NodeName:   approvalFlowNodeName(action),
+			ApproverID: approverID,
+			Action:     action,
+			Comment:    record.Remark,
+			Time:       record.Date,
+		})
+	}
+
+	for _, task := range instance.Tasks {
+		status := strings.ToUpper(strings.TrimSpace(task.Status))
+		if status != "RUNNING" && status != "PENDING" && status != "WAITING" {
+			continue
+		}
+		appendNode(database.ApprovalFlowNode{
+			NodeName:   "待审批",
+			ApproverID: task.UserID,
+			Action:     "pending",
+			Time:       task.CreateTime,
+		})
+	}
+
+	sort.SliceStable(nodes, func(i, j int) bool {
+		left, leftOK := parseApprovalFlowTime(nodes[i].Time)
+		right, rightOK := parseApprovalFlowTime(nodes[j].Time)
+		if leftOK != rightOK {
+			return leftOK
+		}
+		if !leftOK || left.Equal(right) {
+			return false
+		}
+		return left.Before(right)
+	})
+	return nodes
+}
+
+func approvalOperationAction(operationType, result string) string {
+	normalizedResult := strings.ToUpper(strings.TrimSpace(result))
+	switch normalizedResult {
+	case "AGREE", "PASS", "APPROVED":
+		return "approved"
+	case "REFUSE", "REJECT", "REJECTED":
+		return "rejected"
+	case "NONE", "":
+		// Fall through to the operation type because DingTalk uses NONE for
+		// operations such as starting an instance or adding a remark.
+	default:
+		return strings.ToLower(normalizedResult)
+	}
+
+	switch strings.ToUpper(strings.TrimSpace(operationType)) {
+	case "START_PROCESS_INSTANCE":
+		return "submitted"
+	case "TERMINATE_PROCESS_INSTANCE":
+		return "terminated"
+	case "ADD_REMARK":
+		return "commented"
+	case "EXECUTE_TASK_NORMAL", "EXECUTE_TASK_AGENT", "EXECUTE_TASK_TRANSFER", "FINISH_PROCESS_INSTANCE":
+		return "processed"
+	default:
+		return ""
+	}
+}
+
+func approvalFlowNodeName(action string) string {
+	switch action {
+	case "submitted":
+		return "发起审批"
+	case "pending":
+		return "待审批"
+	default:
+		return "审批节点"
+	}
+}
+
+func parseApprovalFlowTime(value string) (time.Time, bool) {
+	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", strings.TrimSpace(value), dingtalk.ApprovalBusinessLocation())
+	return parsed, err == nil
 }
 
 func approvalSyncSafeError(err error) (string, string) {

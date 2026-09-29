@@ -36,7 +36,20 @@ func (r *SupplementaryRequestRepository) Create(req *database.OvertimeSupplement
 		return err
 	}
 	req.OrgID = merged
-	return r.db.Create(req).Error
+	tx := r.db
+	// Pending requests do not have manually supplied clock times yet. Keep the
+	// nullable database columns NULL until the request is approved.
+	omitFields := make([]string, 0, 2)
+	if req.SupplementaryClockIn.IsZero() {
+		omitFields = append(omitFields, "SupplementaryClockIn")
+	}
+	if req.SupplementaryClockOut.IsZero() {
+		omitFields = append(omitFields, "SupplementaryClockOut")
+	}
+	if len(omitFields) > 0 {
+		tx = tx.Omit(omitFields...)
+	}
+	return tx.Create(req).Error
 }
 
 func (r *SupplementaryRequestRepository) FindByMatchResultID(matchResultID uint) (*database.OvertimeSupplementaryRequest, error) {

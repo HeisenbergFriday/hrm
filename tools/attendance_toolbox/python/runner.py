@@ -441,28 +441,104 @@ def run_final(config: dict, output_dir: Path) -> list[dict]:
     leave_path = path_or_empty(config, "final_leave")
     overtime_path = path_or_empty(config, "final_overtime")
     subsidy_path = path_or_empty(config, "final_subsidy")
+    attendance_roster_path = path_or_empty(config, "final_attendance_roster") or None
     if not all([active_path, schedule_path, leave_path, overtime_path, subsidy_path]):
-        raise ValueError("请上传在职花名册、作息表、请假明细表、加班明细表和补贴扣款表。")
+        raise ValueError(
+            "请上传在职花名册、作息表、请假明细表、加班明细表和补贴扣款表。"
+        )
 
     out_path = output_dir / "最终表.xlsx"
     resign_path = path_or_empty(config, "final_resign") or None
+    auto_resign_path = path_or_empty(config, "final_auto_resign_json") or None
     transfer_path = path_or_empty(config, "final_transfer")
 
     employees = fin.parse_roster(active_path, resign_path)
-    attendance_records = fin.parse_attendance_identity(subsidy_path)
-    employees = fin.apply_attendance_identity(employees, attendance_records)
-    transfer_map = fin.parse_transfer(transfer_path) if transfer_path else {}
     schedule_ctx = fin.parse_schedule(schedule_path)
+    if not resign_path and auto_resign_path:
+        auto_resigned = fin.parse_auto_resign_json(auto_resign_path, schedule_ctx)
+        employees, auto_stats = fin.merge_employee_sources(
+            employees, auto_resigned, mark_source=False
+        )
+        print(
+            "[最终表] 自动离职人员: "
+            f"目标月 {schedule_ctx['year']:04d}-{schedule_ctx['month']:02d}，"
+            f"窗口内 {len(auto_resigned)} 人，新增 {auto_stats['added_count']} 人，"
+            f"匹配补充 {auto_stats['matched_count']} 人"
+        )
+    # 月度考勤表是本月实际发生人员的直接来源。把它并入花名册人员底盘，
+    # 防止在职花名册漏人时最终表静默少人；后续 apply_attendance_identity
+    # 仍负责用考勤身份补齐/纠正部门和正式工号。
+    attendance_records = fin.parse_attendance_identity(subsidy_path)
+    employees, attendance_stats = fin.merge_employee_sources(
+        employees,
+        attendance_records,
+        mark_source=False,
+        source_flag="source_target_month_activity",
+    )
+    print(
+        "[最终表] 月度考勤人员并集: "
+        f"考勤表 {attendance_stats['source_count']} 人，新增 {attendance_stats['added_count']} 人，"
+        f"匹配补充 {attendance_stats['matched_count']} 人"
+    )
+    if attendance_roster_path:
+        attendance_roster = fin.parse_roster(attendance_roster_path)
+        employees, merge_stats = fin.merge_employee_sources(employees, attendance_roster)
+        print(
+            "[最终表] 人员并集兜底: "
+            f"人工考勤表 {merge_stats['source_count']} 人，新增 {merge_stats['added_count']} 人，"
+            f"匹配补充 {merge_stats['matched_count']} 人"
+        )
     chengdu_names = tuple(names_or_default(config, "chengdu_schedule_names", calc_leave.DEFAULT_CHENGDU_WORK_LOCATION_NAMES))
-    leave_map = fin.parse_leave_summary(leave_path, schedule_ctx)
+    leave_identity_records: list[dict] = []
+    leave_map = fin.parse_leave_summary(
+        leave_path,
+        schedule_ctx,
+        identity_records=leave_identity_records,
+    )
     leave_day_details = fin.parse_leave_day_details(leave_path, schedule_ctx, chengdu_names)
+    leave_employees, unresolved_leave = fin.employees_from_activity_records(leave_identity_records)
+    employees, leave_stats = fin.merge_employee_sources(
+        employees,
+        leave_employees,
+        mark_source=False,
+        source_flag="source_target_month_activity",
+    )
+    print(
+        "[最终表] 请假人员并集: "
+        f"来源 {leave_stats['source_count']} 人，新增 {leave_stats['added_count']} 人，"
+        f"无法识别数字身份 {unresolved_leave} 人"
+    )
+    overtime_identity_records: list[dict] = []
     overtime_map = fin.parse_overtime_summary(
         overtime_path,
         schedule_ctx["year"],
         schedule_ctx["month"],
         employees,
         schedule_ctx,
+        identity_records=overtime_identity_records,
     )
+    overtime_employees, unresolved_overtime = fin.employees_from_activity_records(
+        overtime_identity_records
+    )
+    employees, overtime_stats = fin.merge_employee_sources(
+        employees,
+        overtime_employees,
+        mark_source=False,
+        source_flag="source_target_month_activity",
+    )
+    print(
+        "[最终表] 加班人员并集: "
+        f"来源 {overtime_stats['source_count']} 人，新增 {overtime_stats['added_count']} 人，"
+        f"无法识别数字身份 {unresolved_overtime} 人"
+    )
+    employees = fin.apply_attendance_identity(employees, attendance_records)
+    employees, dedupe_stats = fin.deduplicate_employee_sources(employees)
+    print(
+        "[最终表] 重复正式工号合并: "
+        f"合并 {dedupe_stats['duplicate_count']} 条，"
+        f"姓名冲突 {dedupe_stats['conflict_count']} 条"
+    )
+    transfer_map = fin.parse_transfer(transfer_path) if transfer_path else {}
     absent_by_no, absent_by_name = fin.parse_subsidy_absent(subsidy_path)
     absent_day_details = fin.parse_subsidy_absent_day_details(
         subsidy_path,
@@ -710,6 +786,7 @@ EXPECTED_HEADERS = {
     },
     "final": {
         "roster": ["姓名", "工号"],
+        "attendance_roster": ["姓名", "工号"],
         "schedule": ["日期"],
     },
     "parttime": {
@@ -779,6 +856,11 @@ def action_validate(config: dict, output_dir: Path) -> list[dict]:
         schedule_path = path_or_empty(config, "final_schedule")
         if roster_path:
             results["final_roster"] = _check_headers(roster_path, EXPECTED_HEADERS["final"]["roster"])
+        attendance_roster_path = path_or_empty(config, "final_attendance_roster")
+        if attendance_roster_path:
+            results["final_attendance_roster"] = _check_headers(
+                attendance_roster_path, EXPECTED_HEADERS["final"]["attendance_roster"]
+            )
         if schedule_path:
             results["final_schedule"] = _check_headers(schedule_path, EXPECTED_HEADERS["final"]["schedule"])
     elif module == "parttime":
