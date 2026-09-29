@@ -121,7 +121,13 @@ func (r *ApprovalRepository) UpsertByOrgProcessID(approval *database.Approval) e
 	if approval.Extension != nil {
 		existing.Extension = mergeApprovalExtension(existing.Extension, approval.Extension)
 	}
-	return r.db.Save(&existing).Error
+	tx := r.db
+	// RUNNING instances have no finish time. Preserve the database NULL instead
+	// of letting GORM serialize time.Time{} as MySQL's rejected zero date.
+	if existing.FinishTime.IsZero() {
+		tx = tx.Omit("FinishTime")
+	}
+	return tx.Save(&existing).Error
 }
 
 // createApproval inserts a new approval row.
@@ -478,6 +484,22 @@ func decorateApproval(approval *database.Approval) {
 		return
 	}
 	approval.BusinessStartTime, approval.BusinessEndTime = extractApprovalBusinessTimes(approval.Content)
+	approval.FlowHistory = decodeApprovalFlowHistory(approval.Extension["flow_history"])
+}
+
+func decodeApprovalFlowHistory(raw interface{}) []database.ApprovalFlowNode {
+	if raw == nil {
+		return nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var nodes []database.ApprovalFlowNode
+	if err := json.Unmarshal(data, &nodes); err != nil {
+		return nil
+	}
+	return nodes
 }
 
 func sortApprovalsByBusinessTime(approvals []database.Approval, field string, ascending bool) {

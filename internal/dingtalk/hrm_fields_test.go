@@ -168,6 +168,27 @@ func TestParseHRMEmployeeFieldsWithChineseFieldNamesOnly(t *testing.T) {
 	}
 }
 
+func TestParseHRMEmployeeFieldsParsesRegularizationDatesByNameAndCamelCaseValues(t *testing.T) {
+	cfg := Config{}.normalized()
+	fields := []interface{}{
+		map[string]interface{}{
+			"fieldCode":      "tenant-plan-date",
+			"fieldName":      "计划转正日期",
+			"fieldValueList": []interface{}{map[string]interface{}{"value": "2026-09-01"}},
+		},
+		map[string]interface{}{
+			"field_code":       "tenant-actual-date",
+			"field_name":       "实际转正日期",
+			"field_value_list": []interface{}{map[string]interface{}{"value": "2026-09-05"}},
+		},
+	}
+
+	got := parseHRMEmployeeFields(fields, cfg)
+	if got.Planned != "2026-09-01" || got.Actual != "2026-09-05" {
+		t.Fatalf("regularization dates were not parsed from field names/value aliases: %#v", got)
+	}
+}
+
 // TestParseHRMEmployeeFieldsEmptyValuesDoNotOverwrite verifies that empty
 // field values do not overwrite previously parsed non-empty values.
 func TestParseHRMEmployeeFieldsEmptyValuesDoNotOverwrite(t *testing.T) {
@@ -197,6 +218,9 @@ func TestHasAnyHRMTargetField(t *testing.T) {
 	}
 	if !hasAnyHRMTargetField(usersWithFields) {
 		t.Fatal("expected true when at least one user has a target field")
+	}
+	if !hasAnyHRMTargetField(map[string]UserInfo{"user-date": {ActualRegularDate: "2026-09-05"}}) {
+		t.Fatal("regularization dates must count as an HRM target field")
 	}
 
 	usersAllEmpty := map[string]UserInfo{

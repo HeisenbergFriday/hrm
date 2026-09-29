@@ -260,11 +260,12 @@ const modules: ModuleConfig[] = [
   {
     key: 'final',
     title: '最终汇总',
-    description: '汇总花名册、作息、请假、加班、补贴扣款结果，生成最终考勤表。',
+    description: '汇总花名册、作息、请假、加班、补贴扣款结果，生成最终考勤表。若系统结果不正确，可再上传人工考勤汇总表兜底，避免漏人。',
     outputName: '最终表.xlsx',
     fileFields: [
       { name: 'final_active', label: '在职花名册', required: true, templateId: 'roster' },
       { name: 'final_resign', label: '离职花名册', templateId: 'roster' },
+      { name: 'final_attendance_roster', label: '人工考勤汇总表（结果不正确时再上传）', templateId: 'roster' },
       { name: 'final_transfer', label: '异动流程表', templateId: 'transfer' },
       { name: 'final_schedule', label: '作息表', required: true, templateId: 'schedule' },
       { name: 'final_leave', label: '请假明细表', required: true, templateId: 'final_leave_detail' },
@@ -477,6 +478,9 @@ const fieldRequirements: Record<string, { label: string; badges: FieldBadge[] }[
   final: [
     { label: '在职花名册', badges: [
       { label: '姓名', required: true },
+    ]},
+    { label: '人工考勤汇总表（可选，结果不正确时再上传）', badges: [
+      { label: '姓名' }, { label: '工号' },
     ]},
     { label: '作息表', badges: [
       { label: '作息时间表', required: true }, { label: '周数', required: true },

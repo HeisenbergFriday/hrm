@@ -42,16 +42,17 @@ func TestMapLegacyProcessingForm_LeaveAndOvertime(t *testing.T) {
 func TestMapLegacyProcessingForm_FinalSubsidyParttime(t *testing.T) {
 	final := mapLegacyProcessingForm("final", &multipart.Form{
 		File: map[string][]*multipart.FileHeader{
-			"roster":   {{Filename: "在职.xlsx", Size: 1}},
-			"schedule": {{Filename: "作息.xlsx", Size: 1}},
-			"leave":    {{Filename: "假.xlsx", Size: 1}},
-			"overtime": {{Filename: "加.xlsx", Size: 1}},
-			"subsidy":  {{Filename: "补.xlsx", Size: 1}},
-			"resigned": {{Filename: "离.xlsx", Size: 1}},
-			"transfer": {{Filename: "异.xlsx", Size: 1}},
+			"roster":            {{Filename: "在职.xlsx", Size: 1}},
+			"schedule":          {{Filename: "作息.xlsx", Size: 1}},
+			"leave":             {{Filename: "假.xlsx", Size: 1}},
+			"overtime":          {{Filename: "加.xlsx", Size: 1}},
+			"subsidy":           {{Filename: "补.xlsx", Size: 1}},
+			"resigned":          {{Filename: "离.xlsx", Size: 1}},
+			"attendance_roster": {{Filename: "人工考勤汇总.xlsx", Size: 1}},
+			"transfer":          {{Filename: "异.xlsx", Size: 1}},
 		},
 	})
-	for _, key := range []string{"final_active", "final_schedule", "final_leave", "final_overtime", "final_subsidy", "final_resign", "final_transfer"} {
+	for _, key := range []string{"final_active", "final_schedule", "final_leave", "final_overtime", "final_subsidy", "final_resign", "final_attendance_roster", "final_transfer"} {
 		if len(final.File[key]) != 1 {
 			t.Fatalf("missing %s", key)
 		}

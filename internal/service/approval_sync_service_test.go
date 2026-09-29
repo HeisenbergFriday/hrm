@@ -158,6 +158,56 @@ func TestApprovalSyncRunContinuesAfterProcessFailureAndPreservesFields(t *testin
 	}
 }
 
+func TestApprovalSyncStoresResolvedAndDeduplicatedFlowHistory(t *testing.T) {
+	serviceUnderTest, store := newApprovalSyncServiceStub("org-a")
+	serviceUnderTest.resolveName = func(userID string) (string, error) {
+		if userID == "approver-1" {
+			return "审批人甲", nil
+		}
+		return "", errors.New("user not found")
+	}
+	serviceUnderTest.fetchApprovals = func(context.Context, string, string, string, string) (dingtalk.ApprovalFetchResult, error) {
+		return dingtalk.ApprovalFetchResult{Instances: []dingtalk.ApprovalInstance{{
+			ProcessInstanceID: "flow-1", OriginatorUserID: "starter-1", Title: "请假审批",
+			Status: "RUNNING", CreateTime: "2026-08-27 17:00:00",
+			OperationRecords: []dingtalk.ApprovalOperationRecord{
+				{Date: "2026-08-27 17:00:00", OperationType: "START_PROCESS_INSTANCE", Result: "NONE"},
+				{UserID: "approver-1", Date: "2026-08-27 17:05:00", OperationType: "EXECUTE_TASK_NORMAL", Result: "AGREE", Remark: "同意"},
+				{UserID: "approver-1", Date: "2026-08-27 17:05:00", OperationType: "EXECUTE_TASK_NORMAL", Result: "AGREE", Remark: "同意"},
+			},
+			Tasks: []dingtalk.ApprovalTask{
+				{UserID: "approver-1", Status: "COMPLETED", Result: "AGREE", FinishTime: "2026-08-27 17:05:00"},
+				{UserID: "approver-2", Status: "RUNNING", Result: "NONE", CreateTime: "2026-08-27 17:06:00"},
+			},
+		}}}, nil
+	}
+
+	result := serviceUnderTest.Run(context.Background(), ApprovalSyncPlan{ProcessCodes: []string{"PROC-LEAVE"}}, "flow-request")
+	if result.Status != ApprovalSyncStatusSuccess {
+		t.Fatalf("sync result = %#v", result)
+	}
+	record := store.records["org-a|flow-1"]
+	if record == nil {
+		t.Fatal("approval was not stored")
+	}
+	nodes, ok := record.Extension["flow_history"].([]database.ApprovalFlowNode)
+	if !ok {
+		t.Fatalf("flow_history type = %T, value = %#v", record.Extension["flow_history"], record.Extension["flow_history"])
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("flow history = %#v, want one submitted, approved, and pending node", nodes)
+	}
+	if nodes[0].Action != "submitted" || nodes[0].ApproverName != "starter-1" {
+		t.Fatalf("submitted node = %#v", nodes[0])
+	}
+	if nodes[1].Action != "approved" || nodes[1].ApproverName != "审批人甲" || nodes[1].Comment != "同意" {
+		t.Fatalf("approved node = %#v", nodes[1])
+	}
+	if nodes[2].Action != "pending" || nodes[2].ApproverName != "approver-2" {
+		t.Fatalf("pending node = %#v", nodes[2])
+	}
+}
+
 func TestApprovalSyncRunAllFailedAndUpsertIsIdempotent(t *testing.T) {
 	serviceUnderTest, store := newApprovalSyncServiceStub("org-a")
 	call := 0

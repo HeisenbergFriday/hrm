@@ -168,6 +168,37 @@ func TestAttendanceSyncAutomaticallyRecalculatesRetryableOvertime(t *testing.T) 
 	}
 }
 
+func TestOvertimeMatchReturnsSupplementaryRequestCreateFailure(t *testing.T) {
+	t.Setenv("DINGTALK_COMP_TIME_SYNC_ENABLED", "false")
+	db := openLeaveJobsDB(t)
+	migrateRecalcTables(t, db)
+	seedOvertimeRule(t, db, "org-a")
+
+	location := dingtalk.ApprovalBusinessLocation()
+	approval := database.Approval{
+		OrgID: "org-a", ProcessID: "missing-supplementary-table", Title: "加班审批",
+		ApplicantID: "user-1", ApplicantName: "员工甲", Status: "COMPLETED",
+		CreateTime: time.Date(2026, 9, 28, 9, 0, 0, 0, location),
+		FinishTime: time.Date(2026, 9, 28, 10, 0, 0, 0, location),
+		Content: map[string]interface{}{
+			"加班开始时间": "2026-09-28 18:00:00",
+			"加班结束时间": "2026-09-28 21:00:00",
+		},
+		Extension: map[string]interface{}{"result": "agree"},
+	}
+	if err := db.Create(&approval).Error; err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+	if err := db.Migrator().DropTable(&database.OvertimeSupplementaryRequest{}); err != nil {
+		t.Fatalf("drop supplementary request table: %v", err)
+	}
+
+	err := NewOvertimeMatchingServiceWithOrgID(db, "org-a").MatchApproval(approval.ID)
+	if err == nil || !strings.Contains(err.Error(), "create supplementary request for missing clock record") {
+		t.Fatalf("MatchApproval() error = %v, want supplementary request creation failure", err)
+	}
+}
+
 func TestAttendanceSyncRecalculationIsTenantScopedAndSkipsTerminal(t *testing.T) {
 	t.Setenv("DINGTALK_COMP_TIME_SYNC_ENABLED", "false")
 	db := openLeaveJobsDB(t)

@@ -57,6 +57,7 @@ export const menuConfig: MenuItem[] = [
       { key: menuPermissionKey('employee-profile'), title: '员工档案', label: <Link to="/employee-profile">员工档案</Link>, icon: <UserOutlined /> },
       { key: menuPermissionKey('employee-flow'), title: '入转调离', label: <Link to="/employee-flow">入转调离</Link>, icon: <SwapOutlined /> },
       { key: menuPermissionKey('talent-analysis'), title: '人才分析', label: <Link to="/talent-analysis">人才分析</Link>, icon: <BarChartOutlined /> },
+      { key: menuPermissionKey('people-data-center'), title: '人事数据中心', label: <Link to="/people-data-center">人事数据中心</Link>, icon: <DatabaseOutlined />, orgIds: ['muteng'] },
       { key: menuPermissionKey('sync-log'), title: '同步日志', label: <Link to="/sync-log">同步日志</Link>, icon: <HistoryOutlined /> },
     ],
   },

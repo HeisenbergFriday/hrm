@@ -234,7 +234,9 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 		if err := s.saveMatchResult(approval, approvalStart, approvalEnd, nil, nil, 0, 0, 0, "no_clock_record", msg); err != nil {
 			return err
 		}
-		_ = s.createSupplementaryRequestIfNotExists(approval.ApplicantID, approvalDate, approval.ID)
+		if err := s.createSupplementaryRequestIfNotExists(approval.ApplicantID, approvalDate, approval.ID); err != nil {
+			return fmt.Errorf("create supplementary request for missing clock record: %w", err)
+		}
 		return nil
 	}
 
@@ -248,7 +250,9 @@ func (s *OvertimeMatchingService) MatchApprovalWithForce(approvalID uint, force 
 				approvalStart.Format("15:04"), approvalEnd.Format("15:04"), len(overtimeWindowAttendances), clockInfo)); err != nil {
 			return err
 		}
-		_ = s.createSupplementaryRequestIfNotExists(approval.ApplicantID, approvalDate, approval.ID)
+		if err := s.createSupplementaryRequestIfNotExists(approval.ApplicantID, approvalDate, approval.ID); err != nil {
+			return fmt.Errorf("create supplementary request for insufficient clock record: %w", err)
+		}
 		return nil
 	}
 

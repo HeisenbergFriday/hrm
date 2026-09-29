@@ -717,6 +717,17 @@ type PagedResponse struct {
 func applyDingTalkProfileFields(profile *database.EmployeeProfile, user dingtalk.UserInfo, status string) {
 	profile.WorkEmail = user.Email
 	profile.ProfileStatus = status
+	// DingTalk's userid is an identity key, not the employee's business number.
+	// Only a non-empty business number from the DingTalk payload may update the
+	// profile. Empty responses must preserve an existing HR-maintained number.
+	if employeeID := strings.TrimSpace(user.EmployeeID); employeeID != "" {
+		profile.EmployeeID = employeeID
+	} else if isLegacyDingTalkEmployeeID(profile, user) {
+		// Older syncs used the DingTalk identity as EmployeeID. Remove that
+		// legacy value so roster generation fails closed instead of exporting a
+		// numeric UserID as if it were a business employee number.
+		profile.EmployeeID = ""
+	}
 	if user.HiredDate != "" {
 		profile.EntryDate = user.HiredDate
 	}
@@ -739,6 +750,23 @@ func applyDingTalkProfileFields(profile *database.EmployeeProfile, user dingtalk
 	if user.JobFamily != "" {
 		profile.JobFamily = user.JobFamily
 	}
+}
+
+func isLegacyDingTalkEmployeeID(profile *database.EmployeeProfile, user dingtalk.UserInfo) bool {
+	legacy := strings.TrimSpace(profile.EmployeeID)
+	if legacy == "" {
+		return false
+	}
+	if userID := strings.TrimSpace(user.UserID); userID != "" && legacy == userID {
+		return true
+	}
+	if localUserID := strings.TrimSpace(profile.UserID); localUserID != "" && legacy == localUserID {
+		return true
+	}
+	if profile.OrgID != "" && user.UserID != "" && legacy == database.ScopedExternalID(profile.OrgID, user.UserID) {
+		return true
+	}
+	return false
 }
 
 // HealthCheck 健康检查
@@ -1444,9 +1472,8 @@ func ensureLocalUserForDingTalkLogin(c *gin.Context, orgID string, u dingtalk.Us
 
 	employeeService := employeeServiceForOrg(c, orgID)
 	profile := &database.EmployeeProfile{
-		OrgID:      orgID,
-		UserID:     newUser.UserID,
-		EmployeeID: newUser.UserID,
+		OrgID:  orgID,
+		UserID: newUser.UserID,
 	}
 	applyDingTalkProfileFields(profile, u, status)
 	if err := employeeService.CreateProfile(profile); err != nil {
@@ -1594,6 +1621,14 @@ func generateSessionToken(c *gin.Context, user *database.User) (string, time.Tim
 	}
 	if err := database.DB.Create(&session).Error; err != nil {
 		return "", time.Time{}, err
+	}
+	// Keep the organization-membership cache current for identities that have a
+	// DingTalk binding. This is used by the in-session organization switch
+	// intersection check; a missing cache row must never grant access by itself.
+	if dingTalkUserID := strings.TrimSpace(user.DingTalkUserID); dingTalkUserID != "" {
+		if err := database.EnsureOrganizationUser(user.OrgID, dingTalkUserID, "active"); err != nil {
+			log.Printf("[auth] ensure organization membership failed org_id=%s dingtalk_user_id=%s err=%v", database.NormalizeOrganizationID(user.OrgID), dingTalkUserID, err)
+		}
 	}
 	return tokenString, expiresAt, nil
 }
@@ -2180,6 +2215,7 @@ type orgSyncUserDependencies struct {
 	CreateProfile                func(*database.EmployeeProfile) error
 	UpdateProfile                func(*database.EmployeeProfile) error
 	ReplaceDepartmentMemberships func(string, []string) error
+	EnsureOrganizationMembership func(string, string, string) error
 	DeactivateMissingUsers       func([]string) ([]string, error)
 	RevokeSessions               func(string)
 }
@@ -2200,6 +2236,7 @@ func orgSyncUserDependenciesForRequest(c *gin.Context, orgID string) orgSyncUser
 		CreateProfile:                employeeService.CreateProfile,
 		UpdateProfile:                employeeService.UpdateProfile,
 		ReplaceDepartmentMemberships: userService.ReplaceDepartmentMemberships,
+		EnsureOrganizationMembership: database.EnsureOrganizationUser,
 		DeactivateMissingUsers:       userService.DeactivateUsersMissingFromDingTalk,
 		RevokeSessions: func(userID string) {
 			revokeActiveSessionsForUser(orgID, userID, "sync_org_inactive")
@@ -2387,12 +2424,18 @@ func syncDingTalkUsers(ctx context.Context, orgID string, users []dingtalk.UserI
 				logOrgSyncError(requestID, maskedOrgID, "employees", "department_memberships", err, startTime, result.SuccessCount, result.FailCount+1)
 			}
 		}
+		if userPersisted && deps.EnsureOrganizationMembership != nil {
+			if err := deps.EnsureOrganizationMembership(orgID, userID, status); err != nil {
+				itemFailed = true
+				logOrgSyncError(requestID, maskedOrgID, "employees", "organization_membership", err, startTime, result.SuccessCount, result.FailCount+1)
+			}
+		}
 
 		// 用户主数据写入失败时无法安全写档案；角色失败后仍继续档案写入用于数据修复。
 		if !itemFailed || created {
 			profile, profileErr := deps.FindProfile(localUserID)
 			if created || errors.Is(profileErr, gorm.ErrRecordNotFound) {
-				profile = &database.EmployeeProfile{OrgID: orgID, UserID: localUserID, EmployeeID: localUserID}
+				profile = &database.EmployeeProfile{OrgID: orgID, UserID: localUserID}
 				applyDingTalkProfileFields(profile, user, status)
 				if err := deps.CreateProfile(profile); err != nil {
 					itemFailed = true

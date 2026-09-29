@@ -399,6 +399,9 @@ func TestGenerateOrgRosterExcelProducesRealRichWorkbookFromCurrentOrg(t *testing
 	if row[0] != "MT9999" || row[1] != "测试运维" || row[3] != "运营管理中心" || row[4] != "运营支撑部" || row[5] != "智慧寄存运维组" {
 		t.Fatalf("unexpected generated roster row: %#v", row)
 	}
+	if row[9] != "2026-01-02" || row[11] != "2026-04-02" {
+		t.Fatalf("generated roster must retain profile dates: %#v", row)
+	}
 	if row[0] == "user-ops" || row[0] == "ding-ops" || row[0] == "OTHER001" {
 		t.Fatalf("generated business employee ID was forged or leaked: %#v", row)
 	}

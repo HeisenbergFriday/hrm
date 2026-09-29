@@ -252,6 +252,40 @@ func TestFetchDeptUsersNormalizesHiredDate(t *testing.T) {
 	}
 }
 
+func TestResolveDingTalkEmployeeIDUsesBusinessNumberAndNeverUserID(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  map[string]interface{}
+		want string
+	}{
+		{name: "job number", raw: map[string]interface{}{"userid": "123456789", "job_number": "MT0129"}, want: "MT0129"},
+		{name: "camel case", raw: map[string]interface{}{"employeeNo": "TXB0017"}, want: "TXB0017"},
+		{name: "extension", raw: map[string]interface{}{"ext_fields": map[string]interface{}{"工号": "WB0008"}}, want: "WB0008"},
+		{name: "missing does not fall back", raw: map[string]interface{}{"userid": "123456789"}, want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := resolveDingTalkEmployeeID(test.raw); got != test.want {
+				t.Fatalf("resolveDingTalkEmployeeID() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestFetchDeptUsersReadsBusinessEmployeeNumber(t *testing.T) {
+	stubDingTalkHTTPClient(t, func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"errcode":0,"result":{"list":[{"userid":"123456789","name":"员工","active":true,"dept_id_list":[1],"job_number":"MT0129"}],"has_more":false}}`), nil
+	})
+
+	users, err := fetchDeptUsers("safe-token", 1)
+	if err != nil {
+		t.Fatalf("fetchDeptUsers() error = %v", err)
+	}
+	if len(users) != 1 || users[0].EmployeeID != "MT0129" {
+		t.Fatalf("users = %#v, want employee id MT0129", users)
+	}
+}
+
 func TestSyncUsersWithDeptsForConfigRequiresEveryDepartmentSource(t *testing.T) {
 	clearTokenCacheForTest(t)
 	cfg := AppConfig{OrgID: "org-a", AppKey: "key-a", AppSecret: "secret-a"}

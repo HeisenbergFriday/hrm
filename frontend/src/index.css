@@ -248,6 +248,10 @@ code {
   flex: 1 1 auto;
 }
 
+.app-org-switcher {
+  min-width: 132px;
+}
+
 .app-header-user {
   max-width: 160px;
   overflow: hidden;
@@ -948,6 +952,11 @@ code {
 
   .app-layout-mobile .app-header-user {
     max-width: 96px;
+  }
+
+  .app-layout-mobile .app-org-switcher {
+    min-width: 108px;
+    max-width: 132px;
   }
 
   .app-layout-mobile .app-header-logout {

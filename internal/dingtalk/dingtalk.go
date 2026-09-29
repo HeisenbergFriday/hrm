@@ -985,6 +985,221 @@ func GetAccessTokenForConfig(cfg AppConfig) (string, error) {
 	return getAccessTokenWithConfig(configFromAppConfig(cfg))
 }
 
+// DingTalkDismission contains the small, stable subset of HRM departure data
+// needed by the attendance final-table workflow.  UserID is only an external
+// identity; EmployeeID is the business employee number and must never fall
+// back to UserID.
+type DingTalkDismission struct {
+	UserID      string `json:"user_id"`
+	EmployeeID  string `json:"employee_id"`
+	Name        string `json:"name"`
+	ResignDate  string `json:"resign_date"`
+	LastWorkDay string `json:"last_work_day"`
+}
+
+// ListDingTalkDismissionsForOrg reads the official HRM departure endpoints.
+// The endpoint returns IDs first and departure details separately, so this
+// helper handles pagination and the documented 50-ID batch limit in one place.
+func ListDingTalkDismissionsForOrg(ctx context.Context, orgID string) ([]DingTalkDismission, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, errors.New("org_id is required")
+	}
+	token, err := GetAccessTokenForOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0)
+	seen := make(map[string]struct{})
+	var nextToken string
+	for {
+		query := url.Values{}
+		query.Set("maxResults", "100")
+		if nextToken != "" {
+			query.Set("nextToken", nextToken)
+		} else {
+			query.Set("nextToken", "0")
+		}
+		endpoint := "https://api.dingtalk.com/v1.0/hrm/employees/dismissions?" + query.Encode()
+		resp, callErr := getJSONContext(ctx, endpoint, map[string]string{
+			"Authorization":               "Bearer " + token,
+			"x-acs-dingtalk-access-token": token,
+		})
+		if callErr != nil {
+			return nil, callErr
+		}
+		result := dismissionResultMap(resp)
+		for _, item := range dismissionList(result) {
+			id := firstMapString(item, "userId", "userid", "user_id", "staffId", "staff_id")
+			if id == "" {
+				if raw, ok := item["__scalar"].(string); ok {
+					id = strings.TrimSpace(raw)
+				}
+			}
+			if id != "" {
+				if _, exists := seen[id]; !exists {
+					seen[id] = struct{}{}
+					ids = append(ids, id)
+				}
+			}
+		}
+		hasMore := boolValue(result, "hasMore", "has_more")
+		next := scalarString(result["nextToken"])
+		if next == "" {
+			next = scalarString(result["next_token"])
+		}
+		if !hasMore || next == "" || next == nextToken {
+			break
+		}
+		nextToken = next
+	}
+
+	out := make([]DingTalkDismission, 0, len(ids))
+	for start := 0; start < len(ids); start += 50 {
+		end := start + 50
+		if end > len(ids) {
+			end = len(ids)
+		}
+		encoded, _ := json.Marshal(ids[start:end])
+		query := url.Values{}
+		query.Set("userIdList", string(encoded))
+		endpoint := "https://api.dingtalk.com/v1.0/hrm/employees/dimissionInfos?" + query.Encode()
+		resp, callErr := getJSONContext(ctx, endpoint, map[string]string{
+			"Authorization":               "Bearer " + token,
+			"x-acs-dingtalk-access-token": token,
+		})
+		if callErr != nil {
+			return nil, callErr
+		}
+		result := dismissionResultMap(resp)
+		for _, item := range dismissionList(result) {
+			userID := firstMapString(item, "userId", "userid", "user_id", "staffId", "staff_id")
+			if userID == "" {
+				continue
+			}
+			out = append(out, DingTalkDismission{
+				UserID:      userID,
+				EmployeeID:  resolveDingTalkEmployeeID(item),
+				Name:        firstMapString(item, "name", "userName", "user_name"),
+				ResignDate:  firstMapString(item, "dimissionDate", "dismissionDate", "resignDate", "resign_date"),
+				LastWorkDay: firstMapString(item, "lastWorkDate", "lastWorkingDay", "last_work_day"),
+			})
+		}
+	}
+	return out, nil
+}
+
+func getJSONContext(ctx context.Context, endpoint string, headers map[string]string) (map[string]interface{}, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉请求地址异常", err)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := dingTalkHTTPClient.Do(req)
+	if err != nil {
+		return nil, dingTalkNetworkError("GET", endpoint, err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logrus.Warnf("dingtalk response body close failed: %v", closeErr)
+		}
+	}()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, dingTalkNetworkError("GET", endpoint, err)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		detail := fmt.Errorf("GET %s returned HTTP %d: %s", safeDingTalkEndpoint(endpoint), resp.StatusCode, sanitizeDingTalkDiagnostic(string(body)))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, newSyncError(ErrorCodePermissionDenied, "钉钉智能人事离职接口权限不足，请确认已开通智能人事个人信息读权限", detail)
+		}
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉离职接口返回异常", detail)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉离职接口返回格式异常", err)
+	}
+	if code, ok := result["code"].(string); ok && code != "" && code != "OK" {
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉离职接口返回失败", errors.New(sanitizeDingTalkDiagnostic(code)))
+	}
+	if errcode, ok := result["errcode"].(float64); ok && errcode != 0 {
+		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉离职接口返回失败", errors.New(sanitizeDingTalkDiagnostic(scalarString(result["errmsg"]))))
+	}
+	return result, nil
+}
+
+func dismissionResultMap(resp map[string]interface{}) map[string]interface{} {
+	if result, ok := resp["result"].(map[string]interface{}); ok {
+		return result
+	}
+	if result, ok := resp["result"].([]interface{}); ok {
+		return map[string]interface{}{"__items": result}
+	}
+	return resp
+}
+
+func dismissionList(result map[string]interface{}) []map[string]interface{} {
+	if raw, ok := result["__items"].([]interface{}); ok {
+		return normalizeDismissionItems(raw)
+	}
+	for _, key := range []string{"data", "list", "items", "records", "dismissionInfos"} {
+		if raw, ok := result[key].([]interface{}); ok {
+			return normalizeDismissionItems(raw)
+		}
+	}
+	if nested, ok := result["data"].(map[string]interface{}); ok {
+		return dismissionList(nested)
+	}
+	return nil
+}
+
+func normalizeDismissionItems(raw []interface{}) []map[string]interface{} {
+	items := make([]map[string]interface{}, 0, len(raw))
+	for _, value := range raw {
+		if item, ok := value.(map[string]interface{}); ok {
+			items = append(items, item)
+		} else if scalar := scalarString(value); scalar != "" {
+			items = append(items, map[string]interface{}{"__scalar": scalar})
+		}
+	}
+	return items
+}
+
+func firstMapString(m map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value := scalarString(m[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func boolValue(m map[string]interface{}, keys ...string) bool {
+	for _, key := range keys {
+		if value, ok := m[key].(bool); ok {
+			return value
+		}
+	}
+	return false
+}
+
+func scalarString(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		return strconv.FormatInt(int64(typed), 10)
+	case json.Number:
+		return strings.TrimSpace(typed.String())
+	case int:
+		return strconv.Itoa(typed)
+	default:
+		return ""
+	}
+}
+
 // ===================== OAuth 鐧诲綍 =====================
 
 // GetQRLoginURL 鑾峰彇閽夐拤鎵爜鐧诲綍 URL
@@ -1300,7 +1515,11 @@ type DeptInfo struct {
 
 // UserInfo 鐢ㄦ埛淇℃伅
 type UserInfo struct {
-	UserID                 string                 `json:"userid"`
+	UserID string `json:"userid"`
+	// EmployeeID is the business employee number maintained in DingTalk,
+	// such as MT0129. It is deliberately kept separate from UserID: UserID
+	// is a DingTalk identity and must never be used as the HR business number.
+	EmployeeID             string                 `json:"employee_id"`
 	Name                   string                 `json:"name"`
 	Email                  string                 `json:"email"`
 	Mobile                 string                 `json:"mobile"`
@@ -1639,15 +1858,20 @@ func markUsersHRMFieldSyncStatus(users map[string]UserInfo, status string) {
 	}
 }
 
-// hasAnyHRMTargetField reports whether at least one user has a non-empty
-// employment type, job level, or job family value populated from the HRM API.
+// hasAnyHRMTargetField reports whether at least one user has a non-empty HRM
+// target value populated from the HRM API. Dates count too: otherwise a
+// successful sync containing only regularization dates is incorrectly
+// reported as success_no_fields.
 // It is used to distinguish "API succeeded but returned no target fields"
 // from "API succeeded and returned target fields".
 func hasAnyHRMTargetField(users map[string]UserInfo) bool {
 	for _, user := range users {
 		if strings.TrimSpace(user.EmploymentType) != "" ||
 			strings.TrimSpace(user.JobLevel) != "" ||
-			strings.TrimSpace(user.JobFamily) != "" {
+			strings.TrimSpace(user.JobFamily) != "" ||
+			strings.TrimSpace(user.PlannedRegularDate) != "" ||
+			strings.TrimSpace(user.ActualRegularDate) != "" ||
+			strings.TrimSpace(user.ProbationEndDate) != "" {
 			return true
 		}
 	}
@@ -1715,6 +1939,9 @@ func fetchDingTalkUserDetail(accessToken, userID string) (map[string]interface{}
 }
 
 func mergeDingTalkUserDetail(user UserInfo, detail map[string]interface{}) UserInfo {
+	if employeeID := resolveDingTalkEmployeeID(detail); employeeID != "" {
+		user.EmployeeID = employeeID
+	}
 	if strings.TrimSpace(user.Position) == "" {
 		if position, source := resolveDingTalkPosition(detail); position != "" {
 			user.Position = position
@@ -1864,7 +2091,7 @@ func fetchHRMRegularDatesForOrg(accessToken string, userIDs []string, cfg Config
 			continue
 		}
 
-		fields, ok := record["field_data_list"].([]interface{})
+		fields, ok := hrmFieldDataList(record)
 		if !ok {
 			continue
 		}
@@ -1883,10 +2110,20 @@ func parseHRMEmployeeFields(fields []interface{}, cfg Config) hrmRegularDates {
 			continue
 		}
 		value := extractHRMFieldValue(fieldMap)
-		switch getString(fieldMap, "field_code") {
+		fieldCode := firstNonEmptyStringValue(getString(fieldMap, "field_code"), getString(fieldMap, "fieldCode"))
+		switch fieldCode {
 		case "sys01-planRegularTime":
 			result.Planned = value
 		case "sys01-regularTime":
+			result.Actual = value
+		}
+		// Some DingTalk tenants return a custom/opaque field code while keeping
+		// the standard Chinese field name. Keep the standard dates parseable in
+		// that response shape as well; the code remains the preferred match.
+		if result.Planned == "" && matchesHRMFieldIdentifiers(fieldMap, "计划转正日期", "planned_regular_date", "planRegularTime") {
+			result.Planned = value
+		}
+		if result.Actual == "" && matchesHRMFieldIdentifiers(fieldMap, "实际转正日期", "actual_regular_date", "regularTime") {
 			result.Actual = value
 		}
 		if result.ProbationEndDate == "" && matchesConfiguredHRMField(fieldMap, cfg, hrmFieldProbationEndDate) {
@@ -1935,7 +2172,7 @@ func requireDingTalkAgentID(cfg Config) (int64, error) {
 }
 
 func extractHRMFieldValue(field map[string]interface{}) string {
-	values, ok := field["field_value_list"].([]interface{})
+	values, ok := hrmFieldDataList(field)
 	if !ok {
 		return ""
 	}
@@ -1954,6 +2191,37 @@ func extractHRMFieldValue(field map[string]interface{}) string {
 		}
 	}
 	return ""
+}
+
+func hrmFieldDataList(field map[string]interface{}) ([]interface{}, bool) {
+	for _, key := range []string{"field_value_list", "fieldValueList"} {
+		if values, ok := field[key].([]interface{}); ok {
+			return values, true
+		}
+	}
+	return nil, false
+}
+
+func matchesHRMFieldIdentifiers(field map[string]interface{}, candidates ...string) bool {
+	identifiers := []string{
+		getString(field, "field_code"),
+		getString(field, "fieldCode"),
+		getString(field, "field_name"),
+		getString(field, "fieldName"),
+		getString(field, "name"),
+		getString(field, "label"),
+	}
+	for _, identifier := range identifiers {
+		if strings.TrimSpace(identifier) == "" {
+			continue
+		}
+		for _, candidate := range candidates {
+			if normalizeFieldName(identifier) == normalizeFieldName(candidate) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func stringValue(v interface{}) string {
@@ -3499,6 +3767,7 @@ func fetchDeptUsers(accessToken string, deptID int64) ([]UserInfo, error) {
 			managerName, _ := resolveDingTalkDirectManagerName(m)
 			user := UserInfo{
 				UserID:                 getString(m, "userid"),
+				EmployeeID:             resolveDingTalkEmployeeID(m),
 				Name:                   getString(m, "name"),
 				Email:                  getString(m, "email"),
 				Mobile:                 getString(m, "mobile"),
@@ -3778,14 +4047,34 @@ func formatUnixTime(ts int64) string {
 
 // ApprovalInstance 瀹℃壒瀹炰緥
 type ApprovalInstance struct {
-	ProcessInstanceID string                   `json:"process_instance_id"`
-	Title             string                   `json:"title"`
-	Status            string                   `json:"status"`
-	Result            string                   `json:"result"`
-	CreateTime        string                   `json:"create_time"`
-	FinishTime        string                   `json:"finish_time"`
-	OriginatorUserID  string                   `json:"originator_userid"`
-	FormValues        []map[string]interface{} `json:"form_component_values"`
+	ProcessInstanceID string                    `json:"process_instance_id"`
+	Title             string                    `json:"title"`
+	Status            string                    `json:"status"`
+	Result            string                    `json:"result"`
+	CreateTime        string                    `json:"create_time"`
+	FinishTime        string                    `json:"finish_time"`
+	OriginatorUserID  string                    `json:"originator_userid"`
+	FormValues        []map[string]interface{}  `json:"form_component_values"`
+	Tasks             []ApprovalTask            `json:"tasks"`
+	OperationRecords  []ApprovalOperationRecord `json:"operation_records"`
+}
+
+// ApprovalTask is one DingTalk approval task attached to a process instance.
+type ApprovalTask struct {
+	UserID     string `json:"userid"`
+	Status     string `json:"task_status"`
+	Result     string `json:"task_result"`
+	CreateTime string `json:"create_time"`
+	FinishTime string `json:"finish_time"`
+}
+
+// ApprovalOperationRecord is one user-visible operation in a DingTalk process.
+type ApprovalOperationRecord struct {
+	UserID        string `json:"userid"`
+	Date          string `json:"date"`
+	OperationType string `json:"operation_type"`
+	Result        string `json:"operation_result"`
+	Remark        string `json:"remark"`
 }
 
 // GetApprovals 鑾峰彇瀹℃壒瀹炰緥鍒楄〃
@@ -4006,17 +4295,21 @@ func getApprovalDetailContext(ctx context.Context, accessToken, instanceID strin
 		return nil, newSyncError(ErrorCodeResponseInvalid, "钉钉审批详情格式异常", errors.New("approval detail response missing process_instance"))
 	}
 
+	return parseApprovalInstance(instanceID, pi), nil
+}
+
+func parseApprovalInstance(instanceID string, pi map[string]interface{}) *ApprovalInstance {
 	instance := &ApprovalInstance{
 		ProcessInstanceID: instanceID,
-		Title:             getString(pi, "title"),
-		Status:            getString(pi, "status"),
-		Result:            getString(pi, "result"),
-		CreateTime:        getString(pi, "create_time"),
-		FinishTime:        getString(pi, "finish_time"),
-		OriginatorUserID:  getString(pi, "originator_userid"),
+		Title:             firstString(pi, "title"),
+		Status:            firstString(pi, "status"),
+		Result:            firstString(pi, "result"),
+		CreateTime:        formatDingTalkDateTime(firstValue(pi, "create_time", "createTime")),
+		FinishTime:        formatDingTalkDateTime(firstValue(pi, "finish_time", "finishTime")),
+		OriginatorUserID:  firstString(pi, "originator_userid", "originatorUserId", "originatorUserid"),
 	}
 
-	if formValues, ok := pi["form_component_values"].([]interface{}); ok {
+	if formValues, ok := firstValue(pi, "form_component_values", "formComponentValues").([]interface{}); ok {
 		for _, fv := range formValues {
 			if m, ok := fv.(map[string]interface{}); ok {
 				instance.FormValues = append(instance.FormValues, m)
@@ -4024,7 +4317,48 @@ func getApprovalDetailContext(ctx context.Context, accessToken, instanceID strin
 		}
 	}
 
-	return instance, nil
+	if tasks, ok := firstValue(pi, "tasks").([]interface{}); ok {
+		for _, rawTask := range tasks {
+			task, ok := rawTask.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			instance.Tasks = append(instance.Tasks, ApprovalTask{
+				UserID:     firstString(task, "userid", "user_id", "userId"),
+				Status:     firstString(task, "task_status", "taskStatus", "status"),
+				Result:     firstString(task, "task_result", "taskResult", "result"),
+				CreateTime: formatDingTalkDateTime(firstValue(task, "create_time", "createTime")),
+				FinishTime: formatDingTalkDateTime(firstValue(task, "finish_time", "finishTime")),
+			})
+		}
+	}
+
+	if records, ok := firstValue(pi, "operation_records", "operationRecords").([]interface{}); ok {
+		for _, rawRecord := range records {
+			record, ok := rawRecord.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			instance.OperationRecords = append(instance.OperationRecords, ApprovalOperationRecord{
+				UserID:        firstString(record, "userid", "user_id", "userId"),
+				Date:          formatDingTalkDateTime(firstValue(record, "date", "operation_time", "operationTime")),
+				OperationType: firstString(record, "operation_type", "operationType", "type"),
+				Result:        firstString(record, "operation_result", "operationResult", "result"),
+				Remark:        firstString(record, "remark", "comment"),
+			})
+		}
+	}
+
+	return instance
+}
+
+func firstValue(m map[string]interface{}, keys ...string) interface{} {
+	for _, key := range keys {
+		if value, ok := m[key]; ok && value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 // ===================== HTTP 宸ュ叿 =====================
@@ -4158,6 +4492,47 @@ func getString(m map[string]interface{}, key string) string {
 	if v, ok := m[key]; ok {
 		if s, ok := v.(string); ok {
 			return s
+		}
+	}
+	return ""
+}
+
+// resolveDingTalkEmployeeID extracts the employee's business number from the
+// user payload. DingTalk has returned this field under several spellings over
+// time, and some tenants put it inside an extension object. Never fall back to
+// userid here: userid is an authentication identity, not an HR employee number.
+func resolveDingTalkEmployeeID(raw map[string]interface{}) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	keys := []string{
+		"job_number", "jobnumber", "jobNumber",
+		"employee_id", "employeeId", "employee_no", "employeeNo",
+		"employee_number", "employeeNumber", "staff_no", "staffNo",
+		"work_no", "workNo", "工号",
+	}
+	for _, key := range keys {
+		if value := scalarStringPreserveZero(raw[key]); value != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	for _, containerKey := range []string{
+		"ext_fields", "extFields", "extension", "extensions",
+		"custom_fields", "customFields", "employee_info", "employeeInfo", "profile",
+	} {
+		switch nested := raw[containerKey].(type) {
+		case map[string]interface{}:
+			if value := resolveDingTalkEmployeeID(nested); value != "" {
+				return value
+			}
+		case []interface{}:
+			for _, item := range nested {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					if value := resolveDingTalkEmployeeID(itemMap); value != "" {
+						return value
+					}
+				}
+			}
 		}
 	}
 	return ""

@@ -193,5 +193,101 @@ class CrossMonthLeaveAllocationTests(unittest.TestCase):
         self.assertEqual(details["MT0040"][date(2026, 8, 1)]["事假"], 0.5)
 
 
+class TargetMonthLeaveOutputTests(unittest.TestCase):
+    header = (
+        "发起人工号", "发起人姓名", "一级部门", "二级部门", "三级部门",
+        "请假类型", "开始时间", "结束时间", "系统时长", "发起时间",
+        "完成时间", "审批编号", "审批状态", "审批结果", "是否实习生",
+        "源文件行号",
+    )
+
+    @staticmethod
+    def row(emp_id, start, end, system_hours, leave_type="事假", source_row=2):
+        return (
+            emp_id, f"员工{emp_id}", "总部", "产品部", "研发组",
+            leave_type, start, end, system_hours, None, None,
+            f"APPROVAL-{emp_id}", "完成", "同意", False, source_row,
+        )
+
+    def run_process(self, rows, year, month, overrides=None):
+        context = schedule_context(year, month, {
+            date(year, month, day)
+            for day in range(1, 29)
+            if date(year, month, day).weekday() < 5
+        })
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "请假明细表.xlsx"
+            calc_leave.process(
+                [self.header, *rows],
+                str(output),
+                context,
+                offsite_duration_overrides=overrides,
+            )
+            workbook = openpyxl.load_workbook(output, data_only=True)
+            try:
+                worksheet = workbook["请假明细"]
+                return [tuple(row) for row in worksheet.iter_rows(min_row=2, values_only=True)]
+            finally:
+                workbook.close()
+
+    def test_september_output_drops_non_overlapping_rows_and_splits_cross_month(self):
+        rows = [
+            self.row("MT-AUG", datetime(2026, 8, 10, 9), datetime(2026, 8, 10, 18, 30), 8, source_row=2),
+            self.row("MT-SEP", datetime(2026, 9, 10, 9), datetime(2026, 9, 10, 18, 30), 8, source_row=3),
+            self.row("MT-CROSS", datetime(2026, 8, 31, 9), datetime(2026, 9, 3, 18, 30), 32, source_row=4),
+            self.row("MT-OCT", datetime(2026, 10, 1, 9), datetime(2026, 10, 1, 18, 30), 8, source_row=5),
+            self.row("MT-OFF-AUG", datetime(2026, 8, 20, 9), datetime(2026, 8, 20, 18, 30), 8, source_row=6),
+            self.row("MT-OFF-CROSS", datetime(2026, 8, 31, 9), datetime(2026, 9, 1, 18, 30), 16, source_row=7),
+            self.row("MT-OFF-NATURAL", datetime(2026, 8, 31), datetime(2026, 9, 2), "3天", "陪产假", 8),
+            self.row("MT-OFF-UPLOAD", datetime(2026, 8, 31, 9), datetime(2026, 9, 1, 18, 30), 16, source_row=9),
+        ]
+        overrides = {
+            "by_approval": {},
+            "by_row": {},
+            "by_employee": {
+                ("id", "MT-OFF-AUG"): {"hours": None},
+                ("id", "MT-OFF-CROSS"): {"hours": None},
+                ("id", "MT-OFF-NATURAL"): {"hours": None},
+                ("id", "MT-OFF-UPLOAD"): {"hours": 12},
+            },
+        }
+
+        output_rows = self.run_process(rows, 2026, 9, overrides)
+        by_id = {row[0]: row for row in output_rows}
+
+        self.assertEqual(
+            {"MT-SEP", "MT-CROSS", "MT-OFF-CROSS", "MT-OFF-NATURAL", "MT-OFF-UPLOAD"},
+            set(by_id),
+        )
+        self.assertEqual(by_id["MT-CROSS"][6], datetime(2026, 8, 31, 9))
+        self.assertEqual(by_id["MT-CROSS"][7], datetime(2026, 9, 3, 18, 30))
+        self.assertEqual(by_id["MT-CROSS"][9:11], (24, 3))
+        self.assertEqual(by_id["MT-OFF-CROSS"][9:11], (8, 1))
+        self.assertEqual(by_id["MT-OFF-CROSS"][11], "异地不打卡-跨月按系统时长分摊")
+        self.assertEqual(by_id["MT-OFF-NATURAL"][9:11], (16, 2))
+        self.assertEqual(by_id["MT-OFF-UPLOAD"][9:11], (4, 0.5))
+        self.assertEqual(by_id["MT-OFF-UPLOAD"][11], "异地不打卡-跨月按上传时长分摊")
+
+    def test_july_to_august_leave_keeps_only_august_share(self):
+        row = self.row(
+            "MT-JUL-AUG",
+            datetime(2026, 7, 31, 9),
+            datetime(2026, 8, 1, 18, 30),
+            16,
+        )
+        overrides = {
+            "by_approval": {},
+            "by_row": {},
+            "by_employee": {("id", "MT-JUL-AUG"): {"hours": None}},
+        }
+
+        output_rows = self.run_process([row], 2026, 8, overrides)
+
+        self.assertEqual(len(output_rows), 1)
+        self.assertEqual(output_rows[0][6], datetime(2026, 7, 31, 9))
+        self.assertEqual(output_rows[0][7], datetime(2026, 8, 1, 18, 30))
+        self.assertEqual(output_rows[0][9:11], (8, 1))
+
+
 if __name__ == "__main__":
     unittest.main()

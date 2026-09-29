@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, lazy, Suspense } from 'react'
-import { Layout, Menu, ConfigProvider, Spin, message, Button, Drawer, Grid, Empty, Result } from 'antd'
+import { Layout, Menu, ConfigProvider, Spin, message, Button, Drawer, Grid, Empty, Result, Select, Tooltip } from 'antd'
 import type { MenuProps } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
@@ -18,20 +18,20 @@ import MobileTableEnhancer from './components/MobileTableEnhancer'
 import {
   authOrgIDFromSearchParamsOrStorage,
   authRedirectTargetFromLocation,
-  loginPathWithRedirectAndOrg,
   loginPathWithRedirect,
-  normalizeAuthOrgID,
   rememberAuthOrgID,
   rememberAuthRedirect,
 } from './utils/authRedirect'
 import { resolveMobileLayout, useMobileRuntime } from './utils/responsive'
 import { useAuthStore } from './store/authStore'
+import { queryClient } from './queryClient'
 
 const Login = lazy(() => import('./pages/Login'))
 const Callback = lazy(() => import('./pages/Callback'))
 const LoginError = lazy(() => import('./pages/LoginError'))
 const Home = lazy(() => import('./pages/Home'))
 const Organization = lazy(() => import('./pages/Organization'))
+const PeopleDataCenter = lazy(() => import('./pages/PeopleDataCenter'))
 const DepartmentTree = lazy(() => import('./pages/DepartmentTree'))
 const EmployeeList = lazy(() => import('./pages/EmployeeList'))
 const EmployeeDetail = lazy(() => import('./pages/EmployeeDetail'))
@@ -273,7 +273,10 @@ function App() {
   const mobileRuntime = useMobileRuntime()
   const location = useLocation()
   const navigate = useNavigate()
-  const { isLoggedIn, user, login, logout, menuKeys, orgId } = useAuthStore()
+  const { isLoggedIn, user, login, logout, menuKeys, orgId, permissions } = useAuthStore()
+  const [switchableOrganizations, setSwitchableOrganizations] = useState<Array<{ org_id: string; name: string; is_current?: boolean }>>([])
+  const [switchingOrganization, setSwitchingOrganization] = useState(false)
+  const canSwitchOrganization = permissions.includes('organization_switch')
   const selectedMenuKey = selectedMenuKeyForPath(location.pathname)
   const isMobile = resolveMobileLayout(screens.md, mobileRuntime)
 
@@ -290,6 +293,26 @@ function App() {
       if (orgID) rememberAuthOrgID(orgID)
       logout()
       navigate(orgID ? `/login?mode=scan&org_id=${encodeURIComponent(orgID)}` : '/login?mode=scan', { replace: true })
+    }
+  }
+
+  const handleSwitchOrganization = async (targetOrgID: string) => {
+    if (!targetOrgID || targetOrgID === orgId || switchingOrganization) return
+    setSwitchingOrganization(true)
+    try {
+      const response: any = await authAPI.switchOrganization(targetOrgID)
+      const nextUser = response?.data?.user
+      if (!nextUser) throw new Error('切换组织响应缺少用户信息')
+      // 所有页面查询都隐含当前 JWT org_id；先清掉旧组织缓存，避免切换瞬间展示上一组织的数据。
+      queryClient.clear()
+      login(nextUser)
+      rememberAuthOrgID(nextUser.org_id || targetOrgID)
+      setSwitchableOrganizations((current) => current.map((org) => ({ ...org, is_current: org.org_id === nextUser.org_id })))
+      message.success(`已切换到${switchableOrganizations.find((org) => org.org_id === targetOrgID)?.name || targetOrgID}`, 0.8)
+    } catch (error) {
+      message.error(getAxiosErrorMessage(error, '切换组织失败，请确认你已被配置到该组织且钉钉账号已加入'))
+    } finally {
+      setSwitchingOrganization(false)
     }
   }
   const filteredMenuItems = filterMenuByKeys(menuConfig, menuKeys, orgId)
@@ -339,41 +362,35 @@ function App() {
     if (!isMobile) setMobileMenuOpen(false)
   }, [isMobile])
 
+  // 登录页会把 org_id 带到首页作为初始组织提示；登录完成后立即移除，
+  // 防止旧的 URL 参数再次触发“退出后重登”的跨组织路径。
   useEffect(() => {
     if (!isLoggedIn) return
+    const params = new URLSearchParams(location.search)
+    if (!params.has('org_id') && !params.has('org')) return
+    params.delete('org_id')
+    params.delete('org')
+    const search = params.toString()
+    navigate(`${location.pathname}${search ? `?${search}` : ''}${location.hash || ''}`, { replace: true })
+  }, [isLoggedIn, location.hash, location.pathname, location.search, navigate])
 
-    const requestedOrgID = authOrgIDFromSearchParamsOrStorage(new URLSearchParams(location.search))
-    if (!requestedOrgID) return
-
-    const currentOrgID = normalizeAuthOrgID(user?.org_id)
-    if (currentOrgID === requestedOrgID) {
-      rememberAuthOrgID(requestedOrgID)
+  useEffect(() => {
+    if (!isLoggedIn || !canSwitchOrganization) {
+      setSwitchableOrganizations([])
       return
     }
-
     let cancelled = false
-    const redirectTarget = authRedirectTargetFromLocation(location)
-
-    setAutoLogging(false)
-    setSessionChecking(true)
-    rememberAuthOrgID(requestedOrgID)
-    rememberAuthRedirect(redirectTarget)
-
-    authAPI.logout()
-      .catch((err) => {
-        console.warn('[auth-org-switch] logout current org session failed', err)
+    authAPI.getSwitchableOrganizations()
+      .then((response: any) => {
+        if (!cancelled) setSwitchableOrganizations(Array.isArray(response?.data?.organizations) ? response.data.organizations : [])
       })
-      .finally(() => {
-        if (cancelled) return
-        logout()
-        setSessionChecking(false)
-        navigate(loginPathWithRedirectAndOrg(redirectTarget, requestedOrgID), { replace: true })
+      .catch(() => {
+        if (!cancelled) setSwitchableOrganizations([])
       })
-
     return () => {
       cancelled = true
     }
-  }, [isLoggedIn, location, logout, navigate, user?.org_id])
+  }, [canSwitchOrganization, isLoggedIn, orgId])
 
   // 刷新菜单权限（启动时 + 页面获焦时）
   useEffect(() => {
@@ -564,6 +581,21 @@ function App() {
             />
             <span className="app-header-title">{isMobile ? currentTitle : ''}</span>
             <span className="app-header-spacer" />
+            <Tooltip title={canSwitchOrganization ? undefined : '你缺少 organization_switch 权限，需要联系管理员添加'}>
+              <Select
+                aria-label="当前组织"
+                className="app-org-switcher"
+                size="small"
+                value={orgId}
+                loading={switchingOrganization}
+                disabled={!canSwitchOrganization || switchingOrganization}
+                onChange={handleSwitchOrganization}
+                options={(switchableOrganizations.length > 0 ? switchableOrganizations : [{ org_id: orgId, name: orgId }]).map((org) => ({
+                  value: org.org_id,
+                  label: org.name || org.org_id,
+                }))}
+              />
+            </Tooltip>
             <span className="app-header-user app-user-chip">{user?.name || '管理员'}</span>
             <Button
               type="text"
@@ -585,6 +617,7 @@ function App() {
                 <Route path="/employees/:id" element={<RouteGuard menuKey="menu:employees"><EmployeeDetail /></RouteGuard>} />
                 <Route path="/sync-log" element={<RouteGuard menuKey="menu:sync-log"><SyncLog /></RouteGuard>} />
                 <Route path="/organization" element={<RouteGuard menuKey="menu:organization-dashboard"><Organization /></RouteGuard>} />
+                <Route path="/people-data-center" element={<RouteGuard menuKey="menu:people-data-center"><PeopleDataCenter /></RouteGuard>} />
                 <Route path="/attendance" element={<RouteGuard menuKey="menu:attendance"><Attendance /></RouteGuard>} />
                 <Route path="/attendance-export" element={<RouteGuard menuKey="menu:attendance-export"><AttendanceExport /></RouteGuard>} />
                 <Route path="/attendance-processing" element={<RouteGuard menuKey="menu:attendance-processing"><AttendanceProcessing /></RouteGuard>} />

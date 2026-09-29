@@ -2,7 +2,7 @@
   "normalization": "LF",
   "files": {
     "overtime/rules_engine.py": "b36605e75bf25c53c64f90098c5b762b2fa4d24b5d660ee0e4ed459f9a019623",
-    "leave/calc_leave.py": "2e57491e72621e664a499c9cd2e4e4b976a31a299ec684d57a18e704b27bbb23",
+    "leave/calc_leave.py": "ac52fddcce6d4ddbbef551c0c0e16628d01b03956a7a8b8fdfc4c3b6eccfcc9f",
     "subsidy/calc_subsidy_deduction.py": "f0018ba515bc0bc85bb16cfe8832eec9122f9151b1c4fcdd44fd754f4e723b09",
     "parttime/calc_parttime_summary.py": "c4aa0d10e7e8fcb114b5c5b431c5677decf63532c31c4d55a907b85334432940",
     "dingtalk_sync.py": "283347770cb51f4b6b7c4048f9fca293f49b2377d7200e484d57beccda515ef3"

@@ -263,6 +263,39 @@ class GenerateRosterCLITest(unittest.TestCase):
 
 
 class FinalRosterContractEndToEndTest(unittest.TestCase):
+    def test_attendance_roster_union_keeps_people_and_business_employee_number(self):
+        primary = [{
+            "emp_no": "MUTENG:17853815596954272",
+            "name": "张三",
+            "contract_entity": "本地公司",
+            "emp_type": "全职",
+        }]
+        supplemental = [
+            {
+                "emp_no": "MT0001",
+                "name": "张三",
+                "contract_entity": "本地公司",
+                "emp_type": "全职",
+            },
+            {
+                "emp_no": "MT0002",
+                "name": "李四",
+                "emp_type": "实习",
+            },
+        ]
+
+        merged, stats = runner.fin.merge_employee_sources(primary, supplemental)
+
+        self.assertEqual(stats, {"source_count": 2, "matched_count": 1, "added_count": 1})
+        self.assertEqual([employee["emp_no"] for employee in merged], ["MT0001", "MT0002"])
+        self.assertFalse(runner.fin._is_final_table_excluded_employee(merged[1]))
+
+        identity_applied = runner.fin.apply_attendance_identity(
+            merged,
+            [{"emp_no": "17853815596954272", "name": "张三", "position": "工程师"}],
+        )
+        self.assertEqual(identity_applied[0]["emp_no"], "MT0001")
+
     def test_name_roster_and_dingtalk_monthly_summary_generate_final_workbook(self):
         with tempfile.TemporaryDirectory() as workdir:
             root = Path(workdir)
@@ -283,6 +316,14 @@ class FinalRosterContractEndToEndTest(unittest.TestCase):
             roster.save(roster_path)
             roster.close()
 
+            attendance_roster_path = root / "attendance_roster.xlsx"
+            attendance_roster = Workbook()
+            attendance_roster.active.title = "人工考勤汇总"
+            attendance_roster.active.append(["工号", "姓名", "员工类型"])
+            attendance_roster.active.append(["MT0002", "李四", "全职"])
+            attendance_roster.save(attendance_roster_path)
+            attendance_roster.close()
+
             inputs = {
                 "final_schedule": toolbox_templates.build_schedule_template(),
                 "final_leave": toolbox_templates.build_final_leave_detail_template(),
@@ -294,6 +335,12 @@ class FinalRosterContractEndToEndTest(unittest.TestCase):
                 path = root / f"{field}.xlsx"
                 path.write_bytes(content)
                 config[field] = str(path)
+
+            # 人工考勤汇总表是结果异常时的可选兜底，正常流程不上传也应能生成。
+            outputs_without_manual_roster = runner.run_final(config, output_dir)
+            self.assertEqual(len(outputs_without_manual_roster), 1)
+
+            config["final_attendance_roster"] = str(attendance_roster_path)
 
             outputs = runner.run_final(config, output_dir)
             self.assertEqual(len(outputs), 1)
@@ -322,6 +369,12 @@ class FinalRosterContractEndToEndTest(unittest.TestCase):
             self.assertEqual(values["入职日期"].date(), date(2025, 1, 1))
             self.assertEqual(values["离职日期"].date(), date(2026, 6, 30))
             self.assertEqual(values["转正日期"].date(), date(2025, 4, 1))
+
+            output_names = {
+                sheet.cell(row, headers.index("姓名") + 1).value
+                for row in range(3, sheet.max_row + 1)
+            }
+            self.assertIn("李四", output_names)
 
 
 if __name__ == "__main__":

@@ -2356,6 +2356,397 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-08-01T17:51:08.373Z"
+    },
+    {
+      "id": "bug-146",
+      "timestamp": "2026-08-02T15:21:46.944Z",
+      "error_message": "Type error",
+      "file": "frontend/src/pages/AttendanceToolbox.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-02T15:21:46.945Z"
+    },
+    {
+      "id": "bug-147",
+      "timestamp": "2026-08-02T12:00:00.000Z",
+      "error_message": "当月转正天数少算一天：calc_probation_days 工作日分支使用 confirm_date < day 排除了转正当天",
+      "file": "tools/attendance_toolbox/python/finally/calc_finally.py",
+      "root_cause": "日期区间左边界使用严格大于(confirm_date < day)，排除了转正当天；法定节假日分支已正确使用 confirm_date <= day",
+      "fix": "工作日分支 confirm_date < day 改为 confirm_date <= day，统一闭区间 [confirm_date, month_end]；两个处理入口(attendance_toolbox 与 attendance-processing)均已同步修复",
+      "tags": [
+        "date-boundary",
+        "probation",
+        "python",
+        "attendance-toolbox",
+        "off-by-one"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-02T12:00:00.000Z"
+    },
+    {
+      "id": "bug-148",
+      "timestamp": "2026-08-03T01:39:13.758Z",
+      "error_message": "Significant refactor of ",
+      "file": "tools/attendance_toolbox/python/overtime/fill_overtime_fields.py",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 97→135 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "py"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T01:39:13.758Z"
+    },
+    {
+      "id": "bug-149",
+      "timestamp": "2026-08-03T01:39:35.498Z",
+      "error_message": "Significant refactor of ",
+      "file": "tools/attendance_toolbox/python/runner.py",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 5→6 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "py"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T01:39:35.498Z"
+    },
+    {
+      "id": "bug-150",
+      "timestamp": "2026-08-03T01:40:49.818Z",
+      "error_message": "Incorrect value in code",
+      "file": "tools/attendance_toolbox/python/overtime/fill_overtime_fields.py",
+      "root_cause": "Had \"部门\"",
+      "fix": "Changed to \"部门名称\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "py"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T01:40:49.818Z"
+    },
+    {
+      "id": "bug-151",
+      "timestamp": "2026-08-03T01:55:17.070Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/AttendanceToolbox.test.tsx",
+      "root_cause": "12 lines replaced/restructured",
+      "fix": "Rewrote 31→20 lines (12 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T01:55:17.070Z"
+    },
+    {
+      "id": "bug-roster-file-selection-ops-group-unadded-20260801",
+      "timestamp": "2026-08-01T00:00:00.000Z",
+      "error_message": "花名册选错文件（岗位异动流程表被误识别为花名册）+ 运维组未强制标记未加",
+      "file": "tools/attendance_toolbox/python/overtime/fill_overtime_fields.py, frontend/src/pages/AttendanceToolbox.tsx, internal/service/attendance_toolbox_service.go",
+      "root_cause": "1. parse_employee_department_map 花名册字段别名包含\"发起人工号/发起人姓名/发起人部门\"，导致岗位异动流程表被误识别为花名册。2. fill_overtime_fields.py 缺少 OPS_GROUP_DEPT_NAMES 允许名单，无法识别\"智慧寄存运维组\"。3. getDingtalkSyncExportFile 在 flow_key 不匹配时回退到第一个 export。",
+      "fix": "1. 从花名册解析移除\"发起人\"前缀别名，新增\"员工编号/部门名称\"别名。2. 新增 OPS_GROUP_DEPT_NAMES={\"运维组\",\"智慧寄存运维组\"} 和 _is_ops_group_by_depts/_apply_ops_group_unadded_override，在 fill_row 中优先检查。3. 修复 getDingtalkSyncExportFile 不再回退。4. 新增 Go GenerateOrgRosterExcel + Python action_generate_roster + 前端 generateOrgRoster API。",
+      "tags": [
+        "attendance-toolbox",
+        "roster",
+        "overtime",
+        "dingtalk-sync",
+        "OPS_GROUP",
+        "file-selection"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-01T00:00:00.000Z"
+    },
+    {
+      "id": "bug-153",
+      "timestamp": "2026-08-03T02:15:03.222Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/AttendanceToolbox.test.tsx",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 47→79 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T02:15:03.222Z"
+    },
+    {
+      "id": "bug-154",
+      "timestamp": "2026-08-03T02:15:55.909Z",
+      "error_message": "Incorrect value in code",
+      "file": "frontend/src/pages/AttendanceToolbox.tsx",
+      "root_cause": "Had '上传钉钉考勤月度汇总表（补贴及扣款），配合作息、签到和考勤数据，生成核对表；存在差异时会返回压缩包",
+      "fix": "Changed to '数据来源：钉钉考勤打卡 → 考勤统计 → 报表管理 → 月度汇总表（补贴及扣款）。请在钉钉后台导出",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-08-03T02:16:56.928Z"
+    },
+    {
+      "id": "bug-155",
+      "timestamp": "2026-08-03T02:24:30.902Z",
+      "error_message": "Incorrect value in code",
+      "file": "internal/service/attendance_toolbox_service.go",
+      "root_cause": "Had \"log\"",
+      "fix": "Changed to \"mime/multipart\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T02:24:30.902Z"
+    },
+    {
+      "id": "bug-156",
+      "timestamp": "2026-08-03T02:25:27.602Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/AttendanceToolbox.tsx",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 7→15 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T02:25:27.602Z"
+    },
+    {
+      "id": "bug-157",
+      "timestamp": "2026-08-03T02:28:58.646Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/AttendanceToolbox.test.tsx",
+      "root_cause": "13 lines replaced/restructured",
+      "fix": "Rewrote 34→20 lines (13 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T02:28:58.646Z"
+    },
+    {
+      "id": "bug-158",
+      "timestamp": "2026-08-03T02:39:38.357Z",
+      "error_message": "Significant refactor of ",
+      "file": "tools/attendance_toolbox/python/subsidy/calc_subsidy_deduction.py",
+      "root_cause": "7 lines replaced/restructured",
+      "fix": "Rewrote 11→21 lines (7 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "py"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T02:39:38.357Z"
+    },
+    {
+      "id": "bug-159",
+      "timestamp": "2026-08-03T02:39:54.974Z",
+      "error_message": "Significant refactor of ",
+      "file": "tools/attendance_toolbox/python/finally/calc_finally.py",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 3→4 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "py"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T02:39:54.974Z"
+    },
+    {
+      "id": "bug-160",
+      "timestamp": "2026-08-03T02:41:48.956Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/attendance_toolbox_service.go",
+      "root_cause": "33 lines replaced/restructured",
+      "fix": "Rewrote 51→10 lines (33 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T02:41:48.956Z"
+    },
+    {
+      "id": "bug-161",
+      "timestamp": "2026-08-03T02:43:57.579Z",
+      "error_message": "Significant refactor of ",
+      "file": "frontend/src/pages/AttendanceToolbox.test.tsx",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 51→73 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T02:43:57.579Z"
+    },
+    {
+      "id": "bug-162",
+      "timestamp": "2026-08-03T03:03:35.330Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/attendance_toolbox_service_test.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 3→4 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-03T03:03:35.330Z"
+    },
+    {
+      "id": "bug-163",
+      "timestamp": "2026-08-04T01:46:14.178Z",
+      "error_message": "Incorrect value in code",
+      "file": "tools/attendance_toolbox/python/subsidy/calc_subsidy_deduction.py",
+      "root_cause": "Had \"(20\\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\\",
+      "fix": "Changed to \"(20\\d{2})[-/.](1[0-2]|0?[1-9])[-/.](3[01]|[12]\\d|",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "py"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-04T01:46:14.178Z"
+    },
+    {
+      "id": "bug-164",
+      "timestamp": "2026-08-06T02:12:19.072Z",
+      "error_message": "Missing import: ../services/api",
+      "file": "frontend/src/pages/ApprovalInstance.tsx",
+      "root_cause": "Module(s) not imported: ../services/api",
+      "fix": "Added import(s) for ../services/api",
+      "tags": [
+        "auto-detected",
+        "missing-import",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-06T02:12:19.072Z"
+    },
+    {
+      "id": "bug-165",
+      "timestamp": "2026-08-06T02:13:01.069Z",
+      "error_message": "CSS fix: mutationFn",
+      "file": "frontend/src/pages/ApprovalStats.tsx",
+      "root_cause": "mutationFn: (resume = false) => resume → (resume) => resume",
+      "fix": "Changed mutationFn: (resume = false) => resume → (resume) => resume",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-06T02:13:01.069Z"
+    },
+    {
+      "id": "bug-approval-date-filter-utc-instead-of-utc8-20260806",
+      "timestamp": "2026-08-06T10:00:00.000Z",
+      "error_message": "审批列表 FindAll 和 FindAllByTitleKeywords 的 start_date/end_date 过滤使用 time.Parse (UTC) 而非 time.ParseInLocation(UTC+8)，在 TZ=UTC 环境下日期边界偏移一天",
+      "file": "internal/repository/approval_repository.go",
+      "root_cause": "FindAll 和 FindAllByTitleKeywords 中的日期解析使用 time.Parse(\"2006-01-02\", v) 默认 UTC 时区，而审批记录的 create_time 存储为 UTC+8。当 start_date=\"2026-08-05\" 时，UTC 解析为 2026-08-05 00:00 UTC = 2026-08-05 08:00 UTC+8，导致当天 00:00-08:00 UTC+8 的记录被遗漏",
+      "fix": "改为 time.ParseInLocation(\"2006-01-02\", strings.TrimSpace(v), dingtalk.ApprovalBusinessLocation())，与 FindAllForStats 保持一致",
+      "tags": [
+        "timezone",
+        "approval",
+        "repository",
+        "date-filter",
+        "UTC+8"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-06T10:00:00.000Z"
+    },
+    {
+      "id": "bug-167",
+      "timestamp": "2026-08-10T03:27:38.705Z",
+      "error_message": "Significant refactor of ",
+      "file": "internal/service/overtime_matching_service.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 40→82 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-10T03:27:38.705Z"
+    },
+    {
+      "id": "bug-168",
+      "timestamp": "2026-08-10T03:31:59.874Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "internal/service/leave_jobs.go",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-10T03:31:59.874Z"
+    },
+    {
+      "id": "bug-169",
+      "timestamp": "2026-08-10T03:32:14.410Z",
+      "error_message": "Wrong operator: || should be ==",
+      "file": "internal/service/leave_jobs.go",
+      "root_cause": "Used \"||\" instead of \"==\"",
+      "fix": "Changed operator || → ==",
+      "tags": [
+        "auto-detected",
+        "operator-fix",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-08-10T03:32:14.410Z"
     }
   ]
 }

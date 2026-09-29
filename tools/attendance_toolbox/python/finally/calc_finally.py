@@ -20,6 +20,7 @@ calc_finally.py
 from __future__ import annotations
 
 import calendar
+import json
 import os
 import re
 import sys
@@ -476,6 +477,8 @@ def _derive_category(emp: dict, month_start: date, month_end: date) -> str | Non
 
 def _is_final_table_excluded_employee(emp: dict) -> bool:
     """兼职、实习和劳务外包人员不进入最终考勤汇总表。"""
+    if emp.get("source_attendance_roster") or emp.get("source_target_month_activity"):
+        return False
     source_text = " ".join(
         str(emp.get(key) or "")
         for key in ("emp_type", "category", "position", "type_hint")
@@ -1155,6 +1158,279 @@ def parse_roster(
     return employees
 
 
+def parse_auto_resign_json(path: str, schedule_ctx: dict) -> list[dict]:
+    """Parse the server-side DingTalk HRM departure snapshot.
+
+    DingTalk returns historical departures, while a monthly attendance table
+    only needs the previous, current and following calendar month.  Filtering
+    here keeps the final workbook deterministic and prevents old departures
+    from being added merely because the HRM API returned them.
+    """
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    records = payload.get("employees") if isinstance(payload, dict) else payload
+    if not isinstance(records, list):
+        return []
+    year = int(schedule_ctx["year"])
+    month = int(schedule_ctx["month"])
+    anchor = date(year, month, 1)
+    previous = (anchor.replace(day=1) - timedelta(days=1)).replace(day=1)
+    following = (anchor.replace(day=28) + timedelta(days=4)).replace(day=1)
+    allowed = {(previous.year, previous.month), (year, month), (following.year, following.month)}
+    result: list[dict] = []
+    seen: set[str] = set()
+    for raw in records:
+        if not isinstance(raw, dict):
+            continue
+        resign_date = _to_date(raw.get("resign_date") or raw.get("last_work_day"))
+        if not resign_date or (resign_date.year, resign_date.month) not in allowed:
+            continue
+        emp_no = _normalize_emp_no(raw.get("emp_no") or raw.get("employee_id"))
+        name = _clean_name(raw.get("name"))
+        if not emp_no and not name:
+            continue
+        key = emp_no or _normalize_name_key(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append({
+            "emp_no": emp_no,
+            "name": name,
+            "contract_entity": _first_text(raw.get("contract_entity")),
+            "dept1": _first_text(raw.get("dept1")),
+            "dept2": _first_text(raw.get("dept2")),
+            "dept3": _first_text(raw.get("dept3")),
+            "position": _first_text(raw.get("position")),
+            "emp_type": _first_text(raw.get("emp_type")),
+            "category": _first_text(raw.get("category")) or "离职",
+            "hire_date": _to_date(raw.get("hire_date")),
+            "resign_date": resign_date,
+            "confirm_date": _to_date(raw.get("confirm_date")),
+        })
+    return result
+
+
+def _is_business_employee_number(value: object) -> bool:
+    """判断是否为人事使用的员工编号，而不是钉钉 UserID。"""
+    normalized = _normalize_emp_no(value)
+    return bool(normalized and re.fullmatch(r"[A-Za-z]{1,8}\d{1,12}", normalized))
+
+
+def _business_employee_number_rank(value: object) -> int:
+    """同名/同人出现多个正式工号时，优先使用当前人事主编号。"""
+    normalized = _normalize_emp_no(value)
+    if not _is_business_employee_number(normalized):
+        return -1
+    if normalized.startswith("MT"):
+        return 30
+    if normalized.startswith("TXB"):
+        return 20
+    if normalized.startswith("WB"):
+        return 10
+    return 0
+
+
+def _should_prefer_business_employee_number(current: object, incoming: object) -> bool:
+    current_value = _normalize_emp_no(current)
+    incoming_value = _normalize_emp_no(incoming)
+    return (
+        _is_business_employee_number(incoming_value)
+        and _business_employee_number_rank(incoming_value)
+        > _business_employee_number_rank(current_value)
+    )
+
+
+def employees_from_activity_keys(keys) -> tuple[list[dict], int]:
+    """Turn leave/overtime lookup keys into minimal employee identities.
+
+    Business employee numbers are retained as employee numbers. Other text is
+    treated as a name. Pure numeric DingTalk identities cannot safely become a
+    person without a name, so they are reported as unresolved instead of being
+    written into the employee-number column.
+    """
+    employees: list[dict] = []
+    unresolved = 0
+    seen: set[tuple[str, str]] = set()
+    for raw_key in keys or ():
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        emp_no = _normalize_emp_no(key) if _is_business_employee_number(key) else ""
+        name = "" if emp_no else _clean_name(key)
+        if not emp_no and (not name or re.fullmatch(r"\d+", name)):
+            unresolved += 1
+            continue
+        identity = (emp_no, _normalize_name_key(name))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        employees.append({"emp_no": emp_no, "name": name})
+    return employees, unresolved
+
+
+def employees_from_activity_records(records) -> tuple[list[dict], int]:
+    """保留请假/加班原始记录中的姓名，避免只用工号新增无名员工。"""
+    employees: list[dict] = []
+    unresolved = 0
+    by_emp_no: dict[str, dict] = {}
+    by_name: dict[str, dict] = {}
+    for raw in records or ():
+        if not isinstance(raw, dict):
+            continue
+        raw_emp_no = _normalize_emp_no(raw.get("emp_no"))
+        emp_no = raw_emp_no if _is_business_employee_number(raw_emp_no) else ""
+        name = _clean_name(raw.get("name"))
+        if not emp_no and not name:
+            unresolved += 1
+            continue
+        if emp_no:
+            target = by_emp_no.get(emp_no)
+            if target is None:
+                target = {"emp_no": emp_no, "name": name}
+                by_emp_no[emp_no] = target
+                employees.append(target)
+            elif not _clean_name(target.get("name")) and name:
+                target["name"] = name
+            continue
+        name_key = _normalize_name_key(name)
+        if name_key in by_name:
+            continue
+        target = {"emp_no": "", "name": name}
+        by_name[name_key] = target
+        employees.append(target)
+    return employees, unresolved
+
+
+def deduplicate_employee_sources(employees: list[dict]) -> tuple[list[dict], dict[str, int]]:
+    """按正式工号合并重复来源，保留资料最完整的一条员工记录。"""
+    result: list[dict] = []
+    by_emp_no: dict[str, dict] = {}
+    duplicate_count = 0
+    conflict_count = 0
+
+    def score(employee: dict) -> tuple[int, int, int]:
+        nonempty = sum(1 for value in employee.values() if _is_nonempty(value))
+        return (
+            1 if _clean_name(employee.get("name")) else 0,
+            1 if employee.get("source_attendance_roster") else 0,
+            nonempty,
+        )
+
+    for source in employees:
+        employee = dict(source)
+        emp_no = _normalize_emp_no(employee.get("emp_no"))
+        if not emp_no:
+            result.append(employee)
+            continue
+        target = by_emp_no.get(emp_no)
+        if target is None:
+            by_emp_no[emp_no] = employee
+            result.append(employee)
+            continue
+
+        duplicate_count += 1
+        if (
+            _normalize_name_key(target.get("name"))
+            and _normalize_name_key(employee.get("name"))
+            and _normalize_name_key(target.get("name"))
+            != _normalize_name_key(employee.get("name"))
+        ):
+            conflict_count += 1
+        if score(employee) > score(target):
+            target, employee = employee, target
+            result[result.index(by_emp_no[emp_no])] = target
+            by_emp_no[emp_no] = target
+        for field, value in employee.items():
+            if not _is_nonempty(target.get(field)) and _is_nonempty(value):
+                target[field] = value
+
+    return result, {
+        "duplicate_count": duplicate_count,
+        "conflict_count": conflict_count,
+    }
+
+
+def merge_employee_sources(
+    primary_employees: list[dict],
+    supplemental_employees: list[dict],
+    *,
+    mark_source: bool = True,
+    source_flag: str | None = None,
+) -> tuple[list[dict], dict[str, int]]:
+    """以花名册为主，合并人工考勤表人员，禁止人员静默丢失。
+
+    工号优先匹配；人工表中的业务工号可修正钉钉 UserID 形式的工号，
+    但不会用钉钉 UserID 覆盖已有的 MT/TXB/WB 等人事工号。
+    """
+    employees = [dict(employee) for employee in primary_employees]
+    by_emp_no: dict[str, dict] = {}
+    by_name: dict[str, list[dict]] = defaultdict(list)
+    for employee in employees:
+        emp_no = _normalize_emp_no(employee.get("emp_no"))
+        if emp_no:
+            by_emp_no[emp_no] = employee
+        name_key = _normalize_name_key(employee.get("name"))
+        if name_key:
+            by_name[name_key].append(employee)
+
+    matched_count = 0
+    added_count = 0
+    for source in supplemental_employees:
+        incoming = dict(source)
+        if mark_source:
+            incoming["source_attendance_roster"] = True
+        if source_flag:
+            incoming[source_flag] = True
+        incoming_emp_no = _normalize_emp_no(incoming.get("emp_no"))
+        # Numeric DingTalk UserIDs are identities, not business employee
+        # numbers. Keep the person, but never use such a value as the final
+        # table's formal employee number.
+        if incoming_emp_no and not _is_business_employee_number(incoming_emp_no):
+            incoming_emp_no = ""
+            incoming["emp_no"] = ""
+        incoming_name_key = _normalize_name_key(incoming.get("name"))
+        target = by_emp_no.get(incoming_emp_no) if incoming_emp_no else None
+        if target is None and incoming_name_key:
+            candidates = by_name.get(incoming_name_key, [])
+            if len(candidates) == 1:
+                target = candidates[0]
+
+        if target is None:
+            employees.append(incoming)
+            if incoming_emp_no:
+                by_emp_no[incoming_emp_no] = incoming
+            if incoming_name_key:
+                by_name[incoming_name_key].append(incoming)
+            added_count += 1
+            continue
+
+        matched_count += 1
+        if mark_source:
+            target["source_attendance_roster"] = True
+        if source_flag:
+            target[source_flag] = True
+        current_emp_no = _normalize_emp_no(target.get("emp_no"))
+        if _should_prefer_business_employee_number(current_emp_no, incoming_emp_no):
+            if current_emp_no:
+                by_emp_no.pop(current_emp_no, None)
+            target["emp_no"] = incoming_emp_no
+            by_emp_no[incoming_emp_no] = target
+
+        # 花名册仍是人事主数据；仅对缺失字段补值，避免人工表覆盖合同主体和日期。
+        for field in (
+            "name", "contract_entity", "dept1", "dept2", "dept3", "position",
+            "emp_type", "category", "hire_date", "resign_date", "confirm_date",
+        ):
+            if not _is_nonempty(target.get(field)) and _is_nonempty(incoming.get(field)):
+                target[field] = incoming[field]
+
+    return employees, {
+        "source_count": len(supplemental_employees),
+        "matched_count": matched_count,
+        "added_count": added_count,
+    }
+
+
 def parse_attendance_identity(path: str) -> list[dict]:
     """从钉钉月度考勤/补贴核对业务表提取员工身份与组织字段。"""
     wb = load_workbook_compat(path, data_only=True)
@@ -1251,6 +1527,8 @@ def apply_attendance_identity(employees: list[dict], attendance_records: list[di
     enriched_employees: list[dict] = []
     for employee in employees:
         roster_emp_no = _normalize_emp_no(employee.get("emp_no"))
+        if roster_emp_no and not _is_business_employee_number(roster_emp_no):
+            roster_emp_no = ""
         roster_name = _clean_name(employee.get("name"))
         matched = by_emp_no.get(roster_emp_no) if roster_emp_no else None
         if matched is not None:
@@ -1288,7 +1566,9 @@ def apply_attendance_identity(employees: list[dict], attendance_records: list[di
             record = candidates[0]
             attendance_emp_no = _normalize_emp_no(record.get("emp_no"))
             attendance_name = _clean_name(record.get("name"))
-            if attendance_emp_no:
+            if _should_prefer_business_employee_number(
+                enriched.get("emp_no"), attendance_emp_no
+            ):
                 enriched["emp_no"] = attendance_emp_no
             if attendance_name:
                 enriched["name"] = attendance_name
@@ -1504,6 +1784,7 @@ def parse_schedule(path: str) -> dict:
 def parse_leave_summary(
     path: str,
     schedule_ctx: dict | None = None,
+    identity_records: list[dict] | None = None,
 ) -> dict[str, dict[str, float]]:
     """
     解析请假明细表（支持多 Sheet），
@@ -1541,6 +1822,8 @@ def parse_leave_summary(
                 matched = lt
                 break
         if matched:
+            if identity_records is not None:
+                identity_records.append({"emp_no": emp_no, "name": name})
             result[key][matched] += days
 
     print(f"[请假明细] 共解析 {len(result)} 名员工的请假数据")
@@ -1652,6 +1935,7 @@ def parse_overtime_summary(
     target_month: int | None = None,
     employees: list[dict] | None = None,
     schedule_ctx: dict | None = None,
+    identity_records: list[dict] | None = None,
 ) -> dict[str, dict[str, float]]:
     """
     解析加班明细表，
@@ -1743,6 +2027,8 @@ def parse_overtime_summary(
             row_has_premium = any(
                 value for value in (val_2x_hours, val_2x_days, val_3x_hours, val_3x_days)
             )
+            if identity_records is not None and row_has_premium:
+                identity_records.append({"emp_no": emp_no, "name": name})
             if can_fallback_2x and not row_has_premium:
                 if overtime_date is None:
                     overtime_date = _resolve_overtime_row_date(
@@ -1760,6 +2046,8 @@ def parse_overtime_summary(
                 ):
                     fallback_hours = _to_float(ws.cell(r, col_final_hours + 1).value)
                     if fallback_hours and fallback_hours > 0:
+                        if identity_records is not None:
+                            identity_records.append({"emp_no": emp_no, "name": name})
                         if _is_rest_premium_excluded(emp_no, name):
                             excluded_2x_rows += 1
                         else:
@@ -2210,7 +2498,9 @@ def generate(
 
     window_employees = [
         emp for emp in employees
-        if _in_resign_keep_window(
+        if emp.get("source_attendance_roster")
+        or emp.get("source_target_month_activity")
+        or _in_resign_keep_window(
             emp.get("resign_date"), year, month, emp.get("hire_date"),
         )
     ]
@@ -2223,6 +2513,32 @@ def generate(
         emp for emp in window_employees
         if not _is_final_table_excluded_employee(emp)
     ]
+    supplemental_employees = [
+        emp for emp in employees if emp.get("source_attendance_roster")
+    ]
+    output_keys = {
+        (_normalize_emp_no(emp.get("emp_no")), _normalize_name_key(emp.get("name")))
+        for emp in output_employees
+    }
+    missing_supplemental = [
+        emp for emp in supplemental_employees
+        if (
+            _normalize_emp_no(emp.get("emp_no")),
+            _normalize_name_key(emp.get("name")),
+        ) not in output_keys
+    ]
+    if missing_supplemental:
+        missing_names = "、".join(
+            _clean_name(emp.get("name")) or _normalize_emp_no(emp.get("emp_no")) or "未命名"
+            for emp in missing_supplemental[:20]
+        )
+        raise ValueError(
+            "人工考勤汇总表人员未全部进入最终表，已停止生成；"
+            f"缺失 {len(missing_supplemental)} 人：{missing_names}"
+        )
+    print(
+        f"[最终表] 人工考勤人员兜底校验通过：{len(supplemental_employees)} 人全部保留"
+    )
 
     # ── 逐员工写数据 ─────────────────────────────────────────────────
     for idx, emp in enumerate(output_employees, 1):

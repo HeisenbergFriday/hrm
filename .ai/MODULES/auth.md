@@ -136,6 +136,11 @@ Response：
 }
 ```
 
+### 登录态组织切换
+
+- `GET /api/v1/auth/switchable-orgs`：需要 `organization_switch`，返回当前身份同时满足本地组织配置与 active 钉钉成员关系的组织列表。
+- `POST /api/v1/auth/switch-org`：需要 `organization_switch`，body 为 `{ "org_id": "目标组织" }`；后端重新签发目标组织 JWT 并收回旧会话，失败时返回 403，不接受通过 URL、Header 或其他请求字段绕过组织交集校验。
+
 ---
 
 ## 钉钉登录
@@ -237,6 +242,7 @@ type Claims struct {
 - JWT 中的 `org_id` 是后续业务数据隔离的上下文来源；JWT **必须**携带 `org_id`。缺省时 `JWTAuth` 返回 401 且 `code=token_missing_org_id`，**禁止**回退 `default`；前端应引导重新登录。
 - 登录成功会写入 `UserSession`，新 token 必须带 `session_id` 和当前 `session_version`；旧版缺少这些声明或版本不匹配的 token 会被拒绝，用户需重新登录。
 - 浏览器登录态通过 `peopleops_auth` HttpOnly Cookie 维护，写操作通过 `peopleops_csrf` + `X-CSRF-Token` 双提交校验。
+- 登录后的组织切换使用 `GET /api/v1/auth/switchable-orgs` 和 `POST /api/v1/auth/switch-org`，必须持有 `organization_switch` 权限。可切换范围取“目标组织存在该身份已配置的 active 用户”与 `organization_users` 中 active 钉钉成员关系的交集；请求体里的 `org_id` 只能作为目标候选，不能绕过后端校验。成功切换会重新签发绑定目标 `org_id` 的会话并收回旧组织会话，禁止退出重登或继续复用旧组织 JWT。
 - JWT 默认有效期为 480 分钟，可通过 `JWT_TTL_MINUTES` 配置，代码会限制在 5-1440 分钟范围内。
 - 钉钉组织同步将用户置为非 active 时，会撤销该用户仍未撤销的服务端 session。
 - 文件访问 `/api/v1/files/:filename` 必须通过 Authorization header 或认证 Cookie 访问，前端使用授权 fetch + object URL 预览，不把主 JWT 拼进 URL。
