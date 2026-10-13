@@ -807,8 +807,8 @@ const AttendanceToolbox: React.FC = () => {
     )
     setRosterSync({ loading: true })
     try {
-      // 全局响应拦截器已经返回 response.data；这里直接得到 Blob，禁止再次解包。
-      const blob = await attendanceToolboxAPI.generateOrgRoster()
+      // 响应转换器将 Blob 与后端返回的缺工号跳过人数一并保留。
+      const { blob, skippedEmployeeCount } = await attendanceToolboxAPI.generateOrgRoster()
 
       const appliedFieldNames = applySyncedFile(
         [...AUTO_SYNC_UPLOADS.roster],
@@ -823,6 +823,9 @@ const AttendanceToolbox: React.FC = () => {
         },
       )
       setRosterSync({ loading: false, lastSyncAt: dayjs().format('YYYY-MM-DD HH:mm') })
+      if (skippedEmployeeCount > 0) {
+        messageApi.warning(`花名册生成完成：已跳过 ${skippedEmployeeCount} 名缺少业务工号（EmployeeID）的员工，其余符合条件的员工已写入花名册`)
+      }
       if (mode === 'manual') {
         if (appliedFieldNames.length === AUTO_SYNC_UPLOADS.roster.length) {
           messageApi.success('花名册生成完成，已自动回填到加班与最终汇总上传位')

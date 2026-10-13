@@ -1,6 +1,6 @@
 ---
 purpose: 开发问题复盘日志——沉淀已定位根因且有复用价值的缺陷与防复发约束，供开发前查阅、开发后更新
-last_updated: 2026-09-28
+last_updated: 2026-10-13
 source_of_truth:
   - 本文件（防复发索引、写入规则与归档导航）
   - docs/development-issues/2026.md（2026 年完整问题条目）
@@ -63,7 +63,7 @@ update_when:
 | `attendance-toolbox` `roster` `dingtalk` `hrm` `regularization-date` | 钉钉 HRM 转正日期必须兼容标准/中文字段标识及 snake_case/camelCase 返回结构；同步成功但仅有转正日期时也不得标记为无字段 | [2026-09-22 钉钉 HRM 转正日期未进入同步花名册](development-issues/2026.md#2026-09-22-p1-钉钉-hrm-转正日期未进入同步花名册) |
 | `attendance-toolbox` `dingtalk` `approval` `time-window` | `processinstance/listids` 禁止直接提交超长或未来时间范围；客户端必须按最多 120 天连续分片、结束时间预留时钟偏差，并跨片去重、全局执行条数上限 | [2026-08-01 钉钉审批查询时间范围非法](development-issues/2026.md#2026-08-01-p1-钉钉审批查询时间范围非法导致工具箱同步失败) |
 | `attendance-toolbox` `structured-result` `auto-fill` | 自动回填必须从 structured run 按 `kind=export + flow_key` 下载业务表；审计/元数据不得上传，也不得因多文件而改走 ZIP 或重跑同步 | [2026-08-01 自动回填误判多文件](development-issues/2026.md#2026-08-01-p1-自动回填将审计文件计入结果导致同步成功后仍报错) |
-| `attendance-toolbox` `roster` `data-contract` `multi-tenant` | 自动回填到加班入口的组织花名册必须使用当前 org 的 `EmployeeProfile.EmployeeID`、真实姓名与有效部门路径；当前 org 的 `<org>:0` 是兼容历史数据的根哨兵，外组织同形值仍属悬空；缺工号/姓名/路径整体 400；仅姓名文件不得自动回填加班；自动响应不得覆盖请求期间的用户选择/删除/替换；禁止审批字段/position_transfer 充当花名册 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
+| `attendance-toolbox` `roster` `data-contract` `multi-tenant` | 组织花名册只输出当前 org 中具有权威 `EmployeeProfile.EmployeeID`、真实姓名与有效部门路径的 active 员工；缺工号员工跳过且必须在前端提示人数，禁止 UserID/DingTalkUserID 兜底；待输出员工缺姓名/路径仍整体 400；当前 org 的 `<org>:0` 是兼容历史数据的根哨兵，外组织同形值仍属悬空；自动响应不得覆盖请求期间的用户选择/删除/替换 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
 | `attendance-toolbox` `roster` `org-sync` `auto-repair` | 部门路径错误可在 `attendance_manage` 权限和统一确认框后复用异步组织同步，成功/部分成功后按原文件快照重试一次；其他错误、缺权限或重试失败禁止自动循环 | 同上 |
 | `attendance-toolbox` `playwright` `locator` | 页面存在重复 placeholder/文案时，E2E 必须先用 tabpanel、form 或可访问名称缩小作用域；禁止使用全页面模糊定位 | [2026-07-30 考勤工具箱 E2E 重复日期占位符](development-issues/2026.md#2026-07-30-p2-考勤工具箱-e2e-重复日期占位符导致-strict-mode-失败) |
 | `attendance-toolbox` `date-boundary` `probation` | 日期区间条件必须使用闭区间语义，覆盖月初、月末、节假日和闰年边界；禁止对工作日使用严格大于/小于导致边界漏算 | [2026-08-02 当月转正天数少算一天](development-issues/2026.md#2026-08-02-p1-当月转正天数少算一天日期区间左边界漏算) |

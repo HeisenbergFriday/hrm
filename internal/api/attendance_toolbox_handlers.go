@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"peopleops/internal/middleware"
 	"peopleops/internal/service"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -361,6 +362,7 @@ func GenerateOrgRoster(c *gin.Context) {
 	}
 	c.Header("Content-Disposition", service.ContentDispositionAttachment(result.FileName))
 	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("X-Roster-Skipped-Employee-Count", strconv.Itoa(result.SkippedMissingEmpNoCount))
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.Data)
 }
 

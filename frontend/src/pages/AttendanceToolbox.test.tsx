@@ -350,10 +350,12 @@ describe('AttendanceToolbox', () => {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     }))
     mockGenerateOrgRoster.mockReset()
-    // 全局响应拦截器会解包 response.data，调用方直接收到 Blob。
-    mockGenerateOrgRoster.mockResolvedValue(new Blob(['roster-xlsx'], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    }))
+    mockGenerateOrgRoster.mockResolvedValue({
+      blob: new Blob(['roster-xlsx'], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      }),
+      skippedEmployeeCount: 0,
+    })
 
     vi.stubGlobal('URL', {
       createObjectURL: () => 'blob:mock',
@@ -627,6 +629,20 @@ describe('AttendanceToolbox', () => {
     expect(mockRunDingtalkSync).not.toHaveBeenCalled()
   })
 
+  it('warns after generating a roster that skipped employees without business IDs', async () => {
+    mockGenerateOrgRoster.mockResolvedValueOnce({
+      blob: new Blob(['roster-with-valid-employees']),
+      skippedEmployeeCount: 3,
+    })
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+
+    await waitFor(() => expect(messageApi.warning).toHaveBeenCalledWith(
+      '花名册生成完成：已跳过 3 名缺少业务工号（EmployeeID）的员工，其余符合条件的员工已写入花名册',
+    ))
+    expect(messageApi.error).not.toHaveBeenCalled()
+  })
+
   it('re-generates roster and re-syncs transfer from file cards without expanding fixed config', async () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
@@ -661,7 +677,7 @@ describe('AttendanceToolbox', () => {
 
   it('auto roster response preserves a user upload made during the request and fills the other empty slot', async () => {
     const user = userEvent.setup()
-    let resolveRosterGeneration: ((value: Blob) => void) | undefined
+    let resolveRosterGeneration: ((value: { blob: Blob; skippedEmployeeCount: number }) => void) | undefined
     mockGenerateOrgRoster.mockImplementation(() => new Promise((resolve) => {
       resolveRosterGeneration = resolve
     }))
@@ -676,7 +692,7 @@ describe('AttendanceToolbox', () => {
     }))
 
     await act(async () => {
-      resolveRosterGeneration?.(new Blob(['generated']))
+      resolveRosterGeneration?.({ blob: new Blob(['generated']), skippedEmployeeCount: 0 })
       await Promise.resolve()
     })
 
@@ -709,7 +725,7 @@ describe('AttendanceToolbox', () => {
 
   it('auto roster response does not refill a slot the user replaced and deleted during the request', async () => {
     const user = userEvent.setup()
-    let resolveRosterGeneration: ((value: Blob) => void) | undefined
+    let resolveRosterGeneration: ((value: { blob: Blob; skippedEmployeeCount: number }) => void) | undefined
     mockGenerateOrgRoster.mockImplementation(() => new Promise((resolve) => {
       resolveRosterGeneration = resolve
     }))
@@ -725,7 +741,7 @@ describe('AttendanceToolbox', () => {
     await user.click(within(overtime.panel).getByRole('button', { name: '移除替换文件.xlsx' }))
 
     await act(async () => {
-      resolveRosterGeneration?.(new Blob(['generated']))
+      resolveRosterGeneration?.({ blob: new Blob(['generated']), skippedEmployeeCount: 0 })
       await Promise.resolve()
     })
 
@@ -747,7 +763,7 @@ describe('AttendanceToolbox', () => {
     const final = await getUploadInputByTabAndLabel(user, /最终汇总/, '在职花名册')
     await user.upload(final.input, new File(['manual-before'], '汇总手工文件.xlsx'))
 
-    let resolveManualGeneration: ((value: Blob) => void) | undefined
+    let resolveManualGeneration: ((value: { blob: Blob; skippedEmployeeCount: number }) => void) | undefined
     mockGenerateOrgRoster.mockImplementationOnce(() => new Promise((resolve) => {
       resolveManualGeneration = resolve
     }))
@@ -758,7 +774,7 @@ describe('AttendanceToolbox', () => {
     const changedOvertime = await getUploadInputByTabAndLabel(user, /加班明细/, '花名册/员工信息表')
     await user.upload(changedOvertime.input, new File(['manual-after'], '请求后替换.xlsx'))
     await act(async () => {
-      resolveManualGeneration?.(new Blob(['generated-manual']))
+      resolveManualGeneration?.({ blob: new Blob(['generated-manual']), skippedEmployeeCount: 0 })
       await Promise.resolve()
     })
 
@@ -832,9 +848,12 @@ describe('AttendanceToolbox', () => {
           data: { message: '1 名在职员工缺少有效主部门或部门层级无法解析，请先修复组织数据' },
         },
       })
-      .mockResolvedValueOnce(new Blob(['repaired-roster'], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      }))
+      .mockResolvedValueOnce({
+        blob: new Blob(['repaired-roster'], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        }),
+        skippedEmployeeCount: 0,
+      })
 
     render(<AttendanceToolbox />)
     await waitForToolboxReady()

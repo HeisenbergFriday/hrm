@@ -1,6 +1,6 @@
 ---
 purpose: 考勤模块业务规则说明
-last_updated: 2026-09-28
+last_updated: 2026-10-13
 source_of_truth:
   - internal/api/handlers.go（考勤相关 handler）
   - internal/api/attendance_toolbox_handlers.go（考勤工具箱上传计算 handler）
@@ -306,7 +306,7 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - 权限：`attendance_toolbox_operate` 或兼容的 `attendance_manage`；`attendance_toolbox_dingtalk_sync`、menu-only 均不得调用。
 - 组织：JWT `org_id` 是唯一可信来源；缺失时 fail-closed，请求 body/query 不得覆盖；用户查询必须按 `org_id` 隔离并排除软删除数据。
 - 员工范围：仅当前组织 `status=active` 且未软删除的用户；业务工号必须取 `EmployeeProfile.EmployeeID`，部门路径必须取该用户当前主部门在本组织中的真实父子层级。所有用户、档案、部门查询均显式绑定 JWT `org_id`。钉钉根父级兼容空值、字面量 `0` 和当前组织的 `database.ScopedExternalID(orgID, "0")` 历史值；外组织 scoped 根不得视为合法根。
-- 完整性：任一待输出员工缺少 `EmployeeID`、姓名或有效部门路径（包括主部门缺失、跨组织、父级断裂、循环、部门空名称）时，接口整体返回包含对应缺失人数的 400；禁止跳过后静默生成不完整文件。`EmployeeID`、姓名、有效部门路径三者均为组织生成接口的必备字段，且不得使用 `UserID`、`DingTalkUserID`、工号或其他字段伪造姓名，也不得使用姓名、`UserID`、`DingTalkUserID` 兜底业务工号。根节点兼容不得扩大为“任意不存在父级均合法”。
+- 完整性：缺少 `EmployeeProfile.EmployeeID` 的 active 员工从本次花名册中跳过，不得使用姓名、`UserID` 或 `DingTalkUserID` 兜底业务工号；接口通过 `X-Roster-Skipped-Employee-Count` 返回跳过人数，前端必须显式警告。对实际待输出员工，姓名或有效部门路径缺失（包括主部门缺失、跨组织、父级断裂、循环、部门空名称）仍整体返回包含对应人数的 400。全部 active 员工均因缺工号被跳过时不生成空文件。不得使用 `UserID`、`DingTalkUserID`、工号或其他字段伪造姓名；根节点兼容不得扩大为“任意不存在父级均合法”。
 - 输出：xlsx 固定 12 列：工号、姓名、合同主体、一级部门、二级部门、三级部门、岗位、员工类型、人员分类、入职日期、离职日期、转正日期；其中工号、姓名和真实部门路径是加班入口契约，其他无权威来源字段保持空。超过三级的组织路径保留距离叶子最近的三级业务部门，顺序不得重排或猜测。
 - 回填：前端自动生成后可将同一份富花名册回填到 `overtime_roster` 与 `final_active`；自动请求必须逐上传位保存请求开始时的空状态和用户修改版本，只填请求开始与响应时均为空、且期间未被用户选择/删除/替换的位置。手动点击生成可替换请求开始时已有但期间未变化的位置；请求期间的用户操作始终优先。生成失败不得改动现有文件。不得把仅姓名文件自动回填到 `overtime_roster`。最终汇总仍可从用户上传的钉钉月度汇总表补充/纠正工号、姓名、考勤组、部门和岗位，但只能使用月度表中的非空值；合同主体、员工类型、人员分类、入职日期、离职日期和转正日期以花名册为准，禁止在身份合并时清空。手工仅姓名花名册只作为最终汇总兼容输入，不是组织生成接口的输出契约。
 - 自动修复：仅当生成错误明确包含“缺少有效主部门”或“部门层级无法解析”，且当前用户拥有 `attendance_manage` 时，前端调用统一 `confirmOrgSync` 显示确认框；确认后复用 `/org/sync/start` + 轮询链路，同步成功或部分成功后携带原上传位快照自动重试花名册一次。其他完整性错误、缺权限、同步失败及重试失败均不得继续触发，禁止无限循环或绕过组织同步确认。
