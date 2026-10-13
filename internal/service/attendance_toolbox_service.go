@@ -60,12 +60,13 @@ type AttendanceToolboxService struct {
 }
 
 type AttendanceToolboxResult struct {
-	FileName    string
-	ContentType string
-	Data        []byte
-	Kind        string
-	FlowKey     string
-	RowCount    int
+	FileName                 string
+	ContentType              string
+	Data                     []byte
+	Kind                     string
+	FlowKey                  string
+	RowCount                 int
+	SkippedMissingEmpNoCount int
 }
 
 type attendanceToolboxRunnerOutput struct {
@@ -1143,8 +1144,9 @@ func rosterDepartmentLevels(path []string) (dept1, dept2, dept3 string) {
 	return dept1, dept2, dept3
 }
 
-// buildRosterEmployees 构造组织花名册，并返回缺业务工号、缺姓名、缺部门路径的人数。
-// 姓名不得伪造；姓名、UserID 和 DingTalkUserID 均不得作为业务工号兜底。
+// buildRosterEmployees 构造组织花名册，并返回跳过的缺业务工号人数、
+// 实际待输出员工中缺姓名和缺部门路径的人数。姓名不得伪造；
+// 姓名、UserID 和 DingTalkUserID 均不得作为业务工号兜底。
 func buildRosterEmployees(
 	users []database.User,
 	profiles map[string]database.EmployeeProfile,
@@ -1162,6 +1164,7 @@ func buildRosterEmployees(
 		}
 		if empNo == "" {
 			missingEmpNo++
+			continue
 		}
 
 		name := strings.TrimSpace(user.Name)
@@ -1300,10 +1303,7 @@ func (s *AttendanceToolboxService) GenerateOrgRosterExcel(ctx context.Context, o
 		return nil, err
 	}
 
-	// 3) 数据不完整时整体拒绝生成，避免产出无法供加班模块使用的文件。
-	if missingEmpNo > 0 {
-		return nil, fmt.Errorf("%w：%d 名在职员工缺少业务工号（EmployeeID），请先在员工档案中补充", ErrRosterMissingEmpNo, missingEmpNo)
-	}
+	// 3) 缺少权威业务工号的员工不输出；已计入花名册的员工仍必须有真实姓名与有效部门路径。
 	if missingName > 0 {
 		return nil, &RosterMissingNameError{Count: missingName}
 	}
@@ -1335,11 +1335,12 @@ func (s *AttendanceToolboxService) GenerateOrgRosterExcel(ctx context.Context, o
 		output.FileName = "花名册.xlsx"
 	}
 	return &AttendanceToolboxResult{
-		FileName:    output.FileName,
-		ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-		Data:        output.Data,
-		Kind:        output.Kind,
-		RowCount:    output.RowCount,
+		FileName:                 output.FileName,
+		ContentType:              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		Data:                     output.Data,
+		Kind:                     output.Kind,
+		RowCount:                 output.RowCount,
+		SkippedMissingEmpNoCount: missingEmpNo,
 	}, nil
 }
 

@@ -85,8 +85,8 @@ func TestBuildRosterEmployeesMissingEmployeeIDNeverFallsBack(t *testing.T) {
 		nil,
 		map[string][]string{"dept": {"总部"}},
 	)
-	if len(employees) != 1 || employees[0].EmpNo != "" || missingEmpNo != 1 || missingName != 0 || missingDeptPath != 0 {
-		t.Fatalf("missing EmployeeID must fail without fallback: employees=%#v missingEmpNo=%d missingName=%d missingDeptPath=%d", employees, missingEmpNo, missingName, missingDeptPath)
+	if len(employees) != 0 || missingEmpNo != 1 || missingName != 0 || missingDeptPath != 0 {
+		t.Fatalf("missing EmployeeID must be skipped without fallback: employees=%#v missingEmpNo=%d missingName=%d missingDeptPath=%d", employees, missingEmpNo, missingName, missingDeptPath)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestBuildRosterEmployeesMissingNameDoesNotSkipOtherIntegrityChecks(t *testi
 	}
 }
 
-func TestGenerateOrgRosterExcelMissingEmployeeIDFailsClosed(t *testing.T) {
+func TestGenerateOrgRosterExcelOnlyMissingEmployeeIDsHasNoOutput(t *testing.T) {
 	db := withRosterTestDB(t)
 	seedRosterDepartment(t, db, "org-missing-id", "dept", "总部", "0")
 	seedRosterUser(t, db, database.User{
@@ -136,8 +136,8 @@ func TestGenerateOrgRosterExcelMissingEmployeeIDFailsClosed(t *testing.T) {
 	})
 
 	_, err := NewAttendanceToolboxService().GenerateOrgRosterExcel(context.Background(), "org-missing-id")
-	if !errors.Is(err, ErrRosterMissingEmpNo) || !strings.Contains(err.Error(), "1 名") {
-		t.Fatalf("expected explicit missing EmployeeID error, got %v", err)
+	if !errors.Is(err, ErrRosterNoEmployees) {
+		t.Fatalf("expected no valid employees after skipping missing EmployeeID, got %v", err)
 	}
 }
 
@@ -370,6 +370,10 @@ func TestGenerateOrgRosterExcelProducesRealRichWorkbookFromCurrentOrg(t *testing
 		Email: "ops@a.test", Mobile: "13800000005", DepartmentID: "ops", Position: "运维工程师", Status: "active",
 	})
 	seedRosterUser(t, db, database.User{
+		OrgID: "org-a", UserID: "user-no-id", DingTalkUserID: "ding-no-id", Name: "无工号员工",
+		Email: "no-id@a.test", Mobile: "13800000007", DepartmentID: "ops", Status: "active",
+	})
+	seedRosterUser(t, db, database.User{
 		OrgID: "org-b", UserID: "user-other", DingTalkUserID: "ding-other", Name: "其他员工",
 		Email: "other@b.test", Mobile: "13800000006", DepartmentID: "ops", Status: "active",
 	})
@@ -384,6 +388,9 @@ func TestGenerateOrgRosterExcelProducesRealRichWorkbookFromCurrentOrg(t *testing
 	result, err := NewAttendanceToolboxService().GenerateOrgRosterExcel(context.Background(), "org-a")
 	if err != nil {
 		t.Fatalf("GenerateOrgRosterExcel: %v", err)
+	}
+	if result.SkippedMissingEmpNoCount != 1 {
+		t.Fatalf("SkippedMissingEmpNoCount = %d, want 1", result.SkippedMissingEmpNoCount)
 	}
 	rows := inspectRosterWorkbook(t, result.Data)
 	if len(rows) != 2 || len(rows[0]) != 12 {

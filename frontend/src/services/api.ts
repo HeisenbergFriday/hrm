@@ -431,6 +431,11 @@ export type AttendanceToolboxRunResponse = {
 // 后端工具箱默认 600 秒；客户端多等待 60 秒，以便接收后端超时响应。
 export const ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS = 11 * 60 * 1000
 
+export type GeneratedOrgRoster = {
+  blob: Blob
+  skippedEmployeeCount: number
+}
+
 export const attendanceToolboxAPI = {
   getDefaults: () => api.get('/attendance/toolbox/defaults'),
   run: (module: string, data: FormData) => api.post(`/attendance/toolbox/${module}/run`, data, {
@@ -552,10 +557,18 @@ export const attendanceToolboxAPI = {
     responseType: 'blob',
     timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
   }),
-  /** 按当前组织生成标准在职花名册 xlsx（后端读取本组织 active 用户与档案）。 */
-  generateOrgRoster: () => api.post<Blob, Blob>('/attendance/toolbox/roster/generate', {}, {
+  /** 按当前组织生成标准在职花名册 xlsx，并返回缺工号跳过人数。 */
+  generateOrgRoster: () => api.post<Blob, GeneratedOrgRoster>('/attendance/toolbox/roster/generate', {}, {
     responseType: 'blob',
     timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
+    transformResponse: [(blob: Blob, headers) => {
+      const rawCount = headers?.['x-roster-skipped-employee-count']
+      const parsedCount = Number.parseInt(String(rawCount ?? '0'), 10)
+      return {
+        blob,
+        skippedEmployeeCount: Number.isFinite(parsedCount) && parsedCount > 0 ? parsedCount : 0,
+      }
+    }],
   }),
 }
 

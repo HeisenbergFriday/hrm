@@ -202,10 +202,11 @@ func TestGenerateOrgRosterRoute_ErrorMapping(t *testing.T) {
 func TestGenerateOrgRosterRoute_SuccessReturnsInspectableXLSX(t *testing.T) {
 	workbook := makeRosterWorkbookWithOpenpyxl(t)
 	generator := &stubOrgRosterGenerator{result: &service.AttendanceToolboxResult{
-		FileName: "花名册_测试组织.xlsx",
-		Data:     workbook,
-		Kind:     "export",
-		RowCount: 1,
+		FileName:                 "花名册_测试组织.xlsx",
+		Data:                     workbook,
+		Kind:                     "export",
+		RowCount:                 1,
+		SkippedMissingEmpNoCount: 3,
 	}}
 	recorder := runGenerateOrgRosterRoute(t, []string{"attendance_toolbox_operate"}, nil, "org-a", `{}`, generator)
 	if recorder.Code != http.StatusOK {
@@ -216,6 +217,9 @@ func TestGenerateOrgRosterRoute_SuccessReturnsInspectableXLSX(t *testing.T) {
 	}
 	if recorder.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("X-Content-Type-Options = %q", recorder.Header().Get("X-Content-Type-Options"))
+	}
+	if recorder.Header().Get("X-Roster-Skipped-Employee-Count") != "3" {
+		t.Fatalf("X-Roster-Skipped-Employee-Count = %q, want 3", recorder.Header().Get("X-Roster-Skipped-Employee-Count"))
 	}
 	wantDisposition := service.ContentDispositionAttachment("花名册_测试组织.xlsx")
 	if recorder.Header().Get("Content-Disposition") != wantDisposition {
