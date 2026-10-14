@@ -365,6 +365,8 @@ class MaternityLeaveOverrideTests(unittest.TestCase):
             "leave_type": "产假",
             "raw_start": "2026-05-20 09:00",
             "raw_end": "2026-07-10 18:30",
+            "calculation_month": (2026, 6),
+            "daily_ledger": {"2026-06-10": {"hours": 8, "days": 1}},
         }]
         with patch.object(fin, "_collect_deduped_leave_rows", return_value=leave_rows):
             detail = fin.parse_leave_day_details("unused.xlsx", self.schedule_ctx)
@@ -973,6 +975,7 @@ class LeaveOvertimeHeaderCompatTests(unittest.TestCase):
                     "系统时长", "最终请假时长", "最终请假天数", "审批状态", "审批结果"])
         ws.append(["MT0001", "张三", "总部", "事假", "2026-06-15 09:00", "2026-06-15 18:00",
                     8.0, 8.0, 1.0, "完成", "同意"])
+        self._append_review_contract(ws)
         fd, path = tempfile.mkstemp(suffix=".xlsx")
         os.close(fd)
         wb.save(path)
@@ -998,6 +1001,7 @@ class LeaveOvertimeHeaderCompatTests(unittest.TestCase):
         ws.append(["MT0001", "张三", "总部", "产品技术部", "后端组",
                     "事假", "2026-06-15 09:00", "2026-06-15 18:00", 8.0, 8.0, 1.0,
                     "", "DING-001", "完成", "同意", False, 2])
+        self._append_review_contract(ws)
         fd, path = tempfile.mkstemp(suffix=".xlsx")
         os.close(fd)
         wb.save(path)
@@ -1016,6 +1020,16 @@ class LeaveOvertimeHeaderCompatTests(unittest.TestCase):
             self.assertIn("事假", leave_map["MT0001"])
         finally:
             os.remove(path)
+
+    @staticmethod
+    def _append_review_contract(ws):
+        """Header aliases remain supported after an explicit Excel confirmation."""
+        first = ws.max_column + 1
+        fields = ("复核状态", "确认请假时长", "确认说明", "计算月份", "计量口径", "日分摊")
+        values = ("已确认", 8, "人工核对旧表", "2026-06", "小时", '{"2026-06-15":{"hours":8,"days":1}}')
+        for offset, (field, value) in enumerate(zip(fields, values)):
+            ws.cell(1, first + offset, field)
+            ws.cell(2, first + offset, value)
 
     def test_overtime_parser_accepts_historical_employee_headers(self):
         """加班表历史表头：员工工号、员工姓名、2倍加班（小时）。"""
