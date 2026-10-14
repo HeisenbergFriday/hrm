@@ -920,10 +920,10 @@ const OvertimeTab: React.FC = () => {
         )}
         <Form form={suppForm} layout="vertical">
           <Form.Item name="clock_in" label="补卡上班时间" rules={[{ required: true, message: '请选择补卡上班时间' }]}>
-            <DatePicker showTime format="YYYY年M月D日 HH:mm:ss" style={{ width: '100%' }} placeholder="选择上班打卡时间" />
+            <DatePicker showTime format="YYYY年M月D日 HH:mm:ss" style={{ width: '100%' }} placeholder="选择上班打卡时间" locale={datePickerZhCN} />
           </Form.Item>
           <Form.Item name="clock_out" label="补卡下班时间" rules={[{ required: true, message: '请选择补卡下班时间' }]}>
-            <DatePicker showTime format="YYYY年M月D日 HH:mm:ss" style={{ width: '100%' }} placeholder="选择下班打卡时间" />
+            <DatePicker showTime format="YYYY年M月D日 HH:mm:ss" style={{ width: '100%' }} placeholder="选择下班打卡时间" locale={datePickerZhCN} />
           </Form.Item>
           <Form.Item name="reason" label="补卡原因">
             <Input.TextArea rows={3} placeholder="请输入补卡原因（选填）" />

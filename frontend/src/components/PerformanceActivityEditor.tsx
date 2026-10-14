@@ -15,6 +15,7 @@ import {
   Typography,
   Upload,
 } from 'antd'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import type { FormInstance } from 'antd/es/form'
 import { CloseOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons'
 
@@ -654,17 +655,17 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
               <Row gutter={[16, 12]}>
                 <Col xs={24} md={12}>
                   <Form.Item name="date_range" label="绩效周期" rules={[{ required: true, message: '请选择绩效周期' }]}>
-                    <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                    <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} locale={datePickerZhCN} />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={12}>
                   <Form.Item name="target_set_range" label="目标设定时间">
-                    <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                    <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} locale={datePickerZhCN} />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={12}>
                   <Form.Item name="snapshot_as_of_date" label="组织快照日期" extra="为空时按创建参与人时的当前组织归属生成快照">
-                    <DatePicker placeholder="选择考核期归属日期" style={{ width: '100%' }} />
+                    <DatePicker placeholder="选择考核期归属日期" style={{ width: '100%' }} locale={datePickerZhCN} />
                   </Form.Item>
                 </Col>
               </Row>
@@ -682,12 +683,12 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                   <>
                     <Col xs={24} lg={8}>
                       <Form.Item name="self_eval_range" label="自评时间" rules={[{ required: true, message: '请选择自评时间' }]}>
-                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} locale={datePickerZhCN} />
                       </Form.Item>
                     </Col>
                     <Col xs={24} lg={8}>
                       <Form.Item name="manager_eval_range" label="主管评分时间" rules={[{ required: true, message: '请选择主管评分时间' }]}>
-                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} locale={datePickerZhCN} />
                       </Form.Item>
                     </Col>
                     {requiresResultConfirmSchedule && (
@@ -697,7 +698,7 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                           label={isMutengTemplate ? 'HR/员工确认时间' : '结果确认时间'}
                           rules={[{ required: true, message: isMutengTemplate ? '请选择HR/员工确认时间' : '请选择结果确认时间' }]}
                         >
-                          <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                          <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} locale={datePickerZhCN} />
                         </Form.Item>
                       </Col>
                     )}
@@ -820,22 +821,22 @@ const PerformanceActivityEditorContent: React.FC<PerformanceActivityEditorConten
                   <>
                     <Col xs={24} md={12}>
                       <Form.Item name="hr_confirm_deadline" label="HR确认截止日">
-                        <DatePicker placeholder="请选择截止日" style={{ width: '100%' }} />
+                        <DatePicker placeholder="请选择截止日" style={{ width: '100%' }} locale={datePickerZhCN} />
                       </Form.Item>
                     </Col>
                     <Col xs={24} lg={8}>
                       <Form.Item name="employee_confirm_range" label="员工确认时间">
-                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} locale={datePickerZhCN} />
                       </Form.Item>
                     </Col>
                     <Col xs={24} lg={8}>
                       <Form.Item name="manager_confirm_range" label="主管确认时间">
-                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} locale={datePickerZhCN} />
                       </Form.Item>
                     </Col>
                     <Col xs={24} lg={8}>
                       <Form.Item name="hr_confirm_range" label="HR确认时间">
-                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} />
+                        <RangePicker placeholder={['开始日期', '结束日期']} style={{ width: '100%' }} locale={datePickerZhCN} />
                       </Form.Item>
                     </Col>
                   </>

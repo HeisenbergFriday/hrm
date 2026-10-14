@@ -24,6 +24,7 @@ import {
   Typography,
   message,
 } from 'antd'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import type { TableColumnsType } from 'antd'
 import { CalendarOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -1362,7 +1363,7 @@ export default function WeekSchedule() {
               onChange={(date) => setSelectedMonth(date || dayjs())}
               allowClear={false}
               className="ws-month-picker"
-            />
+            locale={datePickerZhCN} />
           </Space>
         }
       >
@@ -1577,7 +1578,7 @@ export default function WeekSchedule() {
             className="ws-panel-card"
             extra={
               <Space>
-                <DatePicker picker="year" value={dayjs(`${holidayYear}-01-01`)} onChange={(value) => setHolidayYear(value?.year() || dayjs().year())} />
+                <DatePicker picker="year" value={dayjs(`${holidayYear}-01-01`)} onChange={(value) => setHolidayYear(value?.year() || dayjs().year())} locale={datePickerZhCN} />
                 <Button onClick={() => setHolidayImportModalOpen(true)}>批量导入</Button>
                 <Button type="primary" onClick={() => setHolidayModalOpen(true)}>
                   新增节假日
@@ -1809,7 +1810,7 @@ export default function WeekSchedule() {
           )}
 
           <Form.Item<RuleFormValues> label="基准日期" name="base_date" rules={[{ required: true, message: '请选择基准日期' }]}>
-            <DatePicker style={{ width: '100%' }} />
+            <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
           </Form.Item>
 
           <Form.Item<RuleFormValues> label="轮换模式" name="pattern" rules={[{ required: true, message: '请选择轮换模式' }]}>
@@ -1891,7 +1892,7 @@ export default function WeekSchedule() {
       >
         <Form form={holidayForm} layout="vertical">
           <Form.Item<HolidayFormValues> label="日期" name="date" rules={[{ required: true, message: '请选择日期' }]}>
-            <DatePicker style={{ width: '100%' }} />
+            <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
           </Form.Item>
           <Form.Item<HolidayFormValues> label="名称" name="name" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="例如：劳动节、国庆调休上班" />

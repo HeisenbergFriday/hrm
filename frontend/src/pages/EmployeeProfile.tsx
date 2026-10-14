@@ -17,6 +17,7 @@ import {
   Typography,
   message,
 } from 'antd'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -510,7 +511,7 @@ const EmployeeProfilePage: React.FC = () => {
             </Col>
             <Col xs={24} md={12}>
               <Form.Item name="birth_date" label="出生日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
@@ -554,32 +555,32 @@ const EmployeeProfilePage: React.FC = () => {
             </Col>
             <Col xs={24} md={12}>
               <Form.Item name="entry_date" label="入职日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col xs={24} md={8}>
               <Form.Item name="probation_end_date" label="试用期结束日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col xs={24} md={8}>
               <Form.Item name="planned_regular_date" label="计划转正日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col xs={24} md={8}>
               <Form.Item name="actual_regular_date" label="实际转正日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
               <Form.Item name="contract_start_date" label="合同开始日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
               <Form.Item name="contract_end_date" label="合同结束日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
@@ -609,7 +610,7 @@ const EmployeeProfilePage: React.FC = () => {
             </Col>
             <Col xs={24} md={12}>
               <Form.Item name="graduation_date" label="毕业日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>

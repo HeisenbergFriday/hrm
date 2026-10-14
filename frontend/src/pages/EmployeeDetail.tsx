@@ -21,6 +21,7 @@ import {
   Typography,
   message,
 } from 'antd'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { ArrowLeftOutlined, EditOutlined, SwapRightOutlined, SyncOutlined, UserOutlined } from '@ant-design/icons'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -650,7 +651,7 @@ const EmployeeDetail: React.FC = () => {
             </Col>
             <Col span={12}>
               <Form.Item name="birth_date" label="出生日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -673,22 +674,22 @@ const EmployeeDetail: React.FC = () => {
             </Col>
             <Col span={12}>
               <Form.Item name="entry_date" label="入职日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="probation_end_date" label="试用期结束">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="planned_regular_date" label="计划转正">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="actual_regular_date" label="实际转正">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -706,12 +707,12 @@ const EmployeeDetail: React.FC = () => {
             </Col>
             <Col span={12}>
               <Form.Item name="contract_start_date" label="合同开始">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="contract_end_date" label="合同结束">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>

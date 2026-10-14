@@ -15,6 +15,7 @@ import {
   Tag,
   message,
 } from 'antd'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import type { ColumnsType } from 'antd/es/table'
 import { EditOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -374,7 +375,7 @@ const PerformanceInterviews: React.FC = () => {
             </Col>
             <Col span={12}>
               <Form.Item name="scheduled_at" label="计划时间">
-                <DatePicker showTime style={{ width: '100%' }} />
+                <DatePicker showTime style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={24}>

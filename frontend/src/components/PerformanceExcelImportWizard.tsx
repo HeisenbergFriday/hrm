@@ -21,6 +21,7 @@ import {
   Upload,
   message,
 } from 'antd'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import type { UploadFile } from 'antd/es/upload/interface'
 import { FileExcelOutlined, InboxOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -316,7 +317,7 @@ const PerformanceExcelImportWizard: React.FC<PerformanceExcelImportWizardProps> 
                   start_date: dates?.[0]?.format('YYYY-MM-DD') || '',
                   end_date: dates?.[1]?.format('YYYY-MM-DD') || '',
                 })}
-              />
+              locale={datePickerZhCN} />
             </Col>
             <Col xs={24} md={8}>
               <Text type="secondary">参与员工（可空）</Text>

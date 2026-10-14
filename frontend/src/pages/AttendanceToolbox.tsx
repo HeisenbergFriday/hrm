@@ -25,6 +25,7 @@ import {
   Upload,
   message,
 } from 'antd'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import type { UploadFile, UploadProps } from 'antd'
 import type { RcFile } from 'antd/es/upload/interface'
 import type { RangePickerProps } from 'antd/es/date-picker'
@@ -1269,7 +1270,7 @@ const AttendanceToolbox: React.FC = () => {
                           'start_date',
                           value ? value.format('YYYY-MM-DD') : '',
                         )}
-                      />
+                      locale={datePickerZhCN} />
                     </Space>
                   </Col>
                   <Col xs={24} md={6}>
@@ -1284,7 +1285,7 @@ const AttendanceToolbox: React.FC = () => {
                           'end_date',
                           value ? value.format('YYYY-MM-DD') : '',
                         )}
-                      />
+                      locale={datePickerZhCN} />
                     </Space>
                   </Col>
                 </Row>
@@ -1709,7 +1710,7 @@ const AttendanceToolbox: React.FC = () => {
                     [monthField]: value ? value.format('YYYY-MM') : '',
                   }))
                 }}
-              />
+              locale={datePickerZhCN} />
               <Text type="secondary" style={{ fontSize: 12 }}>
                 默认自动识别；文件跨月或标题不规范时可手动锁定。锁定月份与作息表不一致时会停止计算。
               </Text>
@@ -1759,7 +1760,7 @@ const AttendanceToolbox: React.FC = () => {
                     allowClear={false}
                     placeholder={['开始日期', '结束日期']}
                     aria-label="钉钉请假拉取日期范围"
-                  />
+                  locale={datePickerZhCN} />
                 </Space>
               </Col>
               <Col xs={24} md={12}>
@@ -1818,7 +1819,7 @@ const AttendanceToolbox: React.FC = () => {
                     allowClear={false}
                     placeholder={['开始日期', '结束日期']}
                     aria-label="钉钉加班拉取日期范围"
-                  />
+                  locale={datePickerZhCN} />
                 </Space>
               </Col>
               <Col xs={24} md={12}>
@@ -2392,7 +2393,7 @@ const AttendanceToolbox: React.FC = () => {
                     allowClear={false}
                     style={{ width: 120 }}
                     placeholder="选择月份"
-                  />
+                  locale={datePickerZhCN} />
                 </Space>
                 <Text type="secondary" style={{ fontSize: 11 }}>
                   {canDingtalkSync
