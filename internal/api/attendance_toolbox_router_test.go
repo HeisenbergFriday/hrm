@@ -32,6 +32,8 @@ func TestAttendanceToolboxRouterRegistersStructuredEndpoints(t *testing.T) {
 		"GET /api/v1/attendance/toolbox/runs/:run_id/zip",
 		"GET /api/v1/attendance/toolbox/runs/:run_id/preview",
 		"POST /api/v1/attendance/toolbox/dingtalk-sync",
+		"POST /api/v1/attendance/toolbox/dingtalk-sync/start",
+		"GET /api/v1/attendance/toolbox/dingtalk-sync/jobs/:request_id",
 		"POST /api/v1/attendance/toolbox/parttime-monthly-punch",
 	} {
 		if _, ok := routes[route]; !ok {
