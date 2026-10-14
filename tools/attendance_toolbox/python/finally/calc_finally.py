@@ -787,11 +787,14 @@ def _parse_schedule_summary_days(path: str, summary_label: str) -> tuple[int | N
 
 
 def _collect_deduped_leave_rows(path: str) -> list[dict]:
-    """读取并按相同请假时间去重后的请假明细行。"""
+    """Read approved/reviewed rows; identity is approval ID, never just timestamps."""
     wb = openpyxl.load_workbook(path, data_only=True)
     deduped_rows: dict[tuple, dict] = {}
+    matched_sheets = 0
 
     for sn in wb.sheetnames:
+        if sn in {"异常清单", "复核说明", "填写说明"}:
+            continue
         ws = wb[sn]
         header_row_idx, header_vals = _find_header_row(ws, "发起人工号", "工号", "请假类型")
         if header_row_idx is None:
@@ -806,6 +809,10 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
         col_start = _find_col(header_vals, "开始时间")
         col_end = _find_col(header_vals, "结束时间")
         col_sys_hours = _find_col(header_vals, "系统时长", "时长", "请假时长")
+        review_cols = {
+            field: _find_col_exact(header_vals, field)
+            for field in calc_leave.REVIEW_COLUMNS
+        }
         col_final_hours = _find_col(
             header_vals,
             "最终请假时长",
@@ -831,8 +838,9 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
                 missing.append("请假类型")
             if col_days is None:
                 missing.append("最终请假天数/最终时长（天）")
-            print(f"[请假明细] {sn} 未找到 {'、'.join(missing)} 列，已跳过")
-            continue
+            wb.close()
+            raise ValueError(f"[请假明细] {sn} 未找到 {'、'.join(missing)} 列，请重新生成请假明细。")
+        matched_sheets += 1
 
         for r in range(header_row_idx + 1, ws.max_row + 1):
             emp_no = _normalize_emp_no(
@@ -847,16 +855,20 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
             raw_start = ws.cell(r, col_start + 1).value if col_start is not None else None
             raw_end = ws.cell(r, col_end + 1).value if col_end is not None else None
             key = emp_no or name
+            if not key and not leave_type:
+                continue
 
-            if key and leave_type and raw_start is not None and raw_end is not None:
-                dedupe_key = (
-                    key,
-                    leave_type,
-                    _normalize_leave_dedupe_part(raw_start),
-                    _normalize_leave_dedupe_part(raw_end),
-                )
-            else:
-                dedupe_key = ("__row__", sn, r)
+            def review_value(field):
+                column = review_cols[field]
+                return ws.cell(r, column + 1).value if column is not None else None
+
+            state = str(review_value("复核状态") or "").strip()
+            if state not in {"自动通过", "已确认"}:
+                wb.close()
+                raise ValueError(f"请假明细[{sn}]第{r}行尚未确认或缺少复核状态；请在原明细填写确认值、确认说明并标记已确认，再上传到最终汇总。")
+
+            approval_id = str(review_value("审批编号") or "").strip()
+            dedupe_key = ("approval", approval_id) if approval_id else ("__row__", sn, r)
 
             current_row = {
                 "emp_no": emp_no,
@@ -873,20 +885,140 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
                     if col_final_hours is not None else None
                 ),
                 "raw_days": raw_days,
+                "approval_id": approval_id,
+                "review_state": state,
+                "review_values": {field: review_value(field) for field in calc_leave.REVIEW_COLUMNS},
+                "source": f"[{sn}]第{r}行",
             }
+
+            try:
+                _resolve_leave_review(current_row)
+            except ValueError:
+                wb.close()
+                raise
 
             existing_row = deduped_rows.get(dedupe_key)
             if existing_row is None:
                 deduped_rows[dedupe_key] = current_row
                 continue
 
-            existing_has_cjk = _contains_cjk(existing_row["raw_days"])
-            current_has_cjk = _contains_cjk(raw_days)
-            if existing_has_cjk and not current_has_cjk:
-                deduped_rows[dedupe_key] = current_row
+            if current_row != existing_row:
+                # Identical ID with differing ledgers must not silently choose an amount.
+                comparable = ("emp_no", "name", "leave_type", "raw_start", "raw_end", "raw_days", "final_hours", "review_values")
+                if any(current_row[field] != existing_row[field] for field in comparable):
+                    wb.close()
+                    raise ValueError(f"同一审批编号存在不同请假结果：{current_row['source']}；请只保留确认后的有效版本。")
 
     wb.close()
-    return list(deduped_rows.values())
+    if matched_sheets == 0:
+        raise ValueError("未找到可识别的请假明细工作表，请重新生成包含复核字段的明细。")
+    rows = list(deduped_rows.values())
+    # Zero confirmations may exclude superseded overlaps; any positive unresolved
+    # overlap still needs explicit human confirmation on both records.
+    active_rows = [row for row in rows if row["raw_days"] > 0]
+    tuples = [
+        (row["emp_no"], row["name"], "", "", "", row["leave_type"], row["raw_start"], row["raw_end"])
+        for row in active_rows
+    ]
+    for index in calc_leave.find_leave_overlap_indexes(tuples):
+        if active_rows[index]["review_state"] != "已确认":
+            raise ValueError("同一员工不同审批时段重叠；请逐条人工确认后生成最终汇总。")
+    daily_totals = defaultdict(float)
+    for row in rows:
+        person = row["emp_no"] or row["name"]
+        for day, item in row["daily_ledger"].items():
+            daily_totals[(person, day)] += item["days"]
+            if daily_totals[(person, day)] > 1 + 0.000001:
+                raise ValueError("同一员工同一日多条请假合计超过1天，请核对重叠审批及确认日分摊。")
+    return rows
+
+
+def _resolve_leave_review(row: dict) -> None:
+    """Validate the Excel review contract and restore one authoritative daily ledger."""
+    values = row["review_values"]
+    unit = str(values["计量口径"] or "").strip()
+    if unit not in {"小时", "自然日", "应出勤日"}:
+        raise ValueError(f"请假{row['source']}缺少有效计量口径，请重新生成请假明细。")
+    try:
+        month = datetime.strptime(str(values["计算月份"]), "%Y-%m").date()
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"请假{row['source']}计算月份无效。") from exc
+    start, end = calc_leave.normalized_leave_interval(row["raw_start"], row["raw_end"])
+    if start is None or end is None or start > end:
+        raise ValueError(f"请假{row['source']}起止时间无效，请先修正时间。")
+    manual = row["review_state"] == "已确认"
+    if manual and not str(values["确认说明"] or "").strip():
+        raise ValueError(f"请假{row['source']}已确认但未填写确认说明。")
+    amount = calc_leave.finite_nonnegative(
+        values["确认请假时长"] if manual and unit == "小时"
+        else values["确认请假天数"] if manual
+        else row["final_hours"] if unit == "小时" else row["raw_days"]
+    )
+    if amount is None:
+        raise ValueError(f"请假{row['source']}缺少有效确认值/最终值；不能仅修改复核状态。")
+    if amount > 0 and not (row["emp_no"] or row["name"]):
+        raise ValueError(f"请假{row['source']}缺少员工身份，不能入账。")
+    if not manual:
+        if not row["approval_id"] or str(values["审批状态"] or "").strip() != "完成" or str(values["审批结果"] or "").strip() != "同意":
+            raise ValueError(f"请假{row['source']}审批未明确生效，须人工确认。")
+        if str(values["异常原因"] or "").strip():
+            raise ValueError(f"请假{row['source']}仍有异常原因，须人工确认。")
+        kind = row["leave_type"]
+        expected_unit = "自然日" if calc_leave.is_natural_day_leave(kind) else "应出勤日" if calc_leave.is_expected_attendance_day_leave(kind) else "小时" if kind in calc_leave.ORDINARY_HOUR_LEAVE_TYPES else None
+        if unit != expected_unit:
+            raise ValueError(f"请假{row['source']}假别与计量口径不一致，须人工确认。")
+        if unit == "小时" and (start.year, start.month) == (end.year, end.month):
+            system = calc_leave.finite_nonnegative(row.get("sys_hours"))
+            if system is None or abs(system - amount) > 0.000001:
+                raise ValueError(f"请假{row['source']}自动通过值与系统时长不一致，须人工确认。")
+    raw_daily = values["确认日分摊"] if manual and values["确认日分摊"] else values["日分摊"]
+    daily = {}
+    try:
+        if manual and values["确认日分摊"]:
+            for pair in re.split(r"[;；\n]+", str(raw_daily).strip()):
+                date_text, quantity_text = pair.strip().split("=", 1)
+                if date_text.strip() in daily:
+                    raise ValueError("重复日期")
+                quantity = calc_leave.finite_nonnegative(quantity_text)
+                if quantity is None:
+                    raise ValueError("无效数量")
+                daily[date_text.strip()] = {"hours": quantity if unit == "小时" else None, "days": quantity / 8 if unit == "小时" else quantity}
+        else:
+            daily = json.loads(str(raw_daily or "{}"))
+        if not isinstance(daily, dict):
+            raise ValueError("日分摊须为日期映射")
+        for date_text, item in daily.items():
+            day = date.fromisoformat(date_text)
+            quantity = calc_leave.finite_nonnegative(item.get("hours" if unit == "小时" else "days"))
+            if quantity is None or quantity > (8 if unit == "小时" else 1) + 0.01:
+                raise ValueError("每日数量无效或超限")
+            cross_hour_ledger = unit == "小时" and (start.year, start.month) != (end.year, end.month)
+            if (not cross_hour_ledger and (day.year, day.month) != (month.year, month.month)) or not start.date() <= day <= end.date():
+                raise ValueError("日分摊超出计算月份或请假区间")
+            daily[date_text] = {"hours": quantity if unit == "小时" else None, "days": quantity / 8 if unit == "小时" else quantity}
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError(f"请假{row['source']}日分摊无效：{exc}") from exc
+    if unit == "小时" and (start.year, start.month) != (end.year, end.month) and amount > 0:
+        total = calc_leave.finite_nonnegative(values["确认整段时长"] if manual and values["确认整段时长"] is not None else row.get("sys_hours"))
+        full_total = sum(item["hours"] for item in daily.values())
+        if total is None or abs(full_total - total) > 0.000001:
+            raise ValueError(f"请假{row['source']}整段日分摊与系统总时长不一致；须填写整段确认日分摊，系统时长错误时另填确认整段时长。")
+    daily = {key: item for key, item in daily.items() if key.startswith(f"{month.year:04d}-{month.month:02d}-")}
+    ledger_total = sum(item["hours" if unit == "小时" else "days"] for item in daily.values())
+    if amount == 0 and manual:
+        daily = {}
+    elif abs(ledger_total - amount) > 0.000001:
+        # A single-day correction is unambiguous; multi-day corrections need a ledger.
+        if manual and start.date() == end.date() and (start.year, start.month) == (month.year, month.month) and amount <= (8 if unit == "小时" else 1):
+            daily = {start.date().isoformat(): {"hours": amount if unit == "小时" else None, "days": amount / 8 if unit == "小时" else amount}}
+        else:
+            raise ValueError(f"请假{row['source']}确认值与日分摊不一致；请填写确认日分摊，各日合计须等于本月确认值。")
+    row["final_hours"] = amount if unit == "小时" else None
+    # Keep full precision internally: rounding each approval separately can
+    # make the monthly sum differ from the shared daily ledger (3h+3h -> .76d).
+    row["raw_days"] = amount / 8 if unit == "小时" else amount
+    row["daily_ledger"] = daily
+    row["calculation_month"] = (month.year, month.month)
 
 
 def _normalize_paid_statutory_holidays(days: set[date]) -> set[date]:
@@ -1792,23 +1924,13 @@ def parse_leave_summary(
     汇总时直接使用请假明细中的“最终请假天数”。
     """
     result: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    hours_fallback_rows = 0
     for row in _collect_deduped_leave_rows(path):
+        if schedule_ctx is not None and row.get("calculation_month") != (schedule_ctx["year"], schedule_ctx["month"]):
+            raise ValueError("请假明细计算月份与最终汇总作息月份不一致，请重新生成对应月份请假明细。")
         emp_no = row["emp_no"]
         name = row["name"]
         leave_type = row["leave_type"]
         days = _to_float(row["raw_days"])
-        # Defensive: prefer final hours → days when day column is missing/blank.
-        # Only fall back when days is None (not when explicitly 0), so true zero
-        # outside-month rows stay zero. Prefer 最终请假时长 over 系统时长.
-        if days is None:
-            final_hours = _to_float(row.get("final_hours"))
-            sys_hours = _to_float(row.get("sys_hours"))
-            hours = final_hours if final_hours and final_hours > 0 else sys_hours
-            if hours and hours > 0:
-                days = _overtime_days_from_hours(hours)
-                hours_fallback_rows += 1
-
         key = emp_no or name
         if not key or not leave_type or days is None:
             continue
@@ -1825,10 +1947,10 @@ def parse_leave_summary(
             if identity_records is not None:
                 identity_records.append({"emp_no": emp_no, "name": name})
             result[key][matched] += days
+        else:
+            raise ValueError(f"最终汇总未配置请假类型：{leave_type}，不能静默忽略。")
 
     print(f"[请假明细] 共解析 {len(result)} 名员工的请假数据")
-    if hours_fallback_rows:
-        print(f"[请假明细] 其中 {hours_fallback_rows} 行按系统时长小时折算天数（天数字段为空/0）")
     return dict(result)
 
 
@@ -1843,7 +1965,6 @@ def parse_leave_day_details(
     )
     month_start = schedule_ctx["month_start"]
     month_end = schedule_ctx["month_end"]
-    special_chengdu_name_set = set(special_chengdu_names or ())
 
     for row in _collect_deduped_leave_rows(path):
         key = row["emp_no"] or row["name"]
@@ -1857,65 +1978,13 @@ def parse_leave_day_details(
                 matched = lt
                 break
         if matched is None:
-            continue
-
-        dt_start = calc_leave.to_datetime(row["raw_start"])
-        dt_end = calc_leave.to_datetime(row["raw_end"])
-        if dt_start is None or dt_end is None:
-            continue
-
-        if not calc_leave.has_time_component(row["raw_start"]):
-            dt_start = dt_start.replace(hour=9, minute=0)
-        if not calc_leave.has_time_component(row["raw_end"]):
-            dt_end = dt_end.replace(hour=18, minute=30)
-
-        if (
-            not calc_leave.is_natural_day_leave(matched)
-            and not calc_leave.is_expected_attendance_day_leave(matched)
-        ):
-            cross_month_daily_hours, _ = (
-                calc_leave.allocate_adjacent_cross_month_system_daily_hours(
-                    dt_start,
-                    dt_end,
-                    row.get("sys_hours"),
-                )
-            )
-            if cross_month_daily_hours is not None:
-                for leave_date, hours in cross_month_daily_hours.items():
-                    if month_start <= leave_date <= month_end and hours > 0:
-                        result[key][leave_date][matched] += _round2(hours / 8)
-                continue
-
-        is_cd = _is_chengdu(
-            row["dept1"],
-            row["dept2"],
-            row["dept3"],
-            row["name"],
-            special_chengdu_name_set,
-        )
-        working_days = (
-            schedule_ctx["chengdu_working_days"]
-            if is_cd else schedule_ctx["main_working_days"]
-        )
-        if matched == "产假":
-            expected_key = (
-                "chengdu_expected_attendance_days"
-                if is_cd else "main_expected_attendance_days"
-            )
-            day_calendar = schedule_ctx.get(expected_key) or working_days
-        else:
-            day_calendar = working_days
-
-        cur = max(dt_start.date(), month_start)
-        end = min(dt_end.date(), month_end)
-        while cur <= end:
-            hours = calc_leave.calc_target_month_working_hours(
-                dt_start, dt_end, day_calendar, cur, cur,
-            )
-            day_value = _round2(hours / 8) if hours else None
-            if day_value:
-                result[key][cur][matched] += day_value
-            cur += timedelta(days=1)
+            raise ValueError(f"最终汇总未配置请假类型：{leave_type}。")
+        if row["calculation_month"] != (month_start.year, month_start.month):
+            raise ValueError("请假明细计算月份与最终汇总月份不一致。")
+        for date_text, item in row["daily_ledger"].items():
+            leave_date = date.fromisoformat(date_text)
+            if item["days"] > 0:
+                result[key][leave_date][matched] += item["days"]
 
     return {
         key: {

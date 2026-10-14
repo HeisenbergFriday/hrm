@@ -2,6 +2,7 @@ import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
 import { authRedirectTargetFromLocation, loginPathWithRedirect, rememberAuthRedirect } from '../utils/authRedirect'
 import { csrfHeadersForMethod } from '../utils/csrf'
+import { createToolboxDingtalkSyncClient, type ToolboxDingtalkSyncJob } from '../utils/toolboxDingtalkSync'
 
 export const api = axios.create({
   baseURL: '/api/v1',
@@ -436,6 +437,16 @@ export type GeneratedOrgRoster = {
   skippedEmployeeCount: number
 }
 
+const runToolboxDingtalkSyncJob = createToolboxDingtalkSyncClient({
+  start: (request) => api.post<{ code: number; data: ToolboxDingtalkSyncJob }, { data: ToolboxDingtalkSyncJob }>('/attendance/toolbox/dingtalk-sync/start', request),
+  getJob: (requestId) => api.get<{ code: number; data: ToolboxDingtalkSyncJob }, { data: ToolboxDingtalkSyncJob }>(`/attendance/toolbox/dingtalk-sync/jobs/${encodeURIComponent(requestId)}`),
+  getRun: (runId) => api.get<{ code: number; data: AttendanceToolboxRunResponse }, { data: AttendanceToolboxRunResponse }>(`/attendance/toolbox/runs/${encodeURIComponent(runId)}`),
+  scope: () => {
+    const { orgId, user } = useAuthStore.getState()
+    return JSON.stringify([orgId, user?.id])
+  },
+})
+
 export const attendanceToolboxAPI = {
   getDefaults: () => api.get('/attendance/toolbox/defaults'),
   run: (module: string, data: FormData) => api.post(`/attendance/toolbox/${module}/run`, data, {
@@ -481,7 +492,7 @@ export const attendanceToolboxAPI = {
     responseType: 'blob',
     timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
   }),
-  /** Structured dingtalk sync via workflow API. */
+  /** Page pulls use short start + status polling; multipart callers stay compatible. */
   runDingtalkSyncStructured: (data: FormData | {
     start_date: string
     end_date: string
@@ -495,16 +506,7 @@ export const attendanceToolboxAPI = {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
     }
-    const form = new FormData()
-    form.append('dingtalk_sync_start_date', data.start_date)
-    form.append('dingtalk_sync_end_date', data.end_date)
-    if (data.flow_keys?.length) form.append('dingtalk_sync_flow_keys', data.flow_keys.join(','))
-    if (data.max_instances != null) form.append('dingtalk_sync_max_instances', String(data.max_instances))
-    if (data.padding_days != null) form.append('dingtalk_sync_padding_days', String(data.padding_days))
-    return api.post('/attendance/toolbox/workflows/dingtalk_sync', form, {
-      timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    return runToolboxDingtalkSyncJob(data)
   },
   /** Export default rules, or current session rules when rulesJson is provided. */
   exportRules: (rulesJson?: string) => {

@@ -211,7 +211,7 @@ const modules: ModuleConfig[] = [
   {
     key: 'leave',
     title: '请假明细',
-    description: '从钉钉拉取或上传请假系统导出表，并配合作息表生成请假明细表。',
+    description: '从钉钉拉取或上传请假系统导出表，配合作息表生成明细。下载后处理异常清单，在原明细行填写确认值和确认说明并标记已确认，再上传到最终汇总。',
     outputName: '请假明细表.xlsx',
     fileFields: [
       { name: 'leave_src', label: '请假系统导出表', required: true, templateId: 'leave_export' },
@@ -260,7 +260,7 @@ const modules: ModuleConfig[] = [
   {
     key: 'final',
     title: '最终汇总',
-    description: '汇总花名册、作息、请假、加班、补贴扣款结果，生成最终考勤表。若系统结果不正确，可再上传人工考勤汇总表兜底，避免漏人。',
+    description: '汇总花名册、作息、请假、加班、补贴扣款结果。请上传已完成复核的请假明细表；还有待确认记录时不会生成最终表。若系统结果不正确，可上传人工考勤汇总表兜底。',
     outputName: '最终表.xlsx',
     fileFields: [
       { name: 'final_active', label: '在职花名册', required: true, templateId: 'roster' },
@@ -489,6 +489,8 @@ const fieldRequirements: Record<string, { label: string; badges: FieldBadge[] }[
     { label: '请假明细表', badges: [
       { label: '请假类型', required: true }, { label: '最终请假天数', required: true },
       { label: '发起人工号' }, { label: '发起人姓名' }, { label: '开始时间' }, { label: '结束时间' },
+      { label: '复核状态', required: true }, { label: '确认请假时长/天数' }, { label: '确认说明' },
+      { label: '计算月份', required: true }, { label: '计量口径', required: true }, { label: '日分摊', required: true },
     ]},
     { label: '加班明细表', badges: [
       { label: '2倍加班小时' }, { label: '3倍加班小时' },
