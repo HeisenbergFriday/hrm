@@ -44,6 +44,8 @@ func registerAttendanceToolboxRoutes(attendance *gin.RouterGroup) {
 	attendance.GET("/toolbox/defaults", middleware.RequirePermissionOrMenu([]string{"attendance_manage", "attendance_toolbox_operate"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxDefaults)
 	attendance.POST("/toolbox/:module/run", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), RunAttendanceToolbox)
 	attendance.POST("/toolbox/dingtalk-sync", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunDingtalkSync)
+	attendance.POST("/toolbox/dingtalk-sync/start", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), StartToolboxDingtalkSync)
+	attendance.GET("/toolbox/dingtalk-sync/jobs/:request_id", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), GetToolboxDingtalkSyncJob)
 	// 从本地数据库生成组织花名册 xlsx（active 用户 + 部门路径），供加班模块自动回填。
 	// 权限：attendance_toolbox_operate 或 attendance_manage；不使用 dingtalk_sync，因为数据来自本地数据库。
 	attendance.POST("/toolbox/roster/generate", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), GenerateOrgRoster)

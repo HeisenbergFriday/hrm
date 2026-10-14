@@ -66,7 +66,7 @@ update_when:
 8. **绩效管理**：活动创建 → 参与人刷新 →（沐腾）双门槛开启 + 参与人独立流水线 /（旧流程）统一阶段推进 → 结果确认/公布 → 归档
 9. **员工全生命周期**：入职 → 档案管理 → 转岗 → 离职
 10. **补卡申请**：员工提交补卡 → 审批流程 → 钉钉同步
-11. **考勤工具箱文件计算**：React multipart 参数/Excel → Go `AttendanceToolboxService` → Python runner；Python 生成业务 Excel 与 `kind=meta` JSON，Go 合并到结构化运行响应 `meta/stats`，前端据此展示异常提示且不把 meta 文件作为用户下载结果
+11. **考勤工具箱文件计算**：React multipart 参数/Excel → Go `AttendanceToolboxService` → Python runner；Python 生成业务 Excel 与 `kind=meta` JSON，Go 合并到结构化运行响应 `meta/stats`，前端据此展示异常提示且不把 meta 文件作为用户下载结果。页面请假/加班/异动拉取采用短启动 → 持久化 `ApprovalSyncTask(type=toolbox_dingtalk:<流程集合摘要>)` → flush 202 → 后台 Python → 终态轮询 → 原 scoped run 文件下载；任务唯一锁按组织+流程集合，结果访问另校验当前用户，终态通过独立短上下文写入。
 
 ### 外部 Doris 考勤同步（一期）
 

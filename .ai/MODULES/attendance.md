@@ -293,11 +293,20 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 - 环境变量：`ATTENDANCE_TOOLBOX_RUN_TTL_SECONDS`（默认 2h，夹在 5m–24h）、`ATTENDANCE_TOOLBOX_RUN_MAX_BYTES`（默认 512MB）
 - run 读取/下载权限按模块收紧：`attendance_manage` / `attendance_toolbox_operate` 可读任意模块结果；仅持 `attendance_toolbox_dingtalk_sync` 的用户只可读/下载**自己同 org** 的 `dingtalk_sync` 结果，禁止借此访问 leave/overtime 等其他模块结果。路由中间件放行三种权限，模块边界由 handler `toolboxRunModuleAccessible` 判断。
 
-请假、加班、异动等钉钉审批数据的页面自动回填必须走 structured workflow，按 `kind=export + flow_key` 下载唯一业务文件；`kind=audit` / `kind=meta` 只用于诊断或 API 调用方下载，禁止作为上传输入，也不得因审计文件存在而把结果误判为不可回填的 ZIP。工具箱不展示独立总同步页签；底层 structured/blob API 和各业务模块按需拉取入口继续保留兼容。
+请假、加班、异动等钉钉审批数据的页面自动回填必须通过异步任务获得 structured run，按 `kind=export + flow_key` 下载唯一业务文件；`kind=audit` / `kind=meta` 只用于诊断或 API 调用方下载，禁止作为上传输入，也不得因审计文件存在而把结果误判为不可回填的 ZIP。工具箱不展示独立总同步页签；底层 structured/blob API 和各业务模块按需拉取入口继续保留兼容。
+
+### 工具箱钉钉异步拉取
+
+- `POST /api/v1/attendance/toolbox/dingtalk-sync/start`：JSON 日期范围、`flow_keys`、`padding_days`、`max_instances`；权限为 `attendance_toolbox_dingtalk_sync` 或 `attendance_manage`。只校验本地参数并落库 running，写出并 flush `202 + request_id` 后才调度钉钉/Python 调用。
+- `GET /api/v1/attendance/toolbox/dingtalk-sync/jobs/:request_id`：同权限，按 JWT 组织、当前用户、任务编号查询 running/success/failed；成功携带 `run_id`，复用原 run 与文件下载接口。
+- 任务复用 `ApprovalSyncTask` 表，类型为 `toolbox_dingtalk:<流程集合摘要>`；数据库唯一 active_key 按组织与流程集合防重。同组织请假与页面自动岗位异动可并行，同类拉取冲突返回 409。任务状态跨服务实例持久化，结果文件沿用现有短期 run store。
+- 后台上下文脱离客户端取消，受 `ATTENDANCE_TOOLBOX_TIMEOUT_SECONDS` 上限约束；失败/panic/超时通过独立 5 秒上下文写终态并释放锁。启动和查询回收超过执行上限加 60 秒的 running；迟到完成不得覆盖已回收终态。
+- 页面每 2 秒用默认 10 秒短请求轮询，最多等待 11 分钟；查询传输失败保留任务编号，再次点击继续查同一任务。异步启动接口 404/405/501 直接提示后端版本未更新，不回退旧长请求；已受理任务的查询/结果读取失败不得触发回退或自动重拉。切换用户/组织后停止返回原组织结果。
+- run 文件仍绑定 user+org，服务重启或过期后可能无法下载，持久化任务成功不保证文件永久保存。多实例部署沿用 run store 的路由/存储要求，不能将本机内存结果视为共享存储。
 
 花名册不属于钉钉审批流程：必须调用本地组织数据接口 `/api/v1/attendance/toolbox/roster/generate`，禁止再次使用 `position_transfer` 或其他 structured workflow 导出表充当花名册。花名册与异动流程的权限、数据来源和自动回填状态必须相互独立。
 
-前端回退策略：`shouldFallbackToLegacyToolboxAPI` 仅在结构化接口 **404/405/501** 时回退旧 blob；403/400/410/5xx/超时/网络不得回退，钉钉同步成功后不得重跑。
+前端回退策略：旧 multipart 结构化调用仅在 **404/405/501** 时回退旧 blob；页面钉钉异步启动接口缺失时直接提示版本未更新，不回退旧长请求。403/400/410/其他 5xx/超时/网络不得回退。已受理的钉钉任务查询/结果读取失败禁止回退；钉钉同步成功后不得自动重跑。
 
 ### POST /api/v1/attendance/toolbox/roster/generate
 
@@ -495,7 +504,7 @@ Body：
 - `ATTENDANCE_TOOLBOX_DIR`：考勤工具箱 Python 引擎目录，默认自动查找 `tools/attendance_toolbox/python`
 - `ATTENDANCE_TOOLBOX_PYTHON`：Python 可执行文件，默认 Windows 使用 `python`，Linux 使用 `python3`
 - `ATTENDANCE_TOOLBOX_TIMEOUT_SECONDS`：工具箱单次计算超时时间，默认 600 秒
-- 工具箱长任务超时顺序必须保持：后端 `ATTENDANCE_TOOLBOX_TIMEOUT_SECONDS` 默认 600 秒 < Nginx/外层网关 630 秒 < 前端请求 660 秒。任一外层代理仍为默认约 60 秒时，钉钉同步会被提前截断并返回 504；部署配置见 `deploy/README.md`。
+- 页面钉钉拉取使用短启动与轮询，无需维持整个拉取期间的网关长连接。保留的同步计算/兼容接口仍需保持：后端 `ATTENDANCE_TOOLBOX_TIMEOUT_SECONDS` 默认 600 秒 < Nginx/外层网关 630 秒 < 前端请求 660 秒；部署配置见 `deploy/README.md`。
 
 ---
 
