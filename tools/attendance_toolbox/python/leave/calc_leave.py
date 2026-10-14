@@ -7,8 +7,7 @@ calc_leave.py
   步骤一（清洗，内存处理，不生成中间文件）：
     过滤审批状态/结果，拆分部门层级，规范化时长字段。
     过滤规则：
-      - 只保留审批状态为"完成"、"审批中"、"已修改"的行
-      - 审批状态为"完成"但审批结果为"拒绝"的行也剔除
+      - 先按审批编号选择版本，再剔除撤销/拒绝；未知、审批中、已修改状态进入复核
 
   步骤二（计算）：
     根据 作息表.xlsx 工作日补充三个字段：
@@ -16,13 +15,12 @@ calc_leave.py
     将结果写入 请假明细表.xlsx
 
 计算规则（由行政沟通确认）：
-  - 请假在目标月内、sys为数值 → final = sys（信任HR系统）
-  - 请假跨越上月→目标月、或 sys 为文字天数 → 重新按目标月工作日计算
-  - 请假目标月开始→下月结束   → 只计算目标月内工作日部分
-  - 请假纯在下月及以后        → 标记为「X月考勤」
+  - 普通同月请假：系统与作息时长一致自动通过，否则待确认
+  - 普通跨月小时制：整段系统时长为总账，保存整段日分摊，仅输出目标月份额
+  - 无效时长、未知口径、审批不明确、重叠审批进入异常清单，不写可入账值
   - 产假按作息表应出勤日计算，不按自然日计算
-  - 婚/陪产等文字sys且纯在目标月内 → N×8（N 为天数）
-  - 二/三级部门为售后运营组、电话客服组、成都运营、成都客服且在目标月内 → 直接使用系统时长
+  - 陪产假、丧假按自然日，小时列留空；其他未明确特殊假须人工确认口径
+  - 异地不打卡同样校验；上传覆盖时长须人工确认
   - 成都员工（部门字段含"成都"）使用成都工作日历
 ──────────────────────────────────────────────────────────────────────────────
 """
@@ -30,6 +28,7 @@ calc_leave.py
 import argparse
 import decimal
 import json
+import math
 import os
 import re
 from datetime import date, datetime, timedelta
@@ -96,6 +95,146 @@ ROW_IS_INTERN = 14
 ROW_SOURCE_ROW = 15
 
 MATERNITY_OVERRIDE_APPROVAL_PREFIX = "MANUAL-MATERNITY-"
+
+# Append to the historical 12 columns so existing header-based readers remain usable.
+REVIEW_COLUMNS = (
+    "审批编号", "审批状态", "审批结果", "发起时间", "完成时间",
+    "复核状态", "异常原因", "确认请假时长", "确认请假天数", "确认说明",
+    "日分摊", "确认日分摊", "计算月份", "计量口径", "作息时长", "确认整段时长",
+)
+ORDINARY_HOUR_LEAVE_TYPES = {"事假", "病假", "年假", "调休"}
+
+
+def finite_nonnegative(value):
+    """Parse a quantity without treating blanks, NaN, infinity or negatives as zero."""
+    if value is None or isinstance(value, bool) or str(value).strip() == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+def normalized_leave_interval(raw_start, raw_end):
+    start, end = to_datetime(raw_start), to_datetime(raw_end)
+    if not isinstance(start, datetime) or not isinstance(end, datetime):
+        return None, None
+    if not has_time_component(raw_start):
+        start = start.replace(hour=9, minute=0)
+    if not has_time_component(raw_end):
+        end = end.replace(hour=18, minute=30)
+    return start, end
+
+
+def find_leave_overlap_indexes(rows):
+    """Different approvals for overlapping employee intervals require review."""
+    by_person = {}
+    overlaps = set()
+    for index, row in enumerate(rows):
+        person = normalize_employee_id(row[ROW_EMP_ID]) or normalize_employee_name(row[ROW_EMP_NAME])
+        start, end = normalized_leave_interval(row[ROW_START], row[ROW_END])
+        if not person or not start or not end or start > end:
+            continue
+        by_person.setdefault(person, []).append((start, end, index))
+    for intervals in by_person.values():
+        active = []
+        for start, end, index in sorted(intervals):
+            active = [item for item in active if item[0] > start]
+            for _, other_index in active:
+                overlaps.update((index, other_index))
+            active.append((end, index))
+    return overlaps
+
+
+def review_leave_record(row, schedule_ctx, *, is_chengdu=False, is_all_month_scheduled=False):
+    """Return month-specific quantities, daily ledger and explicit review reasons."""
+    start, end = normalized_leave_interval(row[ROW_START], row[ROW_END])
+    reasons = []
+    if len(row) > 16 and row[16]:
+        reasons.append(str(row[16]))
+    manual_maternity = str(row[ROW_APPROVAL_ID] or "").startswith(MATERNITY_OVERRIDE_APPROVAL_PREFIX)
+    if not str(row[ROW_APPROVAL_ID] or "").strip():
+        reasons.append("缺少审批编号")
+    if not manual_maternity and (
+        str(row[ROW_APPROVAL_STATUS] or "").strip() != "完成"
+        or str(row[ROW_APPROVAL_RESULT] or "").strip() != "同意"
+    ):
+        reasons.append("审批尚未明确完成并同意")
+    kind = str(row[ROW_LEAVE_TYPE] or "").strip()
+    natural = is_natural_day_leave(kind)
+    maternity = is_expected_attendance_day_leave(kind)
+    unit = "自然日" if natural else "应出勤日" if maternity else "小时"
+    if not natural and not maternity and kind not in ORDINARY_HOUR_LEAVE_TYPES:
+        unit = "待明确"
+    daily = {}
+    if start is None or end is None or start > end:
+        return None, None, daily, unit, None, reasons + ["起止时间缺失、无法解析或倒置"]
+    first, last = schedule_ctx["month_start"], schedule_ctx["month_end"]
+    calendar_key = "chengdu_working_days" if is_chengdu else "main_working_days"
+    days = schedule_ctx[calendar_key]
+    if maternity:
+        days = schedule_ctx.get("chengdu_expected_attendance_days" if is_chengdu else "main_expected_attendance_days") or days
+    if is_all_month_scheduled:
+        days = {first + timedelta(days=i) for i in range((last - first).days + 1)}
+    cur = max(start.date(), first)
+    while cur <= min(end.date(), last):
+        hours = calc_target_month_working_hours(start, end, days, cur, cur)
+        value = 1.0 if natural else _round2(hours) / 8
+        if value:
+            daily[cur.isoformat()] = {"days": value, "hours": None if natural else _round2(hours)}
+        cur += timedelta(days=1)
+    schedule_hours = _round2(sum(item["hours"] or 0 for item in daily.values())) if not natural else None
+    raw_system = row[ROW_SYS_DURATION]
+    system_days = parse_day_text(raw_system)
+    system_hours = finite_nonnegative(raw_system)
+    if system_hours is not None and abs(system_hours - _round2(system_hours)) > 0.000001:
+        reasons.append("系统小时精度超过两位小数，需确认精度口径")
+    if not manual_maternity and system_days is None and system_hours is None:
+        reasons.append("系统时长为空或无效")
+    if natural or maternity:
+        # Calendar leave has its own unit; never convert natural days into 8-hour days.
+        total_calendar_days = (end.date() - start.date()).days + 1
+        if system_days is not None and system_days > total_calendar_days:
+            reasons.append("系统天数超过起止日期范围")
+        if natural and system_days is not None and abs(system_days - total_calendar_days) > 0.01:
+            reasons.append("系统天数与自然日区间不一致")
+        if system_hours is not None and system_hours > total_calendar_days * 24:
+            reasons.append("系统时长明显超过起止日期范围")
+        final_days = sum(item["days"] for item in daily.values())
+        if final_days > 0 and (system_days == 0 or system_hours == 0):
+            reasons.append("系统时长为0但区间内存在应计假期")
+        return schedule_hours, final_days, daily, unit, schedule_hours, reasons
+    if kind not in ORDINARY_HOUR_LEAVE_TYPES:
+        reasons.append("假别计算口径未明确")
+    if system_days is not None:
+        reasons.append("普通请假系统单位为天，需确认小时口径")
+        system_hours = None
+    same_month = (start.year, start.month) == (end.year, end.month)
+    if system_hours is not None and same_month:
+        if abs(system_hours - schedule_hours) > 0.000001:
+            reasons.append("系统时长与作息时长不一致")
+        if system_hours > schedule_hours + 0.01:
+            reasons.append("系统时长超过区间内作息上限")
+    elif system_hours is not None:
+        allocation, message = allocate_adjacent_cross_month_system_daily_hours(start, end, system_hours)
+        if allocation is None:
+            reasons.append(message or "跨月时长无法可靠分摊")
+        else:
+            daily = {
+                day.isoformat(): {"hours": hours, "days": _round2(hours / 8)}
+                for day, hours in allocation.items() if hours > 0
+            }
+            if not is_all_month_scheduled and any(
+                first <= day <= last and hours > 0 and day not in days
+                and day not in {start.date(), end.date()}
+                for day, hours in allocation.items()
+            ):
+                reasons.append("跨月日分摊与本月作息不一致")
+    final_hours = _round2(sum(
+        item["hours"] or 0 for day, item in daily.items() if first.isoformat() <= day <= last.isoformat()
+    ))
+    return final_hours, _round2(final_hours / 8), daily, unit, schedule_hours, reasons
 
 SYSTEM_DURATION_DEPTS = {"售后运营组", "电话客服组", "成都运营", "成都客服"}
 
@@ -234,9 +373,9 @@ def has_time_component(val):
 def parse_day_text(sys_val):
     """从 '4天'、'0.5天' 等文本中提取天数，失败返回 None。"""
     if isinstance(sys_val, str):
-        m = re.match(r'([\d.]+)\s*天$', sys_val.strip())
+        m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*天', sys_val.strip())
         if m:
-            return float(m.group(1))
+            return finite_nonnegative(m.group(1))
     return None
 
 
@@ -651,26 +790,28 @@ def calc_from_system_duration(sys_val):
 
 
 def allocate_adjacent_cross_month_system_daily_hours(dt_start, dt_end, sys_val):
-    """将普通数字小时制请假按日分摊，并保证合计等于系统时长。
+    """将跨月普通数字小时制请假按日分摊，并保证合计等于系统时长。
 
-    仅处理跨相邻两个月的数字小时记录。日期/时间用于生成基础日分摊，
-    系统时长作为总账；不超过 8 小时的差额从结束日向前校正。
+    兼容函数名不变，支持跨年和多个自然月。日期/时间用于生成基础日分摊，
+    原始系统时长作为总账；小于 8 小时的差额从结束日向前校正。
     差异过大时返回人工核对提示，交回原作息算法处理。
     """
     if parse_day_text(sys_val) is not None:
         return None, None
     try:
-        system_hours = _round_to_half_hour(_round2(float(sys_val)))
+        system_hours = finite_nonnegative(sys_val)
     except (TypeError, ValueError):
         return None, None
 
-    if system_hours < 0 or dt_start > dt_end:
+    if system_hours is None or dt_start > dt_end:
         return None, "跨月系统时长或日期区间异常，需人工确认"
 
     start_month = date(dt_start.year, dt_start.month, 1)
     end_month = date(dt_end.year, dt_end.month, 1)
-    if _next_month_start(start_month.year, start_month.month) != end_month:
+    if start_month == end_month:
         return None, None
+    if (dt_end.date() - dt_start.date()).days > 366:
+        return None, "普通请假跨度超过一年，需人工确认"
 
     daily_hours = []
     cur = dt_start.date()
@@ -703,6 +844,9 @@ def allocate_adjacent_cross_month_system_daily_hours(dt_start, dt_end, sys_val):
     # 差额统一从结束日向前吸收，使结束月份承担边界时间和半小时舍入差。
     if remaining > 0:
         for item in reversed(daily_hours):
+            # Never invent leave on a zero-hour rest day to force conservation.
+            if item[1] <= 0:
+                continue
             room = _round2(8.0 - item[1])
             if room <= 0:
                 continue
@@ -727,7 +871,7 @@ def allocate_adjacent_cross_month_system_daily_hours(dt_start, dt_end, sys_val):
         return None, "跨月系统时长无法完成月度分摊，需人工确认"
 
     allocated_total = _round2(sum(hours for _, hours in daily_hours))
-    if abs(allocated_total - system_hours) > 0.01:
+    if abs(allocated_total - system_hours) > 0.000001:
         return None, "跨月分摊合计与系统时长不一致，需人工确认"
     return {leave_date: hours for leave_date, hours in daily_hours}, "跨月按系统时长分摊"
 
@@ -891,7 +1035,7 @@ def parse_export_duration(val):
     if val is None:
         return None
     s = str(val).strip()
-    m = re.match(r'^([\d.]+)\s*小时$', s)
+    m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*小时', s)
     if m:
         return float(m.group(1))
     if re.match(r'^\d+\s*天$', s):
@@ -1406,9 +1550,8 @@ def find_offsite_duration_override(row: tuple, overrides: dict | None) -> dict |
 
 def leave_row_overlaps_target_month(row: tuple, schedule_ctx: dict) -> bool:
     """无法解析日期时保留该行，让后续计算输出明确的解析失败提示。"""
-    dt_start = to_datetime(row[ROW_START])
-    dt_end = to_datetime(row[ROW_END])
-    if dt_start is None or dt_end is None:
+    dt_start, dt_end = normalized_leave_interval(row[ROW_START], row[ROW_END])
+    if dt_start is None or dt_end is None or dt_start > dt_end:
         return True
     return (
         dt_start.date() <= schedule_ctx["month_end"]
@@ -1567,9 +1710,14 @@ def get_row_priority(row: tuple) -> tuple:
 
 
 def is_better_leave_row(current_row: tuple, candidate_row: tuple) -> bool:
-    if has_modified_status(current_row, candidate_row):
-        return get_modified_row_priority(candidate_row) > get_modified_row_priority(current_row)
-    return get_row_priority(candidate_row) > get_row_priority(current_row)
+    def version_key(row):
+        terminal_invalid = is_revoked_approval(row[ROW_APPROVAL_STATUS], row[ROW_APPROVAL_RESULT]) or str(row[ROW_APPROVAL_RESULT] or "").strip() == "拒绝"
+        return (
+            to_datetime(row[ROW_FINISH_TIME]) or (datetime.max if terminal_invalid else to_datetime(row[ROW_LAUNCH_TIME]) or datetime.min),
+            terminal_invalid,
+            get_row_priority(row),
+        )
+    return version_key(candidate_row) > version_key(current_row)
 
 
 def clean_export(export_file: str) -> list[tuple]:
@@ -1577,9 +1725,7 @@ def clean_export(export_file: str) -> list[tuple]:
     读取请假系统导出文件，按状态过滤并整理为标准内存格式，返回行列表。
     第0行为表头元组，后续为数据行元组。
 
-    保留条件：
-      审批状态 in {'完成', '审批中', '已修改'}
-      且 NOT (审批状态 == '完成' AND 审批结果 == '拒绝')
+    先按编号/版本时间选最新状态，再排除撤销和拒绝；其他状态保留供复核。
 
     返回列顺序：
       发起人工号 / 发起人姓名 / 一级部门 / 二级部门 / 三级部门
@@ -1612,32 +1758,21 @@ def clean_export(export_file: str) -> list[tuple]:
         ('发起人工号', '发起人姓名', '一级部门', '二级部门', '三级部门',
          '请假类型', '开始时间', '结束时间', '系统时长',
          '发起时间', '完成时间', '审批编号', '审批状态', '审批结果',
-         '是否实习生', '源文件行号')
+         '是否实习生', '源文件行号', '审批版本提示')
     ]
 
     kept = skipped = 0
     revoked = 0
     approval_deduped = 0
     staged_by_approval: dict[str, tuple] = {}
+    ambiguous_modified = set()
     for source_row_num, row in enumerate(rows[1:], start=2):
         if not any(row):       # 全空行跳过
             continue
         status = row[col[normalize_header_name("审批状态")]]
         result = row[col[normalize_header_name("审批结果")]]
 
-        # 过滤：剔除已撤销/终止/作废（含状态或结果文案中的关键字）
-        if is_revoked_approval(status, result):
-            skipped += 1
-            revoked += 1
-            continue
-        # 过滤：仅保留指定审批状态
-        if str(status or "").strip() not in KEEP_STATUSES:
-            skipped += 1
-            continue
-        # 过滤：完成 + 拒绝 也剔除
-        if str(status or "").strip() == "完成" and str(result or "").strip() == "拒绝":
-            skipped += 1
-            continue
+        # Select a version before filtering: a later revocation invalidates old approval.
 
         emp_id     = normalize_employee_id(row[col[normalize_header_name("发起人工号")]])
         emp_name   = normalize_employee_name(row[col[normalize_header_name("发起人姓名")]])
@@ -1661,8 +1796,15 @@ def clean_export(export_file: str) -> list[tuple]:
             launch_time, finish_time, approval_id, status, result,
             is_intern, source_row_num,
         )
-        approval_key = str(approval_id).strip()
+        approval_key = str(approval_id or "").strip() or f"__missing_id_row_{source_row_num}"
+        if str(status or "").strip() == "已修改" and to_datetime(finish_time) is None:
+            ambiguous_modified.add(approval_key)
         existing_row = staged_by_approval.get(approval_key)
+        if existing_row is not None and (
+            existing_row[ROW_EMP_ID] != cleaned_row[ROW_EMP_ID]
+            or existing_row[ROW_EMP_NAME] != cleaned_row[ROW_EMP_NAME]
+        ):
+            raise ValueError("同一审批编号对应不同员工，请核对源表审批编号。")
         if existing_row is None:
             staged_by_approval[approval_key] = cleaned_row
         elif is_better_leave_row(existing_row, cleaned_row):
@@ -1673,7 +1815,13 @@ def clean_export(export_file: str) -> list[tuple]:
         kept += 1
 
     deduped_rows = sorted(staged_by_approval.values(), key=lambda item: item[ROW_SOURCE_ROW])
-    out_rows.extend(deduped_rows)
+    for row in deduped_rows:
+        if is_revoked_approval(row[ROW_APPROVAL_STATUS], row[ROW_APPROVAL_RESULT]) or str(row[ROW_APPROVAL_RESULT] or "").strip() == "拒绝":
+            skipped += 1
+            revoked += 1
+            continue
+        hint = "审批已修改但缺少完成时间，版本待确认" if str(row[ROW_APPROVAL_ID] or "").strip() in ambiguous_modified else ""
+        out_rows.append(row + (hint,))
     print(f'[清洗] 保留 {kept} 行，剔除 {skipped} 行（含不符合审批状态及"完成+拒绝"数据）')
     if revoked:
         print(f'[清洗] 其中已撤销记录 {revoked} 行')
@@ -1832,6 +1980,21 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
     ws_fulltime = wb_out.active
     ws_fulltime.title = '请假明细'
     ws_intern = wb_out.create_sheet('实习生请假明细')
+    ws_issues = wb_out.create_sheet('异常清单')
+    instructions = wb_out.create_sheet('复核说明')
+    for instruction in (
+        "在请假明细/实习生请假明细原行处理；异常清单仅为核对副本，不参与汇总。",
+        "待确认记录不入账。填写确认说明、确认请假时长（小时制）或确认请假天数（日制），再将复核状态改为已确认。",
+        "确认值为计算月份内的份额，可填0表示本月不计入；不得填写整段跨月总时长。",
+        "若跨多日确认值改变日分配，填写确认日分摊，例如2026-09-01=4;2026-09-02=8。小时制填小时，日制填天数。",
+        "跨月确认须核对其他月份，各月份额合计应等于有效审批总时长。",
+        "跨月小时制改动日分配时，确认日分摊须填写整段全部日期；如系统总时长错误，另填确认整段时长并说明依据。",
+        "计量口径待明确的特殊假，请先确认按小时、自然日还是应出勤日计算，再填写该口径和确认值。",
+        "不同审批重叠请逐条核对，可将重复申请确认值填0并说明原因；不能只保留时间相同的一条。",
+        "保留审批信息、计算月份、计量口径和日分摊。处理后上传到最终汇总的请假明细表入口。",
+    ):
+        instructions.append([instruction])
+    overlap_indexes = find_leave_overlap_indexes(src_rows[1:])
 
     print(f'        当前作息月份：{schedule_ctx["year"]}年{schedule_ctx["month"]}月')
 
@@ -1857,9 +2020,10 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
     for i, row in enumerate(src_rows):
         if i == 0:
             # 写表头，追加三列
-            new_header = list(row[:9]) + ['最终请假时长', '最终请假天数', '备注']
+            new_header = list(row[:9]) + ['最终请假时长', '最终请假天数', '备注'] + list(REVIEW_COLUMNS)
             ws_fulltime.append(new_header)
             ws_intern.append(new_header)
+            ws_issues.append(new_header)
             continue
 
         if not row[ROW_EMP_ID] and not row[ROW_EMP_NAME]:  # 工号可空，姓名也空才视为空行
@@ -1874,38 +2038,50 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
         is_all_month_scheduled = employee_name in warehouse_schedule_name_set
 
         offsite_rule = find_offsite_duration_override(row, offsite_duration_overrides)
+        final_h, final_days, daily, unit, schedule_hours, reasons = review_leave_record(
+            row, schedule_ctx, is_chengdu=is_cd, is_all_month_scheduled=is_all_month_scheduled,
+        )
+        remark = None
+        start, end = normalized_leave_interval(row[ROW_START], row[ROW_END])
+        if start and end and (start.year, start.month) != (end.year, end.month) and unit == "小时" and not reasons:
+            remark = "跨月按系统时长分摊"
         if offsite_rule:
-            final_h, final_days, remark = calc_offsite_duration_fields(
-                row,
-                offsite_rule,
-                schedule_ctx,
-                is_chengdu=is_cd,
-                is_all_month_scheduled=is_all_month_scheduled,
-            )
             offsite_matched += 1
             if offsite_rule.get("hours") is not None:
                 offsite_upload_duration += 1
+                reasons.append("异地上传时长需人工确认")
             else:
                 offsite_system_duration += 1
+            remark = "异地不打卡" + ("-" + remark if remark else "")
         else:
             if is_cd and (normalize_employee_name(row[ROW_EMP_NAME]) or "") in special_chengdu_name_set:
                 special_chengdu_matched += 1
-            final_h, final_days, remark = calc_final_fields(
-                row[:9],
-                schedule_ctx,
-                is_chengdu=is_cd,
-                is_all_month_scheduled=is_all_month_scheduled,
-            )
             if (
                 str(row[ROW_APPROVAL_ID] or "").startswith(MATERNITY_OVERRIDE_APPROVAL_PREFIX)
                 and not remark
             ):
                 remark = "长期产假人工兜底"
+        if i - 1 in overlap_indexes:
+            reasons.append("同一员工不同审批时段重叠")
+        state = "待确认" if reasons else "自动通过"
+        reason_text = "；".join(dict.fromkeys(reasons))
+        if reasons:
+            final_h = final_days = None
+            remark = "待确认：" + reason_text
         is_intern, intern_match_source = decide_intern_target(
             row, employee_type_map, special_employee_name_set
         )
         target_ws = ws_intern if is_intern else ws_fulltime
-        target_ws.append(list(row[:9]) + [final_h, final_days, remark])
+        output_row = list(row[:9]) + [final_h, final_days, remark] + [
+            row[ROW_APPROVAL_ID], row[ROW_APPROVAL_STATUS], row[ROW_APPROVAL_RESULT],
+            row[ROW_LAUNCH_TIME], row[ROW_FINISH_TIME], state, reason_text,
+            None, None, None, json.dumps(daily, ensure_ascii=False, sort_keys=True), None,
+            f'{schedule_ctx["year"]:04d}-{schedule_ctx["month"]:02d}', unit, schedule_hours,
+            None,
+        ]
+        target_ws.append(output_row)
+        if reasons:
+            ws_issues.append(output_row)
         processed += 1
         if intern_match_source == "special_list":
             special_list_matched += 1
@@ -1920,7 +2096,35 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
         else:
             fulltime_count += 1
 
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.worksheet.datavalidation import DataValidation
+    for sheet in (ws_fulltime, ws_intern, ws_issues):
+        sheet.freeze_panes = "C2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(wrap_text=True)
+            sheet.column_dimensions[cell.column_letter].width = 18
+        for label in ("备注", "异常原因", "确认说明", "日分摊", "确认日分摊"):
+            column = new_header.index(label) + 1
+            sheet.column_dimensions[openpyxl.utils.get_column_letter(column)].width = 45
+        if sheet is not ws_issues:
+            validation = DataValidation(type="list", formula1='"自动通过,待确认,已确认"')
+            validation.errorTitle = "请选择复核状态"
+            validation.error = "待确认记录填写确认值和说明后，选择已确认。"
+            validation.showErrorMessage = True
+            sheet.add_data_validation(validation)
+            column_letter = openpyxl.utils.get_column_letter(new_header.index("复核状态") + 1)
+            validation.add(f"{column_letter}2:{column_letter}{max(sheet.max_row, 2)}")
+        for cells in sheet.iter_rows(min_row=2):
+            if cells[new_header.index("复核状态")].value == "待确认":
+                cells[new_header.index("复核状态")].fill = PatternFill("solid", fgColor="FFFFE7BA")
+    instructions.column_dimensions["A"].width = 110
+    for cells in instructions.iter_rows():
+        cells[0].alignment = Alignment(wrap_text=True, vertical="top")
+        instructions.row_dimensions[cells[0].row].height = 36
     wb_out.save(out_file)
+    wb_out.close()
     print(f'\n[完成] 已写出 → {out_file}')
     print(f'       共处理 {processed} 行')
     print(f'       全职表 {fulltime_count} 行，实习生子表 {intern_count} 行')

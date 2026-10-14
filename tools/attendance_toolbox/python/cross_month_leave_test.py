@@ -178,12 +178,14 @@ class CrossMonthLeaveAllocationTests(unittest.TestCase):
             worksheet.append([
                 "发起人工号", "发起人姓名", "一级部门", "二级部门", "三级部门",
                 "请假类型", "开始时间", "结束时间", "系统时长", "最终请假时长",
-                "最终请假天数", "备注",
+                "最终请假天数", "备注", "复核状态", "确认请假时长", "确认说明",
+                "计算月份", "计量口径", "日分摊",
             ])
             worksheet.append([
                 "MT0040", "测试员工", "智慧零售", "网点拓展部", "区域",
                 "事假", datetime(2026, 7, 30, 8, 0), datetime(2026, 8, 1, 12, 7),
-                20, 4, 0.5, "跨月按系统时长分摊",
+                20, 4, 0.5, "跨月按系统时长分摊", "已确认", 4, "核对结束月半天",
+                "2026-08", "小时", '{"2026-07-30":{"hours":8,"days":1},"2026-07-31":{"hours":8,"days":1},"2026-08-01":{"hours":4,"days":0.5}}',
             ])
             workbook.save(path)
             workbook.close()
@@ -264,9 +266,9 @@ class TargetMonthLeaveOutputTests(unittest.TestCase):
         self.assertEqual(by_id["MT-CROSS"][9:11], (24, 3))
         self.assertEqual(by_id["MT-OFF-CROSS"][9:11], (8, 1))
         self.assertEqual(by_id["MT-OFF-CROSS"][11], "异地不打卡-跨月按系统时长分摊")
-        self.assertEqual(by_id["MT-OFF-NATURAL"][9:11], (16, 2))
-        self.assertEqual(by_id["MT-OFF-UPLOAD"][9:11], (4, 0.5))
-        self.assertEqual(by_id["MT-OFF-UPLOAD"][11], "异地不打卡-跨月按上传时长分摊")
+        self.assertEqual(by_id["MT-OFF-NATURAL"][9:11], (None, 2))
+        self.assertEqual(by_id["MT-OFF-UPLOAD"][9:11], (None, None))
+        self.assertIn("需人工确认", by_id["MT-OFF-UPLOAD"][11])
 
     def test_july_to_august_leave_keeps_only_august_share(self):
         row = self.row(
