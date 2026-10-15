@@ -27,12 +27,27 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         self.path = Path(self.tmp.name) / "请假明细表.xlsx"
         self.ctx = schedule_context(2026, 9, {date(2026, 9, day) for day in (1, 2, 3, 4)})
 
-    def row(self, hours=8, *, approval="A1", kind="事假", start=None, end=None, status="完成"):
+    def row(
+        self,
+        hours=8,
+        *,
+        approval="A1",
+        kind="事假",
+        start=None,
+        end=None,
+        status="完成",
+        emp_id="MT0001",
+        name="测试员工",
+        instance_id="",
+        process_code="",
+        originator_userid="",
+    ):
         return (
-            "MT0001", "测试员工", "总部", "产品部", "研发组", kind,
+            emp_id, name, "总部", "产品部", "研发组", kind,
             start or datetime(2026, 9, 1, 9), end or datetime(2026, 9, 1, 18, 30),
             hours, datetime(2026, 8, 25, 9), datetime(2026, 8, 26, 9),
             approval, status, "同意", False, 2,
+            instance_id, process_code, originator_userid,
         )
 
     def generate(self, rows):
@@ -40,6 +55,7 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
             "发起人工号", "发起人姓名", "一级部门", "二级部门", "三级部门", "请假类型",
             "开始时间", "结束时间", "系统时长", "发起时间", "完成时间", "审批编号",
             "审批状态", "审批结果", "是否实习生", "源文件行号",
+            "审批实例ID", "审批流程码", "发起人钉钉UserID",
         )
         with contextlib.redirect_stdout(io.StringIO()):
             calc_leave.process([header] + rows, str(self.path), self.ctx)
@@ -136,6 +152,88 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             rows = calc_leave.clean_export(str(path))
         self.assertEqual(len(rows), 1)
+
+    def test_same_business_id_different_originators_are_kept_end_to_end(self):
+        path = Path(self.tmp.name) / "source-with-identity.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append([
+            "审批状态", "审批结果", "发起人工号", "发起人姓名", "发起人部门",
+            "请假类型", "开始时间", "结束时间", "时长", "审批编号",
+            "发起时间", "完成时间", "审批实例ID", "审批流程码", "发起人钉钉UserID",
+        ])
+        for emp_id, name, instance_id, originator in (
+            ("MT1", "员工甲", "pi-1", "ding-1"),
+            ("MT2", "员工乙", "pi-2", "ding-2"),
+        ):
+            ws.append([
+                "完成", "同意", emp_id, name, "总部", "事假",
+                datetime(2026, 9, 1, 9), datetime(2026, 9, 1, 18, 30), "8小时", "BIZ-1",
+                datetime(2026, 8, 25, 9), datetime(2026, 8, 26, 9),
+                instance_id, "PROC-LEAVE", originator,
+            ])
+        wb.save(path)
+        wb.close()
+
+        with contextlib.redirect_stdout(io.StringIO()) as stdout:
+            rows = calc_leave.clean_export(str(path))
+            calc_leave.process(rows, str(self.path), self.ctx)
+        self.assertEqual(3, len(rows))
+        self.assertIn("跨发起人复用", stdout.getvalue())
+        summary = calc_finally.parse_leave_summary(str(self.path), self.ctx)
+        self.assertEqual(1, summary["MT1"]["事假"])
+        self.assertEqual(1, summary["MT2"]["事假"])
+        result = openpyxl.load_workbook(self.path, data_only=True)
+        try:
+            sheet = result["请假明细"]
+            columns = {cell.value: cell.column for cell in sheet[1]}
+            self.assertTrue(sheet.column_dimensions[sheet.cell(1, columns["审批实例ID"]).column_letter].hidden)
+        finally:
+            result.close()
+
+    def test_same_originator_business_id_still_selects_latest_revocation(self):
+        path = Path(self.tmp.name) / "source-versioned.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append([
+            "审批状态", "审批结果", "发起人工号", "发起人姓名", "发起人部门",
+            "请假类型", "开始时间", "结束时间", "时长", "审批编号", "完成时间",
+            "审批实例ID", "审批流程码", "发起人钉钉UserID",
+        ])
+        for status, finish, instance_id in (
+            ("完成", "2026-09-02 12:00", "pi-old"),
+            ("已撤销", "2026-09-03 12:00", "pi-new"),
+        ):
+            ws.append([
+                status, "同意", "MT1", "员工", "总部", "事假",
+                "2026-09-01", "2026-09-01", "8小时", "BIZ-1", finish,
+                instance_id, "PROC-LEAVE", "ding-1",
+            ])
+        wb.save(path)
+        wb.close()
+        with contextlib.redirect_stdout(io.StringIO()):
+            rows = calc_leave.clean_export(str(path))
+        self.assertEqual(1, len(rows))
+
+    def test_same_instance_id_with_different_employee_is_rejected(self):
+        path = Path(self.tmp.name) / "source-instance-conflict.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append([
+            "审批状态", "审批结果", "发起人工号", "发起人姓名", "发起人部门",
+            "请假类型", "开始时间", "结束时间", "时长", "审批编号",
+            "审批实例ID", "审批流程码", "发起人钉钉UserID",
+        ])
+        for emp_id, name in (("MT1", "员工甲"), ("MT2", "员工乙")):
+            ws.append([
+                "完成", "同意", emp_id, name, "总部", "事假",
+                "2026-09-01", "2026-09-01", "8小时", "BIZ-1",
+                "pi-conflict", "PROC-LEAVE", "ding-1",
+            ])
+        wb.save(path)
+        wb.close()
+        with self.assertRaisesRegex(ValueError, "同一审批实例ID"):
+            calc_leave.clean_export(str(path))
 
     def test_pending_approval_and_modified_status_require_review(self):
         for status in ("审批中", "已修改", "未知状态"):

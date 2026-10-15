@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import io
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
+
+import openpyxl
 
 
 TOOLBOX_ROOT = Path(__file__).resolve().parent
@@ -103,6 +106,52 @@ class DingTalkQueryWindowTests(unittest.TestCase):
         self.assertEqual(["pi-1", "pi-2"], result.instance_ids)
         self.assertTrue(result.truncated)
         self.assertEqual(2, result.detail_count)
+
+
+class DingTalkLeaveExportIdentityTests(unittest.TestCase):
+    def test_leave_export_preserves_long_identifiers_as_text(self) -> None:
+        class FakeClient:
+            def prefetch_users(self, _userids):
+                return None
+
+            def get_user(self, userid):
+                return {"job_number": f"JOB-{userid}", "name": f"员工-{userid}"}
+
+        instance = {
+            "_sync_process_instance_id": "pi-12345678901234567890",
+            "_sync_process_code": "PROC-LEAVE",
+            "business_id": 12345678901234567890,
+            "originator_userid": "ding-user-1",
+            "originator_dept_name": "总部",
+            "status": "COMPLETED",
+            "result": "agree",
+            "form_component_values": [{
+                "component_type": "DDHolidayField",
+                "value": ["2026-09-01 09:00", "2026-09-01 18:30", 8, "hour", "事假"],
+            }],
+        }
+
+        export = ds.DingTalkExporter(FakeClient()).build_leave_export(
+            [instance], "请假系统导出.xlsx"
+        )
+        workbook = openpyxl.load_workbook(io.BytesIO(export.data), data_only=True)
+        try:
+            worksheet = workbook["请假系统导出"]
+            columns = {cell.value: cell.column for cell in worksheet[1]}
+            self.assertEqual(
+                "12345678901234567890",
+                worksheet.cell(2, columns["审批编号"]).value,
+            )
+            self.assertEqual(
+                "pi-12345678901234567890",
+                worksheet.cell(2, columns["审批实例ID"]).value,
+            )
+            self.assertEqual("PROC-LEAVE", worksheet.cell(2, columns["审批流程码"]).value)
+            self.assertEqual("ding-user-1", worksheet.cell(2, columns["发起人钉钉UserID"]).value)
+            for label in ("审批编号", "审批实例ID", "审批流程码", "发起人钉钉UserID"):
+                self.assertEqual("@", worksheet.cell(2, columns[label]).number_format)
+        finally:
+            workbook.close()
 
 
 if __name__ == "__main__":

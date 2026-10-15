@@ -7,7 +7,8 @@ calc_leave.py
   步骤一（清洗，内存处理，不生成中间文件）：
     过滤审批状态/结果，拆分部门层级，规范化时长字段。
     过滤规则：
-      - 先按审批编号选择版本，再剔除撤销/拒绝；未知、审批中、已修改状态进入复核
+      - 自动同步按流程码+审批编号+发起人钉钉ID选择版本，再剔除撤销/拒绝
+      - 旧人工表缺少技术身份列时继续按审批编号选择版本
 
   步骤二（计算）：
     根据 作息表.xlsx 工作日补充三个字段：
@@ -93,6 +94,10 @@ ROW_APPROVAL_STATUS = 12
 ROW_APPROVAL_RESULT = 13
 ROW_IS_INTERN = 14
 ROW_SOURCE_ROW = 15
+ROW_APPROVAL_INSTANCE_ID = 16
+ROW_APPROVAL_PROCESS_CODE = 17
+ROW_APPROVAL_ORIGINATOR_USER_ID = 18
+ROW_VERSION_HINT = 19
 
 MATERNITY_OVERRIDE_APPROVAL_PREFIX = "MANUAL-MATERNITY-"
 
@@ -102,7 +107,14 @@ REVIEW_COLUMNS = (
     "复核状态", "异常原因", "确认请假时长", "确认请假天数", "确认说明",
     "日分摊", "确认日分摊", "计算月份", "计量口径", "作息时长", "确认整段时长",
 )
+APPROVAL_IDENTITY_COLUMNS = (
+    "审批实例ID", "审批流程码", "发起人钉钉UserID",
+)
 ORDINARY_HOUR_LEAVE_TYPES = {"事假", "病假", "年假", "调休"}
+
+
+def row_value(row, index, default=None):
+    return row[index] if len(row) > index else default
 
 
 def finite_nonnegative(value):
@@ -151,8 +163,8 @@ def review_leave_record(row, schedule_ctx, *, is_chengdu=False, is_all_month_sch
     """Return month-specific quantities, daily ledger and explicit review reasons."""
     start, end = normalized_leave_interval(row[ROW_START], row[ROW_END])
     reasons = []
-    if len(row) > 16 and row[16]:
-        reasons.append(str(row[16]))
+    if row_value(row, ROW_VERSION_HINT):
+        reasons.append(str(row_value(row, ROW_VERSION_HINT)))
     manual_maternity = str(row[ROW_APPROVAL_ID] or "").startswith(MATERNITY_OVERRIDE_APPROVAL_PREFIX)
     if not str(row[ROW_APPROVAL_ID] or "").strip():
         reasons.append("缺少审批编号")
@@ -1081,6 +1093,11 @@ def normalize_employee_id(emp_id):
     return text
 
 
+def normalize_approval_identity(value):
+    """Keep approval identifiers textual, including long numeric values."""
+    return normalize_employee_id(value)
+
+
 def parse_special_employee_names(text: str | None) -> tuple[str, ...]:
     if not text:
         return ()
@@ -1725,13 +1742,16 @@ def clean_export(export_file: str) -> list[tuple]:
     读取请假系统导出文件，按状态过滤并整理为标准内存格式，返回行列表。
     第0行为表头元组，后续为数据行元组。
 
-    先按编号/版本时间选最新状态，再排除撤销和拒绝；其他状态保留供复核。
+    自动同步表按流程码+审批编号+发起人钉钉ID归组版本；审批实例ID
+    保证单条记录唯一。旧人工表没有技术身份列时继续按审批编号归组。
+    选出最新状态后再排除撤销和拒绝；其他状态保留供复核。
 
     返回列顺序：
       发起人工号 / 发起人姓名 / 一级部门 / 二级部门 / 三级部门
       / 请假类型 / 开始时间 / 结束时间 / 系统时长
       / 发起时间 / 完成时间 / 审批编号 / 审批状态 / 审批结果
-      / 是否实习生 / 源文件行号
+      / 是否实习生 / 源文件行号 / 审批实例ID / 审批流程码
+      / 发起人钉钉UserID / 审批版本提示
     """
     if not os.path.exists(export_file):
         raise FileNotFoundError(f"未找到请假系统导出文件：{export_file}")
@@ -1758,13 +1778,16 @@ def clean_export(export_file: str) -> list[tuple]:
         ('发起人工号', '发起人姓名', '一级部门', '二级部门', '三级部门',
          '请假类型', '开始时间', '结束时间', '系统时长',
          '发起时间', '完成时间', '审批编号', '审批状态', '审批结果',
-         '是否实习生', '源文件行号', '审批版本提示')
+         '是否实习生', '源文件行号', '审批实例ID', '审批流程码',
+         '发起人钉钉UserID', '审批版本提示')
     ]
 
     kept = skipped = 0
     revoked = 0
     approval_deduped = 0
-    staged_by_approval: dict[str, tuple] = {}
+    staged_by_version: dict[tuple, tuple] = {}
+    staged_by_instance: dict[str, tuple] = {}
+    originators_by_business: dict[tuple[str, str], set[str]] = {}
     ambiguous_modified = set()
     for source_row_num, row in enumerate(rows[1:], start=2):
         if not any(row):       # 全空行跳过
@@ -1785,7 +1808,21 @@ def clean_export(export_file: str) -> list[tuple]:
         finish_key = normalize_header_name("完成时间")
         launch_time = row[col[launch_key]] if launch_key in col else None
         finish_time = row[col[finish_key]] if finish_key in col else None
-        approval_id = row[col[normalize_header_name("审批编号")]]
+        approval_id = normalize_approval_identity(
+            row[col[normalize_header_name("审批编号")]]
+        )
+        instance_col = normalize_header_name("审批实例ID")
+        process_col = normalize_header_name("审批流程码")
+        originator_col = normalize_header_name("发起人钉钉UserID")
+        approval_instance_id = normalize_approval_identity(
+            row[col[instance_col]] if instance_col in col else None
+        )
+        approval_process_code = normalize_approval_identity(
+            row[col[process_col]] if process_col in col else None
+        )
+        approval_originator_user_id = normalize_approval_identity(
+            row[col[originator_col]] if originator_col in col else None
+        )
         is_intern = False
         if intern_col_name:
             is_intern = is_intern_from_position(row[col[intern_col_name]])
@@ -1795,38 +1832,80 @@ def clean_export(export_file: str) -> list[tuple]:
             leave_type, start_time, end_time, duration,
             launch_time, finish_time, approval_id, status, result,
             is_intern, source_row_num,
+            approval_instance_id, approval_process_code, approval_originator_user_id,
         )
-        approval_key = str(approval_id or "").strip() or f"__missing_id_row_{source_row_num}"
+        if approval_instance_id:
+            instance_row = staged_by_instance.get(approval_instance_id)
+            if instance_row is not None and (
+                instance_row[ROW_EMP_ID] != cleaned_row[ROW_EMP_ID]
+                or instance_row[ROW_EMP_NAME] != cleaned_row[ROW_EMP_NAME]
+                or (
+                    instance_row[ROW_APPROVAL_ORIGINATOR_USER_ID]
+                    and cleaned_row[ROW_APPROVAL_ORIGINATOR_USER_ID]
+                    and instance_row[ROW_APPROVAL_ORIGINATOR_USER_ID]
+                    != cleaned_row[ROW_APPROVAL_ORIGINATOR_USER_ID]
+                )
+            ):
+                raise ValueError("同一审批实例ID对应不同员工，请核对钉钉审批源数据。")
+            if instance_row is None:
+                staged_by_instance[approval_instance_id] = cleaned_row
+
+        if approval_id and approval_originator_user_id:
+            version_key = (
+                "approval",
+                approval_process_code,
+                approval_id,
+                approval_originator_user_id,
+            )
+            business_key = (approval_process_code, approval_id)
+            originators_by_business.setdefault(business_key, set()).add(
+                approval_originator_user_id
+            )
+        elif approval_id:
+            # Legacy/manual files do not contain stable DingTalk identity fields.
+            # Preserve the historical fail-closed behavior instead of guessing.
+            version_key = ("legacy_approval", approval_id)
+        elif approval_instance_id:
+            version_key = ("instance", approval_process_code, approval_instance_id)
+        else:
+            version_key = ("__missing_id_row__", source_row_num)
         if str(status or "").strip() == "已修改" and to_datetime(finish_time) is None:
-            ambiguous_modified.add(approval_key)
-        existing_row = staged_by_approval.get(approval_key)
-        if existing_row is not None and (
+            ambiguous_modified.add(version_key)
+        existing_row = staged_by_version.get(version_key)
+        if version_key[0] == "legacy_approval" and existing_row is not None and (
             existing_row[ROW_EMP_ID] != cleaned_row[ROW_EMP_ID]
             or existing_row[ROW_EMP_NAME] != cleaned_row[ROW_EMP_NAME]
         ):
             raise ValueError("同一审批编号对应不同员工，请核对源表审批编号。")
         if existing_row is None:
-            staged_by_approval[approval_key] = cleaned_row
+            staged_by_version[version_key] = cleaned_row
         elif is_better_leave_row(existing_row, cleaned_row):
-            staged_by_approval[approval_key] = cleaned_row
+            staged_by_version[version_key] = cleaned_row
             approval_deduped += 1
         else:
             approval_deduped += 1
         kept += 1
 
-    deduped_rows = sorted(staged_by_approval.values(), key=lambda item: item[ROW_SOURCE_ROW])
-    for row in deduped_rows:
+    deduped_entries = sorted(
+        staged_by_version.items(), key=lambda item: item[1][ROW_SOURCE_ROW]
+    )
+    for version_key, row in deduped_entries:
         if is_revoked_approval(row[ROW_APPROVAL_STATUS], row[ROW_APPROVAL_RESULT]) or str(row[ROW_APPROVAL_RESULT] or "").strip() == "拒绝":
             skipped += 1
             revoked += 1
             continue
-        hint = "审批已修改但缺少完成时间，版本待确认" if str(row[ROW_APPROVAL_ID] or "").strip() in ambiguous_modified else ""
+        hint = "审批已修改但缺少完成时间，版本待确认" if version_key in ambiguous_modified else ""
         out_rows.append(row + (hint,))
     print(f'[清洗] 保留 {kept} 行，剔除 {skipped} 行（含不符合审批状态及"完成+拒绝"数据）')
     if revoked:
         print(f'[清洗] 其中已撤销记录 {revoked} 行')
     if approval_deduped:
-        print(f'[清洗] 已按审批编号保留更有效记录，去重 {approval_deduped} 行')
+        print(f'[清洗] 已按审批版本组保留更有效记录，去重 {approval_deduped} 行')
+    business_collisions = sum(
+        1 for originators in originators_by_business.values() if len(originators) > 1
+    )
+    if business_collisions:
+        print(f'[清洗] 检测到 {business_collisions} 个审批编号跨发起人复用，已按审批实例分别保留')
     if intern_col_name:
         print(f'[清洗] 实习生识别字段：{intern_col_name}')
     else:
@@ -1928,6 +2007,7 @@ def merge_maternity_leave_overrides(
             None, None, None,
             f"{MATERNITY_OVERRIDE_APPROVAL_PREFIX}{index}",
             "完成", "同意", False, next_source_row,
+            "", "", "",
         ))
         next_source_row += 1
         added += 1
@@ -2020,7 +2100,12 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
     for i, row in enumerate(src_rows):
         if i == 0:
             # 写表头，追加三列
-            new_header = list(row[:9]) + ['最终请假时长', '最终请假天数', '备注'] + list(REVIEW_COLUMNS)
+            new_header = (
+                list(row[:9])
+                + ['最终请假时长', '最终请假天数', '备注']
+                + list(REVIEW_COLUMNS)
+                + list(APPROVAL_IDENTITY_COLUMNS)
+            )
             ws_fulltime.append(new_header)
             ws_intern.append(new_header)
             ws_issues.append(new_header)
@@ -2078,6 +2163,9 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
             None, None, None, json.dumps(daily, ensure_ascii=False, sort_keys=True), None,
             f'{schedule_ctx["year"]:04d}-{schedule_ctx["month"]:02d}', unit, schedule_hours,
             None,
+            row_value(row, ROW_APPROVAL_INSTANCE_ID, ""),
+            row_value(row, ROW_APPROVAL_PROCESS_CODE, ""),
+            row_value(row, ROW_APPROVAL_ORIGINATOR_USER_ID, ""),
         ]
         target_ws.append(output_row)
         if reasons:
@@ -2108,6 +2196,12 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
         for label in ("备注", "异常原因", "确认说明", "日分摊", "确认日分摊"):
             column = new_header.index(label) + 1
             sheet.column_dimensions[openpyxl.utils.get_column_letter(column)].width = 45
+        for label in APPROVAL_IDENTITY_COLUMNS:
+            column = new_header.index(label) + 1
+            column_letter = openpyxl.utils.get_column_letter(column)
+            sheet.column_dimensions[column_letter].hidden = True
+            for row_index in range(2, sheet.max_row + 1):
+                sheet.cell(row_index, column).number_format = "@"
         if sheet is not ws_issues:
             validation = DataValidation(type="list", formula1='"自动通过,待确认,已确认"')
             validation.errorTitle = "请选择复核状态"

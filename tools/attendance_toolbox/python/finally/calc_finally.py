@@ -787,7 +787,7 @@ def _parse_schedule_summary_days(path: str, summary_label: str) -> tuple[int | N
 
 
 def _collect_deduped_leave_rows(path: str) -> list[dict]:
-    """Read approved/reviewed rows; identity is approval ID, never just timestamps."""
+    """Read approved/reviewed rows using instance ID with legacy fallback."""
     wb = openpyxl.load_workbook(path, data_only=True)
     deduped_rows: dict[tuple, dict] = {}
     matched_sheets = 0
@@ -812,6 +812,10 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
         review_cols = {
             field: _find_col_exact(header_vals, field)
             for field in calc_leave.REVIEW_COLUMNS
+        }
+        identity_cols = {
+            field: _find_col_exact(header_vals, field)
+            for field in calc_leave.APPROVAL_IDENTITY_COLUMNS
         }
         col_final_hours = _find_col(
             header_vals,
@@ -862,13 +866,28 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
                 column = review_cols[field]
                 return ws.cell(r, column + 1).value if column is not None else None
 
+            def identity_value(field):
+                column = identity_cols[field]
+                return ws.cell(r, column + 1).value if column is not None else None
+
             state = str(review_value("复核状态") or "").strip()
             if state not in {"自动通过", "已确认"}:
                 wb.close()
                 raise ValueError(f"请假明细[{sn}]第{r}行尚未确认或缺少复核状态；请在原明细填写确认值、确认说明并标记已确认，再上传到最终汇总。")
 
             approval_id = str(review_value("审批编号") or "").strip()
-            dedupe_key = ("approval", approval_id) if approval_id else ("__row__", sn, r)
+            approval_instance_id = str(identity_value("审批实例ID") or "").strip()
+            approval_process_code = str(identity_value("审批流程码") or "").strip()
+            approval_originator_user_id = str(
+                identity_value("发起人钉钉UserID") or ""
+            ).strip()
+            dedupe_key = (
+                ("instance", approval_process_code, approval_instance_id)
+                if approval_instance_id
+                else ("approval", approval_id)
+                if approval_id
+                else ("__row__", sn, r)
+            )
 
             current_row = {
                 "emp_no": emp_no,
@@ -886,6 +905,9 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
                 ),
                 "raw_days": raw_days,
                 "approval_id": approval_id,
+                "approval_instance_id": approval_instance_id,
+                "approval_process_code": approval_process_code,
+                "approval_originator_user_id": approval_originator_user_id,
                 "review_state": state,
                 "review_values": {field: review_value(field) for field in calc_leave.REVIEW_COLUMNS},
                 "source": f"[{sn}]第{r}行",
@@ -904,10 +926,15 @@ def _collect_deduped_leave_rows(path: str) -> list[dict]:
 
             if current_row != existing_row:
                 # Identical ID with differing ledgers must not silently choose an amount.
-                comparable = ("emp_no", "name", "leave_type", "raw_start", "raw_end", "raw_days", "final_hours", "review_values")
+                comparable = (
+                    "emp_no", "name", "leave_type", "raw_start", "raw_end",
+                    "raw_days", "final_hours", "approval_originator_user_id",
+                    "review_values",
+                )
                 if any(current_row[field] != existing_row[field] for field in comparable):
                     wb.close()
-                    raise ValueError(f"同一审批编号存在不同请假结果：{current_row['source']}；请只保留确认后的有效版本。")
+                    identity_label = "审批实例ID" if approval_instance_id else "审批编号"
+                    raise ValueError(f"同一{identity_label}存在不同请假结果：{current_row['source']}；请只保留确认后的有效版本。")
 
     wb.close()
     if matched_sheets == 0:
@@ -959,7 +986,11 @@ def _resolve_leave_review(row: dict) -> None:
     if amount > 0 and not (row["emp_no"] or row["name"]):
         raise ValueError(f"请假{row['source']}缺少员工身份，不能入账。")
     if not manual:
-        if not row["approval_id"] or str(values["审批状态"] or "").strip() != "完成" or str(values["审批结果"] or "").strip() != "同意":
+        if (
+            not (row["approval_id"] or row.get("approval_instance_id"))
+            or str(values["审批状态"] or "").strip() != "完成"
+            or str(values["审批结果"] or "").strip() != "同意"
+        ):
             raise ValueError(f"请假{row['source']}审批未明确生效，须人工确认。")
         if str(values["异常原因"] or "").strip():
             raise ValueError(f"请假{row['source']}仍有异常原因，须人工确认。")
