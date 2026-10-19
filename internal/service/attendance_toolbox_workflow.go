@@ -554,6 +554,7 @@ func mapLegacyProcessingForm(module string, form *multipart.Form) *multipart.For
 	case "leave":
 		copyFiles("leave_src", "input", "leave_src")
 		copyFiles("leave_schedule", "schedule", "leave_schedule")
+		copyFiles("leave_reviewed", "reviewed", "leave_reviewed")
 		copyFiles("leave_offsite_duration", "offsite_duration", "leave_offsite_duration")
 	case "overtime":
 		copyFiles("overtime_src", "input", "overtime_src")

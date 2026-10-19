@@ -9,6 +9,7 @@ func TestMapLegacyProcessingForm_LeaveAndOvertime(t *testing.T) {
 	form := &multipart.Form{
 		Value: map[string][]string{},
 		File: map[string][]*multipart.FileHeader{
+			"reviewed": {{Filename: "reviewed.xlsx", Size: 10}},
 			"input":    {{Filename: "请假系统导出.xlsx", Size: 10}},
 			"schedule": {{Filename: "作息表.xlsx", Size: 10}},
 		},
@@ -16,6 +17,9 @@ func TestMapLegacyProcessingForm_LeaveAndOvertime(t *testing.T) {
 	mapped := mapLegacyProcessingForm("leave", form)
 	if len(mapped.File["leave_src"]) != 1 {
 		t.Fatalf("leave_src missing: %+v", mapped.File)
+	}
+	if len(mapped.File["leave_reviewed"]) != 1 {
+		t.Fatalf("leave_reviewed missing")
 	}
 	if len(mapped.File["leave_schedule"]) != 1 {
 		t.Fatalf("leave_schedule missing")

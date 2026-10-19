@@ -57,8 +57,9 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
             "审批状态", "审批结果", "是否实习生", "源文件行号",
             "审批实例ID", "审批流程码", "发起人钉钉UserID",
         )
+        self.source_rows = [header] + rows
         with contextlib.redirect_stdout(io.StringIO()):
-            calc_leave.process([header] + rows, str(self.path), self.ctx)
+            calc_leave.process(self.source_rows, str(self.path), self.ctx)
 
     def edit(self, changes, row=2):
         wb = openpyxl.load_workbook(self.path)
@@ -86,21 +87,24 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         details = calc_finally.parse_leave_day_details(str(self.path), self.ctx)
         self.assertEqual(details["MT0001"][date(2026, 9, 1)]["事假"], 1)
 
-    def test_mismatch_is_blank_and_final_stops(self):
+    def test_mismatch_uses_schedule_result_without_exception(self):
         self.generate([self.row(4)])
         values, issues = self.values()
         self.assertEqual(values["系统时长"], 4)
         self.assertEqual(values["作息时长"], 8)
-        self.assertIsNone(values["最终请假时长"])
-        self.assertEqual(issues, 1)
-        with self.assertRaisesRegex(ValueError, "尚未确认"):
-            calc_finally.parse_leave_summary(str(self.path), self.ctx)
+        self.assertEqual(values["最终请假时长"], 8)
+        self.assertEqual(values["复核状态"], "自动通过")
+        self.assertEqual(issues, 0)
+        self.assertEqual(calc_finally.parse_leave_summary(str(self.path), self.ctx)["MT0001"]["事假"], 1)
 
     def test_confirmation_changes_both_summary_and_daily_detail(self):
         self.generate([self.row(4)])
         self.edit({"复核状态": "已确认", "确认请假时长": 4, "确认说明": "核对审批，实际请半天"})
-        summary = calc_finally.parse_leave_summary(str(self.path), self.ctx)
-        detail = calc_finally.parse_leave_day_details(str(self.path), self.ctx)
+        regenerated = Path(self.tmp.name) / "regenerated.xlsx"
+        with contextlib.redirect_stdout(io.StringIO()):
+            calc_leave.process(self.source_rows, str(regenerated), self.ctx, reviewed_file=str(self.path))
+        summary = calc_finally.parse_leave_summary(str(regenerated), self.ctx)
+        detail = calc_finally.parse_leave_day_details(str(regenerated), self.ctx)
         self.assertEqual(summary["MT0001"]["事假"], 0.5)
         self.assertEqual(detail["MT0001"][date(2026, 9, 1)]["事假"], 0.5)
 
@@ -109,6 +113,24 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         self.edit({"复核状态": "已确认", "确认请假时长": 0, "确认说明": "重复申请，本月不入账"})
         self.assertEqual(calc_finally.parse_leave_summary(str(self.path), self.ctx), {})
         self.assertEqual(calc_finally.parse_leave_day_details(str(self.path), self.ctx), {})
+
+    def test_final_amount_entry_is_reused_when_explicitly_confirmed(self):
+        self.generate([self.row(4)])
+        self.edit({"复核状态": "已确认", "最终请假时长": 4, "确认说明": "人事已核对"})
+        regenerated = Path(self.tmp.name) / "regenerated-final.xlsx"
+        with contextlib.redirect_stdout(io.StringIO()):
+            calc_leave.process(self.source_rows, str(regenerated), self.ctx, reviewed_file=str(self.path))
+        workbook = openpyxl.load_workbook(regenerated, data_only=True)
+        worksheet = workbook["请假明细"]
+        columns = {cell.value: cell.column for cell in worksheet[1]}
+        self.assertEqual(worksheet.cell(2, columns["确认请假时长"]).value, 4)
+        self.assertEqual(worksheet.cell(2, columns["最终请假时长"]).value, 4)
+        self.assertEqual(worksheet.cell(2, columns["复核状态"]).value, "已确认")
+        workbook.close()
+        rows = calc_finally._collect_deduped_leave_rows(str(regenerated))
+        self.assertEqual(rows[0]["raw_days"], 0.5)
+        summary = calc_finally.parse_leave_summary(str(regenerated), self.ctx)
+        self.assertEqual(summary["MT0001"]["事假"], 0.5)
 
     def test_state_only_and_missing_reason_cannot_bypass_review(self):
         self.generate([self.row(4)])
@@ -119,13 +141,14 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "确认值"):
             calc_finally.parse_leave_summary(str(self.path), self.ctx)
 
-    def test_bad_system_values_are_visible_pending_records(self):
+    def test_bad_system_values_use_calculable_schedule_result(self):
         for amount in (None, "", "坏数据", "3..5小时", "3..5天", -1, "NaN", "inf", 80):
             with self.subTest(amount=amount):
                 self.generate([self.row(amount)])
-                values, _ = self.values()
-                self.assertEqual(values["复核状态"], "待确认")
-                self.assertIsNone(values["最终请假天数"])
+                values, issues = self.values()
+                self.assertEqual(values["复核状态"], "自动通过")
+                self.assertEqual(values["最终请假时长"], 8)
+                self.assertEqual(issues, 0)
 
     def test_missing_ids_do_not_collapse_multiple_source_rows(self):
         path = Path(self.tmp.name) / "source.xlsx"
@@ -274,7 +297,7 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         allocation, _ = calc_leave.allocate_adjacent_cross_month_system_daily_hours(start, end, 11.2)
         self.assertAlmostEqual(sum(allocation.values()), 11.2)
         self.generate([self.row(11.2, start=start, end=end)])
-        self.assertEqual(self.values()[0]["最终请假时长"], 3.2)
+        self.assertEqual(self.values()[0]["最终请假时长"], 3)
 
     def test_three_month_allocation_conserves_total(self):
         start, end = datetime(2026, 7, 31, 9), datetime(2026, 9, 1, 18, 30)
@@ -297,15 +320,12 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "日分摊"):
             calc_finally.parse_leave_summary(str(self.path), self.ctx)
 
-    def test_cross_month_confirmation_requires_whole_segment_total(self):
+    def test_cross_month_confirmation_uses_target_month_ledger(self):
         self.generate([self.row(None, start=datetime(2026, 8, 31, 9))])
-        self.edit({"复核状态": "已确认", "确认请假时长": 8, "确认说明": "核对源审批实际整段16小时"})
-        with self.assertRaisesRegex(ValueError, "整段"):
-            calc_finally.parse_leave_summary(str(self.path), self.ctx)
-        self.edit({"确认整段时长": 16, "确认日分摊": "2026-08-31=8;2026-09-01=8"})
+        self.edit({"复核状态": "已确认", "确认请假时长": 8, "确认说明": "核对本月实际8小时"})
         self.assertEqual(calc_finally.parse_leave_summary(str(self.path), self.ctx)["MT0001"]["事假"], 1)
-        self.edit({"确认整段时长": 20})
-        with self.assertRaisesRegex(ValueError, "整段"):
+        self.edit({"确认日分摊": "2026-08-31=8;2026-09-01=8"})
+        with self.assertRaisesRegex(ValueError, "计算月份"):
             calc_finally.parse_leave_summary(str(self.path), self.ctx)
 
     def test_confirmation_does_not_hide_out_of_range_daily_allocation(self):
@@ -314,10 +334,13 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "超出"):
             calc_finally.parse_leave_summary(str(self.path), self.ctx)
 
-    def test_cross_month_schedule_disagreement_is_pending(self):
+    def test_cross_month_uses_uploaded_month_schedule(self):
         self.ctx["main_working_days"].remove(date(2026, 9, 2))
         self.generate([self.row(32, start=datetime(2026, 8, 31, 9), end=datetime(2026, 9, 3, 18, 30))])
-        self.assertEqual(self.values()[0]["复核状态"], "待确认")
+        values, issues = self.values()
+        self.assertEqual(values["复核状态"], "自动通过")
+        self.assertEqual(values["最终请假时长"], 16)
+        self.assertEqual(issues, 0)
 
     def test_legacy_sheet_missing_review_fields_is_rejected(self):
         wb = openpyxl.Workbook()

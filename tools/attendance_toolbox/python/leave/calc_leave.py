@@ -16,8 +16,8 @@ calc_leave.py
     将结果写入 请假明细表.xlsx
 
 计算规则（由行政沟通确认）：
-  - 普通同月请假：系统与作息时长一致自动通过，否则待确认
-  - 普通跨月小时制：整段系统时长为总账，保存整段日分摊，仅输出目标月份额
+  - 普通请假：按上传作息表和起止时间计算；系统时长仅供核对，不阻止可计算记录入账
+  - 普通跨月小时制：只计算上传作息表对应月份的实际工作时长
   - 无效时长、未知口径、审批不明确、重叠审批进入异常清单，不写可入账值
   - 产假、陪产假、丧假按自然日计算，小时列留空；其他未明确特殊假须人工确认口径
   - 异地不打卡同样校验；上传覆盖时长须人工确认
@@ -196,52 +196,12 @@ def review_leave_record(row, schedule_ctx, *, is_chengdu=False, is_all_month_sch
             daily[cur.isoformat()] = {"days": value, "hours": None if natural else _round2(hours)}
         cur += timedelta(days=1)
     schedule_hours = _round2(sum(item["hours"] or 0 for item in daily.values())) if not natural else None
-    raw_system = row[ROW_SYS_DURATION]
-    system_days = parse_day_text(raw_system)
-    system_hours = finite_nonnegative(raw_system)
-    if system_hours is not None and abs(system_hours - _round2(system_hours)) > 0.000001:
-        reasons.append("系统小时精度超过两位小数，需确认精度口径")
-    if not manual_maternity and system_days is None and system_hours is None:
-        reasons.append("系统时长为空或无效")
     if natural or maternity:
-        # Calendar leave has its own unit; never convert natural days into 8-hour days.
-        total_calendar_days = (end.date() - start.date()).days + 1
-        if system_days is not None and system_days > total_calendar_days:
-            reasons.append("系统天数超过起止日期范围")
-        if natural and system_days is not None and abs(system_days - total_calendar_days) > 0.01:
-            reasons.append("系统天数与自然日区间不一致")
-        if system_hours is not None and system_hours > total_calendar_days * 24:
-            reasons.append("系统时长明显超过起止日期范围")
+        # Calendar leave has its own unit; calculate from the approved interval.
         final_days = sum(item["days"] for item in daily.values())
-        if final_days > 0 and (system_days == 0 or system_hours == 0):
-            reasons.append("系统时长为0但区间内存在应计假期")
         return schedule_hours, final_days, daily, unit, schedule_hours, reasons
     if kind not in ORDINARY_HOUR_LEAVE_TYPES:
         reasons.append("假别计算口径未明确")
-    if system_days is not None:
-        reasons.append("普通请假系统单位为天，需确认小时口径")
-        system_hours = None
-    same_month = (start.year, start.month) == (end.year, end.month)
-    if system_hours is not None and same_month:
-        if abs(system_hours - schedule_hours) > 0.000001:
-            reasons.append("系统时长与作息时长不一致")
-        if system_hours > schedule_hours + 0.01:
-            reasons.append("系统时长超过区间内作息上限")
-    elif system_hours is not None:
-        allocation, message = allocate_adjacent_cross_month_system_daily_hours(start, end, system_hours)
-        if allocation is None:
-            reasons.append(message or "跨月时长无法可靠分摊")
-        else:
-            daily = {
-                day.isoformat(): {"hours": hours, "days": _round2(hours / 8)}
-                for day, hours in allocation.items() if hours > 0
-            }
-            if not is_all_month_scheduled and any(
-                first <= day <= last and hours > 0 and day not in days
-                and day not in {start.date(), end.date()}
-                for day, hours in allocation.items()
-            ):
-                reasons.append("跨月日分摊与本月作息不一致")
     final_hours = _round2(sum(
         item["hours"] or 0 for day, item in daily.items() if first.isoformat() <= day <= last.isoformat()
     ))
@@ -1010,26 +970,15 @@ def calc_final_fields(row, schedule_ctx, is_chengdu=False, is_all_month_schedule
             final_days = std_days
         return (final_h, final_days, None) if final_h else (0, 0, None)
 
-    monthly_allocation, allocation_remark = allocate_adjacent_cross_month_system_hours(
-        dt_start,
-        dt_end,
-        sys_val,
-    )
-    if monthly_allocation is not None:
-        month_key = (month_start.year, month_start.month)
-        final_h = monthly_allocation.get(month_key, 0.0)
-        final_days = _round2(final_h / 8) if final_h else 0
-        return final_h, final_days, allocation_remark
-
-    # sys 为数值或其他文本 → 按作息表工作日计算本月部分
+    # 普通跨月请假只按当前上传作息表计算目标月份，不使用系统整段时长反推。
     final_h = calc_target_month_working_hours(dt_start, dt_end, working_days, month_start, month_end)
     final_h = _round_to_half_hour(final_h)
 
     if final_h == 0:
-        return 0, 0, allocation_remark
+        return 0, 0, "跨月按目标月作息计算"
 
     final_days = _round2(final_h / 8)
-    return final_h, final_days, allocation_remark
+    return final_h, final_days, "跨月按目标月作息计算"
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
@@ -2053,6 +2002,8 @@ MANUAL_REVIEW_FIELDS = (
     "确认日分摊", "确认整段时长", "备注",
 )
 
+REVIEW_FINAL_AMOUNT_FIELDS = ("最终请假时长", "最终请假天数")
+
 
 def _review_time_key(value):
     parsed = to_datetime(value)
@@ -2122,6 +2073,10 @@ def load_review_overrides(reviewed_file: str | None) -> dict:
                 else:
                     key = ("row", emp_id or emp_name, _review_time_key(value(row, "开始时间")), _review_time_key(value(row, "结束时间")))
                 candidate = {field: value(row, field) for field in MANUAL_REVIEW_FIELDS}
+                # Some users fill the calculated final amount directly in the
+                # exception row. Keep it as a fallback, while still requiring
+                # an explicit confirmed state and explanation below.
+                candidate.update({field: value(row, field) for field in REVIEW_FINAL_AMOUNT_FIELDS})
                 previous = overrides.get(key)
                 previous_score = 1 if previous and str(previous.get("复核状态") or "").strip() == "已确认" else 0
                 candidate_score = 1 if str(candidate.get("复核状态") or "").strip() == "已确认" else 0
@@ -2214,7 +2169,7 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
         remark = None
         start, end = normalized_leave_interval(row[ROW_START], row[ROW_END])
         if start and end and (start.year, start.month) != (end.year, end.month) and unit == "小时" and not reasons:
-            remark = "跨月按系统时长分摊"
+            remark = "跨月按目标月作息计算"
         if offsite_rule:
             offsite_matched += 1
             if offsite_rule.get("hours") is not None:
@@ -2261,6 +2216,11 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
                     output_row[new_header.index(field)] = value
             amount_field = "确认请假天数" if unit in {"自然日", "应出勤日"} else "确认请假时长"
             prior_amount = prior_review.get(amount_field)
+            if prior_amount is None or str(prior_amount).strip() == "":
+                fallback_field = "最终请假天数" if unit != "小时" else "最终请假时长"
+                prior_amount = prior_review.get(fallback_field)
+                if prior_amount is not None and str(prior_amount).strip() != "":
+                    output_row[new_header.index(amount_field)] = prior_amount
             prior_note = str(prior_review.get("确认说明") or "").strip()
             if prior_state == "已确认" and prior_amount is not None and prior_note:
                 output_row[new_header.index("复核状态")] = "已确认"

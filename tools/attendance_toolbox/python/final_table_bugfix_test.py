@@ -267,8 +267,8 @@ class ScheduleFormulaParsingTests(unittest.TestCase):
 
 
 class MaternityLeaveTypeTests(unittest.TestCase):
-    def test_maternity_is_expected_attendance_day_leave(self):
-        self.assertTrue(calc_leave.is_expected_attendance_day_leave("产假"))
+    def test_maternity_is_natural_day_leave(self):
+        self.assertFalse(calc_leave.is_expected_attendance_day_leave("产假"))
         self.assertFalse(calc_leave.is_expected_attendance_day_leave("事假"))
 
 
@@ -333,13 +333,13 @@ class MaternityLeaveOverrideTests(unittest.TestCase):
         )
         self.assertEqual(merged, [self.header, existing])
 
-    def test_full_first_and_last_month_use_expected_attendance_dates(self):
+    def test_full_first_and_last_month_use_natural_dates(self):
         full = ("", "员工", "", "", "", "产假", "2026-05-01", "2026-07-31", None)
         first = ("", "员工", "", "", "", "产假", "2026-06-15", "2026-07-31", None)
         last = ("", "员工", "", "", "", "产假", "2026-05-01", "2026-06-10", None)
-        self.assertEqual(calc_leave.calc_final_fields(full, self.schedule_ctx)[1], 7)
-        self.assertEqual(calc_leave.calc_final_fields(first, self.schedule_ctx)[1], 3)
-        self.assertEqual(calc_leave.calc_final_fields(last, self.schedule_ctx)[1], 4)
+        self.assertEqual(calc_leave.calc_final_fields(full, self.schedule_ctx)[1], 30)
+        self.assertEqual(calc_leave.calc_final_fields(first, self.schedule_ctx)[1], 16)
+        self.assertEqual(calc_leave.calc_final_fields(last, self.schedule_ctx)[1], 10)
 
     def test_name_only_manual_leave_is_written(self):
         merged = calc_leave.merge_maternity_leave_overrides(

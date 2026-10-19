@@ -998,10 +998,6 @@ def _resolve_leave_review(row: dict) -> None:
         expected_unit = "自然日" if calc_leave.is_natural_day_leave(kind) else "应出勤日" if calc_leave.is_expected_attendance_day_leave(kind) else "小时" if kind in calc_leave.ORDINARY_HOUR_LEAVE_TYPES else None
         if unit != expected_unit:
             raise ValueError(f"请假{row['source']}假别与计量口径不一致，须人工确认。")
-        if unit == "小时" and (start.year, start.month) == (end.year, end.month):
-            system = calc_leave.finite_nonnegative(row.get("sys_hours"))
-            if system is None or abs(system - amount) > 0.000001:
-                raise ValueError(f"请假{row['source']}自动通过值与系统时长不一致，须人工确认。")
     raw_daily = values["确认日分摊"] if manual and values["确认日分摊"] else values["日分摊"]
     daily = {}
     try:
@@ -1023,17 +1019,11 @@ def _resolve_leave_review(row: dict) -> None:
             quantity = calc_leave.finite_nonnegative(item.get("hours" if unit == "小时" else "days"))
             if quantity is None or quantity > (8 if unit == "小时" else 1) + 0.01:
                 raise ValueError("每日数量无效或超限")
-            cross_hour_ledger = unit == "小时" and (start.year, start.month) != (end.year, end.month)
-            if (not cross_hour_ledger and (day.year, day.month) != (month.year, month.month)) or not start.date() <= day <= end.date():
+            if (day.year, day.month) != (month.year, month.month) or not start.date() <= day <= end.date():
                 raise ValueError("日分摊超出计算月份或请假区间")
             daily[date_text] = {"hours": quantity if unit == "小时" else None, "days": quantity / 8 if unit == "小时" else quantity}
     except (ValueError, TypeError, AttributeError) as exc:
         raise ValueError(f"请假{row['source']}日分摊无效：{exc}") from exc
-    if unit == "小时" and (start.year, start.month) != (end.year, end.month) and amount > 0:
-        total = calc_leave.finite_nonnegative(values["确认整段时长"] if manual and values["确认整段时长"] is not None else row.get("sys_hours"))
-        full_total = sum(item["hours"] for item in daily.values())
-        if total is None or abs(full_total - total) > 0.000001:
-            raise ValueError(f"请假{row['source']}整段日分摊与系统总时长不一致；须填写整段确认日分摊，系统时长错误时另填确认整段时长。")
     daily = {key: item for key, item in daily.items() if key.startswith(f"{month.year:04d}-{month.month:02d}-")}
     ledger_total = sum(item["hours" if unit == "小时" else "days"] for item in daily.values())
     if amount == 0 and manual:
