@@ -205,6 +205,7 @@ def run_leave(config: dict, output_dir: Path) -> list[dict]:
     offsite_path = path_or_empty(config, "leave_offsite_duration")
     if offsite_path:
         offsite_overrides, _ = capture(calc_leave.load_offsite_duration_overrides, offsite_path)
+    reviewed_path = path_or_empty(config, "leave_reviewed")
     _, _ = capture(
         calc_leave.process,
         src_rows,
@@ -214,6 +215,8 @@ def run_leave(config: dict, output_dir: Path) -> list[dict]:
         offsite_overrides,
         tuple(names_or_default(config, "leave_special_names", calc_leave.DEFAULT_SPECIAL_EMPLOYEE_NAMES)),
         tuple(names_or_default(config, "chengdu_schedule_names", calc_leave.DEFAULT_CHENGDU_WORK_LOCATION_NAMES)),
+        None,
+        reviewed_path,
     )
     return [{"path": str(out_path), "file_name": out_path.name}]
 

@@ -217,6 +217,7 @@ const modules: ModuleConfig[] = [
     fileFields: [
       { name: 'leave_src', label: '请假系统导出表', required: true, templateId: 'leave_export' },
       { name: 'leave_schedule', label: '作息表', required: true, templateId: 'schedule' },
+      { name: 'leave_reviewed', label: '上次请假明细表（保留人工确认，可选）', templateId: 'final_leave_detail' },
       { name: 'leave_offsite_duration', label: '月度汇总表（异地外勤，可选）', templateId: 'offsite_duration' },
     ],
     textFields: [

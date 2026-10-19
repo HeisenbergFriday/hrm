@@ -39,6 +39,16 @@ func TestMapLegacyProcessingForm_LeaveAndOvertime(t *testing.T) {
 	}
 }
 
+func TestAttendanceToolboxSpecs_LeaveKeepsReviewedWorkbook(t *testing.T) {
+	spec, ok := attendanceToolboxSpecs()["leave"]
+	if !ok {
+		t.Fatal("leave toolbox spec missing")
+	}
+	if got := spec.SingleFiles["leave_reviewed"]; got != "leave_reviewed" {
+		t.Fatalf("leave_reviewed mapping = %q, want leave_reviewed", got)
+	}
+}
+
 func TestMapLegacyProcessingForm_FinalSubsidyParttime(t *testing.T) {
 	final := mapLegacyProcessingForm("final", &multipart.Form{
 		File: map[string][]*multipart.FileHeader{

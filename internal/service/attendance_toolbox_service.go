@@ -436,6 +436,7 @@ func attendanceToolboxSpecs() map[string]attendanceToolboxModuleSpec {
 			SingleFiles: map[string]string{
 				"leave_src":              "leave_src",
 				"leave_schedule":         "leave_schedule",
+				"leave_reviewed":         "leave_reviewed",
 				"leave_offsite_duration": "leave_offsite_duration",
 			},
 			TextFields: []string{"leave_special_names", "chengdu_schedule_names"},

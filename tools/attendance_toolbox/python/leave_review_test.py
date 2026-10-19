@@ -352,12 +352,12 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(summary["MT0001"]["事假"], 0.75)
         self.assertEqual(daily["MT0001"][date(2026, 9, 1)]["事假"], 0.75)
 
-    def test_partial_maternity_preserves_fractional_attendance_days(self):
+    def test_maternity_uses_natural_days_even_when_time_is_partial(self):
         self.generate([self.row("1天", kind="产假", end=datetime(2026, 9, 1, 12))])
         summary = calc_finally.parse_leave_summary(str(self.path), self.ctx)
         daily = calc_finally.parse_leave_day_details(str(self.path), self.ctx)
-        self.assertEqual(summary["MT0001"]["产假"], 0.375)
-        self.assertEqual(daily["MT0001"][date(2026, 9, 1)]["产假"], 0.375)
+        self.assertEqual(summary["MT0001"]["产假"], 1)
+        self.assertEqual(daily["MT0001"][date(2026, 9, 1)]["产假"], 1)
 
     def test_unrecognized_workbook_cannot_be_treated_as_no_leave(self):
         wb = openpyxl.Workbook()

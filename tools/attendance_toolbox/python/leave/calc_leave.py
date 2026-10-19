@@ -19,8 +19,7 @@ calc_leave.py
   - 普通同月请假：系统与作息时长一致自动通过，否则待确认
   - 普通跨月小时制：整段系统时长为总账，保存整段日分摊，仅输出目标月份额
   - 无效时长、未知口径、审批不明确、重叠审批进入异常清单，不写可入账值
-  - 产假按作息表应出勤日计算，不按自然日计算
-  - 陪产假、丧假按自然日，小时列留空；其他未明确特殊假须人工确认口径
+  - 产假、陪产假、丧假按自然日计算，小时列留空；其他未明确特殊假须人工确认口径
   - 异地不打卡同样校验；上传覆盖时长须人工确认
   - 成都员工（部门字段含"成都"）使用成都工作日历
 ──────────────────────────────────────────────────────────────────────────────
@@ -771,19 +770,19 @@ def should_use_system_duration(row):
 
 
 # 按自然日计算的假期类型
-NATURAL_DAY_LEAVE_TYPES = {"陪产假", "丧假"}
+NATURAL_DAY_LEAVE_TYPES = {"产假", "陪产假", "丧假"}
 
-# 按作息表应出勤日计算的假期类型
-EXPECTED_ATTENDANCE_DAY_LEAVE_TYPES = {"产假"}
+# 保留扩展点；当前已确认的特殊假均按自然日计算
+EXPECTED_ATTENDANCE_DAY_LEAVE_TYPES = set()
 
 
 def is_natural_day_leave(leave_type):
-    """检查是否为按自然日计算的假期类型（陪产假、丧假）。"""
+    """检查是否为按自然日计算的假期类型（产假、陪产假、丧假）。"""
     return str(leave_type).strip() in NATURAL_DAY_LEAVE_TYPES
 
 
 def is_expected_attendance_day_leave(leave_type):
-    """检查是否为按作息表应出勤日计算的假期类型（产假）。"""
+    """检查是否为按作息表应出勤日计算的假期类型。"""
     return str(leave_type).strip() in EXPECTED_ATTENDANCE_DAY_LEAVE_TYPES
 
 
@@ -2049,12 +2048,97 @@ def decide_intern_target(
     return bool(row[ROW_IS_INTERN]), None
 
 
+MANUAL_REVIEW_FIELDS = (
+    "复核状态", "确认请假时长", "确认请假天数", "确认说明",
+    "确认日分摊", "确认整段时长", "备注",
+)
+
+
+def _review_time_key(value):
+    parsed = to_datetime(value)
+    return parsed.isoformat() if parsed is not None else str(value or "").strip()
+
+
+def _review_key_from_source(row: tuple):
+    instance_id = normalize_approval_identity(row_value(row, ROW_APPROVAL_INSTANCE_ID, ""))
+    if instance_id:
+        return ("instance", instance_id)
+    approval_id = normalize_approval_identity(row_value(row, ROW_APPROVAL_ID, ""))
+    if approval_id:
+        return (
+            "approval",
+            normalize_approval_identity(row_value(row, ROW_APPROVAL_PROCESS_CODE, "")),
+            approval_id,
+            normalize_approval_identity(row_value(row, ROW_APPROVAL_ORIGINATOR_USER_ID, "")),
+            normalize_employee_id(row_value(row, ROW_EMP_ID, ""))
+            or normalize_employee_name(row_value(row, ROW_EMP_NAME, "")),
+        )
+    return (
+        "row",
+        normalize_employee_id(row_value(row, ROW_EMP_ID, ""))
+        or normalize_employee_name(row_value(row, ROW_EMP_NAME, "")),
+        _review_time_key(row_value(row, ROW_START)),
+        _review_time_key(row_value(row, ROW_END)),
+    )
+
+
+def load_review_overrides(reviewed_file: str | None) -> dict:
+    """读取上一次生成的请假明细，保留人工填写的复核结果。"""
+    if not reviewed_file or not os.path.exists(reviewed_file):
+        return {}
+    wb = load_workbook(reviewed_file, data_only=True, read_only=True)
+    overrides = {}
+    try:
+        for ws in wb.worksheets:
+            if ws.title not in {"请假明细", "实习生请假明细", "异常清单"}:
+                continue
+            rows = ws.iter_rows(values_only=True)
+            header = next(rows, None)
+            if not header:
+                continue
+            columns = {normalize_header_name(value): index for index, value in enumerate(header) if value}
+            if normalize_header_name("复核状态") not in columns or normalize_header_name("审批编号") not in columns:
+                continue
+            def value(row, name):
+                index = columns.get(normalize_header_name(name))
+                return row[index] if index is not None and index < len(row) else None
+            for row in rows:
+                if not any(row):
+                    continue
+                instance_id = normalize_approval_identity(value(row, "审批实例ID"))
+                approval_id = normalize_approval_identity(value(row, "审批编号"))
+                emp_id = normalize_employee_id(value(row, "发起人工号"))
+                emp_name = normalize_employee_name(value(row, "发起人姓名"))
+                if instance_id:
+                    key = ("instance", instance_id)
+                elif approval_id:
+                    key = (
+                        "approval",
+                        normalize_approval_identity(value(row, "审批流程码")),
+                        approval_id,
+                        normalize_approval_identity(value(row, "发起人钉钉UserID")),
+                        emp_id or emp_name,
+                    )
+                else:
+                    key = ("row", emp_id or emp_name, _review_time_key(value(row, "开始时间")), _review_time_key(value(row, "结束时间")))
+                candidate = {field: value(row, field) for field in MANUAL_REVIEW_FIELDS}
+                previous = overrides.get(key)
+                previous_score = 1 if previous and str(previous.get("复核状态") or "").strip() == "已确认" else 0
+                candidate_score = 1 if str(candidate.get("复核状态") or "").strip() == "已确认" else 0
+                if previous is None or candidate_score >= previous_score:
+                    overrides[key] = candidate
+    finally:
+        wb.close()
+    return overrides
+
+
 def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
             employee_type_map: dict[str, str] | None = None,
             offsite_duration_overrides: dict | None = None,
             special_employee_names: tuple[str, ...] | set[str] | None = None,
             special_chengdu_names: tuple[str, ...] | set[str] | None = None,
-            warehouse_schedule_names: tuple[str, ...] | set[str] | None = None):
+            warehouse_schedule_names: tuple[str, ...] | set[str] | None = None,
+            reviewed_file: str | None = None):
     """清洗后的内存行列表 → 计算三字段 → 写入请假明细表。"""
     wb_out = openpyxl.Workbook()
     ws_fulltime = wb_out.active
@@ -2075,6 +2159,7 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
     ):
         instructions.append([instruction])
     overlap_indexes = find_leave_overlap_indexes(src_rows[1:])
+    review_overrides = load_review_overrides(reviewed_file)
 
     print(f'        当前作息月份：{schedule_ctx["year"]}年{schedule_ctx["month"]}月')
 
@@ -2167,6 +2252,28 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
             row_value(row, ROW_APPROVAL_PROCESS_CODE, ""),
             row_value(row, ROW_APPROVAL_ORIGINATOR_USER_ID, ""),
         ]
+        prior_review = review_overrides.get(_review_key_from_source(row))
+        prior_state = str((prior_review or {}).get("复核状态") or "").strip()
+        if prior_review and prior_state in {"待确认", "已确认"}:
+            for field in MANUAL_REVIEW_FIELDS:
+                value = prior_review.get(field)
+                if value is not None and str(value).strip() != "":
+                    output_row[new_header.index(field)] = value
+            amount_field = "确认请假天数" if unit in {"自然日", "应出勤日"} else "确认请假时长"
+            prior_amount = prior_review.get(amount_field)
+            prior_note = str(prior_review.get("确认说明") or "").strip()
+            if prior_state == "已确认" and prior_amount is not None and prior_note:
+                output_row[new_header.index("复核状态")] = "已确认"
+                output_row[new_header.index("异常原因")] = ""
+                output_row[new_header.index("最终请假时长")] = (
+                    prior_amount if unit == "小时" else None
+                )
+                output_row[new_header.index("最终请假天数")] = (
+                    prior_amount if unit != "小时" else None
+                )
+                output_row[new_header.index("备注")] = prior_review.get("备注") or "人工确认结果保留"
+                state = "已确认"
+                reasons = []
         target_ws.append(output_row)
         if reasons:
             ws_issues.append(output_row)
