@@ -2585,28 +2585,8 @@ func SyncUsers(c *gin.Context) {
 	}
 	defer unlock()
 
-	users, err := syncUsersForOrg(orgID)
-	if err != nil {
-		logOrgSyncError(requestID, maskedOrgID, "employees", "source_fetch", err, startTime, 0, 1)
-		errorCode, safeMessage := orgSyncErrorDetails(err, employeeSyncFailedErrorCode, employeeSyncFailedMessage)
-		result := orgSyncEmployeeStageResult{Status: "failed", FailCount: 1, Error: safeMessage, ErrorCode: errorCode}
-		_ = writeOrgSyncStatusForRequest(c, orgID, orgSyncStatusUpdate{SyncType: "users", Status: "failed", Message: safeMessage, RequestID: requestID, DurationMS: time.Since(startTime).Milliseconds(), ErrorCode: errorCode, FailCount: 1})
-		respondOrgSyncStage(c, "users", result, requestID, time.Since(startTime), nil)
-		return
-	}
-
-	result := syncDingTalkUsers(c.Request.Context(), orgID, users, shouldOverwriteEmptyDingTalkOrgFields(c), orgSyncUserDependenciesForRequest(c, orgID), requestID, maskedOrgID, startTime)
-	statusMessage := fmt.Sprintf("同步 %d 个用户", result.SuccessCount)
-	switch result.Status {
-	case "partial_failed":
-		if result.FailCount == 0 && result.HRMFieldStatus == "failed" {
-			statusMessage = employeeHRMSyncFailedMessage
-		} else {
-			statusMessage = fmt.Sprintf("同步部分完成：成功 %d，失败 %d", result.SuccessCount, result.FailCount)
-		}
-	case "failed":
-		statusMessage = employeeSyncFailedMessage
-	}
+	result := executeOrgUserSync(c, orgID, requestID, maskedOrgID, startTime)
+	statusMessage := orgUserSyncStatusMessage(result)
 	_ = writeOrgSyncStatusForRequest(c, orgID, orgSyncStatusUpdate{SyncType: "users", Status: result.Status, Message: statusMessage, RequestID: requestID, DurationMS: time.Since(startTime).Milliseconds(), ErrorCode: result.ErrorCode, SuccessCount: result.SuccessCount, FailCount: result.FailCount})
 	respondOrgSyncStage(c, "users", result, requestID, time.Since(startTime), gin.H{
 		"position_missing_count": result.PositionMissingCount, "overwrite_empty": result.OverwriteEmpty,
@@ -2621,6 +2601,199 @@ func SyncUsers(c *gin.Context) {
 		"deactivation_status":               result.DeactivationStatus,
 		"deactivation_error":                result.DeactivationError,
 	})
+}
+
+// StartUserSyncData starts a user sync as a short request and continues it in
+// a detached background context.
+func StartUserSyncData(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok || !validateOrgSyncRequestSelectors(c, orgID) {
+		return
+	}
+	startTime := time.Now()
+	requestID := orgSyncRequestID(c, startTime)
+	maskedOrgID := redactOrgIDForSyncLog(orgID)
+	unlock, locked := tryAcquireOrgSync(orgID)
+	if !locked {
+		respondOrgSyncConflict(c, requestID, maskedOrgID, startTime)
+		return
+	}
+
+	syncContext, cancelSync := newOrgSyncExecutionContext(c.Request.Context())
+	backgroundContext := c.Copy()
+	middleware.RebindRequestContext(backgroundContext, syncContext)
+	if err := writeOrgSyncStatusForRequest(c, orgID, orgSyncStatusUpdate{
+		SyncType: "users", Status: "running", Message: "用户数据正在后台同步", RequestID: requestID,
+	}); err != nil {
+		cancelSync()
+		unlock()
+		c.JSON(http.StatusInternalServerError, Response{
+			Code: http.StatusInternalServerError, Message: "创建用户同步任务失败，请稍后重试",
+			Data: gin.H{"request_id": requestID},
+		})
+		return
+	}
+
+	go func() {
+		defer unlock()
+		defer cancelSync()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				statusContext, cancelStatus := newOrgSyncStatusContext(backgroundContext)
+				defer cancelStatus()
+				result := orgSyncEmployeeStageResult{Status: "failed", FailCount: 1, Error: orgSyncPanicMessage, ErrorCode: orgSyncPanicErrorCode}
+				_ = writeOrgSyncStatusForRequest(statusContext, orgID, orgSyncStatusUpdate{
+					SyncType: "users", Status: result.Status, Message: result.Error, RequestID: requestID,
+					DurationMS: time.Since(startTime).Milliseconds(), ErrorCode: result.ErrorCode,
+					FailCount: result.FailCount, Details: map[string]interface{}{"result": buildOrgUserSyncTaskResult(result, requestID, time.Since(startTime))},
+				})
+				log.Printf("[SyncUsers] request_id=%s org=%s stage=background result=panic panic_type=%T", sanitizeSyncLogText(requestID), maskedOrgID, recovered)
+			}
+		}()
+
+		result := executeOrgUserSync(backgroundContext, orgID, requestID, maskedOrgID, startTime)
+		if errors.Is(backgroundContext.Request.Context().Err(), context.DeadlineExceeded) {
+			result = markOrgUserSyncTimedOut(result)
+		}
+		statusContext, cancelStatus := newOrgSyncStatusContext(backgroundContext)
+		defer cancelStatus()
+		if err := writeOrgSyncStatusForRequest(statusContext, orgID, orgSyncStatusUpdate{
+			SyncType: "users", Status: result.Status, Message: orgUserSyncStatusMessage(result), RequestID: requestID,
+			DurationMS: time.Since(startTime).Milliseconds(), ErrorCode: result.ErrorCode,
+			SuccessCount: result.SuccessCount, FailCount: result.FailCount,
+			Details: map[string]interface{}{"result": buildOrgUserSyncTaskResult(result, requestID, time.Since(startTime))},
+		}); err != nil {
+			log.Printf("[SyncUsers] request_id=%s org=%s stage=background result=final_status_persist_failed error_type=%T", sanitizeSyncLogText(requestID), maskedOrgID, err)
+		}
+	}()
+
+	c.JSON(http.StatusAccepted, Response{Code: http.StatusAccepted, Message: "running", Data: gin.H{
+		"status": "running", "request_id": requestID,
+	}})
+}
+
+// GetUserSyncResult returns the persisted state of one user-sync task.
+func GetUserSyncResult(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	rawRequestID := strings.TrimSpace(c.Param("request_id"))
+	requestID := sanitizeSyncLogText(rawRequestID)
+	if requestID == "" || len(rawRequestID) > 128 || len(requestID) > 128 {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "同步请求编号无效"})
+		return
+	}
+	status, err := service.NewSyncService(middleware.RequestDB(c)).GetSyncStatusByRequestID(orgID, "users", requestID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "未找到该用户同步任务"})
+		return
+	}
+	if err != nil {
+		log.Printf("[SyncUsers] request_id=%s org=%s stage=query result=failed error_type=%T", requestID, redactOrgIDForSyncLog(orgID), err)
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "查询用户同步任务失败，请稍后重试"})
+		return
+	}
+	if status == nil {
+		c.JSON(http.StatusNotFound, Response{Code: http.StatusNotFound, Message: "未找到该用户同步任务"})
+		return
+	}
+	if status.Status == "running" {
+		c.JSON(http.StatusAccepted, Response{Code: http.StatusAccepted, Message: "running", Data: gin.H{
+			"status": "running", "request_id": requestID, "duration_ms": time.Since(status.LastSyncTime).Milliseconds(),
+		}})
+		return
+	}
+	result, exists := status.Details["result"]
+	if !exists {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "用户同步已结束，但结果详情不可用"})
+		return
+	}
+	var httpStatus int
+	switch status.Status {
+	case "success":
+		httpStatus = http.StatusOK
+	case "partial_failed":
+		httpStatus = http.StatusMultiStatus
+	default:
+		httpStatus = http.StatusInternalServerError
+	}
+	c.JSON(httpStatus, Response{Code: httpStatus, Message: status.Status, Data: result})
+}
+
+func executeOrgUserSync(c *gin.Context, orgID, requestID, maskedOrgID string, startTime time.Time) orgSyncEmployeeStageResult {
+	users, err := syncUsersForOrg(orgID)
+	if err != nil {
+		logOrgSyncError(requestID, maskedOrgID, "employees", "source_fetch", err, startTime, 0, 1)
+		errorCode, safeMessage := orgSyncErrorDetails(err, employeeSyncFailedErrorCode, employeeSyncFailedMessage)
+		return orgSyncEmployeeStageResult{Status: "failed", FailCount: 1, Error: safeMessage, ErrorCode: errorCode}
+	}
+	return syncDingTalkUsers(c.Request.Context(), orgID, users, shouldOverwriteEmptyDingTalkOrgFields(c), orgSyncUserDependenciesForRequest(c, orgID), requestID, maskedOrgID, startTime)
+}
+
+func orgUserSyncStatusMessage(result orgSyncEmployeeStageResult) string {
+	statusMessage := fmt.Sprintf("同步 %d 个用户", result.SuccessCount)
+	switch result.Status {
+	case "partial_failed":
+		if result.FailCount == 0 && result.HRMFieldStatus == "failed" {
+			return employeeHRMSyncFailedMessage
+		}
+		return fmt.Sprintf("同步部分完成：成功 %d，失败 %d", result.SuccessCount, result.FailCount)
+	case "failed":
+		if result.Error != "" {
+			return result.Error
+		}
+		return employeeSyncFailedMessage
+	default:
+		return statusMessage
+	}
+}
+
+type orgUserSyncTaskResult struct {
+	Status                         string `json:"status"`
+	SuccessCount                   int    `json:"success_count"`
+	FailCount                      int    `json:"fail_count"`
+	Error                          string `json:"error"`
+	ErrorCode                      string `json:"error_code"`
+	RequestID                      string `json:"request_id"`
+	DurationMS                     int64  `json:"duration_ms"`
+	PositionMissingCount           int    `json:"position_missing_count"`
+	EmploymentTypeMissingCount     int    `json:"employment_type_missing_count"`
+	JobLevelMissingCount           int    `json:"job_level_missing_count"`
+	JobFamilyMissingCount          int    `json:"job_family_missing_count"`
+	RegularizationDateMissingCount int    `json:"regularization_date_missing_count"`
+	HRMFieldStatus                 string `json:"hrm_field_status"`
+	HRMFieldError                  string `json:"hrm_field_error"`
+	OverwriteEmpty                 bool   `json:"overwrite_empty"`
+	DefaultRoleAssignedCount       int    `json:"default_role_assigned_count"`
+	DeactivatedMissingCount        int    `json:"deactivated_missing_count"`
+	DeactivationStatus             string `json:"deactivation_status"`
+	DeactivationError              string `json:"deactivation_error"`
+}
+
+func buildOrgUserSyncTaskResult(result orgSyncEmployeeStageResult, requestID string, duration time.Duration) orgUserSyncTaskResult {
+	return orgUserSyncTaskResult{
+		Status: result.Status, SuccessCount: result.SuccessCount, FailCount: result.FailCount,
+		Error: result.Error, ErrorCode: result.ErrorCode, RequestID: requestID, DurationMS: duration.Milliseconds(),
+		PositionMissingCount: result.PositionMissingCount, EmploymentTypeMissingCount: result.EmploymentTypeMissingCount,
+		JobLevelMissingCount: result.JobLevelMissingCount, JobFamilyMissingCount: result.JobFamilyMissingCount,
+		RegularizationDateMissingCount: result.RegularizationDateMissingCount, HRMFieldStatus: result.HRMFieldStatus,
+		HRMFieldError: result.HRMFieldError, OverwriteEmpty: result.OverwriteEmpty,
+		DefaultRoleAssignedCount: result.DefaultRoleAssignedCount, DeactivatedMissingCount: result.DeactivatedMissingCount,
+		DeactivationStatus: result.DeactivationStatus, DeactivationError: result.DeactivationError,
+	}
+}
+
+func markOrgUserSyncTimedOut(result orgSyncEmployeeStageResult) orgSyncEmployeeStageResult {
+	if result.SuccessCount > 0 {
+		result.Status = "partial_failed"
+	} else {
+		result.Status = "failed"
+	}
+	result.FailCount = max(result.FailCount, 1)
+	result.Error = orgSyncTimeoutMessage
+	result.ErrorCode = orgSyncTimeoutErrorCode
+	return result
 }
 
 // SyncDepartments 同步部门

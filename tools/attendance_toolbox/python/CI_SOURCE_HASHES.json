@@ -4,7 +4,7 @@
     "overtime/rules_engine.py": "b36605e75bf25c53c64f90098c5b762b2fa4d24b5d660ee0e4ed459f9a019623",
     "leave/calc_leave.py": "aac6dd81df4f16e68e5f00a3496a1c9f4910197ae8a089832ed5e83aab82e9db",
     "subsidy/calc_subsidy_deduction.py": "f0018ba515bc0bc85bb16cfe8832eec9122f9151b1c4fcdd44fd754f4e723b09",
-    "parttime/calc_parttime_summary.py": "c4aa0d10e7e8fcb114b5c5b431c5677decf63532c31c4d55a907b85334432940",
+    "parttime/calc_parttime_summary.py": "6e94b9ab5df14340838a13d0d0ab88c434a74c382b92f8f9772a156531dbecc7",
     "dingtalk_sync.py": "6560e78a81a79605f5d9a42f48a22a236bfe7339c96ec794a534569887413505"
   }
 }

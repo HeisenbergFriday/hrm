@@ -982,6 +982,40 @@ func TestStartOrgSyncDataReturnsAcceptedAndCompletesInBackground(t *testing.T) {
 	}
 }
 
+func TestStartUserSyncDataReturnsAcceptedAndPersistsFinalResult(t *testing.T) {
+	db := useOrgSyncTestDB(t)
+	orgID := "async-user-org"
+	requestID := "org-sync-test-request"
+	orgSyncLocks.Delete(orgID)
+	stubOrgSyncSources(t, nil, func(string) ([]dingtalk.UserInfo, error) {
+		return nil, errors.New("dingtalk user source unavailable")
+	}, nil, nil)
+
+	startContext, startRecorder := newOrgSyncContext(t, orgID, "/api/v1/sync/users/start", `{}`)
+	StartUserSyncData(startContext)
+	if startRecorder.Code != http.StatusAccepted || !strings.Contains(startRecorder.Body.String(), `"status":"running"`) {
+		t.Fatalf("unexpected user start response: status=%d body=%s", startRecorder.Code, startRecorder.Body.String())
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var status database.SyncStatus
+	for time.Now().Before(deadline) {
+		if err := db.Where("org_id = ? AND type = ? AND request_id = ?", orgID, "users", requestID).First(&status).Error; err == nil && status.Status == "failed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if status.Status != "failed" || status.ErrorCode != employeeSyncFailedErrorCode || status.Details["result"] == nil {
+		t.Fatalf("unexpected final user sync status: %#v", status)
+	}
+
+	queryContext, queryRecorder := newOrgSyncQueryContext(t, orgID, requestID)
+	GetUserSyncResult(queryContext)
+	if queryRecorder.Code != http.StatusInternalServerError || !strings.Contains(queryRecorder.Body.String(), employeeSyncFailedErrorCode) {
+		t.Fatalf("unexpected user result response: status=%d body=%s", queryRecorder.Code, queryRecorder.Body.String())
+	}
+}
+
 func TestOrgSyncBackgroundPersistsAndQueriesRunningThenComplete(t *testing.T) {
 	db := useOrgSyncTestDB(t)
 	orgID := "async-persist-org"

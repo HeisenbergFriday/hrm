@@ -277,17 +277,57 @@ export type OrgSyncTaskAPIResponse = {
   data: OrgSyncTaskResponse
 }
 
+export type OrgSyncUserStartAPIResponse = {
+  code: 202
+  message: 'running'
+  data: {
+    status: 'running'
+    request_id: string
+  }
+}
+
+export type OrgSyncUserRunningAPIResponse = {
+  code: 202
+  message: 'running'
+  data: {
+    status: 'running'
+    request_id: string
+    duration_ms?: number
+  }
+}
+
 export const syncAPI = {
   syncDepartments: () => api.post<OrgSyncTaskAPIResponse, OrgSyncTaskAPIResponse>(
     '/sync/departments',
     {},
     ORG_SYNC_REQUEST_CONFIG,
   ),
-  syncUsers: () => api.post<OrgSyncTaskAPIResponse, OrgSyncTaskAPIResponse>(
-    '/sync/users',
-    {},
-    ORG_SYNC_REQUEST_CONFIG,
-  ),
+  syncUsers: async (): Promise<OrgSyncTaskAPIResponse> => {
+    const startedAt = Date.now()
+    const startResponse = await api.post<OrgSyncUserStartAPIResponse, OrgSyncUserStartAPIResponse>(
+      '/sync/users/start',
+      {},
+      ORG_SYNC_SHORT_REQUEST_CONFIG,
+    )
+    const requestID = startResponse.data?.request_id
+    if (startResponse.code !== 202 || startResponse.data?.status !== 'running' || !requestID) {
+      throw new Error('用户同步启动响应异常，请稍后重试')
+    }
+    while (Date.now() - startedAt < ORG_SYNC_TIMEOUT_MS) {
+      const remainingWaitMS = ORG_SYNC_TIMEOUT_MS - (Date.now() - startedAt)
+      await new Promise((resolve) => setTimeout(resolve, Math.min(ORG_SYNC_POLL_INTERVAL_MS, remainingWaitMS)))
+      if (Date.now() - startedAt >= ORG_SYNC_TIMEOUT_MS) break
+      const response = await api.get<OrgSyncTaskAPIResponse | OrgSyncUserRunningAPIResponse, OrgSyncTaskAPIResponse | OrgSyncUserRunningAPIResponse>(
+        `/sync/users/${encodeURIComponent(requestID)}`,
+        ORG_SYNC_SHORT_REQUEST_CONFIG,
+      )
+      if (response.code === 202) {
+        continue
+      }
+      return response as OrgSyncTaskAPIResponse
+    }
+    throw new Error('用户同步任务等待超时，后台任务可能仍在执行，请前往同步日志确认结果，暂勿重复点击')
+  },
   getSyncStatus: () => api.get<OrgSyncStatusAPIResponse, OrgSyncStatusAPIResponse>('/sync/status'),
 }
 

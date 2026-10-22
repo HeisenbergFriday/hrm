@@ -4540,8 +4540,23 @@ func resolveDingTalkEmployeeID(raw map[string]interface{}) string {
 
 func getFloat(m map[string]interface{}, key string) float64 {
 	if v, ok := m[key]; ok {
-		if f, ok := v.(float64); ok {
-			return f
+		switch value := v.(type) {
+		case float64:
+			return value
+		case float32:
+			return float64(value)
+		case int:
+			return float64(value)
+		case int64:
+			return float64(value)
+		case json.Number:
+			if parsed, err := value.Float64(); err == nil {
+				return parsed
+			}
+		case string:
+			if parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil {
+				return parsed
+			}
 		}
 	}
 	return 0

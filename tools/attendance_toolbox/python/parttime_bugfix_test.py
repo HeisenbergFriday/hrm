@@ -78,7 +78,7 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
         self.assertEqual(parttime._entry_value(day_maps["main"].get(15)), 1.0)
         self.assertEqual(parttime._entry_value(day_maps["main"].get(29)), 1.0)
 
-    def test_fixed_person_keeps_schedule_value_and_only_reminds_anomalies(self) -> None:
+    def test_fixed_person_does_not_fill_dates_without_source_records(self) -> None:
         monthly_summary = {
             "刘芮": {
                 15: parttime._parse_daily_text_value("标准:上班迟到12分钟\n(09:12,18:30)"),
@@ -88,6 +88,7 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
         schedule_days = {
             15: parttime._make_daily_entry(1.0),
             29: parttime._make_daily_entry(1.0),
+            30: parttime._make_daily_entry(1.0),
         }
 
         resolved, source, warnings = parttime._resolve_row_days(
@@ -102,15 +103,14 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
         self.assertEqual(source, parttime.SOURCE_SPECIAL_DEFAULT_WEEKDAYS)
         self.assertEqual(warnings, [])
         self.assertEqual(parttime._entry_value(resolved[15]), 1.0)
-        self.assertEqual(parttime._entry_value(resolved[29]), 1.0)
-        self.assertEqual(sum(parttime._entry_value(entry) or 0 for entry in resolved.values()), 2.0)
+        self.assertEqual(parttime._entry_value(resolved[29]), 0.0)
+        self.assertNotIn(30, resolved)
+        self.assertEqual(sum(parttime._entry_value(entry) or 0 for entry in resolved.values()), 1.0)
         self.assertIn("迟到12分钟", parttime._entry_note(resolved[15]))
         self.assertIn("旷工", parttime._entry_note(resolved[29]))
-        self.assertNotIn("扣减", parttime._entry_note(resolved[15]))
-        self.assertNotIn("未计出勤", parttime._entry_note(resolved[29]))
+        self.assertIn("按规则计1天", parttime._entry_comment(resolved[15]))
         self.assertTrue(parttime._is_alert_entry(resolved[15]))
-        self.assertFalse(parttime._is_deducted_entry(resolved[15]))
-        self.assertFalse(parttime._is_deducted_entry(resolved[29]))
+        self.assertTrue(parttime._is_deducted_entry(resolved[29]))
 
     @staticmethod
     def _write_formula_schedule(path: Path) -> None:
@@ -165,6 +165,34 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
                     data = xml.encode("utf-8")
                 target_zip.writestr(info, data)
         patched_path.replace(path)
+
+
+class BinaryAttendanceValueTests(unittest.TestCase):
+    def test_late_and_early_are_one_with_detail_in_comment(self) -> None:
+        for text, detail in (
+            ("标准:上班迟到15分钟\n(09:15,18:00)", "迟到15分钟"),
+            ("标准:下班早退89分钟\n(09:00,16:31)", "早退89分钟"),
+        ):
+            with self.subTest(text=text):
+                entry = parttime._parse_daily_text_value(text)
+                self.assertEqual(parttime._entry_value(entry), 1.0)
+                self.assertIn(detail, parttime._entry_comment(entry))
+                self.assertNotIn("0.", parttime._entry_comment(entry))
+
+    def test_rest_punch_is_one_and_absence_is_zero(self) -> None:
+        rest = parttime._parse_daily_text_value("休息并打卡\n(09:00,18:30)")
+        absent = parttime._parse_daily_text_value("标准:旷工\n(-)")
+        self.assertEqual(parttime._entry_value(rest), 1.0)
+        self.assertIn("休息并打卡", parttime._entry_comment(rest))
+        self.assertEqual(parttime._entry_value(absent), 0.0)
+
+    def test_empty_and_unknown_source_stay_blank_with_comments(self) -> None:
+        empty = parttime._parse_daily_text_value(None)
+        unknown = parttime._parse_daily_text_value("系统新状态")
+        self.assertIsNone(parttime._entry_value(empty))
+        self.assertIn("原始记录为空", parttime._entry_comment(empty))
+        self.assertIsNone(parttime._entry_value(unknown))
+        self.assertIn("状态文本无法识别", parttime._entry_comment(unknown))
 
 
 if __name__ == "__main__":

@@ -245,7 +245,7 @@ def _format_hours(value: float) -> str:
 
 
 def _make_daily_entry(
-    value: float,
+    value: float | None,
     note: str = "",
     raw_text: str = "",
     alert: bool = False,
@@ -256,7 +256,7 @@ def _make_daily_entry(
     overtime_hours: float | None = None,
 ) -> DailyEntry:
     entry = {
-        "value": _round3(max(value, 0.0)),
+        "value": None if value is None else _round3(max(value, 0.0)),
         "note": note,
         "raw_text": raw_text,
         "alert": alert,
@@ -304,6 +304,19 @@ def _merge_note(*notes: str) -> str:
                 result.append(clean)
                 seen.add(clean)
     return "；".join(result)
+
+
+def _merge_comment(*comments: str) -> str:
+    """Merge comment lines without repeating the same source detail."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for comment in comments:
+        for line in re.split(r"\r?\n+", _normalize_text(comment)):
+            clean = line.strip()
+            if clean and clean not in seen:
+                result.append(clean)
+                seen.add(clean)
+    return "\n".join(result)
 
 
 def _is_alert_entry(entry: DailyEntry | None) -> bool:
@@ -694,31 +707,16 @@ def _apply_exception_minutes(
     if exception_minutes <= 0:
         return _make_daily_entry(base_value, raw_text=raw_text)
 
-    deducted_minutes = exception_minutes
-    exempted_minutes = 0
-    if monthly_exemption_remaining is not None and monthly_exemption_remaining[0] > 0:
-        exempted_minutes = min(exception_minutes, monthly_exemption_remaining[0])
-        monthly_exemption_remaining[0] -= exempted_minutes
-        deducted_minutes -= exempted_minutes
-
-    if deducted_minutes <= 0:
-        return _make_daily_entry(
-            base_value,
-            note=f"{note_prefix}，已用月累计豁免{exempted_minutes}分钟",
-            raw_text=raw_text,
-            alert=True,
-        )
-
-    deducted_days = deducted_minutes / WORKDAY_MINUTES
-    note = f"{note_prefix}，扣减{_round3(deducted_days)}天"
-    if exempted_minutes:
-        note = f"{note_prefix}，豁免{exempted_minutes}分钟，扣减{_round3(deducted_days)}天"
+    # 兼职汇总只记录“是否实际出勤”。迟到/早退的分钟数只保留在批注，
+    # 不再从 1 天中折算扣减。保留参数是为了兼容现有调用方。
+    _ = monthly_exemption_remaining
+    note = f"{note_prefix}；按规则计1天"
     return _make_daily_entry(
-        base_value - deducted_days,
+        1.0,
         note=note,
         raw_text=raw_text,
         alert=True,
-        deducted=True,
+        comment=f"{note}\n源记录：{raw_text}" if raw_text else note,
     )
 
 
@@ -730,38 +728,43 @@ def _parse_daily_text_value(
 ) -> DailyEntry | None:
     text = _normalize_text(value)
     if not text:
-        return None
+        return _make_daily_entry(
+            None,
+            comment="原始记录为空，未自动计出勤",
+            alert=True,
+        )
 
     has_real_punch = _has_real_punch(text)
+    has_punch_marker = has_real_punch or ("打卡" in text and "未打卡" not in text)
     overtime_hours = _extract_overtime_hours(text)
     is_rest_or_unscheduled = "休息" in text or "未排班" in text
     if overtime_hours is not None and overtime_hours > 0 and is_rest_or_unscheduled:
         note_prefix = "未排班加班" if "未排班" in text else "休息日加班"
         hours_text = _format_hours(overtime_hours)
         return _make_daily_entry(
-            overtime_hours * 60 / WORKDAY_MINUTES,
-            note=f"{note_prefix}{hours_text}小时",
+            1.0,
+            note=f"{note_prefix}{hours_text}小时；按规则计1天",
             raw_text=text,
             alert=True,
             unscheduled_punch="未排班" in text and has_real_punch,
-            comment=f"排班为休息/未排班，按加班时长折算出勤\n加班时长：{hours_text}小时\n源记录：{text}",
+            comment=f"排班为休息/未排班，存在实际出勤记录，按规则计1天\n加班时长：{hours_text}小时\n源记录：{text}",
             overtime_hours=overtime_hours,
         )
 
-    if "未排班" in text and has_real_punch:
+    if "未排班" in text and has_punch_marker:
         return _make_daily_entry(
             1.0,
             note="未排班并打卡",
             raw_text=text,
             alert=True,
             unscheduled_punch=True,
-            comment=f"考勤记录显示未排班但已打卡\n源记录：{text}",
+            comment=f"未排班并打卡；按规则计1天\n源记录：{text}",
         )
 
     late_minutes, early_minutes, is_absent = _extract_attendance_anomalies(text)
     exception_minutes = late_minutes + early_minutes
     is_missing_punch = "缺卡" in text
-    is_outing = "外出" in text
+    is_outing = any(keyword in text for keyword in ("外出", "外勤", "上班外勤", "下班外勤"))
     is_business_trip = "出差" in text
     has_offsite_approval = is_outing or is_business_trip
 
@@ -769,43 +772,82 @@ def _parse_daily_text_value(
     if has_offsite_approval and "事假" in text:
         return None
 
-    if has_offsite_approval and count_outing_as_present and not is_absent:
-        offsite_label = "外出" if is_outing else "出差"
+    if has_offsite_approval and not is_absent:
+        offsite_label = "外勤" if is_outing else "出差"
         return _make_daily_entry(
             1.0,
+            note=f"{offsite_label}；按规则计1天",
             raw_text=text,
             offsite=True,
-            comment=f"{offsite_label}已计出勤\n源记录：{text}",
+            comment=f"{offsite_label}；按规则计1天\n源记录：{text}",
         )
 
     leave_hours = _extract_leave_hours(text)
+    if "事假" in text or "病假" in text:
+        return _make_daily_entry(
+            0.0,
+            note="事假/病假；按规则计0天",
+            raw_text=text,
+            alert=True,
+            deducted=True,
+            comment=f"事假/病假；按规则计0天\n源记录：{text}",
+        )
+
     if leave_hours is not None:
         if leave_hours >= 7.5 and not has_real_punch:
-            return None
+            return _make_daily_entry(
+                0.0,
+                note="请假且没有有效出勤记录；按规则计0天",
+                raw_text=text,
+                alert=True,
+                deducted=True,
+                comment=f"请假且没有有效出勤记录；按规则计0天\n源记录：{text}",
+            )
         if leave_hours >= 3.5 and has_real_punch:
-            base_value = 0.5
             if exception_minutes:
                 return _apply_exception_minutes(
-                    base_value,
+                    1.0,
                     exception_minutes,
                     _format_minutes_note(late_minutes, early_minutes, False),
                     text,
                     monthly_exemption_remaining,
                 )
-            return _make_daily_entry(base_value, raw_text=text)
+            return _make_daily_entry(
+                1.0,
+                note="存在有效出勤记录；按规则计1天",
+                raw_text=text,
+                comment=f"存在有效出勤记录；按规则计1天\n源记录：{text}",
+            )
 
-    if "休息" in text and has_real_punch:
+    if "休息" in text and has_punch_marker:
         return _make_daily_entry(
             1.0,
-            note="休息并打卡",
+            note="休息并打卡；按规则计1天",
             raw_text=text,
             alert=True,
             unscheduled_punch=True,
-            comment=f"考勤记录显示休息日已打卡\n源记录：{text}",
+            comment=f"休息并打卡；按规则计1天\n源记录：{text}",
         )
 
     if "休息" in text and not any(keyword in text for keyword in PRESENT_KEYWORDS):
-        return None
+        return _make_daily_entry(
+            0.0,
+            note="休息且没有打卡；按规则计0天",
+            raw_text=text,
+            alert=True,
+            deducted=True,
+            comment=f"休息且没有打卡；按规则计0天\n源记录：{text}",
+        )
+
+    if "未排班" in text and not has_real_punch:
+        return _make_daily_entry(
+            0.0,
+            note="未排班且没有打卡；按规则计0天",
+            raw_text=text,
+            alert=True,
+            deducted=True,
+            comment=f"未排班且没有打卡；按规则计0天\n源记录：{text}",
+        )
 
     if is_outing and not has_real_punch:
         return None
@@ -814,15 +856,54 @@ def _parse_daily_text_value(
         return None
 
     if is_absent and not has_real_punch:
-        return _make_daily_entry(0.0, note="旷工，未计出勤", raw_text=text, alert=True, deducted=True)
+        return _make_daily_entry(
+            0.0,
+            note="旷工；按规则计0天",
+            raw_text=text,
+            alert=True,
+            deducted=True,
+            comment=f"旷工；按规则计0天\n源记录：{text}",
+        )
 
     if is_absent and has_real_punch:
         note = _format_minutes_note(late_minutes, early_minutes, True, is_missing_punch) or "旷工异常"
-        return _make_daily_entry(0.0, note=f"{note}，未计出勤", raw_text=text, alert=True, deducted=True)
+        return _make_daily_entry(
+            0.0,
+            note=f"{note}；按规则计0天",
+            raw_text=text,
+            alert=True,
+            deducted=True,
+            comment=f"{note}；按规则计0天\n源记录：{text}",
+        )
+
+    if "未打卡" in text or "未签到" in text:
+        return _make_daily_entry(
+            0.0,
+            note="未打卡；按规则计0天",
+            raw_text=text,
+            alert=True,
+            deducted=True,
+            comment=f"未打卡；按规则计0天\n源记录：{text}",
+        )
 
     if is_missing_punch:
         note = _format_minutes_note(late_minutes, early_minutes, False, True) or "缺卡仅提醒"
-        return _make_daily_entry(1.0, note=note, raw_text=text, alert=True)
+        if has_real_punch:
+            return _make_daily_entry(
+                1.0,
+                note=f"{note}；按规则计1天",
+                raw_text=text,
+                alert=True,
+                comment=f"{note}；按规则计1天\n源记录：{text}",
+            )
+        return _make_daily_entry(
+            0.0,
+            note="缺卡且没有有效出勤记录；按规则计0天",
+            raw_text=text,
+            alert=True,
+            deducted=True,
+            comment=f"缺卡且没有有效出勤记录；按规则计0天\n源记录：{text}",
+        )
 
     if exception_minutes:
         return _apply_exception_minutes(
@@ -839,7 +920,12 @@ def _parse_daily_text_value(
     if has_real_punch:
         return _make_daily_entry(1.0, raw_text=text)
 
-    return None
+    return _make_daily_entry(
+        None,
+        raw_text=text,
+        alert=True,
+        comment=f"状态文本无法识别，未自动计出勤\n源记录：{text}",
+    )
 
 
 def _merge_daily_maps(target: SourceMap, name: str, day_map: DailyMap) -> None:
@@ -853,12 +939,21 @@ def _merge_daily_maps(target: SourceMap, name: str, day_map: DailyMap) -> None:
         current_value = _entry_value(current)
         incoming_value = _entry_value(value)
         if incoming_value is None:
+            if current is None:
+                merged[day] = value
+            elif current_value is None and isinstance(current, dict) and isinstance(value, dict):
+                current["comment"] = _merge_comment(_entry_comment(current), _entry_comment(value))
+                current["alert"] = bool(current.get("alert") or value.get("alert"))
             continue
-        if current_value is None or incoming_value > current_value:
+        elif current_value == 0.0 or incoming_value == 0.0:
+            # 明确的旷工/请假/未打卡优先于其他来源的默认出勤值。
+            if incoming_value == 0.0:
+                merged[day] = value
+        elif current_value is None or incoming_value > current_value:
             merged[day] = value
         elif incoming_value == current_value and isinstance(current, dict) and isinstance(value, dict):
             current["note"] = _merge_note(_entry_note(current), _entry_note(value))
-            current["comment"] = _merge_note(_entry_comment(current), _entry_comment(value))
+            current["comment"] = _merge_comment(_entry_comment(current), _entry_comment(value))
             current["alert"] = bool(current.get("alert") or value.get("alert"))
             current["deducted"] = bool(current.get("deducted") or value.get("deducted"))
             current["offsite"] = bool(current.get("offsite") or value.get("offsite"))
@@ -1090,15 +1185,16 @@ def parse_attendance_detail(path: str) -> SourceMap:
             continue
         day_map: DailyMap = {}
         for day, col_idx in day_columns:
+            raw_value = ws.cell(row_idx, col_idx).value
             daily_value = _parse_daily_text_value(
-                ws.cell(row_idx, col_idx).value,
+                raw_value,
                 monthly_exemption_remaining=remaining,
                 count_outing_as_present=is_intern_row,
             )
-            if daily_value is None and not has_scope_columns:
-                marker_value = _parse_schedule_marker(ws.cell(row_idx, col_idx).value)
-                if marker_value is not None:
-                    daily_value = _make_daily_entry(marker_value)
+            if not has_scope_columns:
+                marker_value = _parse_schedule_marker(raw_value)
+                if marker_value is not None and _entry_value(daily_value) is None:
+                    daily_value = _make_daily_entry(marker_value, raw_text=_normalize_text(raw_value))
             if daily_value is not None:
                 day_map[day] = daily_value
         _merge_daily_maps(result, name, day_map)
@@ -1157,8 +1253,9 @@ def parse_monthly_summary(path: str) -> SourceMap:
             continue
         day_map: DailyMap = {}
         for offset, col_idx in enumerate(day_columns, start=1):
+            raw_value = ws.cell(row_idx, col_idx).value
             daily_value = _parse_daily_text_value(
-                ws.cell(row_idx, col_idx).value,
+                raw_value,
                 monthly_exemption_remaining=remaining,
                 count_outing_as_present=is_intern_row,
             )
@@ -1518,9 +1615,11 @@ def _merge_unscheduled_punch_days(
     attendance_day_map: DailyMap,
     schedule_source_name: str,
 ) -> DailyMap:
-    merged = dict(schedule_day_map)
+    # 排班只用于识别“未排班打卡”，不负责凭空生成出勤日期。
+    merged: DailyMap = {}
     for day, entry in attendance_day_map.items():
-        if day in merged or not (_entry_has_real_punch(entry) or _is_overtime_entry(entry)):
+        if day in schedule_day_map or not (_entry_has_real_punch(entry) or _is_overtime_entry(entry)):
+            merged[day] = entry
             continue
         marked = _mark_unscheduled_punch_entry(entry, schedule_source_name)
         if marked is not None:
@@ -1600,8 +1699,7 @@ def _resolve_row_days(
 
     if name in special_default_name_set:
         return (
-            _merge_fixed_schedule_anomalies(
-                fallback_day_map,
+            _merge_day_maps(
                 _lookup_source_day_map(monthly_summary, name) or {},
                 _lookup_source_day_map(attendance_detail, name) or {},
             ),
@@ -1627,12 +1725,11 @@ def _resolve_row_days(
                 _lookup_source_day_map(monthly_summary, name) or {},
                 _lookup_source_day_map(attendance_detail, name) or {},
             )
+            if not attendance_day_map:
+                warnings.append(f"{name} 排班存在，但原始考勤没有覆盖日期，保持空白。")
             return (
-                _merge_unscheduled_punch_days(
-                    merged_schedule,
-                    attendance_day_map,
-                    schedule_source_name,
-                ),
+                _merge_unscheduled_punch_days(merged_schedule, attendance_day_map, schedule_source_name)
+                if attendance_day_map else {},
                 schedule_source_name,
                 warnings,
             )
@@ -1747,10 +1844,6 @@ def _write_data_rows(
         total_value = _round3(
             sum(_entry_value(value) or 0.0 for value in daily_map.values() if value is not None)
         )
-        if total_value <= 0:
-            print(f"[跳过] {output_row.get('姓名')} <- {source_name}（实际出勤天数为 0）")
-            continue
-
         row_idx = next_row_idx
         row_reminders: list[str] = []
         for col_idx, header in enumerate(STATIC_HEADERS, start=1):
@@ -1763,12 +1856,14 @@ def _write_data_rows(
             cell = ws.cell(row_idx, start_day_col + day - 1)
             entry = daily_map.get(day)
             value = _entry_value(entry)
-            if value is not None:
-                cell.value = _round3(value)
+            if entry is not None:
+                if value is not None:
+                    cell.value = _round3(value)
                 note = _entry_note(entry)
-                comment = _merge_note(note, _entry_comment(entry))
+                comment = _merge_comment(note, _entry_comment(entry))
                 if comment:
-                    cell.comment = Comment(comment, "考勤汇总")
+                    old_comment = cell.comment.text if cell.comment else ""
+                    cell.comment = Comment(_merge_comment(old_comment, comment), "考勤汇总")
                 if note:
                     row_reminders.append(f"{day}日{note}")
                 if _is_unscheduled_punch_entry(entry):

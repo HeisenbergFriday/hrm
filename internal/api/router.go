@@ -164,6 +164,8 @@ func SetupRouter() *gin.Engine {
 			{
 				sync.POST("/departments", middleware.RequirePermission("attendance_manage"), SyncDepartments)
 				sync.POST("/users", middleware.RequirePermission("attendance_manage"), SyncUsers)
+				sync.POST("/users/start", middleware.RequirePermission("attendance_manage"), StartUserSyncData)
+				sync.GET("/users/:request_id", middleware.RequirePermission("attendance_manage"), GetUserSyncResult)
 				sync.GET("/status", middleware.RequirePermissionOrMenu(
 					[]string{"attendance_manage"},
 					[]string{"menu:sync-log", "menu:sync-jobs", "menu:setting"},

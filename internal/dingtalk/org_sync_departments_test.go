@@ -126,6 +126,32 @@ func TestFetchDeptTreeRejectsMissingOrInvalidResult(t *testing.T) {
 	}
 }
 
+func TestFetchDeptTreeAcceptsStringDepartmentIDs(t *testing.T) {
+	responses := []string{
+		`{"errcode":0,"result":[{"dept_id":"2","name":"研发部","parent_id":"1"}]}`,
+		`{"errcode":0,"result":{"dept_id":"2","name":"研发部","parent_id":"1"}}`,
+		`{"errcode":0,"result":[]}`,
+	}
+	index := 0
+	stubDingTalkHTTPClient(t, func(*http.Request) (*http.Response, error) {
+		if index >= len(responses) {
+			return jsonResponse(http.StatusInternalServerError, `{}`), nil
+		}
+		body := responses[index]
+		index++
+		return jsonResponse(http.StatusOK, body), nil
+	})
+
+	var departments []DeptInfo
+	err := fetchDeptTree("safe-token", 1, &departments)
+	if err != nil {
+		t.Fatalf("fetchDeptTree() error = %v", err)
+	}
+	if len(departments) != 1 || departments[0].DeptID != 2 || departments[0].ParentID != 1 {
+		t.Fatalf("departments = %#v, want child IDs parsed from strings", departments)
+	}
+}
+
 func TestSyncDepartmentsForConfigFailsWhenRootDetailFails(t *testing.T) {
 	clearTokenCacheForTest(t)
 	cfg := AppConfig{OrgID: "org-a", AppKey: "key-a", AppSecret: "secret-a"}
