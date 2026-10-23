@@ -9,6 +9,7 @@ import {
   Collapse,
   DatePicker,
   Divider,
+  Drawer,
   Empty,
   Input,
   InputNumber,
@@ -553,6 +554,7 @@ const AttendanceToolbox: React.FC = () => {
   const canEditRules = hasPerm('attendance_toolbox_rules_edit') || hasPerm('attendance_manage')
 
   const [activeModule, setActiveModule] = useState<ToolboxModuleKey>('leave')
+  const [fixedConfigOpen, setFixedConfigOpen] = useState(false)
   const [completedModules, setCompletedModules] = useState<Partial<Record<ToolboxModuleKey, boolean>>>({})
   const [missingFieldName, setMissingFieldName] = useState<string | null>(null)
   const fieldCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -2526,21 +2528,62 @@ const AttendanceToolbox: React.FC = () => {
         </Space>
       </Card>
 
-      <Collapse
-        ghost
-        style={{ marginBottom: 4 }}
-        items={[{
-          key: 'fixed-config',
-          label: (
-            <Space>
-              <FileProtectOutlined style={{ color: 'var(--color-primary)' }} />
-              <Text strong>固定配置（名单 / 同步源）</Text>
-              <Text type="secondary">默认折叠，仅在人员或规则变化时展开</Text>
+      <Card
+        size="small"
+        style={{
+          marginBottom: 8,
+          borderRadius: 'var(--radius-lg)',
+          border: '1px solid var(--color-border)',
+          background: 'var(--color-bg-card)',
+        }}
+        styles={{ body: { padding: '10px 14px' } }}
+      >
+        <Space
+          align="center"
+          style={{ width: '100%', justifyContent: 'space-between' }}
+          wrap
+        >
+          <Space size={10}>
+            <FileProtectOutlined style={{ color: 'var(--color-primary)', fontSize: 16 }} />
+            <Space direction="vertical" size={0}>
+              <Text strong>固定配置</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                成都作息、固定名单、同步源和规则配置
+              </Text>
             </Space>
-          ),
-          children: renderFixedConfig(),
-        }]}
-      />
+          </Space>
+          <Button
+            type="link"
+            size="small"
+            onClick={() => setFixedConfigOpen(true)}
+            aria-label="打开固定配置"
+          >
+            打开配置
+          </Button>
+        </Space>
+      </Card>
+      <Drawer
+        title={
+          <Space>
+            <FileProtectOutlined style={{ color: 'var(--color-primary)' }} />
+            <span>固定配置</span>
+          </Space>
+        }
+        placement="right"
+        width="min(720px, 100vw)"
+        open={fixedConfigOpen}
+        onClose={() => setFixedConfigOpen(false)}
+        destroyOnHidden={false}
+        styles={{
+          body: {
+            padding: 20,
+            background: 'var(--color-bg-layout)',
+            overflowY: 'auto',
+          },
+        }}
+      >
+        {renderFixedConfig()}
+      </Drawer>
       {renderToolbar()}
           </div>
         </Col>

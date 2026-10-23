@@ -388,8 +388,8 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     expect(screen.getByText('考勤数据处理工具')).toBeInTheDocument()
     await waitForToolboxReady()
-    // Fixed config is collapsed by default; expand to verify default name lists.
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    // Fixed config is closed by default; open it to verify default name lists.
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
     expect(await screen.findByText('梁伯林')).toBeInTheDocument()
     expect(screen.getByText('陈秋宇')).toBeInTheDocument()
     expect(screen.getAllByText('费婷玉').length).toBeGreaterThan(0)
@@ -399,12 +399,12 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
 
-    const fixedConfigItem = screen.getByText('固定配置（名单 / 同步源）').closest('.ant-collapse-item') as HTMLElement
-    expect(within(fixedConfigItem).queryByRole('button', { name: /组织数据生成|钉钉同步/ })).not.toBeInTheDocument()
-    expect(within(fixedConfigItem).getByText('自动生成')).toBeInTheDocument()
-    expect(within(fixedConfigItem).getByText('自动同步')).toBeInTheDocument()
+    const fixedConfigDrawer = document.querySelector('.ant-drawer-content') as HTMLElement
+    expect(within(fixedConfigDrawer).queryByRole('button', { name: /组织数据生成|钉钉同步/ })).not.toBeInTheDocument()
+    expect(within(fixedConfigDrawer).getByText('自动生成')).toBeInTheDocument()
+    expect(within(fixedConfigDrawer).getByText('自动同步')).toBeInTheDocument()
   })
 
   it('blocks leave calculation when required files are missing', async () => {
@@ -819,7 +819,7 @@ describe('AttendanceToolbox', () => {
       await Promise.resolve()
     })
 
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
     expect(await screen.findByText(/生成失败：花名册生成服务未配置/)).toBeInTheDocument()
 
     // 生成失败完成后不得产生自动文件，也不得覆盖已经上传的本地文件。
@@ -871,7 +871,7 @@ describe('AttendanceToolbox', () => {
     })
 
     expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(2)
-    await userEvent.setup().click(screen.getByText('固定配置（名单 / 同步源）'))
+    await userEvent.setup().click(screen.getByRole('button', { name: '打开固定配置' }))
     expect(await screen.findByText(/上次生成：/)).toBeInTheDocument()
   })
 
@@ -889,7 +889,7 @@ describe('AttendanceToolbox', () => {
     await waitForToolboxReady()
     await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
     expect(mockConfirmOrgSync).not.toHaveBeenCalled()
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
     expect(await screen.findByText(/生成失败：1 名在职员工缺少有效主部门/)).toBeInTheDocument()
   })
 
@@ -1142,7 +1142,7 @@ describe('AttendanceToolbox', () => {
   it('默认月份为上一个自然月（req 1）', async () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    // 卡片在未展开时不渲染月份选择器；展开固定配置区域。
+    // 固定配置默认关闭；这里仅验证默认月份计算契约。
     // 这里只验证 getPreviousCalendarMonthRange 的契约（组件内部使用同样的函数）。
     const [start, end] = getPreviousCalendarMonthRange(dayjs('2026-08-02'))
     expect(start.format('YYYY-MM-DD')).toBe('2026-07-01')
@@ -1160,7 +1160,7 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
     const fetchBtn = await screen.findByRole('button', { name: /从钉钉抓取/ })
     expect(fetchBtn).toBeDisabled()
     // 卡片内的提示文案明确告知缺少权限（Tooltip 标题也在 DOM 中，故用 getAllByText）。
@@ -1171,7 +1171,7 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
     await user.click(await screen.findByRole('button', { name: /从钉钉抓取/ }))
     await waitFor(() => expect(mockParttimeMonthlyPunch).toHaveBeenCalledTimes(1))
     const expectedMonth = dayjs().subtract(1, 'month').format('YYYY-MM')
@@ -1186,7 +1186,7 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
     await user.click(await screen.findByRole('button', { name: /从钉钉抓取/ }))
     await waitFor(() => expect(messageApi.error).toHaveBeenCalledWith(expect.stringContaining('抓取失败')))
     // 失败后按钮文案变为「重试抓取」，仍可再次点击（req 6）。
