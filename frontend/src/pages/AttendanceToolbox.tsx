@@ -2215,7 +2215,8 @@ const AttendanceToolbox: React.FC = () => {
 
   const renderToolbar = () => (
     <Collapse
-      style={{ marginBottom: 16 }}
+      ghost
+      style={{ marginBottom: 0 }}
       items={[{
         key: 'templates',
         label: (
@@ -2483,7 +2484,7 @@ const AttendanceToolbox: React.FC = () => {
       {renderHero()}
 
       <Row gutter={[20, 20]} align="top">
-        <Col xs={24} xl={6}>
+        <Col xs={24} xl={24}>
           <div>
       <Card
         size="small"
@@ -2492,6 +2493,7 @@ const AttendanceToolbox: React.FC = () => {
           marginBottom: 16,
           borderRadius: 'var(--radius-lg)',
           border: '1px solid var(--color-border)',
+          display: 'none',
         }}
         styles={{ body: { padding: '14px 16px' } }}
       >
@@ -2525,7 +2527,8 @@ const AttendanceToolbox: React.FC = () => {
       </Card>
 
       <Collapse
-        style={{ marginBottom: 16 }}
+        ghost
+        style={{ marginBottom: 4 }}
         items={[{
           key: 'fixed-config',
           label: (
@@ -2541,7 +2544,7 @@ const AttendanceToolbox: React.FC = () => {
       {renderToolbar()}
           </div>
         </Col>
-        <Col xs={24} xl={18}>
+        <Col xs={24} xl={24}>
       <Tabs
         size="large"
         activeKey={activeModule}
@@ -2550,7 +2553,7 @@ const AttendanceToolbox: React.FC = () => {
           key: item.key,
           label: (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              {completedModules[item.key] ? <CheckCircleOutlined style={{ color: 'var(--color-success)' }} /> : null}
+              {item.key === 'final' ? <span style={{ borderLeft: '1px solid var(--color-border)', paddingLeft: 18 }} /> : null}
               {item.key === 'final'
                 ? <CloudDownloadOutlined />
                 : <FileExcelOutlined />}
