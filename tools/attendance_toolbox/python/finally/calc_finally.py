@@ -985,6 +985,13 @@ def _resolve_leave_review(row: dict) -> None:
         raise ValueError(f"请假{row['source']}缺少有效确认值/最终值；不能仅修改复核状态。")
     if amount > 0 and not (row["emp_no"] or row["name"]):
         raise ValueError(f"请假{row['source']}缺少员工身份，不能入账。")
+    kind = str(row["leave_type"] or "").strip()
+    if kind == calc_leave.MARRIAGE_LEAVE_TYPE and (
+        not (row["approval_id"] or row.get("approval_instance_id"))
+        or str(values["审批状态"] or "").strip() != "完成"
+        or str(values["审批结果"] or "").strip() != "同意"
+    ):
+        raise ValueError(f"请假{row['source']}婚假审批未完成且同意，不能入账。")
     if not manual:
         if (
             not (row["approval_id"] or row.get("approval_instance_id"))
@@ -994,10 +1001,34 @@ def _resolve_leave_review(row: dict) -> None:
             raise ValueError(f"请假{row['source']}审批未明确生效，须人工确认。")
         if str(values["异常原因"] or "").strip():
             raise ValueError(f"请假{row['source']}仍有异常原因，须人工确认。")
-        kind = row["leave_type"]
-        expected_unit = "自然日" if calc_leave.is_natural_day_leave(kind) else "应出勤日" if calc_leave.is_expected_attendance_day_leave(kind) else "小时" if kind in calc_leave.ORDINARY_HOUR_LEAVE_TYPES else None
+        if kind == calc_leave.MARRIAGE_LEAVE_TYPE:
+            expected_unit = "小时"
+        elif kind in calc_leave.APPLICATION_DURATION_LEAVE_TYPES:
+            expected_unit = calc_leave.parse_application_duration(row.get("sys_hours"))[0]
+        else:
+            expected_unit = "自然日" if calc_leave.is_natural_day_leave(kind) else "应出勤日" if calc_leave.is_expected_attendance_day_leave(kind) else "小时" if kind in calc_leave.ORDINARY_HOUR_LEAVE_TYPES else None
         if unit != expected_unit:
             raise ValueError(f"请假{row['source']}假别与计量口径不一致，须人工确认。")
+        if kind == calc_leave.MARRIAGE_LEAVE_TYPE:
+            confirmed_days = calc_leave.finite_nonnegative(values["确认请假天数"])
+            if confirmed_days is None or abs(confirmed_days - amount / 8) > 0.000001:
+                raise ValueError(f"请假{row['source']}确认请假天数与确认请假时长不一致。")
+    if kind == calc_leave.MARRIAGE_LEAVE_TYPE:
+        confirmed_days = calc_leave.finite_nonnegative(values["确认请假天数"])
+        if confirmed_days is None or abs(confirmed_days - amount / 8) > 0.000001:
+            raise ValueError(f"请假{row['source']}确认请假天数与确认请假时长不一致。")
+        application_unit, application_amount = calc_leave.parse_application_duration(row.get("sys_hours"))
+        if application_amount is None:
+            raise ValueError(f"请假{row['source']}缺少申请时长依据。")
+        full_daily, remaining = calc_leave.allocate_application_duration_daily(
+            start.date(), end.date(), application_unit, application_amount,
+        )
+        expected_month_hours = sum(
+            item["hours"] for day, item in full_daily.items()
+            if month.year == day.year and month.month == day.month
+        )
+        if remaining > 0.000001 or abs(expected_month_hours - amount) > 0.000001:
+            raise ValueError(f"请假{row['source']}婚假申请时长与目标月份确认值不一致。")
     raw_daily = values["确认日分摊"] if manual and values["确认日分摊"] else values["日分摊"]
     daily = {}
     try:

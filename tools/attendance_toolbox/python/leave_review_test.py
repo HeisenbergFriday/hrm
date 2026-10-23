@@ -278,9 +278,75 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(values["最终请假天数"], 3)
         self.assertEqual(calc_finally.parse_leave_summary(str(self.path), self.ctx)["MT0001"]["陪产假"], 3)
 
-    def test_unknown_day_rule_requires_review(self):
-        self.generate([self.row("3天", kind="婚假")])
-        self.assertEqual(self.values()[0]["复核状态"], "待确认")
+    def test_marriage_application_days_are_auto_confirmed(self):
+        self.generate([self.row(
+            "3天", kind="婚假",
+            end=datetime(2026, 9, 3, 18, 30),
+        )])
+        values, issues = self.values()
+        self.assertEqual(values["最终请假时长"], 24)
+        self.assertEqual(values["最终请假天数"], 3)
+        self.assertEqual(values["确认请假时长"], 24)
+        self.assertEqual(values["确认请假天数"], 3)
+        self.assertEqual(values["复核状态"], "已确认")
+        self.assertEqual(values["异常原因"], None)
+        self.assertEqual(issues, 0)
+        self.assertEqual(calc_finally.parse_leave_summary(str(self.path), self.ctx)["MT0001"]["婚假"], 3)
+
+    def test_marriage_application_hours_are_converted_at_eight_hours_per_day(self):
+        self.generate([self.row(
+            "16小时", kind="婚假",
+            end=datetime(2026, 9, 2, 18, 30),
+        )])
+        values, issues = self.values()
+        self.assertEqual(values["最终请假时长"], 16)
+        self.assertEqual(values["最终请假天数"], 2)
+        self.assertEqual(values["确认请假天数"], 2)
+        self.assertEqual(values["复核状态"], "已确认")
+        self.assertEqual(issues, 0)
+
+    def test_marriage_cross_month_keeps_only_target_month_days(self):
+        self.generate([self.row(
+            "5天",
+            kind="婚假",
+            start=datetime(2026, 8, 30, 9),
+            end=datetime(2026, 9, 3, 18, 30),
+        )])
+        values, issues = self.values()
+        self.assertEqual(values["最终请假时长"], 24)
+        self.assertEqual(values["最终请假天数"], 3)
+        self.assertEqual(issues, 0)
+        details = calc_finally.parse_leave_day_details(str(self.path), self.ctx)
+        self.assertEqual(set(details["MT0001"]), {date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)})
+
+    def test_marriage_explicit_zero_days_is_confirmed_zero(self):
+        self.generate([self.row("0天", kind="婚假")])
+        values, issues = self.values()
+        self.assertEqual(values["最终请假时长"], 0)
+        self.assertEqual(values["最终请假天数"], 0)
+        self.assertEqual(values["确认请假天数"], 0)
+        self.assertEqual(values["复核状态"], "已确认")
+        self.assertEqual(issues, 0)
+        self.assertEqual(calc_finally.parse_leave_summary(str(self.path), self.ctx), {})
+
+    def test_marriage_missing_application_duration_stays_pending(self):
+        self.generate([self.row(None, kind="婚假")])
+        values, issues = self.values()
+        self.assertEqual(values["复核状态"], "待确认")
+        self.assertIn("缺少申请时长依据", values["异常原因"])
+        self.assertIsNone(values["最终请假天数"])
+        self.assertEqual(issues, 1)
+
+    def test_marriage_requires_completed_and_agreed_approval(self):
+        for status, result in (("审批中", "同意"), ("完成", "拒绝")):
+            with self.subTest(status=status, result=result):
+                source = list(self.row("3天", kind="婚假", status=status))
+                source[13] = result
+                self.generate([tuple(source)])
+                values, issues = self.values()
+                self.assertEqual(values["复核状态"], "待确认")
+                self.assertIn("审批", values["异常原因"])
+                self.assertEqual(issues, 1)
 
     def test_multiday_correction_requires_conserving_daily_ledger(self):
         self.generate([self.row(12, end=datetime(2026, 9, 2, 18, 30))])
@@ -381,6 +447,72 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         daily = calc_finally.parse_leave_day_details(str(self.path), self.ctx)
         self.assertEqual(summary["MT0001"]["产假"], 1)
         self.assertEqual(daily["MT0001"][date(2026, 9, 1)]["产假"], 1)
+
+    def test_maternity_checkup_uses_application_hours_without_schedule(self):
+        self.generate([
+            self.row(
+                8,
+                kind="产检假",
+                emp_id="MT-SD",
+                name="单童",
+                start=datetime(2026, 9, 9, 13),
+                end=datetime(2026, 9, 9, 14),
+            )
+        ])
+        values, issues = self.values()
+        self.assertEqual(values["计量口径"], "小时")
+        self.assertEqual(values["最终请假时长"], 8)
+        self.assertEqual(values["最终请假天数"], 1)
+        self.assertEqual(values["复核状态"], "自动通过")
+        self.assertEqual(issues, 0)
+        summary = calc_finally.parse_leave_summary(str(self.path), self.ctx)
+        self.assertEqual(summary["MT-SD"]["产检假"], 1)
+        daily = calc_finally.parse_leave_day_details(str(self.path), self.ctx)
+        self.assertEqual(daily["MT-SD"][date(2026, 9, 9)]["产检假"], 1)
+
+    def test_maternity_checkup_uses_application_days_directly(self):
+        self.generate([self.row("1天", kind="产检假")])
+        values, issues = self.values()
+        self.assertEqual(values["计量口径"], "自然日")
+        self.assertIsNone(values["最终请假时长"])
+        self.assertEqual(values["最终请假天数"], 1)
+        self.assertEqual(values["复核状态"], "自动通过")
+        self.assertEqual(issues, 0)
+        self.assertEqual(calc_finally.parse_leave_summary(str(self.path), self.ctx)["MT0001"]["产检假"], 1)
+
+    def test_maternity_checkup_missing_or_unrecognized_duration_stays_pending(self):
+        for duration in (None, "8周"):
+            with self.subTest(duration=duration):
+                self.generate([self.row(duration, kind="产检假")])
+                values, issues = self.values()
+                self.assertEqual(values["复核状态"], "待确认")
+                self.assertEqual(issues, 1)
+                self.assertIsNone(values["最终请假天数"])
+
+    def test_maternity_checkup_incomplete_or_rejected_approval_stays_pending(self):
+        pending = list(self.row(8, kind="产检假", status="审批中"))
+        rejected = list(self.row(8, kind="产检假"))
+        rejected[13] = "拒绝"
+        for source_row in (pending, rejected):
+            self.generate([tuple(source_row)])
+            values, issues = self.values()
+            self.assertEqual(values["复核状态"], "待确认")
+            self.assertEqual(issues, 1)
+
+    def test_maternity_checkup_only_keeps_target_month_intersections(self):
+        self.generate([
+            self.row(
+                8,
+                kind="产检假",
+                start=datetime(2026, 8, 31, 9),
+                end=datetime(2026, 8, 31, 18),
+            )
+        ])
+        workbook = openpyxl.load_workbook(self.path, data_only=True)
+        try:
+            self.assertEqual(workbook["请假明细"].max_row, 1)
+        finally:
+            workbook.close()
 
     def test_unrecognized_workbook_cannot_be_treated_as_no_leave(self):
         wb = openpyxl.Workbook()
