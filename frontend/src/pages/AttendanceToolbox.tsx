@@ -2482,6 +2482,9 @@ const AttendanceToolbox: React.FC = () => {
       {messageContextHolder}
       {renderHero()}
 
+      <Row gutter={[20, 20]} align="top">
+        <Col xs={24} xl={6}>
+          <div>
       <Card
         size="small"
         data-testid="attendance-toolbox-wizard"
@@ -2500,6 +2503,7 @@ const AttendanceToolbox: React.FC = () => {
             </Text>
           </Space>
           <Steps
+            direction="vertical"
             size="small"
             current={wizardCurrent >= 0 ? wizardCurrent : 0}
             onChange={(index) => {
@@ -2535,6 +2539,9 @@ const AttendanceToolbox: React.FC = () => {
         }]}
       />
       {renderToolbar()}
+          </div>
+        </Col>
+        <Col xs={24} xl={18}>
       <Tabs
         size="large"
         activeKey={activeModule}
@@ -2551,12 +2558,14 @@ const AttendanceToolbox: React.FC = () => {
             </span>
           ),
           children: (
-            <div style={{ paddingTop: 8 }}>
+            <div style={{ paddingTop: 4 }}>
               {renderModule(item)}
             </div>
           ),
         }))}
       />
+        </Col>
+      </Row>
     </PageContainer>
   )
 }
