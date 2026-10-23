@@ -155,15 +155,15 @@ MONTHLY_SCOPE_KEYWORDS = (
 DEFAULT_SPECIAL_DEFAULT_NAMES = tuple(
     dict.fromkeys(
         (
-            "王心英",
-            "刘芮",
-            "汤颖",
-            "周代林",
-            "陈富庆",
+            "\u738b\u5fc3\u82f1",
+            "\u5218\u82ae",
+            "\u5468\u4ee3\u6797",
+            "\u6c64\u9896",
+            "\u6c64\u6811\u5b8f",
         )
     )
 )
-DEFAULT_SPECIAL_CHENGDU_NAMES: set[str] = set()
+DEFAULT_SPECIAL_CHENGDU_NAMES: set[str] = {"\u738b\u5fc3\u82f1"}
 
 SCHEDULE_PLACEHOLDER_NAMES = {"张三", "李四", "王五"}
 
@@ -1027,6 +1027,10 @@ def _is_monthly_row_in_scope(
     return False
 
 
+def _is_unassigned_attendance_group(value: Any) -> bool:
+    return "未加入考勤组" in _normalize_text(value)
+
+
 def _source_exempts_late_early(path: str, ws) -> bool:
     filename = os.path.basename(path)
     if any(keyword in filename for keyword in MUTENG_KEYWORDS):
@@ -1197,6 +1201,10 @@ def parse_attendance_detail(path: str) -> SourceMap:
                     daily_value = _make_daily_entry(marker_value, raw_text=_normalize_text(raw_value))
             if daily_value is not None:
                 day_map[day] = daily_value
+        if _is_unassigned_attendance_group(attendance_group) and not any(
+            (_entry_value(entry) or 0) > 0 for entry in day_map.values()
+        ):
+            continue
         _merge_daily_maps(result, name, day_map)
 
     wb.close()
@@ -1261,6 +1269,10 @@ def parse_monthly_summary(path: str) -> SourceMap:
             )
             if daily_value is not None:
                 day_map[offset] = daily_value
+        if _is_unassigned_attendance_group(attendance_group) and not any(
+            (_entry_value(entry) or 0) > 0 for entry in day_map.values()
+        ):
+            continue
         _merge_daily_maps(result, name, day_map)
 
     wb.close()
@@ -1699,7 +1711,8 @@ def _resolve_row_days(
 
     if name in special_default_name_set:
         return (
-            _merge_day_maps(
+            _merge_fixed_schedule_anomalies(
+                dict(fallback_day_map),
                 _lookup_source_day_map(monthly_summary, name) or {},
                 _lookup_source_day_map(attendance_detail, name) or {},
             ),

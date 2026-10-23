@@ -63,9 +63,9 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
     def test_default_fixed_names_excludes_chang_yufan(self) -> None:
         self.assertEqual(
             parttime.DEFAULT_SPECIAL_DEFAULT_NAMES,
-            ("王心英", "刘芮", "汤颖", "周代林", "陈富庆"),
+            ("王心英", "刘芮", "周代林", "汤颖", "汤树宏"),
         )
-        self.assertEqual(parttime.DEFAULT_SPECIAL_CHENGDU_NAMES, set())
+        self.assertEqual(parttime.DEFAULT_SPECIAL_CHENGDU_NAMES, {"王心英"})
 
     def test_formula_schedule_uses_cached_dates_for_full_month(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -78,7 +78,12 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
         self.assertEqual(parttime._entry_value(day_maps["main"].get(15)), 1.0)
         self.assertEqual(parttime._entry_value(day_maps["main"].get(29)), 1.0)
 
-    def test_fixed_person_does_not_fill_dates_without_source_records(self) -> None:
+    def test_unassigned_attendance_group_is_detected(self) -> None:
+        self.assertTrue(parttime._is_unassigned_attendance_group("未加入考勤组"))
+        self.assertTrue(parttime._is_unassigned_attendance_group("未加入考勤组（默认）"))
+        self.assertFalse(parttime._is_unassigned_attendance_group("正常考勤组"))
+
+    def test_fixed_person_fills_schedule_dates_without_punch_records(self) -> None:
         monthly_summary = {
             "刘芮": {
                 15: parttime._parse_daily_text_value("标准:上班迟到12分钟\n(09:12,18:30)"),
@@ -103,14 +108,14 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
         self.assertEqual(source, parttime.SOURCE_SPECIAL_DEFAULT_WEEKDAYS)
         self.assertEqual(warnings, [])
         self.assertEqual(parttime._entry_value(resolved[15]), 1.0)
-        self.assertEqual(parttime._entry_value(resolved[29]), 0.0)
-        self.assertNotIn(30, resolved)
-        self.assertEqual(sum(parttime._entry_value(entry) or 0 for entry in resolved.values()), 1.0)
+        self.assertEqual(parttime._entry_value(resolved[29]), 1.0)
+        self.assertEqual(parttime._entry_value(resolved[30]), 1.0)
+        self.assertEqual(sum(parttime._entry_value(entry) or 0 for entry in resolved.values()), 3.0)
         self.assertIn("迟到12分钟", parttime._entry_note(resolved[15]))
         self.assertIn("旷工", parttime._entry_note(resolved[29]))
         self.assertIn("按规则计1天", parttime._entry_comment(resolved[15]))
         self.assertTrue(parttime._is_alert_entry(resolved[15]))
-        self.assertTrue(parttime._is_deducted_entry(resolved[29]))
+        self.assertFalse(parttime._is_deducted_entry(resolved[29]))
 
     @staticmethod
     def _write_formula_schedule(path: Path) -> None:

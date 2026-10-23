@@ -554,6 +554,35 @@ def _round2(val) -> float | None:
     return float(Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
+def _cap_leave_days_to_attendance(
+    leave_data: dict[str, float] | None,
+    attendance_days: float | int | None,
+) -> tuple[dict[str, float], bool]:
+    """将当月请假合计限制在应出勤天数内，并按原假别比例折算。"""
+    source = {
+        str(key): float(value)
+        for key, value in (leave_data or {}).items()
+        if value is not None and float(value) > 0
+    }
+    cap = max(0.0, float(attendance_days or 0))
+    total = sum(source.values())
+    if total <= cap + 0.000001:
+        return source, False
+    if cap <= 0:
+        return {key: 0.0 for key in source}, True
+
+    factor = cap / total
+    scaled: dict[str, float] = {}
+    keys = list(source)
+    for key in keys:
+        scaled[key] = _round2(source[key] * factor) or 0.0
+    rounded_total = sum(scaled.values())
+    correction = _round2(cap - rounded_total) or 0.0
+    if keys and abs(correction) > 0.000001:
+        scaled[keys[-1]] = _round2(max(0.0, scaled[keys[-1]] + correction)) or 0.0
+    return scaled, True
+
+
 def _overtime_days_from_hours(hours: float | int | None) -> float:
     if not hours:
         return 0.0
@@ -2704,7 +2733,14 @@ def generate(
             company_welfare = 0
             payable_days = set(payable_days) - set(company_welfare_days)
 
-        leave_data = _lookup_leave(emp)
+        leave_data, leave_was_capped = _cap_leave_days_to_attendance(
+            _lookup_leave(emp), attendance_days,
+        )
+        if leave_was_capped:
+            print(
+                f"[请假折算] {emp.get('name') or emp.get('emp_no') or '未命名'} "
+                f"请假合计超过应出勤天数，已按 {attendance_days} 天折算"
+            )
         leave_day_detail = _lookup_leave_detail(emp)
         holidays = max(
             0,

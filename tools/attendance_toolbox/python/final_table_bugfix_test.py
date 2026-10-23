@@ -35,6 +35,16 @@ import calc_subsidy_deduction as sub  # noqa: E402
 
 
 class ParseFloatDurationTests(unittest.TestCase):
+    def test_leave_overflow_is_scaled_to_attendance_days(self):
+        capped, changed = fin._cap_leave_days_to_attendance(
+            {"产假": 30, "事假": 10},
+            20,
+        )
+        self.assertTrue(changed)
+        self.assertAlmostEqual(sum(capped.values()), 20.0, places=2)
+        self.assertAlmostEqual(capped["产假"], 15.0, places=2)
+        self.assertAlmostEqual(capped["事假"], 5.0, places=2)
+
     def test_plain_number(self):
         self.assertEqual(ot.parse_float(3.5), 3.5)
         self.assertEqual(ot.parse_float("3.5"), 3.5)
