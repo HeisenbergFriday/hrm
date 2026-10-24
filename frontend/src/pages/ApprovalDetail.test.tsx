@@ -105,4 +105,53 @@ describe('ApprovalDetail 审批内容展示', () => {
     expect(screen.getByText('文件夹')).toBeInTheDocument()
     expect(screen.queryByText('true')).not.toBeInTheDocument()
   })
+
+  it('过滤辅助说明、空值和技术性中间层，并保留加班业务字段', async () => {
+    mockGetApproval.mockResolvedValue({
+      data: {
+        approval: {
+          id: 'approval-1',
+          title: '加班申请',
+          status: 'COMPLETED',
+          applicant_name: '王五',
+          create_time: '2026-10-24 09:00:00',
+          content: {
+            加班信息: JSON.stringify({
+              componentName: 'TableField',
+              props: {
+                label: '加班明细',
+                children: [
+                  { label: '开始时间', value: '2026-10-24 18:00' },
+                  { label: '结束时间', value: '2026-10-24 21:00' },
+                  { label: '时长（小时）', value: 3 },
+                  { label: '因何事加班', value: '版本发布' },
+                  { label: '是否运维人员', value: '否' },
+                  { label: '是否包含法定节假日', value: '否' },
+                  { label: '附件', value: 'https://example.com/overtime.png' },
+                  { componentName: 'TextNote', props: { content: '温馨提示：时长由系统自动计算' } },
+                ],
+              },
+            }),
+            关联审批单: 'null',
+            说明: JSON.stringify({ componentName: 'TextNote', props: { content: '组件配置说明，仅供参考' } }),
+          },
+          flow_history: [],
+        },
+      },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('加班明细')).toBeInTheDocument()
+    expect(screen.getByText('因何事加班')).toBeInTheDocument()
+    expect(screen.getByText('版本发布')).toBeInTheDocument()
+    expect(screen.getByText('时长（小时）')).toBeInTheDocument()
+    expect(screen.getByText('是否包含法定节假日')).toBeInTheDocument()
+    expect(screen.getByText('附件')).toBeInTheDocument()
+    expect(screen.queryByText('字段')).not.toBeInTheDocument()
+    expect(screen.queryByText('值')).not.toBeInTheDocument()
+    expect(screen.queryByText('温馨提示：时长由系统自动计算')).not.toBeInTheDocument()
+    expect(screen.queryByText('组件配置说明，仅供参考')).not.toBeInTheDocument()
+    expect(screen.queryByText('null')).not.toBeInTheDocument()
+  })
 })

@@ -33,6 +33,17 @@ const HIDDEN_FORM_KEYS = new Set([
   'format', 'useCalendar', 'featureMap', 'props',
 ])
 
+const AUXILIARY_TEXT_PATTERNS = [
+  /温馨提示/,
+  /自动计算/,
+  /组件配置/,
+  /填写说明/,
+  /请填写/,
+  /系统自动/,
+  /仅供参考/,
+  /无需填写/,
+]
+
 const OBJECT_KEY_LABELS: Record<string, string> = {
   label: '字段',
   value: '值',
@@ -70,10 +81,30 @@ const parseNestedJSON = (value: unknown): unknown => {
   return parsed
 }
 
+const isPresentationOnlyRecord = (value: Record<string, unknown>): boolean => {
+  const componentNames = [value.componentName, value.componentType]
+    .filter((item): item is string => typeof item === 'string')
+    .map(item => item.toLowerCase().replace(/[-_\s]/g, ''))
+  return componentNames.some(name => name === 'textnote' || name === 'description')
+}
+
+const isAuxiliaryText = (value: string): boolean => AUXILIARY_TEXT_PATTERNS.some(pattern => pattern.test(value))
+
 const hasBusinessValue = (value: unknown): boolean => {
-  if (value === null || value === undefined || value === '') return false
+  const parsed = parseNestedJSON(value)
+  if (parsed !== value) return hasBusinessValue(parsed)
+  if (value === null || value === undefined) return false
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    return normalized !== '' && normalized !== 'null' && normalized !== 'undefined' && !isAuxiliaryText(value)
+  }
   if (Array.isArray(value)) return value.some(hasBusinessValue)
-  if (isRecord(value)) return Object.values(value).some(hasBusinessValue)
+  if (isRecord(value)) {
+    if (isPresentationOnlyRecord(value)) return false
+    const entries = Object.entries(value).filter(([key]) => !HIDDEN_FORM_KEYS.has(key) || key === 'props')
+    if (entries.length === 0) return false
+    return entries.some(([, item]) => hasBusinessValue(item))
+  }
   return true
 }
 
@@ -82,12 +113,26 @@ const objectEntriesForDisplay = (value: Record<string, unknown>): Array<[string,
   const source = isRecord(parsedProps) ? parsedProps : value
   return Object.entries(source).filter(([key, item]) => {
     if (HIDDEN_FORM_KEYS.has(key)) return false
+    if (key === 'label' || key === 'value') return false
     if (!hasBusinessValue(item)) return false
     // Keep unknown business fields, while hiding only known DingTalk schema metadata.
     return DISPLAYABLE_OBJECT_KEYS.has(key)
       || source !== value
       || !Object.prototype.hasOwnProperty.call(value, 'componentName')
   })
+}
+
+const getBusinessField = (value: Record<string, unknown>): { label: unknown; value: unknown } | null => {
+  const parsedProps = parseNestedJSON(value.props)
+  const source = isRecord(parsedProps) ? parsedProps : value
+  const label = source.label
+  if (!hasBusinessValue(label)) return null
+
+  const candidateKeys = ['value', 'children', 'content', 'text']
+  const valueKey = candidateKeys.find(key => source[key] !== undefined && source[key] !== null && hasBusinessValue(source[key]))
+    || candidateKeys.find(key => source[key] !== undefined && source[key] !== null)
+  if (!valueKey) return null
+  return { label, value: source[valueKey] }
 }
 
 const displayObjectKey = (key: string): string => OBJECT_KEY_LABELS[key] || key
@@ -124,14 +169,6 @@ const ApprovalDetail: React.FC = () => {
     return String(v)
   }
 
-  const isMeaningfulValue = (value: unknown): boolean => {
-    if (value === null || value === undefined) return false
-    if (typeof value === 'string') return value.trim() !== ''
-    if (Array.isArray(value)) return value.some(isMeaningfulValue)
-    if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0
-    return true
-  }
-
   const formatBusinessTime = (value?: string | null): string => {
     if (!value) return '—'
     return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : formatDateTime(value)
@@ -161,19 +198,20 @@ const ApprovalDetail: React.FC = () => {
     if (depth > 8) return renderCell(value)
 
     if (Array.isArray(value)) {
-      if (value.length === 0) return <Text type="secondary">—</Text>
-      if (value.some(isImageUrl)) {
+      const businessItems = value.filter(hasBusinessValue)
+      if (businessItems.length === 0) return null
+      if (businessItems.some(isImageUrl)) {
         return (
           <Image.PreviewGroup>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {value.map((item, index) => <React.Fragment key={index}>{renderCell(item)}</React.Fragment>)}
+              {businessItems.map((item, index) => <React.Fragment key={index}>{renderCell(item)}</React.Fragment>)}
             </div>
           </Image.PreviewGroup>
         )
       }
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
-          {value.map((item, index) => (
+          {businessItems.map((item, index) => (
             <div
               key={index}
               style={{
@@ -191,8 +229,18 @@ const ApprovalDetail: React.FC = () => {
     }
 
     if (isRecord(value)) {
+      if (isPresentationOnlyRecord(value)) return null
+      const businessField = getBusinessField(value)
+      if (businessField) {
+        return (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <Text strong>{stringifyCell(businessField.label)}</Text>
+            <div style={{ minWidth: 0, flex: 1 }}>{renderStructuredValue(businessField.value, depth + 1)}</div>
+          </div>
+        )
+      }
       const entries = objectEntriesForDisplay(value)
-      if (entries.length === 0) return <Text type="secondary">—</Text>
+      if (entries.length === 0) return null
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
           {entries.map(([key, item]) => (
@@ -296,7 +344,7 @@ const ApprovalDetail: React.FC = () => {
             {(() => {
               const approval = approvalData.data.approval
               const contentEntries = Object.entries(approval.content || {})
-                .filter(([key, value]) => isMeaningfulValue(key) && isMeaningfulValue(value))
+                .filter(([key, value]) => hasBusinessValue(key) && hasBusinessValue(value))
               const flowHistory = approval.flow_history || []
               const templateLabel = approval.template_name
                 || approval.extension?.process_code
