@@ -1,0 +1,108 @@
+import React from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import ApprovalDetail from './ApprovalDetail'
+
+const mockGetApproval = vi.fn()
+const mockSync = vi.fn()
+const mockNavigate = vi.fn()
+
+vi.mock('../services/api', () => ({
+  approvalAPI: {
+    getApproval: (...args: unknown[]) => mockGetApproval(...args),
+    sync: (...args: unknown[]) => mockSync(...args),
+  },
+}))
+
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => mockNavigate,
+  useLocation: () => ({ pathname: '/approval-detail/approval-1', state: undefined }),
+  useParams: () => ({ id: 'approval-1' }),
+}))
+
+vi.mock('../utils/permission', () => ({
+  hasPermission: () => true,
+}))
+
+const renderPage = () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <ApprovalDetail />
+    </QueryClientProvider>,
+  )
+}
+
+describe('ApprovalDetail 审批内容展示', () => {
+  beforeEach(() => {
+    mockGetApproval.mockReset()
+    mockSync.mockReset()
+    mockNavigate.mockReset()
+  })
+
+  it('递归展示加班审批中的嵌套表单，不渲染原始长 JSON', async () => {
+    const rawFormValue = JSON.stringify({
+      componentName: 'TableField',
+      componentType: 'TableField',
+      id: 'table-1',
+      props: {
+        bizAlias: 'overtimeDetail',
+        label: '加班明细',
+        children: [
+          { label: '加班日期', value: '2026-10-24' },
+          { label: '开始时间', value: '09:00' },
+          { label: '结束时间', value: '18:30' },
+        ],
+      },
+    })
+    mockGetApproval.mockResolvedValue({
+      data: {
+        approval: {
+          id: 'approval-1',
+          title: '加班审批',
+          status: 'COMPLETED',
+          applicant_name: '张三',
+          create_time: '2026-10-24 09:00:00',
+          content: { 加班: rawFormValue },
+          flow_history: [],
+        },
+      },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('加班明细')).toBeInTheDocument()
+    expect(screen.getByText('加班日期')).toBeInTheDocument()
+    expect(screen.getByText('2026-10-24')).toBeInTheDocument()
+    expect(screen.getByText('开始时间')).toBeInTheDocument()
+    expect(screen.getByText('18:30')).toBeInTheDocument()
+    expect(screen.queryByText(rawFormValue)).not.toBeInTheDocument()
+  })
+
+  it('保留普通对象和数组中的业务字段，并过滤表单元数据', async () => {
+    mockGetApproval.mockResolvedValue({
+      data: {
+        approval: {
+          id: 'approval-1',
+          title: '其他审批',
+          status: 'COMPLETED',
+          applicant_name: '李四',
+          create_time: '2026-10-24 09:00:00',
+          content: {
+            说明: { text: '需要采购办公用品', required: true },
+            明细: JSON.stringify([{ name: '签字笔', amount: 10 }, { name: '文件夹', amount: 5 }]),
+          },
+          flow_history: [],
+        },
+      },
+    })
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('需要采购办公用品')).toBeInTheDocument())
+    expect(screen.getByText('签字笔')).toBeInTheDocument()
+    expect(screen.getByText('文件夹')).toBeInTheDocument()
+    expect(screen.queryByText('true')).not.toBeInTheDocument()
+  })
+})

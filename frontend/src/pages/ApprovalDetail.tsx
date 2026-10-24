@@ -21,6 +21,77 @@ interface FlowNode {
   time: string
 }
 
+const DISPLAYABLE_OBJECT_KEYS = new Set([
+  'label', 'value', 'content', 'text', 'remark', 'comment', 'children', 'rowValue',
+  'rowValues', 'details', 'detailList', 'items', 'name', 'type', 'duration', 'unit',
+  'startTime', 'endTime', 'start_time', 'end_time', 'from', 'to', 'date', 'amount',
+])
+
+const HIDDEN_FORM_KEYS = new Set([
+  'componentName', 'componentType', 'bizAlias', 'id', 'required', 'disabled', 'hidden',
+  'hiddenInApprovalDetail', 'notPrint', 'holidayOptions', 'options', 'placeholder',
+  'format', 'useCalendar', 'featureMap', 'props',
+])
+
+const OBJECT_KEY_LABELS: Record<string, string> = {
+  label: '字段',
+  value: '值',
+  content: '内容',
+  text: '说明',
+  remark: '备注',
+  comment: '备注',
+  children: '明细',
+  rowValue: '明细',
+  rowValues: '明细',
+  detailList: '明细',
+  startTime: '开始时间',
+  endTime: '结束时间',
+  start_time: '开始时间',
+  end_time: '结束时间',
+  duration: '时长',
+  unit: '单位',
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+)
+
+const parseNestedJSON = (value: unknown): unknown => {
+  let parsed = value
+  for (let depth = 0; depth < 4 && typeof parsed === 'string'; depth += 1) {
+    const trimmed = parsed.trim()
+    if ((!trimmed.startsWith('{') && !trimmed.startsWith('[')) || trimmed.length < 2) break
+    try {
+      parsed = JSON.parse(trimmed)
+    } catch {
+      break
+    }
+  }
+  return parsed
+}
+
+const hasBusinessValue = (value: unknown): boolean => {
+  if (value === null || value === undefined || value === '') return false
+  if (Array.isArray(value)) return value.some(hasBusinessValue)
+  if (isRecord(value)) return Object.values(value).some(hasBusinessValue)
+  return true
+}
+
+const objectEntriesForDisplay = (value: Record<string, unknown>): Array<[string, unknown]> => {
+  const parsedProps = parseNestedJSON(value.props)
+  const source = isRecord(parsedProps) ? parsedProps : value
+  return Object.entries(source).filter(([key, item]) => {
+    if (HIDDEN_FORM_KEYS.has(key)) return false
+    if (!hasBusinessValue(item)) return false
+    // Keep unknown business fields, while hiding only known DingTalk schema metadata.
+    return DISPLAYABLE_OBJECT_KEYS.has(key)
+      || source !== value
+      || !Object.prototype.hasOwnProperty.call(value, 'componentName')
+  })
+}
+
+const displayObjectKey = (key: string): string => OBJECT_KEY_LABELS[key] || key
+
 const ApprovalDetail: React.FC = () => {
   const navigate = useNavigate()
   const location = useLocation()
@@ -46,17 +117,10 @@ const ApprovalDetail: React.FC = () => {
     half_day: '半天', minute: '分钟', minutes: '分钟',
   }
 
-  const tryParseJSON = (value: unknown): unknown => {
-    if (typeof value !== 'string') return value
-    const trimmed = value.trim()
-    if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return value
-    try { return JSON.parse(trimmed) } catch { return value }
-  }
-
   const stringifyCell = (v: unknown): string => {
     if (v === null || v === undefined || v === '') return '—'
     if (typeof v === 'string') return unitMap[v] || v
-    if (typeof v === 'object') return JSON.stringify(v)
+    if (typeof v === 'object') return '—'
     return String(v)
   }
 
@@ -89,12 +153,64 @@ const ApprovalDetail: React.FC = () => {
     if (isHttpUrl(v)) {
       return <a href={v} target="_blank" rel="noreferrer noopener">{v}</a>
     }
-    return <Text>{stringifyCell(v)}</Text>
+    return <Text style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{stringifyCell(v)}</Text>
+  }
+
+  const renderStructuredValue = (rawValue: unknown, depth = 0): React.ReactNode => {
+    const value = parseNestedJSON(rawValue)
+    if (depth > 8) return renderCell(value)
+
+    if (Array.isArray(value)) {
+      if (value.length === 0) return <Text type="secondary">—</Text>
+      if (value.some(isImageUrl)) {
+        return (
+          <Image.PreviewGroup>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {value.map((item, index) => <React.Fragment key={index}>{renderCell(item)}</React.Fragment>)}
+            </div>
+          </Image.PreviewGroup>
+        )
+      }
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+          {value.map((item, index) => (
+            <div
+              key={index}
+              style={{
+                padding: isRecord(parseNestedJSON(item)) || Array.isArray(parseNestedJSON(item)) ? '6px 8px' : 0,
+                border: isRecord(parseNestedJSON(item)) || Array.isArray(parseNestedJSON(item)) ? '1px solid var(--color-border)' : undefined,
+                borderRadius: 'var(--radius-sm)',
+                background: isRecord(parseNestedJSON(item)) || Array.isArray(parseNestedJSON(item)) ? 'var(--color-bg-layout)' : undefined,
+              }}
+            >
+              {renderStructuredValue(item, depth + 1)}
+            </div>
+          ))}
+        </div>
+      )
+    }
+
+    if (isRecord(value)) {
+      const entries = objectEntriesForDisplay(value)
+      if (entries.length === 0) return <Text type="secondary">—</Text>
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+          {entries.map(([key, item]) => (
+            <div key={key} style={{ display: 'grid', gridTemplateColumns: 'minmax(72px, 120px) minmax(0, 1fr)', gap: 8, alignItems: 'start' }}>
+              <Text type="secondary">{displayObjectKey(key)}</Text>
+              <div style={{ minWidth: 0 }}>{renderStructuredValue(item, depth + 1)}</div>
+            </div>
+          ))}
+        </div>
+      )
+    }
+
+    return renderCell(value)
   }
 
   const renderContentValue = (rawKey: string, rawValue: unknown): React.ReactNode => {
-    const parsedKey = tryParseJSON(rawKey)
-    const parsedValue = tryParseJSON(rawValue)
+    const parsedKey = parseNestedJSON(rawKey)
+    const parsedValue = parseNestedJSON(rawValue)
 
     if (Array.isArray(parsedKey) && Array.isArray(parsedValue)) {
       return (
@@ -102,26 +218,13 @@ const ApprovalDetail: React.FC = () => {
           {parsedKey.map((k: unknown, i: number) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Text strong>{stringifyCell(k)}：</Text>
-              {renderCell(parsedValue[i])}
+              {renderStructuredValue(parsedValue[i])}
             </div>
           ))}
         </div>
       )
     }
-    if (Array.isArray(parsedValue)) {
-      const hasImage = parsedValue.some(isImageUrl)
-      if (hasImage) {
-        return (
-          <Image.PreviewGroup>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {parsedValue.map((item, i) => <React.Fragment key={i}>{renderCell(item)}</React.Fragment>)}
-            </div>
-          </Image.PreviewGroup>
-        )
-      }
-      return <Text>{parsedValue.map(stringifyCell).join('、')}</Text>
-    }
-    return renderCell(parsedValue)
+    return renderStructuredValue(parsedValue)
   }
 
   const getActionIcon = (action: string) => {
@@ -246,9 +349,9 @@ const ApprovalDetail: React.FC = () => {
 
                   <Card title="审批内容" size="small" style={{ marginBottom: 'var(--space-5)' }}>
                     {contentEntries.length > 0 ? (
-                      <Descriptions bordered column={{ xs: 1, sm: 2 }} size="small">
+                      <Descriptions bordered column={{ xs: 1, sm: 1 }} size="small">
                         {contentEntries.map(([key, value]) => {
-                          const parsedKey = tryParseJSON(key)
+                          const parsedKey = parseNestedJSON(key)
                           const labelText = Array.isArray(parsedKey)
                             ? parsedKey.map(stringifyCell).join(' / ')
                             : String(key)
