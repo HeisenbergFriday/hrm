@@ -262,6 +262,8 @@ docker build -t peopleops:latest .
 .\deploy\build-and-deploy.ps1 -SkipConfigUpload
 ```
 
+发布前必读：[deploy/DEPLOYMENT_RUNBOOK.md](../deploy/DEPLOYMENT_RUNBOOK.md)。其中记录测试服固定地址、工作区部署密钥候选路径、Windows SSH 客户端选择、无 Docker 时的便携工具发布流程、回滚和公网冒烟检查。不得在命令文档中写入密钥内容或真实环境变量。
+
 脚本生成的测试镜像必须包含 `tools/attendance_toolbox`、独立 Python 虚拟环境及运行依赖；镜像构建后会自动执行 `runner.py --defaults` 冒烟校验，失败时不会继续上传部署。
 
 首次构建需要从 Docker Hub 拉取 `python:3.12-slim`。脚本会对 Docker 构建最多重试 3 次；若仍出现 `TLS handshake timeout`，可先执行 `docker pull python:3.12-slim`，成功后再重新运行部署命令。

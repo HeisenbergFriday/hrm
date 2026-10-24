@@ -271,3 +271,7 @@ AI 文档更新：
 | `.ai/MODULES/*.md` | 修改对应业务模块时 |
 
 涉及文件大小或 token 消耗时参考 `.wolf/anatomy.md`；需要了解历史修改偏好时参考 `.wolf/cerebrum.md`。
+
+## 部署文档路由
+
+涉及构建发布、测试服部署、远程重启或线上验收时，除读取 `.ai/COMMANDS.md` 外，必须先读取 `deploy/DEPLOYMENT_RUNBOOK.md`；该手册是部署目标、凭据使用方式、回滚和冒烟检查的固定入口。
