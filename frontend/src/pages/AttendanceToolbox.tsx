@@ -89,12 +89,6 @@ interface TemplateMetaItem {
   file_name: string
 }
 
-interface TextField {
-  name: string
-  label: string
-  placeholder: string
-}
-
 interface ModuleConfig {
   key: ToolboxModuleKey
   title: string
@@ -102,7 +96,6 @@ interface ModuleConfig {
   outputName: string
   zipOutputName?: string
   fileFields: FileField[]
-  textFields?: TextField[]
 }
 
 interface MaternityLeaveOverride {
@@ -202,10 +195,6 @@ const modules: ModuleConfig[] = [
       { name: 'leave_reviewed', label: '上次请假明细表（保留人工确认，可选）', templateId: 'final_leave_detail' },
       { name: 'leave_offsite_duration', label: '月度汇总表（异地外勤，可选）', templateId: 'offsite_duration' },
     ],
-    textFields: [
-      { name: 'leave_special_names', label: '特殊名单', placeholder: '不填则使用原工具默认特殊名单，多个姓名用逗号分隔' },
-      { name: 'chengdu_schedule_names', label: '成都作息名单', placeholder: '不填则使用原工具默认成都作息名单，多个姓名用逗号分隔' },
-    ],
   },
   {
     key: 'overtime',
@@ -218,9 +207,6 @@ const modules: ModuleConfig[] = [
       { name: 'overtime_attendance', label: '考勤打卡明细表', templateId: 'overtime_attendance' },
       { name: 'overtime_calendar', label: '作息表', templateId: 'schedule' },
       { name: 'overtime_roster', label: '花名册/员工信息表', templateId: 'roster' },
-    ],
-    textFields: [
-      { name: 'chengdu_schedule_names', label: '成都作息名单', placeholder: '不填则使用原工具默认成都作息名单，多个姓名用逗号分隔' },
     ],
   },
   {
@@ -235,10 +221,6 @@ const modules: ModuleConfig[] = [
       { name: 'subsidy_schedule', label: '作息表', required: true, templateId: 'schedule' },
       { name: 'subsidy_attendance', label: '考勤表', templateId: 'subsidy_attendance' },
       { name: 'subsidy_attendance_result', label: '考勤结果表', templateId: 'attendance_result' },
-    ],
-    textFields: [
-      { name: 'sub_dept_keywords', label: '产研部门关键字', placeholder: '不填则使用原工具默认部门关键字，多个用逗号分隔' },
-      { name: 'sub_late22_names', label: '晚走补贴人员', placeholder: '不填则使用原工具默认人员名单，多个姓名用逗号分隔' },
     ],
   },
   {
@@ -256,9 +238,6 @@ const modules: ModuleConfig[] = [
       { name: 'final_overtime', label: '加班明细表', required: true, templateId: 'final_overtime_detail' },
       { name: 'final_subsidy', label: '补贴扣款表', required: true, templateId: 'subsidy_source' },
     ],
-    textFields: [
-      { name: 'chengdu_schedule_names', label: '成都作息名单', placeholder: '不填则使用原工具默认成都作息名单，多个姓名用逗号分隔' },
-    ],
   },
   {
     key: 'parttime',
@@ -271,11 +250,16 @@ const modules: ModuleConfig[] = [
       { name: 'parttime_monthly', label: '腾小宝月度汇总（可多选）', multiple: true, templateId: 'parttime_monthly_summary' },
       { name: 'parttime_schedules', label: '排班表（可多选）', multiple: true, templateId: 'parttime_schedule' },
     ],
-    textFields: [
-      { name: 'part_special_names', label: '特殊人员名单', placeholder: '不填则使用原工具默认特殊人员名单，多个姓名用逗号分隔' },
-    ],
   },
 ]
+
+const MODULE_FIXED_CONFIG_KEYS: Record<ToolboxModuleKey, string[]> = {
+  leave: ['leave_special_names', 'chengdu_schedule_names'],
+  overtime: ['chengdu_schedule_names'],
+  subsidy: ['sub_dept_keywords', 'sub_late22_names'],
+  final: ['chengdu_schedule_names'],
+  parttime: ['part_special_names'],
+}
 
 const templateDownloadItems: Array<{ key: string; label: string; templateId: string }> = [
   { key: 'leave_export', label: '请假系统导出表', templateId: 'leave_export' },
@@ -572,7 +556,6 @@ const AttendanceToolbox: React.FC = () => {
   const userFileChangeVersionsRef = useRef<Record<string, number>>({})
   const [textValues, setTextValues] = useState<Record<string, string>>({})
   const [fixedDraftValues, setFixedDraftValues] = useState<Record<string, string>>({})
-  const [defaultsLoading, setDefaultsLoading] = useState(false)
   const [runningModule, setRunningModule] = useState<ToolboxModuleKey | null>(null)
   // 按模块隔离，避免请假 audit/log 泄漏到加班/汇总 Tab
   const [runLogByModule, setRunLogByModule] = useState<Partial<Record<ToolboxModuleKey, string>>>({})
@@ -700,7 +683,6 @@ const AttendanceToolbox: React.FC = () => {
 
   useEffect(() => {
     let mounted = true
-    setDefaultsLoading(true)
     setConfigLoading(true)
     Promise.all([
       attendanceToolboxAPI.getDefaults(),
@@ -768,7 +750,6 @@ const AttendanceToolbox: React.FC = () => {
     }).finally(() => {
       if (mounted) {
         setConfigLoading(false)
-        setDefaultsLoading(false)
       }
     })
     return () => { mounted = false }
@@ -1508,11 +1489,8 @@ const AttendanceToolbox: React.FC = () => {
         if (rawFile) formData.append(field.name, rawFile)
       }
     }
-    for (const field of config.textFields || []) {
-      const value = (textValues[field.name] || '').trim()
-      if (Object.prototype.hasOwnProperty.call(textValues, field.name)) {
-        formData.append(field.name, value)
-      }
+    for (const field of MODULE_FIXED_CONFIG_KEYS[moduleKey]) {
+      formData.append(field, (textValues[field] || '').trim())
     }
     if (moduleKey === 'leave') {
       formData.append('maternity_leave_overrides', JSON.stringify(maternityOverrides))
@@ -2140,36 +2118,6 @@ const AttendanceToolbox: React.FC = () => {
             </Row>
           </>
         )}
-
-        {(config.textFields || []).length > 0 && (
-          <Card size="small" style={{ borderRadius: 'var(--radius-lg)' }}>
-            <Row gutter={[16, 16]}>
-              {(config.textFields || []).map((field) => {
-                const hasValue = Boolean((textValues[field.name] || '').trim())
-                return (
-                  <Col xs={24} md={12} key={field.name}>
-                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                      <Space size={4}>
-                        <Text strong>{field.label}</Text>
-                        {hasValue
-                          ? <Tag color="success" style={{ fontSize: 11 }}>已自定义</Tag>
-                          : <Tag style={{ fontSize: 11 }}>使用默认值</Tag>}
-                      </Space>
-                      <Input.TextArea
-                        autoSize={{ minRows: 2, maxRows: 6 }}
-                        value={textValues[field.name] || ''}
-                        placeholder={defaultsLoading ? '正在加载默认名单...' : field.placeholder}
-                        onChange={(event) => setTextValues((prev) => ({ ...prev, [field.name]: event.target.value }))}
-                      />
-                    </Space>
-                  </Col>
-                )
-              })}
-            </Row>
-          </Card>
-        )}
-
-        {config.key === 'leave' && renderMaternityLeaveOverrides()}
 
         {config.key === 'overtime' && (
           <Alert

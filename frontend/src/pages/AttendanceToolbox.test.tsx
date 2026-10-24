@@ -1091,6 +1091,7 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
 
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
     expect(screen.getByText('长期产假人员（自动抓不到时兜底）')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /添加人员/ }))
     expect(await screen.findByText('长期产假人员 1')).toBeInTheDocument()
