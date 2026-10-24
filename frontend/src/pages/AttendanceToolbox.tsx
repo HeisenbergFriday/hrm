@@ -2479,14 +2479,16 @@ const AttendanceToolbox: React.FC = () => {
       .filter((name) => !options.some((option) => option.value === name))
       .map((name) => ({ value: name, label: `${name}（已保存）` }))
     return (
-      <Card size="small" style={{ borderRadius: 10 }}>
+      <div style={{ padding: '4px 0 16px' }}>
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
             <Space direction="vertical" size={2}>
               <Text strong>{title}</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>{description}</Text>
             </Space>
-            <Tag color={names.length ? 'blue' : 'default'}>{names.length ? `已配置 ${names.length} 项` : '未配置'}</Tag>
+            <Tag color={names.length ? 'blue' : 'default'}>
+              {names.length ? `已选择 ${names.length} 项` : '未设置'}
+            </Tag>
           </Space>
           <Select
             mode="multiple"
@@ -2497,20 +2499,23 @@ const AttendanceToolbox: React.FC = () => {
             options={[...selectedOptions, ...options]}
             loading={fixedOptionsLoading}
             disabled={!canOperate}
-            placeholder={isDepartmentConfig ? '搜索并选择部门' : '搜索姓名并选择员工'}
+            placeholder={isDepartmentConfig ? '搜索并选择部门' : '搜索并选择员工'}
             notFoundContent={fixedOptionsLoading ? '正在加载列表…' : '暂无匹配项'}
-            maxTagCount="responsive"
+            maxTagCount={3}
             style={{ width: '100%' }}
             onChange={(values) => setFixedDraftValues((prev) => ({ ...prev, [key]: formatNameList(values) }))}
           />
           {names.length > 0 && (
             <Space wrap size={[4, 4]}>
-              {names.slice(0, 3).map((name) => <Tag key={name} color="blue">{name}</Tag>)}
+              <Text type="secondary" style={{ fontSize: 12 }}>已选：</Text>
+              {names.slice(0, 3).map((name) => (
+                <Text key={name} type="secondary" style={{ fontSize: 12 }}>{name}</Text>
+              ))}
               {names.length > 3 && <Text type="secondary" style={{ fontSize: 12 }}>等 {names.length} 项</Text>}
             </Space>
           )}
         </Space>
-      </Card>
+      </div>
     )
   }
 
@@ -2522,33 +2527,47 @@ const AttendanceToolbox: React.FC = () => {
         message="这里是组织共享的固定配置"
         description="保存后，同一组织的其他用户重新打开考勤工具箱即可看到；月份、花名册和异动流程仍在对应业务卡片中处理。"
       />
-      <Card size="small" title={<Space>长期人员配置 <Text type="secondary" style={{ fontSize: 12 }}>长期名单</Text></Space>} style={{ borderRadius: 10 }}>
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          {renderFixedConfigListCard('leave_special_names', '特殊人员名单', '请假明细中需要特殊处理的人员')}
-          {renderMaternityLeaveOverrides()}
+      <section style={{ border: '1px solid var(--color-border)', borderRadius: 10, background: 'var(--color-bg-card)', padding: '16px 20px 4px' }}>
+        <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 12 }}>
+          <Text strong style={{ fontSize: 16 }}>长期人员</Text>
+          <Space size={8}>
+            <Text type="secondary" style={{ fontSize: 12 }}>长期名单</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>适用于长期有效、不会随月份变化的人员。</Text>
+          </Space>
         </Space>
-      </Card>
-      <Card size="small" title="考勤分类配置" style={{ borderRadius: 10 }}>
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          {renderFixedConfigListCard('chengdu_schedule_names', '成都作息人员', '从当前组织员工中选择按成都作息规则计算的人员')}
-          {renderFixedConfigListCard('sub_late22_names', '晚走补贴人员', '从当前组织员工中选择允许按 22 点后打卡计算补贴的人员')}
-          {renderFixedConfigListCard('sub_dept_keywords', '产研补贴部门', '从当前组织部门中选择适用产研补贴规则的部门')}
-          {renderFixedConfigListCard('part_special_names', '兼职特殊人员', '从当前组织员工中选择兼职汇总中按特殊规则处理的人员')}
+        {renderFixedConfigListCard('leave_special_names', '特殊人员名单', '请假明细中需要特殊处理的人员')}
+        {renderMaternityLeaveOverrides()}
+      </section>
+      <section style={{ border: '1px solid var(--color-border)', borderRadius: 10, background: 'var(--color-bg-card)', padding: '16px 20px 4px' }}>
+        <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 12 }}>
+          <Text strong style={{ fontSize: 16 }}>适用范围</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>按员工或部门指定考勤和补贴规则的适用对象。</Text>
         </Space>
-      </Card>
-      <Card
-        size="small"
-        title="加班规则配置"
-        extra={<Tag color={appliedRules.source === 'custom' ? 'success' : 'default'}>{appliedRules.source === 'custom' ? '已应用自定义规则' : '使用默认规则'}</Tag>}
-        style={{ borderRadius: 10 }}
-      >
+        <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>按员工选择</Text>
+        {renderFixedConfigListCard('chengdu_schedule_names', '成都作息人员', '从当前组织员工中选择按成都作息规则计算的人员')}
+        {renderFixedConfigListCard('sub_late22_names', '晚走补贴人员', '从当前组织员工中选择允许按 22 点后打卡计算补贴的人员')}
+        {renderFixedConfigListCard('part_special_names', '兼职特殊人员', '从当前组织员工中选择兼职汇总中按特殊规则处理的人员')}
+        <Divider style={{ margin: '0 0 12px' }} />
+        <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>按部门选择</Text>
+        {renderFixedConfigListCard('sub_dept_keywords', '产研补贴部门', '从当前组织部门中选择适用产研补贴规则的部门')}
+      </section>
+      <section style={{ border: '1px solid var(--color-border)', borderRadius: 10, background: 'var(--color-bg-card)', padding: '16px 20px' }}>
+        <Space align="center" style={{ width: '100%', justifyContent: 'space-between', marginBottom: 12 }}>
+          <Space direction="vertical" size={4}>
+            <Text strong style={{ fontSize: 16 }}>加班规则</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>可直接预览和编辑，保存固定配置后对组织内用户生效。</Text>
+          </Space>
+          <Tag color={appliedRules.source === 'custom' ? 'success' : 'default'}>
+            {appliedRules.source === 'custom' ? '自定义规则' : '默认规则'}
+          </Tag>
+        </Space>
         <OvertimeRulesEditor
           value={appliedRules}
           onChange={setAppliedRules}
           canEdit={canEditRules && canOperate}
           disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
         />
-      </Card>
+      </section>
       {!canOperate && <Alert type="warning" showIcon message="当前为只读模式" description="你可以查看配置，但需要考勤工具箱操作权限才能修改并保存。" />}
     </Space>
   )
