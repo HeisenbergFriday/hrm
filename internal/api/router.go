@@ -42,6 +42,8 @@ func registerAttendanceToolboxRoutes(attendance *gin.RouterGroup) {
 	// 工具箱写操作与前端细权限对齐：attendance_manage 或 attendance_toolbox_operate；
 	// 禁止仅凭 menu:attendance-toolbox 绕过 feature 权限。只读 defaults 仍允许菜单或管理权限。
 	attendance.GET("/toolbox/defaults", middleware.RequirePermissionOrMenu([]string{"attendance_manage", "attendance_toolbox_operate"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxDefaults)
+	attendance.GET("/toolbox/config", middleware.RequirePermissionOrMenu([]string{"attendance_manage", "attendance_toolbox_operate"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxConfig)
+	attendance.PUT("/toolbox/config", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), SaveAttendanceToolboxConfig)
 	attendance.POST("/toolbox/:module/run", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), RunAttendanceToolbox)
 	attendance.POST("/toolbox/dingtalk-sync", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunDingtalkSync)
 	attendance.POST("/toolbox/dingtalk-sync/start", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), StartToolboxDingtalkSync)

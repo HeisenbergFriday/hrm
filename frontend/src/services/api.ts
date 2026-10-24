@@ -477,6 +477,24 @@ export type GeneratedOrgRoster = {
   skippedEmployeeCount: number
 }
 
+export type AttendanceToolboxMaternityLeaveOverride = {
+  employee_no: string
+  name: string
+  start_date: string
+  end_date: string
+}
+
+export type AttendanceToolboxConfig = {
+  configured?: boolean
+  maternity_leave_overrides: AttendanceToolboxMaternityLeaveOverride[]
+  leave_special_names: string[]
+  chengdu_schedule_names: string[]
+  sub_dept_keywords: string[]
+  sub_late22_names: string[]
+  part_special_names: string[]
+  overtime_rules_json?: string
+}
+
 const runToolboxDingtalkSyncJob = createToolboxDingtalkSyncClient({
   start: (request) => api.post<{ code: number; data: ToolboxDingtalkSyncJob }, { data: ToolboxDingtalkSyncJob }>('/attendance/toolbox/dingtalk-sync/start', request),
   getJob: (requestId) => api.get<{ code: number; data: ToolboxDingtalkSyncJob }, { data: ToolboxDingtalkSyncJob }>(`/attendance/toolbox/dingtalk-sync/jobs/${encodeURIComponent(requestId)}`),
@@ -489,6 +507,8 @@ const runToolboxDingtalkSyncJob = createToolboxDingtalkSyncClient({
 
 export const attendanceToolboxAPI = {
   getDefaults: () => api.get('/attendance/toolbox/defaults'),
+  getConfig: () => api.get<{ data: AttendanceToolboxConfig }>('/attendance/toolbox/config'),
+  saveConfig: (data: Omit<AttendanceToolboxConfig, 'configured'>) => api.put<{ data: AttendanceToolboxConfig }>('/attendance/toolbox/config', data),
   run: (module: string, data: FormData) => api.post(`/attendance/toolbox/${module}/run`, data, {
     responseType: 'blob',
     timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,

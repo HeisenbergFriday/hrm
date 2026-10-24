@@ -51,7 +51,7 @@ import axios from 'axios'
 import dayjs from 'dayjs'
 import PageContainer from '../components/PageContainer'
 import OvertimeRulesEditor, { AppliedRulesState } from './OvertimeRulesEditor'
-import { attendanceToolboxAPI, AttendanceToolboxRunResponse } from '../services/api'
+import { attendanceToolboxAPI, AttendanceToolboxConfig, AttendanceToolboxRunResponse } from '../services/api'
 import { useAuthStore } from '../store/authStore'
 import { confirmOrgSync } from '../utils/orgSyncAction'
 import { shouldFallbackToLegacyToolboxAPI } from '../utils/toolboxFallback'
@@ -179,25 +179,6 @@ export const getPreviousCalendarMonthRange = (
 ): [dayjs.Dayjs, dayjs.Dayjs] => {
   const previousMonth = reference.subtract(1, 'month')
   return [previousMonth.startOf('month'), previousMonth.endOf('month')]
-}
-
-const MATERNITY_LEAVE_STORAGE_KEY = 'attendance-toolbox-maternity-leave-overrides'
-
-const loadMaternityLeaveOverrides = (): MaternityLeaveOverride[] => {
-  if (typeof window === 'undefined') return []
-  try {
-    const value = JSON.parse(window.localStorage.getItem(MATERNITY_LEAVE_STORAGE_KEY) || '[]')
-    if (!Array.isArray(value)) return []
-    return value.filter((item) => item && typeof item === 'object').map((item, index) => ({
-      key: String(item.key || `maternity-${Date.now()}-${index}`),
-      employee_no: String(item.employee_no || ''),
-      name: String(item.name || ''),
-      start_date: String(item.start_date || ''),
-      end_date: String(item.end_date || ''),
-    }))
-  } catch {
-    return []
-  }
 }
 
 /** Recommended month-end order (UI guide only; tabs stay free to switch). */
@@ -331,6 +312,42 @@ function normalizeDefaults(response: unknown): ToolboxDefaults {
 
 function formatNameList(values: string[]) {
   return values.join('、')
+}
+
+const FIXED_CONFIG_LIST_KEYS = [
+  'leave_special_names',
+  'chengdu_schedule_names',
+  'sub_dept_keywords',
+  'sub_late22_names',
+  'part_special_names',
+] as const
+
+function parseNameList(value: string | undefined): string[] {
+  return String(value || '')
+    .split(/[、,，\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+// One-time compatibility read for configurations created by the previous
+// browser-only version. Once a server configuration is saved, the browser
+// value is ignored and no longer acts as the source of truth.
+const LEGACY_MATERNITY_STORAGE_KEY = 'attendance-toolbox-maternity-leave-overrides'
+function loadLegacyMaternityLeaveOverrides(): MaternityLeaveOverride[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(LEGACY_MATERNITY_STORAGE_KEY) || '[]')
+    if (!Array.isArray(raw)) return []
+    return raw.filter((item) => item && typeof item === 'object').map((item, index) => ({
+      key: String(item.key || `legacy-maternity-${index}`),
+      employee_no: String(item.employee_no || ''),
+      name: String(item.name || ''),
+      start_date: String(item.start_date || ''),
+      end_date: String(item.end_date || ''),
+    }))
+  } catch {
+    return []
+  }
 }
 
 /** Exported for unit tests to mock without triggering jsdom navigation. */
@@ -520,14 +537,6 @@ const fieldRequirements: Record<string, { label: string; badges: FieldBadge[] }[
   ],
 }
 
-// ── Hero badge data ──
-
-const heroBadges = [
-  { label: 'Excel 导入', icon: <UploadOutlined /> },
-  { label: '规则校验', icon: <FileProtectOutlined /> },
-  { label: '结果导出', icon: <CloudDownloadOutlined /> },
-]
-
 const AUTO_SYNC_UPLOADS = {
   leave: ['leave_src'],
   overtime: ['overtime_src'],
@@ -562,6 +571,7 @@ const AttendanceToolbox: React.FC = () => {
   const fileListsRef = useRef<Record<string, UploadFile[]>>({})
   const userFileChangeVersionsRef = useRef<Record<string, number>>({})
   const [textValues, setTextValues] = useState<Record<string, string>>({})
+  const [fixedDraftValues, setFixedDraftValues] = useState<Record<string, string>>({})
   const [defaultsLoading, setDefaultsLoading] = useState(false)
   const [runningModule, setRunningModule] = useState<ToolboxModuleKey | null>(null)
   // 按模块隔离，避免请假 audit/log 泄漏到加班/汇总 Tab
@@ -574,7 +584,11 @@ const AttendanceToolbox: React.FC = () => {
     rules: null,
     rulesJson: null,
   })
-  const [maternityLeaveOverrides, setMaternityLeaveOverrides] = useState<MaternityLeaveOverride[]>(loadMaternityLeaveOverrides)
+  const [maternityLeaveOverrides, setMaternityLeaveOverrides] = useState<MaternityLeaveOverride[]>([])
+  const [savedMaternityLeaveOverrides, setSavedMaternityLeaveOverrides] = useState<MaternityLeaveOverride[]>([])
+  const [configLoading, setConfigLoading] = useState(false)
+  const [configSaving, setConfigSaving] = useState(false)
+  const [savedConfigSnapshot, setSavedConfigSnapshot] = useState('')
   const [uploadWarnings, setUploadWarnings] = useState<Record<string, string[]>>({})
   const [auditWarningsByModule, setAuditWarningsByModule] = useState<Partial<Record<ToolboxModuleKey, string[]>>>({})
   const [templateMeta, setTemplateMeta] = useState<TemplateMetaItem[]>([])
@@ -604,40 +618,160 @@ const AttendanceToolbox: React.FC = () => {
 
   const moduleMap = useMemo(() => new Map(modules.map((item) => [item.key, item])), [])
 
-  useEffect(() => {
-    window.localStorage.setItem(MATERNITY_LEAVE_STORAGE_KEY, JSON.stringify(maternityLeaveOverrides))
-  }, [maternityLeaveOverrides])
+  const buildFixedConfigPayload = useCallback((): Omit<AttendanceToolboxConfig, 'configured'> => ({
+    maternity_leave_overrides: maternityLeaveOverrides.map(({ employee_no, name, start_date, end_date }) => ({
+      employee_no: employee_no.trim(),
+      name: name.trim(),
+      start_date,
+      end_date,
+    })),
+    leave_special_names: parseNameList(fixedDraftValues.leave_special_names),
+    chengdu_schedule_names: parseNameList(fixedDraftValues.chengdu_schedule_names),
+    sub_dept_keywords: parseNameList(fixedDraftValues.sub_dept_keywords),
+    sub_late22_names: parseNameList(fixedDraftValues.sub_late22_names),
+    part_special_names: parseNameList(fixedDraftValues.part_special_names),
+    overtime_rules_json: appliedRules.source === 'custom' ? (appliedRules.rulesJson || '') : '',
+  }), [appliedRules.rulesJson, appliedRules.source, fixedDraftValues, maternityLeaveOverrides])
+
+  const currentConfigSnapshot = useMemo(
+    () => JSON.stringify(buildFixedConfigPayload()),
+    [buildFixedConfigPayload],
+  )
+  const configDirty = Boolean(savedConfigSnapshot) && currentConfigSnapshot !== savedConfigSnapshot
+
+  const handleSaveFixedConfig = useCallback(async () => {
+    if (!canOperate) {
+      messageApi.warning('你没有考勤工具箱操作权限，无法保存固定配置')
+      return
+    }
+    const maternity = getMaternityLeaveOverridesForSubmit()
+    if (maternity === null) return
+    setConfigSaving(true)
+    try {
+      const payload = {
+        ...buildFixedConfigPayload(),
+        maternity_leave_overrides: maternity,
+      }
+      await attendanceToolboxAPI.saveConfig(payload)
+      setSavedMaternityLeaveOverrides(maternity.map((item, index) => ({ ...item, key: `maternity-${Date.now()}-${index}` })))
+      setTextValues((prev) => {
+        const next = { ...prev }
+        for (const key of FIXED_CONFIG_LIST_KEYS) next[key] = formatNameList(payload[key])
+        return next
+      })
+      setSavedConfigSnapshot(JSON.stringify(payload))
+      messageApi.success('固定配置已保存，组织内其他用户重新打开后即可使用')
+    } catch (error) {
+      messageApi.error(await resolveErrorMessage(error))
+    } finally {
+      setConfigSaving(false)
+    }
+  }, [buildFixedConfigPayload, canOperate, messageApi])
+
+  const handleCancelFixedConfig = useCallback(() => {
+    if (!savedConfigSnapshot) return
+    try {
+      const saved = JSON.parse(savedConfigSnapshot) as Omit<AttendanceToolboxConfig, 'configured'>
+      setTextValues((prev) => {
+        const next = { ...prev }
+        for (const key of FIXED_CONFIG_LIST_KEYS) next[key] = formatNameList(saved[key] || [])
+        return next
+      })
+      const restoredMaternity = (saved.maternity_leave_overrides || []).map((item, index) => ({
+        key: `maternity-${Date.now()}-${index}`,
+        employee_no: item.employee_no || '',
+        name: item.name || '',
+        start_date: item.start_date || '',
+        end_date: item.end_date || '',
+      }))
+      setFixedDraftValues(Object.fromEntries(FIXED_CONFIG_LIST_KEYS.map((key) => [key, formatNameList(saved[key] || [])])))
+      setMaternityLeaveOverrides(restoredMaternity)
+      setSavedMaternityLeaveOverrides(restoredMaternity)
+      if (saved.overtime_rules_json) {
+        setAppliedRules({ source: 'custom', rules: JSON.parse(saved.overtime_rules_json), rulesJson: saved.overtime_rules_json })
+      } else {
+        setAppliedRules({ source: 'default', rules: null, rulesJson: null })
+      }
+      messageApi.info('已放弃本次未保存修改')
+    } catch {
+      messageApi.warning('恢复已保存配置失败，请重新打开页面')
+    }
+  }, [messageApi, savedConfigSnapshot])
 
   useEffect(() => {
     let mounted = true
     setDefaultsLoading(true)
-
-    attendanceToolboxAPI.getDefaults()
-      .then((response) => {
-        if (!mounted) return
-        const defaults = normalizeDefaults(response)
-        setTextValues((prev) => {
-          const next = { ...prev }
-          for (const [key, values] of Object.entries(defaults)) {
-            if (next[key] === undefined) {
-              next[key] = formatNameList(values)
-            }
-          }
-          return next
-        })
-      })
-      .catch(() => {
-        if (mounted) {
-          messageApi.warning('默认名单加载失败，计算时仍会使用内置规则')
+    setConfigLoading(true)
+    Promise.all([
+      attendanceToolboxAPI.getDefaults(),
+      typeof attendanceToolboxAPI.getConfig === 'function'
+        ? attendanceToolboxAPI.getConfig()
+        : Promise.resolve({ data: { configured: false } as AttendanceToolboxConfig }),
+    ]).then(([defaultsResponse, configResponse]) => {
+      if (!mounted) return
+      const defaults = normalizeDefaults(defaultsResponse)
+      const payload = (configResponse as unknown as { data?: AttendanceToolboxConfig })?.data
+      setTextValues((prev) => {
+        const next = { ...prev }
+        for (const [key, values] of Object.entries(defaults)) {
+          if (next[key] === undefined) next[key] = formatNameList(values)
         }
+        if (payload?.configured) {
+          for (const key of FIXED_CONFIG_LIST_KEYS) {
+            const values = payload[key]
+            if (Array.isArray(values)) next[key] = formatNameList(values)
+          }
+        }
+        setFixedDraftValues((draft) => {
+          const fixed = { ...draft }
+          for (const key of FIXED_CONFIG_LIST_KEYS) fixed[key] = next[key] || ''
+          return fixed
+        })
+        return next
       })
-      .finally(() => {
-        if (mounted) setDefaultsLoading(false)
-      })
-
-    return () => {
-      mounted = false
-    }
+      if (payload?.configured) {
+        const loadedMaternity = (payload.maternity_leave_overrides || []).map((item, index) => ({
+          key: `maternity-${Date.now()}-${index}`,
+          employee_no: String(item.employee_no || ''),
+          name: String(item.name || ''),
+          start_date: String(item.start_date || ''),
+          end_date: String(item.end_date || ''),
+        }))
+        setMaternityLeaveOverrides(loadedMaternity)
+        setSavedMaternityLeaveOverrides(loadedMaternity)
+        if (payload.overtime_rules_json) {
+          try {
+            const rules = JSON.parse(payload.overtime_rules_json) as AppliedRulesState['rules']
+            setAppliedRules({ source: 'custom', rules, rulesJson: payload.overtime_rules_json })
+          } catch {
+            messageApi.warning('已保存的加班规则格式无法读取，将使用默认规则')
+          }
+        }
+      } else {
+        const legacyMaternity = loadLegacyMaternityLeaveOverrides()
+        if (legacyMaternity.length > 0) {
+          setMaternityLeaveOverrides(legacyMaternity)
+          setSavedMaternityLeaveOverrides(legacyMaternity)
+        }
+      }
+      setSavedConfigSnapshot(JSON.stringify({
+        maternity_leave_overrides: payload?.configured ? (payload.maternity_leave_overrides || []) : loadLegacyMaternityLeaveOverrides().map(({ employee_no, name, start_date, end_date }) => ({ employee_no, name, start_date, end_date })),
+        leave_special_names: payload?.configured ? (payload.leave_special_names || []) : (defaults.leave_special_names || []),
+        chengdu_schedule_names: payload?.configured ? (payload.chengdu_schedule_names || []) : (defaults.chengdu_schedule_names || []),
+        sub_dept_keywords: payload?.configured ? (payload.sub_dept_keywords || []) : (defaults.sub_dept_keywords || []),
+        sub_late22_names: payload?.configured ? (payload.sub_late22_names || []) : (defaults.sub_late22_names || []),
+        part_special_names: payload?.configured ? (payload.part_special_names || []) : (defaults.part_special_names || []),
+        overtime_rules_json: payload?.configured ? (payload.overtime_rules_json || '') : '',
+      }))
+    }).catch(() => {
+      if (mounted) messageApi.warning('固定配置加载失败，请稍后重试')
+    }).finally(() => {
+      if (mounted) {
+        setConfigLoading(false)
+        setDefaultsLoading(false)
+      }
+    })
+    return () => { mounted = false }
   }, [])
 
   const refreshTemplateMeta = useCallback(async () => {
@@ -1216,7 +1350,7 @@ const AttendanceToolbox: React.FC = () => {
           type="info"
           showIcon
           message="这里只用于补录自动抓不到的长期产假"
-          description="普通产假仍会自动抓取；如果钉钉已有同一员工的重叠产假，系统会自动跳过手动记录，避免重复计算。配置会保存在当前浏览器。"
+          description="普通产假仍会自动抓取；如果钉钉已有同一员工的重叠产假，系统会自动跳过手动记录，避免重复计算。保存后组织内其他用户也能使用。"
         />
         {maternityLeaveOverrides.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂未添加长期产假人员" />
@@ -1300,8 +1434,8 @@ const AttendanceToolbox: React.FC = () => {
     </Card>
   )
 
-  const getMaternityLeaveOverridesForSubmit = () => {
-    const configured = maternityLeaveOverrides.filter((item) => (
+  const getMaternityLeaveOverridesForSubmit = (source = maternityLeaveOverrides) => {
+    const configured = source.filter((item) => (
       item.employee_no.trim() || item.name.trim() || item.start_date || item.end_date
     ))
     const incomplete = configured.find((item) => !item.name.trim() || !item.start_date || !item.end_date)
@@ -1350,7 +1484,7 @@ const AttendanceToolbox: React.FC = () => {
         return
       }
     }
-    const maternityOverrides = moduleKey === 'leave' ? getMaternityLeaveOverridesForSubmit() : []
+    const maternityOverrides = moduleKey === 'leave' ? getMaternityLeaveOverridesForSubmit(savedMaternityLeaveOverrides) : []
     if (maternityOverrides === null) {
       setRunningModule(null)
       return
@@ -2038,27 +2172,19 @@ const AttendanceToolbox: React.FC = () => {
         {config.key === 'leave' && renderMaternityLeaveOverrides()}
 
         {config.key === 'overtime' && (
-          <Collapse
-            items={[{
-              key: 'rules',
-              label: (
-                <Space>
-                  <ToolOutlined />
-                  加班规则配置
-                  <Tag color={appliedRules.source === 'custom' ? 'success' : 'default'}>
-                    {appliedRules.source === 'custom' ? '自定义规则' : '默认规则'}
-                  </Tag>
-                </Space>
-              ),
-              children: (
-                <OvertimeRulesEditor
-                  value={appliedRules}
-                  onChange={setAppliedRules}
-                  canEdit={canEditRules}
-                  disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
-                />
-              ),
-            }]}
+          <Alert
+            type="info"
+            showIcon
+            message={(
+              <Space>
+                <span>当前使用{appliedRules.source === 'custom' ? '自定义' : '默认'}加班规则</span>
+                <Tag color={appliedRules.source === 'custom' ? 'success' : 'default'}>
+                  {appliedRules.source === 'custom' ? '已应用自定义规则' : '默认规则'}
+                </Tag>
+              </Space>
+            )}
+            description="加班规则统一在固定配置中编辑，点击保存配置后才会对后续计算生效。"
+            action={<Button type="link" onClick={() => setFixedConfigOpen(true)}>打开固定配置</Button>}
           />
         )}
 
@@ -2286,25 +2412,7 @@ const AttendanceToolbox: React.FC = () => {
           </Space>
         </Col>
         <Col flex="0 0 auto">
-          <Space size={8} wrap>
-            {heroBadges.map((b) => (
-              <Tag
-                key={b.label}
-                icon={b.icon}
-                style={{
-                  borderRadius: 99,
-                  padding: '4px 12px',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  background: '#fff',
-                  border: '1px solid var(--color-border)',
-                  color: 'var(--color-text-secondary)',
-                }}
-              >
-                {b.label}
-              </Tag>
-            ))}
-          </Space>
+          <Text type="secondary" style={{ fontSize: 13 }}>上传对应 Excel → 规则校验 → 生成并下载结果</Text>
         </Col>
       </Row>
     </Card>
@@ -2346,99 +2454,77 @@ const AttendanceToolbox: React.FC = () => {
     />
   )
 
-  const renderFixedConfig = () => (
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          这里仅维护长期有效的名单和规则；花名册、异动流程和月份数据请在对应业务页处理。
-        </Text>
-
-        <Divider orientation="left" plain style={{ margin: '4px 0 0' }}>长期名单</Divider>
-        <Row gutter={[16, 16]}>
-          <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>特殊名单（实习生）</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>命中后写入"实习生请假明细"子表</Text>
-                <div style={{ marginTop: 4 }}>
-                  {(textValues.leave_special_names || '').split('、').filter(Boolean).map((name) => (
-                    <Tag key={name} color="blue" style={{ fontSize: 11, margin: '2px' }}>{name}</Tag>
-                  ))}
-                </div>
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>成都作息名单</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>部门名称不含"成都"但按成都作息计算的人员</Text>
-                <div style={{ marginTop: 4 }}>
-                  {(textValues.chengdu_schedule_names || '').split('、').filter(Boolean).map((name) => (
-                    <Tag key={name} color="green" style={{ fontSize: 11, margin: '2px' }}>{name}</Tag>
-                  ))}
-                </div>
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>产研部门关键字</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>用于识别产研休息日加班补贴</Text>
-                <div style={{ marginTop: 4 }}>
-                  {(textValues.sub_dept_keywords || '').split('、').filter(Boolean).map((name) => (
-                    <Tag key={name} color="orange" style={{ fontSize: 11, margin: '2px' }}>{name}</Tag>
-                  ))}
-                </div>
-              </Space>
-            </Card>
-          </Col>
-        </Row>
-
-        <Divider orientation="left" plain style={{ margin: '4px 0 0' }}>补贴与兼职规则</Divider>
-        <Row gutter={[16, 16]}>
-          <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>晚走补贴人员</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>即使在排除部门中也允许按22点后打卡计算</Text>
-                <div style={{ marginTop: 4 }}>
-                  {(textValues.sub_late22_names || '').split('、').filter(Boolean).map((name) => (
-                    <Tag key={name} color="purple" style={{ fontSize: 11, margin: '2px' }}>{name}</Tag>
-                  ))}
-                </div>
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>兼职特殊人员</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>无请假按满勤处理</Text>
-                <div style={{ marginTop: 4 }}>
-                  {(textValues.part_special_names || '').split('、').filter(Boolean).map((name) => (
-                    <Tag key={name} color="cyan" style={{ fontSize: 11, margin: '2px' }}>{name}</Tag>
-                  ))}
-                </div>
-              </Space>
-            </Card>
-          </Col>
-        </Row>
-
-        <Card
-          size="small"
-          title="加班规则配置"
-          extra={<Text type="secondary" style={{ fontSize: 12 }}>默认规则可直接预览</Text>}
-          style={{ borderRadius: 8 }}
-        >
-          <OvertimeRulesEditor
-            value={appliedRules}
-            onChange={setAppliedRules}
-            canEdit={canEditRules}
-            disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
+  const renderFixedConfigListCard = (
+    key: typeof FIXED_CONFIG_LIST_KEYS[number],
+    title: string,
+    description: string,
+  ) => {
+    const names = parseNameList(fixedDraftValues[key])
+    return (
+      <Card size="small" style={{ borderRadius: 10 }}>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Space direction="vertical" size={2}>
+              <Text strong>{title}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>{description}</Text>
+            </Space>
+            <Tag color={names.length ? 'blue' : 'default'}>{names.length ? `已配置 ${names.length} 项` : '未配置'}</Tag>
+          </Space>
+          <Input.TextArea
+            value={fixedDraftValues[key] || ''}
+            autoSize={{ minRows: 2, maxRows: 5 }}
+            disabled={!canOperate}
+            placeholder="多个值用逗号或顿号分隔"
+            onChange={(event) => setFixedDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
           />
-        </Card>
-      </Space>
+          {names.length > 0 && (
+            <Space wrap size={[4, 4]}>
+              {names.slice(0, 3).map((name) => <Tag key={name} color="blue">{name}</Tag>)}
+              {names.length > 3 && <Text type="secondary" style={{ fontSize: 12 }}>等 {names.length} 项</Text>}
+            </Space>
+          )}
+        </Space>
+      </Card>
+    )
+  }
+
+  const renderFixedConfig = () => (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="这里是组织共享的固定配置"
+        description="保存后，同一组织的其他用户重新打开考勤工具箱即可看到；月份、花名册和异动流程仍在对应业务卡片中处理。"
+      />
+      <Card size="small" title={<Space>长期人员配置 <Text type="secondary" style={{ fontSize: 12 }}>长期名单</Text></Space>} style={{ borderRadius: 10 }}>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {renderFixedConfigListCard('leave_special_names', '特殊人员名单', '请假明细中需要特殊处理的人员')}
+          {renderMaternityLeaveOverrides()}
+        </Space>
+      </Card>
+      <Card size="small" title="考勤分类配置" style={{ borderRadius: 10 }}>
+        <Row gutter={[12, 12]}>
+          <Col xs={24} md={12}>{renderFixedConfigListCard('chengdu_schedule_names', '成都作息名单', '按成都作息规则计算的人员')}</Col>
+          <Col xs={24} md={12}>{renderFixedConfigListCard('sub_dept_keywords', '产研部门关键字', '用于识别产研部门补贴规则')}</Col>
+          <Col xs={24} md={12}>{renderFixedConfigListCard('sub_late22_names', '晚走补贴人员', '允许按 22 点后打卡计算补贴的人员')}</Col>
+          <Col xs={24} md={12}>{renderFixedConfigListCard('part_special_names', '兼职特殊人员', '兼职汇总中按特殊规则处理的人员')}</Col>
+        </Row>
+      </Card>
+      <Card
+        size="small"
+        title="加班规则配置"
+        extra={<Tag color={appliedRules.source === 'custom' ? 'success' : 'default'}>{appliedRules.source === 'custom' ? '已应用自定义规则' : '使用默认规则'}</Tag>}
+        style={{ borderRadius: 10 }}
+      >
+        <OvertimeRulesEditor
+          value={appliedRules}
+          onChange={setAppliedRules}
+          canEdit={canEditRules && canOperate}
+          disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
+        />
+      </Card>
+      {!canOperate && <Alert type="warning" showIcon message="当前为只读模式" description="你可以查看配置，但需要考勤工具箱操作权限才能修改并保存。" />}
+    </Space>
   )
 
   const wizardCurrent = Math.max(
@@ -2544,6 +2630,20 @@ const AttendanceToolbox: React.FC = () => {
         open={fixedConfigOpen}
         onClose={() => setFixedConfigOpen(false)}
         destroyOnHidden={false}
+        loading={configLoading}
+        footer={(
+          <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+            <Button onClick={handleCancelFixedConfig} disabled={!configDirty || configSaving}>取消修改</Button>
+            <Button
+              type="primary"
+              onClick={() => void handleSaveFixedConfig()}
+              loading={configSaving}
+              disabled={!canOperate || !configDirty}
+            >
+              保存配置
+            </Button>
+          </Space>
+        )}
         styles={{
           body: {
             padding: 20,

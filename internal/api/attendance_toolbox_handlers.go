@@ -44,6 +44,41 @@ func GetAttendanceToolboxDefaults(c *gin.Context) {
 	})
 }
 
+func GetAttendanceToolboxConfig(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	config, err := service.NewAttendanceToolboxConfigService(middleware.RequestDB(c), orgID).Get(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取考勤工具箱配置失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: config})
+}
+
+func SaveAttendanceToolboxConfig(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	var input service.AttendanceToolboxConfig
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "配置格式无效"})
+		return
+	}
+	config, err := service.NewAttendanceToolboxConfigService(middleware.RequestDB(c), orgID).Save(c.Request.Context(), input)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "organization not found") || strings.Contains(err.Error(), "requires organization") {
+			status = http.StatusInternalServerError
+		}
+		c.JSON(status, Response{Code: status, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "配置已保存", Data: config})
+}
+
 func RunAttendanceToolbox(c *gin.Context) {
 	module := strings.TrimSpace(c.Param("module"))
 	if !service.IsAttendanceToolboxStandardModule(module) {
