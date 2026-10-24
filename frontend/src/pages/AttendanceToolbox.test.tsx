@@ -30,6 +30,8 @@ const mockPreviewRun = vi.fn()
 const mockAuditUploads = vi.fn()
 const mockExportTemplates = vi.fn()
 const mockParttimeMonthlyPunch = vi.fn()
+const mockGetEmployees = vi.fn()
+const mockGetDepartmentTree = vi.fn()
 // 必须在 vi.mock('../services/api') 之前定义，因为 vi.mock 会被 hoisted 到文件顶部。
 const mockGenerateOrgRoster = vi.fn()
 
@@ -66,6 +68,10 @@ vi.mock('../services/api', () => ({
     exportTemplates: (...args: unknown[]) => mockExportTemplates(...args),
     parttimeMonthlyPunch: (...args: unknown[]) => mockParttimeMonthlyPunch(...args),
     generateOrgRoster: (...args: unknown[]) => mockGenerateOrgRoster(...args),
+  },
+  orgAPI: {
+    getEmployees: (...args: unknown[]) => mockGetEmployees(...args),
+    getDepartmentTree: (...args: unknown[]) => mockGetDepartmentTree(...args),
   },
 }))
 
@@ -325,6 +331,8 @@ describe('AttendanceToolbox', () => {
     mockAuditUploads.mockReset()
     mockExportTemplates.mockReset()
     mockGenerateOrgRoster.mockReset()
+    mockGetEmployees.mockReset()
+    mockGetDepartmentTree.mockReset()
     mockConfirmOrgSync.mockReset()
 
     mockGetDefaults.mockResolvedValue({
@@ -337,6 +345,19 @@ describe('AttendanceToolbox', () => {
       },
     })
     mockListTemplates.mockResolvedValue({ data: { templates: [] } })
+    mockGetEmployees.mockResolvedValue({
+      data: {
+        items: [
+          { user_id: 'U001', name: '测试员工' },
+          { user_id: 'U002', name: '成都员工' },
+        ],
+      },
+    })
+    mockGetDepartmentTree.mockResolvedValue({
+      data: {
+        tree: [{ id: 'dept-1', name: '研发中心', children: [{ id: 'dept-2', name: '平台组' }] }],
+      },
+    })
     mockRunDingtalkSync.mockResolvedValue(new Blob(['excel'], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     }))

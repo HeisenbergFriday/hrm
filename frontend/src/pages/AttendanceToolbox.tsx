@@ -16,6 +16,7 @@ import {
   Popover,
   Radio,
   Row,
+  Select,
   Space,
   Steps,
   Table,
@@ -51,7 +52,7 @@ import axios from 'axios'
 import dayjs from 'dayjs'
 import PageContainer from '../components/PageContainer'
 import OvertimeRulesEditor, { AppliedRulesState } from './OvertimeRulesEditor'
-import { attendanceToolboxAPI, AttendanceToolboxConfig, AttendanceToolboxRunResponse } from '../services/api'
+import { attendanceToolboxAPI, AttendanceToolboxConfig, AttendanceToolboxRunResponse, orgAPI } from '../services/api'
 import { useAuthStore } from '../store/authStore'
 import { confirmOrgSync } from '../utils/orgSyncAction'
 import { shouldFallbackToLegacyToolboxAPI } from '../utils/toolboxFallback'
@@ -105,6 +106,36 @@ interface MaternityLeaveOverride {
   start_date: string
   end_date: string
 }
+
+interface ToolboxEmployeeOption {
+  user_id: string
+  name: string
+}
+
+interface ToolboxDepartmentNode {
+  id: string
+  name: string
+  virtual_kind?: string
+  children?: ToolboxDepartmentNode[]
+}
+
+interface ToolboxDepartmentOption {
+  value: string
+  label: string
+}
+
+const flattenToolboxDepartmentOptions = (
+  nodes: ToolboxDepartmentNode[],
+  parentPath = '',
+): ToolboxDepartmentOption[] => nodes.flatMap((node) => {
+  if (node.virtual_kind === 'unassigned') return []
+  const path = parentPath ? `${parentPath}-${node.name}` : node.name
+  const current = node.virtual_kind === 'organization' || !node.name
+    ? []
+    : [{ value: path, label: path.split('-').join(' / ') }]
+  const childParentPath = node.virtual_kind === 'organization' ? parentPath : path
+  return [...current, ...flattenToolboxDepartmentOptions(node.children || [], childParentPath)]
+})
 
 export const getAttendanceToolboxDownloadableFiles = (run: AttendanceToolboxRunResponse | null | undefined) =>
   (run?.files || []).filter((file) => file.kind !== 'meta')
@@ -548,6 +579,10 @@ const AttendanceToolbox: React.FC = () => {
 
   const [activeModule, setActiveModule] = useState<ToolboxModuleKey>('leave')
   const [fixedConfigOpen, setFixedConfigOpen] = useState(false)
+  const [fixedOptionsLoading, setFixedOptionsLoading] = useState(false)
+  const [fixedOptionsLoaded, setFixedOptionsLoaded] = useState(false)
+  const [employeeOptions, setEmployeeOptions] = useState<ToolboxEmployeeOption[]>([])
+  const [departmentOptions, setDepartmentOptions] = useState<ToolboxDepartmentOption[]>([])
   const [completedModules, setCompletedModules] = useState<Partial<Record<ToolboxModuleKey, boolean>>>({})
   const [missingFieldName, setMissingFieldName] = useState<string | null>(null)
   const fieldCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -770,6 +805,31 @@ const AttendanceToolbox: React.FC = () => {
   useEffect(() => {
     refreshTemplateMeta()
   }, [refreshTemplateMeta])
+
+  useEffect(() => {
+    if (!fixedConfigOpen || fixedOptionsLoaded) return
+    let mounted = true
+    setFixedOptionsLoading(true)
+    Promise.all([
+      orgAPI.getEmployees({ page: 1, page_size: 2000, status: 'active' }),
+      orgAPI.getDepartmentTree({ all: true }),
+    ]).then(([employeeResponse, departmentResponse]) => {
+      if (!mounted) return
+      const employees = ((employeeResponse as unknown as { data?: { items?: ToolboxEmployeeOption[] } })?.data?.items || [])
+        .filter((employee) => employee?.user_id && employee?.name && employee.user_id !== 'admin')
+        .map((employee) => ({ user_id: String(employee.user_id), name: String(employee.name) }))
+        .sort((left, right) => left.name.localeCompare(right.name) || left.user_id.localeCompare(right.user_id))
+      const tree = (departmentResponse as unknown as { data?: { tree?: ToolboxDepartmentNode[] } })?.data?.tree || []
+      setEmployeeOptions(employees)
+      setDepartmentOptions(flattenToolboxDepartmentOptions(tree))
+      setFixedOptionsLoaded(true)
+    }).catch(() => {
+      if (mounted) messageApi.warning('员工和部门列表加载失败，仍可查看已保存配置')
+    }).finally(() => {
+      if (mounted) setFixedOptionsLoading(false)
+    })
+    return () => { mounted = false }
+  }, [fixedConfigOpen, fixedOptionsLoaded, messageApi])
 
   const setFieldFiles = useCallback((fieldName: string, list: UploadFile[]) => {
     const next = { ...fileListsRef.current, [fieldName]: list }
@@ -2408,6 +2468,16 @@ const AttendanceToolbox: React.FC = () => {
     description: string,
   ) => {
     const names = parseNameList(fixedDraftValues[key])
+    const isDepartmentConfig = key === 'sub_dept_keywords'
+    const options = isDepartmentConfig
+      ? departmentOptions
+      : employeeOptions.map((employee) => ({
+        value: employee.name,
+        label: `${employee.name}（${employee.user_id}）`,
+      }))
+    const selectedOptions = names
+      .filter((name) => !options.some((option) => option.value === name))
+      .map((name) => ({ value: name, label: `${name}（已保存）` }))
     return (
       <Card size="small" style={{ borderRadius: 10 }}>
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -2418,12 +2488,20 @@ const AttendanceToolbox: React.FC = () => {
             </Space>
             <Tag color={names.length ? 'blue' : 'default'}>{names.length ? `已配置 ${names.length} 项` : '未配置'}</Tag>
           </Space>
-          <Input.TextArea
-            value={fixedDraftValues[key] || ''}
-            autoSize={{ minRows: 2, maxRows: 5 }}
+          <Select
+            mode="multiple"
+            showSearch
+            allowClear
+            optionFilterProp="label"
+            value={names}
+            options={[...selectedOptions, ...options]}
+            loading={fixedOptionsLoading}
             disabled={!canOperate}
-            placeholder="多个值用逗号或顿号分隔"
-            onChange={(event) => setFixedDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
+            placeholder={isDepartmentConfig ? '搜索并选择部门' : '搜索姓名并选择员工'}
+            notFoundContent={fixedOptionsLoading ? '正在加载列表…' : '暂无匹配项'}
+            maxTagCount="responsive"
+            style={{ width: '100%' }}
+            onChange={(values) => setFixedDraftValues((prev) => ({ ...prev, [key]: formatNameList(values) }))}
           />
           {names.length > 0 && (
             <Space wrap size={[4, 4]}>
@@ -2451,12 +2529,12 @@ const AttendanceToolbox: React.FC = () => {
         </Space>
       </Card>
       <Card size="small" title="考勤分类配置" style={{ borderRadius: 10 }}>
-        <Row gutter={[12, 12]}>
-          <Col xs={24} md={12}>{renderFixedConfigListCard('chengdu_schedule_names', '成都作息名单', '按成都作息规则计算的人员')}</Col>
-          <Col xs={24} md={12}>{renderFixedConfigListCard('sub_dept_keywords', '产研部门关键字', '用于识别产研部门补贴规则')}</Col>
-          <Col xs={24} md={12}>{renderFixedConfigListCard('sub_late22_names', '晚走补贴人员', '允许按 22 点后打卡计算补贴的人员')}</Col>
-          <Col xs={24} md={12}>{renderFixedConfigListCard('part_special_names', '兼职特殊人员', '兼职汇总中按特殊规则处理的人员')}</Col>
-        </Row>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {renderFixedConfigListCard('chengdu_schedule_names', '成都作息人员', '从当前组织员工中选择按成都作息规则计算的人员')}
+          {renderFixedConfigListCard('sub_late22_names', '晚走补贴人员', '从当前组织员工中选择允许按 22 点后打卡计算补贴的人员')}
+          {renderFixedConfigListCard('sub_dept_keywords', '产研补贴部门', '从当前组织部门中选择适用产研补贴规则的部门')}
+          {renderFixedConfigListCard('part_special_names', '兼职特殊人员', '从当前组织员工中选择兼职汇总中按特殊规则处理的人员')}
+        </Space>
       </Card>
       <Card
         size="small"
