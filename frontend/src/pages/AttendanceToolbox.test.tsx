@@ -24,6 +24,7 @@ const mockRunDingtalkSyncStructured = vi.fn()
 const mockDownloadRunFile = vi.fn()
 const mockDownloadRunZip = vi.fn()
 const mockImportRulesPreview = vi.fn()
+const mockPreviewRules = vi.fn()
 const mockExportRules = vi.fn()
 const mockPreviewRun = vi.fn()
 const mockAuditUploads = vi.fn()
@@ -58,6 +59,7 @@ vi.mock('../services/api', () => ({
     downloadRunFile: (...args: unknown[]) => mockDownloadRunFile(...args),
     downloadRunZip: (...args: unknown[]) => mockDownloadRunZip(...args),
     importRulesPreview: (...args: unknown[]) => mockImportRulesPreview(...args),
+    previewRules: (...args: unknown[]) => mockPreviewRules(...args),
     exportRules: (...args: unknown[]) => mockExportRules(...args),
     previewRun: (...args: unknown[]) => mockPreviewRun(...args),
     auditUploads: (...args: unknown[]) => mockAuditUploads(...args),
@@ -317,6 +319,7 @@ describe('AttendanceToolbox', () => {
     mockDownloadRunFile.mockReset()
     mockDownloadRunZip.mockReset()
     mockImportRulesPreview.mockReset()
+    mockPreviewRules.mockReset()
     mockExportRules.mockReset()
     mockPreviewRun.mockReset()
     mockAuditUploads.mockReset()
@@ -343,6 +346,16 @@ describe('AttendanceToolbox', () => {
     mockRunWorkflow.mockResolvedValue(makeRunResponse('leave'))
     mockDownloadRunFile.mockResolvedValue(new Blob(['xlsx']))
     mockDownloadRunZip.mockResolvedValue(new Blob(['zip'], { type: 'application/zip' }))
+    mockPreviewRules.mockResolvedValue({
+      data: {
+        premium_rules: [
+          { priority: 1, date_type: 'LEGAL_HOLIDAY', department_group: '全部', multiplier: 3, action: '加班工资' },
+        ],
+        department_rules: [],
+        params: { standard_hours_per_day: 8, no_punch_mark: '未加' },
+        legal_holidays_override: [],
+      },
+    })
     mockPreviewRun.mockResolvedValue({ data: { rows: [{ 姓名: '甲', 工号: 'E01' }] } })
     mockAuditUploads.mockResolvedValue({ data: { warnings: [] } })
     mockExportTemplates.mockResolvedValue(new Blob(['tpl']))
@@ -395,16 +408,30 @@ describe('AttendanceToolbox', () => {
     expect(screen.getAllByText('费婷玉').length).toBeGreaterThan(0)
   })
 
-  it('keeps roster and transfer status in fixed config without duplicate action buttons', async () => {
+  it('keeps roster and transfer actions on their corresponding upload cards', async () => {
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    const { rosterButton, transferButton } = await openRosterAndTransferControls(user)
+    expect(rosterButton).toBeInTheDocument()
+    expect(transferButton).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
+    const fixedConfigDrawer = document.querySelector('.ant-drawer-content') as HTMLElement
+    expect(within(fixedConfigDrawer).queryByText('花名册')).not.toBeInTheDocument()
+    expect(within(fixedConfigDrawer).queryByText('异动流程')).not.toBeInTheDocument()
+    expect(within(fixedConfigDrawer).getByText('长期名单')).toBeInTheDocument()
+  })
+
+  it('shows default overtime rules in the fixed config without downloading Excel', async () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await user.click(screen.getByRole('button', { name: '打开固定配置' }))
-
-    const fixedConfigDrawer = document.querySelector('.ant-drawer-content') as HTMLElement
-    expect(within(fixedConfigDrawer).queryByRole('button', { name: /组织数据生成|钉钉同步/ })).not.toBeInTheDocument()
-    expect(within(fixedConfigDrawer).getByText('自动生成')).toBeInTheDocument()
-    expect(within(fixedConfigDrawer).getByText('自动同步')).toBeInTheDocument()
+    expect(await screen.findByText('默认倍数规则（只读）')).toBeInTheDocument()
+    await user.click(screen.getByText('默认倍数规则（只读）'))
+    expect(screen.getByText('法定节假日')).toBeInTheDocument()
+    expect(mockPreviewRules).toHaveBeenCalled()
+    expect(mockExportRules).not.toHaveBeenCalled()
   })
 
   it('blocks leave calculation when required files are missing', async () => {
@@ -819,7 +846,7 @@ describe('AttendanceToolbox', () => {
       await Promise.resolve()
     })
 
-    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
+    await user.click(screen.getByRole('tab', { name: /最终汇总/ }))
     expect(await screen.findByText(/生成失败：花名册生成服务未配置/)).toBeInTheDocument()
 
     // 生成失败完成后不得产生自动文件，也不得覆盖已经上传的本地文件。
@@ -871,7 +898,7 @@ describe('AttendanceToolbox', () => {
     })
 
     expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(2)
-    await userEvent.setup().click(screen.getByRole('button', { name: '打开固定配置' }))
+    await userEvent.setup().click(screen.getByRole('tab', { name: /最终汇总/ }))
     expect(await screen.findByText(/上次生成：/)).toBeInTheDocument()
   })
 
@@ -889,7 +916,7 @@ describe('AttendanceToolbox', () => {
     await waitForToolboxReady()
     await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
     expect(mockConfirmOrgSync).not.toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
+    await user.click(screen.getByRole('tab', { name: /最终汇总/ }))
     expect(await screen.findByText(/生成失败：1 名在职员工缺少有效主部门/)).toBeInTheDocument()
   })
 
@@ -1160,7 +1187,7 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
+    await user.click(screen.getByRole('tab', { name: /兼职汇总/ }))
     const fetchBtn = await screen.findByRole('button', { name: /从钉钉抓取/ })
     expect(fetchBtn).toBeDisabled()
     // 卡片内的提示文案明确告知缺少权限（Tooltip 标题也在 DOM 中，故用 getAllByText）。
@@ -1171,7 +1198,7 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
+    await user.click(screen.getByRole('tab', { name: /兼职汇总/ }))
     await user.click(await screen.findByRole('button', { name: /从钉钉抓取/ }))
     await waitFor(() => expect(mockParttimeMonthlyPunch).toHaveBeenCalledTimes(1))
     const expectedMonth = dayjs().subtract(1, 'month').format('YYYY-MM')
@@ -1186,7 +1213,7 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
+    await user.click(screen.getByRole('tab', { name: /兼职汇总/ }))
     await user.click(await screen.findByRole('button', { name: /从钉钉抓取/ }))
     await waitFor(() => expect(messageApi.error).toHaveBeenCalledWith(expect.stringContaining('抓取失败')))
     // 失败后按钮文案变为「重试抓取」，仍可再次点击（req 6）。

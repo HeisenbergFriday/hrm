@@ -564,6 +564,10 @@ export const attendanceToolboxAPI = {
       timeout: 60 * 1000,
     })
   },
+  /** Preview effective default or custom overtime rules without downloading Excel. */
+  previewRules: (rulesJson?: string) => api.post('/attendance/toolbox/rules/preview', rulesJson ? { rules_json: rulesJson } : {}, {
+    timeout: 60 * 1000,
+  }),
   /** Preview first 200 rows of a stored run result (does not re-run calculation). */
   previewRun: (runId: string, fileKey?: string) => api.get(`/attendance/toolbox/runs/${runId}/preview`, {
     params: fileKey ? { file_key: fileKey } : undefined,

@@ -1584,6 +1584,98 @@ const AttendanceToolbox: React.FC = () => {
     )
   }
 
+  const renderParttimePunchControls = (field: FileField) => {
+    if (field.name !== 'parttime_attendance_detail') return null
+    const permissionHint = '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加'
+    return (
+      <Card
+        size="small"
+        type="inner"
+        style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}
+        styles={{ body: { padding: '10px 12px' } }}
+      >
+        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+          <Space wrap size={8} align="center">
+            <Text strong style={{ fontSize: 12 }}>按月份获取考勤明细</Text>
+            <DatePicker
+              picker="month"
+              value={parttimePunchMonth}
+              onChange={(value) => setParttimePunchMonth(value)}
+              format="YYYY-MM"
+              allowClear={false}
+              style={{ width: 120 }}
+              aria-label="兼职考勤月份"
+              placeholder="选择月份"
+              locale={datePickerZhCN}
+            />
+            <Tooltip title={!canDingtalkSync ? permissionHint : '仅按用户点击执行，不会自动抓取'}>
+              <span style={{ display: 'inline-block' }}>
+                <Button
+                  type="link"
+                  size="small"
+                  icon={parttimePunchSync.loading ? <SyncOutlined spin /> : <SyncOutlined />}
+                  loading={parttimePunchSync.loading}
+                  disabled={!canDingtalkSync}
+                  onClick={() => void syncParttimeMonthlyPunch()}
+                  style={{ padding: 0 }}
+                >
+                  {parttimePunchSync.error ? '重试抓取' : '从钉钉抓取'}
+                </Button>
+              </span>
+            </Tooltip>
+          </Space>
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            抓取后会自动回填到本卡片；也可以直接上传本地 Excel。再次抓取会替换本次“考勤明细”。
+          </Text>
+          {!canDingtalkSync && (
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              当前账号无钉钉同步权限，请上传本地月度打卡记录 Excel，或联系管理员开通权限
+            </Text>
+          )}
+          {parttimePunchSync.lastSyncAt && (
+            <Text type="success" style={{ fontSize: 11 }}>
+              上次抓取：{parttimePunchSync.lastSyncAt}
+            </Text>
+          )}
+          {parttimePunchSync.error && (
+            <Text type="danger" style={{ fontSize: 11 }}>
+              抓取失败：{parttimePunchSync.error}
+            </Text>
+          )}
+        </Space>
+      </Card>
+    )
+  }
+
+  const renderFileSourceStatus = (field: FileField) => {
+    const isRosterField = field.name === 'overtime_roster' || field.name === 'final_active'
+    const isTransferField = field.name === 'final_transfer'
+    if (!isRosterField && !isTransferField) return null
+    const sync = isRosterField ? rosterSync : transferSync
+    const allowed = isRosterField ? canOperate : canDingtalkSync
+    return (
+      <Space direction="vertical" size={2} style={{ width: '100%' }}>
+        {!allowed && (
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {isRosterField
+              ? '当前账号无操作权限，请上传本地花名册，或联系管理员开通权限'
+              : '当前账号无钉钉同步权限，请上传本地异动流程表，或联系管理员开通权限'}
+          </Text>
+        )}
+        {sync.lastSyncAt && (
+          <Text type="success" style={{ fontSize: 11 }}>
+            {isRosterField ? '上次生成' : '上次同步'}：{sync.lastSyncAt}
+          </Text>
+        )}
+        {sync.error && (
+          <Text type="danger" style={{ fontSize: 11 }}>
+            {isRosterField ? '生成失败' : '同步失败'}：{sync.error}
+          </Text>
+        )}
+      </Space>
+    )
+  }
+
   const renderFileUploadCard = (field: FileField) => {
     const files = fileLists[field.name] || []
     const hasFile = files.length > 0
@@ -1629,6 +1721,9 @@ const AttendanceToolbox: React.FC = () => {
             </div>
             {renderFileSourceAction(field, hasFile)}
           </div>
+
+          {renderFileSourceStatus(field)}
+          {renderParttimePunchControls(field)}
 
           <Dragger
             {...uploadProps(field)}
@@ -2254,11 +2349,12 @@ const AttendanceToolbox: React.FC = () => {
   const renderFixedConfig = () => (
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Text type="secondary" style={{ fontSize: 12 }}>
-          这些值已内置默认值，仅在人员/规则发生变化时修改
+          这里仅维护长期有效的名单和规则；花名册、异动流程和月份数据请在对应业务页处理。
         </Text>
 
+        <Divider orientation="left" plain style={{ margin: '4px 0 0' }}>长期名单</Divider>
         <Row gutter={[16, 16]}>
-          <Col xs={24} md={8}>
+          <Col xs={24} md={12}>
             <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Text strong style={{ fontSize: 12 }}>特殊名单（实习生）</Text>
@@ -2271,7 +2367,7 @@ const AttendanceToolbox: React.FC = () => {
               </Space>
             </Card>
           </Col>
-          <Col xs={24} md={8}>
+          <Col xs={24} md={12}>
             <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Text strong style={{ fontSize: 12 }}>成都作息名单</Text>
@@ -2284,7 +2380,7 @@ const AttendanceToolbox: React.FC = () => {
               </Space>
             </Card>
           </Col>
-          <Col xs={24} md={8}>
+          <Col xs={24} md={12}>
             <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Text strong style={{ fontSize: 12 }}>产研部门关键字</Text>
@@ -2299,133 +2395,9 @@ const AttendanceToolbox: React.FC = () => {
           </Col>
         </Row>
 
+        <Divider orientation="left" plain style={{ margin: '4px 0 0' }}>补贴与兼职规则</Divider>
         <Row gutter={[16, 16]}>
           <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Space size={4}>
-                  <Text strong style={{ fontSize: 12 }}>花名册</Text>
-                  <Tag color="blue" style={{ fontSize: 11 }}>自动生成</Tag>
-                  {rosterSync.loading && <SyncOutlined spin />}
-                </Space>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {canOperate
-                    ? '页面加载时会使用最近一次组织同步数据自动生成，也可上传本地花名册'
-                    : '当前账号无操作权限，请上传本地花名册，或联系管理员开通权限'}
-                </Text>
-                {rosterSync.lastSyncAt && (
-                  <Text type="success" style={{ fontSize: 11 }}>
-                    上次生成：{rosterSync.lastSyncAt}
-                  </Text>
-                )}
-                {!rosterSync.loading && rosterSync.lastSyncAt && (
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    已自动回填到“加班明细 &gt; 花名册/员工信息表”和“最终汇总 &gt; 在职花名册”
-                  </Text>
-                )}
-                {rosterSync.error && (
-                  <Text type="danger" style={{ fontSize: 11 }}>
-                    生成失败：{rosterSync.error}
-                  </Text>
-                )}
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Space size={4}>
-                  <Text strong style={{ fontSize: 12 }}>异动流程</Text>
-                  <Tag color="blue" style={{ fontSize: 11 }}>自动同步</Tag>
-                  {transferSync.loading && <SyncOutlined spin />}
-                </Space>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {canDingtalkSync
-                    ? '页面加载时会自动尝试同步，也可上传本地异动流程表'
-                    : '当前账号无钉钉同步权限，请上传本地异动流程表，或联系管理员开通权限'}
-                </Text>
-                {transferSync.lastSyncAt && (
-                  <Text type="success" style={{ fontSize: 11 }}>
-                    上次同步：{transferSync.lastSyncAt}
-                  </Text>
-                )}
-                {!transferSync.loading && transferSync.lastSyncAt && (
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    已自动回填到“最终汇总 &gt; 异动流程表”
-                  </Text>
-                )}
-                {transferSync.error && (
-                  <Text type="danger" style={{ fontSize: 11 }}>
-                    同步失败：{transferSync.error}
-                  </Text>
-                )}
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Space size={4}>
-                  <Text strong style={{ fontSize: 12 }}>兼职月度打卡记录</Text>
-                  <Tag color="blue" style={{ fontSize: 11 }}>可同步</Tag>
-                  {parttimePunchSync.loading
-                    ? <SyncOutlined spin />
-                    : (
-                      <Tooltip title={!canDingtalkSync ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加' : '仅按用户点击执行，不会自动抓取'}>
-                        <span style={{ display: 'inline-block' }}>
-                          <Button
-                            type="link"
-                            size="small"
-                            icon={<SyncOutlined />}
-                            disabled={!canDingtalkSync}
-                            onClick={() => void syncParttimeMonthlyPunch()}
-                            style={{ fontSize: 11, height: 22, padding: '0 4px' }}
-                          >
-                            {parttimePunchSync.error ? '重试抓取' : '从钉钉抓取'}
-                          </Button>
-                        </span>
-                      </Tooltip>
-                    )}
-                </Space>
-                <Space size={8} align="start" style={{ width: '100%' }}>
-                  <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>月份</Text>
-                  <DatePicker
-                    picker="month"
-                    value={parttimePunchMonth}
-                    onChange={(value) => setParttimePunchMonth(value)}
-                    format="YYYY-MM"
-                    allowClear={false}
-                    style={{ width: 120 }}
-                    placeholder="选择月份"
-                  locale={datePickerZhCN} />
-                </Space>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {canDingtalkSync
-                    ? '点击「从钉钉抓取」拉取该月打卡记录并匹配兼职花名册；失败后可手动上传本地 Excel，再次抓取会替换上一次结果'
-                    : '当前账号无钉钉同步权限，请上传本地月度打卡记录 Excel，或联系管理员开通权限'}
-                </Text>
-                {parttimePunchSync.lastSyncAt && (
-                  <Text type="success" style={{ fontSize: 11 }}>
-                    上次抓取：{parttimePunchSync.lastSyncAt}
-                  </Text>
-                )}
-                {!parttimePunchSync.loading && parttimePunchSync.lastSyncAt && (
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    已自动回填到「兼职汇总 &gt; 考勤明细」上传位
-                  </Text>
-                )}
-                {parttimePunchSync.error && (
-                  <Text type="danger" style={{ fontSize: 11 }}>
-                    抓取失败：{parttimePunchSync.error}
-                  </Text>
-                )}
-              </Space>
-            </Card>
-          </Col>
-        </Row>
-
-        <Row gutter={[16, 16]}>
-          <Col xs={24} md={8}>
             <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Text strong style={{ fontSize: 12 }}>晚走补贴人员</Text>
@@ -2438,7 +2410,7 @@ const AttendanceToolbox: React.FC = () => {
               </Space>
             </Card>
           </Col>
-          <Col xs={24} md={8}>
+          <Col xs={24} md={12}>
             <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Text strong style={{ fontSize: 12 }}>兼职特殊人员</Text>
@@ -2451,23 +2423,21 @@ const AttendanceToolbox: React.FC = () => {
               </Space>
             </Card>
           </Col>
-          <Col xs={24} md={8}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>加班规则配置</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>倍数规则、部门匹配、排除名单</Text>
-                <div style={{ marginTop: 4 }}>
-                  <OvertimeRulesEditor
-                    value={appliedRules}
-                    onChange={setAppliedRules}
-                    canEdit={canEditRules}
-                    disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
-                  />
-                </div>
-              </Space>
-            </Card>
-          </Col>
         </Row>
+
+        <Card
+          size="small"
+          title="加班规则配置"
+          extra={<Text type="secondary" style={{ fontSize: 12 }}>默认规则可直接预览</Text>}
+          style={{ borderRadius: 8 }}
+        >
+          <OvertimeRulesEditor
+            value={appliedRules}
+            onChange={setAppliedRules}
+            canEdit={canEditRules}
+            disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
+          />
+        </Card>
       </Space>
   )
 
@@ -2548,7 +2518,7 @@ const AttendanceToolbox: React.FC = () => {
             <Space direction="vertical" size={0}>
               <Text strong>固定配置</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                成都作息、固定名单、同步源和规则配置
+                长期名单和加班规则
               </Text>
             </Space>
           </Space>
@@ -2582,7 +2552,7 @@ const AttendanceToolbox: React.FC = () => {
           },
         }}
       >
-        {renderFixedConfig()}
+        {fixedConfigOpen ? renderFixedConfig() : null}
       </Drawer>
       {renderToolbar()}
           </div>

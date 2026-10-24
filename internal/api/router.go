@@ -53,6 +53,7 @@ func registerAttendanceToolboxRoutes(attendance *gin.RouterGroup) {
 	// 权限与钉钉同步一致（attendance_toolbox_dingtalk_sync 或 attendance_manage）。
 	attendance.POST("/toolbox/parttime-monthly-punch", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunParttimeMonthlyPunch)
 	attendance.POST("/toolbox/rules/export", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ExportOvertimeRules)
+	attendance.POST("/toolbox/rules/preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), PreviewOvertimeRules)
 	attendance.POST("/toolbox/rules/import-preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ImportOvertimeRulesPreview)
 	attendance.POST("/toolbox/:module/validate", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ValidateAttendanceToolbox)
 	attendance.POST("/toolbox/templates", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ExportAttendanceToolboxTemplates)

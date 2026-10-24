@@ -1062,6 +1062,28 @@ func (s *AttendanceToolboxService) ImportRulesPreview(ctx context.Context, rules
 	return preview, nil
 }
 
+// PreviewRules returns the effective default rules or the supplied JSON rules
+// in the same shape used by the Excel import preview. Keeping this conversion
+// in the Python rules engine avoids duplicating the default rule set in clients.
+func (s *AttendanceToolboxService) PreviewRules(ctx context.Context, rulesJSON string) (map[string]interface{}, error) {
+	config := map[string]interface{}{"rules_json": "{}"}
+	if trimmed := strings.TrimSpace(rulesJSON); trimmed != "" {
+		config["rules_json"] = trimmed
+	}
+	result, err := s.runAction(ctx, "import-rules-preview", config)
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Outputs) == 0 {
+		return nil, errors.New("未生成规则预览")
+	}
+	var preview map[string]interface{}
+	if jsonErr := json.Unmarshal(result.Outputs[0].Data, &preview); jsonErr != nil {
+		return nil, fmt.Errorf("规则预览数据格式异常：%w", jsonErr)
+	}
+	return preview, nil
+}
+
 // ── Action: Validate ─────────────────────────────────────────────────────────
 
 func (s *AttendanceToolboxService) Validate(ctx context.Context, module string, form *multipart.Form) (map[string]interface{}, error) {
