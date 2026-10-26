@@ -41,7 +41,6 @@ const TalentAnalysis = lazy(() => import('./pages/TalentAnalysis'))
 const SyncLog = lazy(() => import('./pages/SyncLog'))
 const Attendance = lazy(() => import('./pages/Attendance'))
 const AttendanceExport = lazy(() => import('./pages/AttendanceExport'))
-const AttendanceProcessing = lazy(() => import('./pages/AttendanceProcessing'))
 const AttendanceExternalSync = lazy(() => import('./pages/AttendanceExternalSync'))
 const AttendanceToolbox = lazy(() => import('./pages/AttendanceToolbox'))
 const WeekSchedule = lazy(() => import('./pages/WeekSchedule'))
@@ -620,9 +619,23 @@ function App() {
                 <Route path="/people-data-center" element={<RouteGuard menuKey="menu:people-data-center"><PeopleDataCenter /></RouteGuard>} />
                 <Route path="/attendance" element={<RouteGuard menuKey="menu:attendance"><Attendance /></RouteGuard>} />
                 <Route path="/attendance-export" element={<RouteGuard menuKey="menu:attendance-export"><AttendanceExport /></RouteGuard>} />
-                <Route path="/attendance-processing" element={<RouteGuard menuKey="menu:attendance-processing"><AttendanceProcessing /></RouteGuard>} />
+                <Route
+                  path="/attendance-processing"
+                  element={(
+                    <RouteGuard menuKey={['menu:attendance-processing', 'menu:attendance-toolbox']}>
+                      <Navigate to="/attendance-toolbox" replace />
+                    </RouteGuard>
+                  )}
+                />
                 <Route path="/attendance/external-sync" element={<RouteGuard menuKey="menu:attendance-external-sync"><AttendanceExternalSync /></RouteGuard>} />
-                <Route path="/attendance-toolbox" element={<RouteGuard menuKey="menu:attendance-toolbox"><AttendanceToolbox /></RouteGuard>} />
+                <Route
+                  path="/attendance-toolbox"
+                  element={(
+                    <RouteGuard menuKey={['menu:attendance-toolbox', 'menu:attendance-processing']}>
+                      <AttendanceToolbox />
+                    </RouteGuard>
+                  )}
+                />
                 <Route path="/week-schedule" element={<RouteGuard menuKey="menu:week-schedule"><WeekSchedule /></RouteGuard>} />
                 <Route path="/employee-shift-config" element={<RouteGuard menuKey="menu:employee-shift-config"><EmployeeShiftConfig /></RouteGuard>} />
                 <Route path="/approval" element={<RouteGuard menuKey="menu:approval-templates"><Approval /></RouteGuard>} />

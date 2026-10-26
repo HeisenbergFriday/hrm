@@ -6,10 +6,10 @@ import { menuConfig, menuPermissionKey, type MenuItem } from '../config/menu'
 
 interface RouteGuardProps {
   /**
-   * 菜单权限 key。默认必须命中 menuKeys 才放行。
+   * 菜单权限 key。传数组时，命中任意一个 menu key 即放行；默认必须命中 menuKeys 才放行。
    * 任务深链页可配合 menuOptional，仅用功能权限放行。
    */
-  menuKey: string
+  menuKey: string | string[]
   /**
    * 功能权限：有任意一个即通过。
    * 与 menuOptional 合用时，深链入口只靠功能权限，不强制 overview 菜单。
@@ -70,8 +70,8 @@ export default function RouteGuard({
 }: RouteGuardProps) {
   const navigate = useNavigate()
   const { menuKeys, permissions } = useAuthStore()
-  const normalizedMenuKey = menuPermissionKey(menuKey)
-  const isHomeMenu = normalizedMenuKey === menuPermissionKey('home')
+  const normalizedMenuKeysForRoute = (Array.isArray(menuKey) ? menuKey : [menuKey]).map(menuPermissionKey)
+  const isHomeMenu = normalizedMenuKeysForRoute.includes(menuPermissionKey('home'))
   const normalizedMenuKeys = new Set((menuKeys || []).map(menuPermissionKey))
   const permissionCodes = normalizePermissionCodes(permissionCode)
   const hasFeaturePermission =
@@ -97,7 +97,7 @@ export default function RouteGuard({
     )
   }
 
-  const hasMenu = normalizedMenuKeys.has(normalizedMenuKey)
+  const hasMenu = normalizedMenuKeysForRoute.some((key) => normalizedMenuKeys.has(key))
   if (!menuOptional && !hasMenu) {
     return (
       <Result

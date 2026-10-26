@@ -69,7 +69,6 @@ export const menuConfig: MenuItem[] = [
     children: [
       { key: menuPermissionKey('attendance'), title: '考勤查询', label: <Link to="/attendance">考勤查询</Link>, icon: <ClockCircleOutlined /> },
       { key: menuPermissionKey('attendance-export'), title: '导出记录', label: <Link to="/attendance-export">导出记录</Link>, icon: <FileExcelOutlined /> },
-      { key: menuPermissionKey('attendance-processing'), title: '数据处理', label: <Link to="/attendance-processing">数据处理</Link>, icon: <ToolOutlined /> },
       { key: menuPermissionKey('attendance-external-sync'), title: '外部考勤同步', label: <Link to="/attendance/external-sync">外部同步</Link>, icon: <CloudSyncOutlined /> },
       { key: menuPermissionKey('leave-overtime'), title: '年假与调休', label: <Link to="/leave-overtime">年假与调休</Link>, icon: <ScheduleOutlined /> },
       { key: menuPermissionKey('attendance-toolbox'), title: '考勤工具箱', label: <Link to="/attendance-toolbox">考勤工具箱</Link>, icon: <ToolOutlined /> },
@@ -145,6 +144,9 @@ export function filterMenuByKeys(items: MenuItem[], allowedKeys: string[], orgID
   if (!allowedKeys || allowedKeys.length === 0) return []
 
   const keySet = new Set(allowedKeys.map(menuPermissionKey))
+  if (keySet.has(menuPermissionKey('attendance-processing'))) {
+    keySet.add(menuPermissionKey('attendance-toolbox'))
+  }
 
   return items
     .map((item) => {

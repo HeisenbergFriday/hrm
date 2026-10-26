@@ -2588,46 +2588,57 @@ const AttendanceToolbox: React.FC = () => {
 
       <Row gutter={[20, 20]} align="top">
         <Col xs={24} xl={24}>
-          <div>
-      <Card
-        size="small"
-        data-testid="attendance-toolbox-wizard"
-        style={{
-          marginBottom: 16,
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--color-border)',
-          display: 'none',
-        }}
-        styles={{ body: { padding: '14px 16px' } }}
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Space wrap>
-            <Text strong>月末结账向导</Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              推荐顺序；点击步骤可切换模块，不强制锁步
-            </Text>
-          </Space>
-          <Steps
-            direction="vertical"
-            size="small"
-            current={wizardCurrent >= 0 ? wizardCurrent : 0}
-            onChange={(index) => {
-              const step = MONTH_END_WIZARD_STEPS[index]
-              if (step) setActiveModule(step.key)
+          <section
+            style={{
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-lg)',
+              background: 'var(--color-bg-card)',
+              padding: '16px',
             }}
-            items={MONTH_END_WIZARD_STEPS.map((step) => ({
-              title: step.title,
-              description: step.hint,
-              status: completedModules[step.key]
-                ? 'finish'
-                : step.key === activeModule
-                  ? 'process'
-                  : 'wait',
-              icon: completedModules[step.key] ? <CheckCircleOutlined /> : undefined,
-            }))}
-          />
-        </Space>
-      </Card>
+          >
+            <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 14 }}>
+              <Text strong style={{ fontSize: 16 }}>配置与准备</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>先确认长期配置和模板，再进入下面的月末处理任务。</Text>
+            </Space>
+            <Card
+              size="small"
+              data-testid="attendance-toolbox-wizard"
+              style={{
+                marginBottom: 16,
+                borderRadius: 'var(--radius-lg)',
+                border: '1px solid var(--color-border)',
+                display: 'none',
+              }}
+              styles={{ body: { padding: '14px 16px' } }}
+            >
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <Space wrap>
+                  <Text strong>月末结账向导</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    推荐顺序；点击步骤可切换模块，不强制锁步
+                  </Text>
+                </Space>
+                <Steps
+                  direction="vertical"
+                  size="small"
+                  current={wizardCurrent >= 0 ? wizardCurrent : 0}
+                  onChange={(index) => {
+                    const step = MONTH_END_WIZARD_STEPS[index]
+                    if (step) setActiveModule(step.key)
+                  }}
+                  items={MONTH_END_WIZARD_STEPS.map((step) => ({
+                    title: step.title,
+                    description: step.hint,
+                    status: completedModules[step.key]
+                      ? 'finish'
+                      : step.key === activeModule
+                        ? 'process'
+                        : 'wait',
+                    icon: completedModules[step.key] ? <CheckCircleOutlined /> : undefined,
+                  }))}
+                />
+              </Space>
+            </Card>
 
       <Card
         size="small"
@@ -2699,32 +2710,45 @@ const AttendanceToolbox: React.FC = () => {
       >
         {fixedConfigOpen ? renderFixedConfig() : null}
       </Drawer>
-      {renderToolbar()}
-          </div>
+            {renderToolbar()}
+          </section>
         </Col>
         <Col xs={24} xl={24}>
-      <Tabs
-        size="large"
-        activeKey={activeModule}
-        onChange={(key) => setActiveModule(key as ToolboxModuleKey)}
-        items={modules.map((item) => ({
-          key: item.key,
-          label: (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              {item.key === 'final' ? <span style={{ borderLeft: '1px solid var(--color-border)', paddingLeft: 18 }} /> : null}
-              {item.key === 'final'
-                ? <CloudDownloadOutlined />
-                : <FileExcelOutlined />}
-              {item.title}
-            </span>
-          ),
-          children: (
-            <div style={{ paddingTop: 4 }}>
-              {renderModule(item)}
-            </div>
-          ),
-        }))}
-      />
+          <section
+            style={{
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-lg)',
+              background: 'var(--color-bg-card)',
+              padding: '0 16px 16px',
+            }}
+          >
+            <Space direction="vertical" size={4} style={{ width: '100%', paddingTop: 16 }}>
+              <Text strong style={{ fontSize: 16 }}>月末处理</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>选择一个任务，上传或同步数据后计算并下载结果。</Text>
+            </Space>
+            <Tabs
+              size="large"
+              activeKey={activeModule}
+              onChange={(key) => setActiveModule(key as ToolboxModuleKey)}
+              items={modules.map((item) => ({
+                key: item.key,
+                label: (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {item.key === 'final' ? <span style={{ borderLeft: '1px solid var(--color-border)', paddingLeft: 18 }} /> : null}
+                    {item.key === 'final'
+                      ? <CloudDownloadOutlined />
+                      : <FileExcelOutlined />}
+                    {item.title}
+                  </span>
+                ),
+                children: (
+                  <div style={{ paddingTop: 4 }}>
+                    {renderModule(item)}
+                  </div>
+                ),
+              }))}
+            />
+          </section>
         </Col>
       </Row>
     </PageContainer>
