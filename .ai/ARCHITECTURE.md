@@ -89,6 +89,7 @@ update_when:
 5. **逐条业务对账**：每条审批 upsert 成功后调用可注入的 `ApprovalBusinessReconciliationService`。`COMPLETED + agree` 为有效态；有效→无效执行冲正，无效→有效重新入账一次。年假使用表单业务日期，加班使用实际工作日期；所有读写显式绑定当前 `org_id`。
 6. **终态与安全**：对账结果区分 `applied/skipped/reversed/retryable/failed`，逐流程汇总计数并聚合为 `success/partial/failed`。retryable 或 failed 进入 partial；单条失败不回滚审批且不阻断后续记录。响应与 `SyncStatus.details` 只保存稳定错误码和安全文案。
 7. **业务幂等与事务**：审批按 `org_id + process_id` upsert。年假请求门闩 `AnnualLeaveConsumeRequest(org_id, request_ref)` 与 grant 行锁、余额、正向/冲正日志同事务，适配 MySQL `REPEATABLE READ`；加班调休按来源净额在锁定匹配记录后 credit/rollback。事务失败不得遗留永久 running/pending。
+8. **实时与补偿闭环**：`dingtalk_stream` 的实例事件和任务事件统一读取最新详情、幂等 upsert 并逐条业务对账；主服务默认每 15 分钟按 active 组织补拉最近 48 小时。自动补偿复用 `ApprovalSyncService` 和 `ApprovalSyncTask(type=approvals)` 数据库门闩，与手动同步互斥；冲突时跳过本轮而非并发执行。
 
 ---
 

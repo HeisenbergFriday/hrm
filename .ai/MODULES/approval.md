@@ -73,6 +73,15 @@ update_when:
 - 全部流程及对账成功为 `success`；有成功写入但存在流程、明细、写入或下游对账失败为 `partial`；没有任何成功写入结果为 `failed`。响应和同步状态禁止保存第三方原始错误、Token、Secret 或 URL 参数。
 - `processinstance/listids` 单次窗口最多 120 天，结束时间不得提交到未来；长日期范围连续分片并按审批实例 ID 全局去重。
 
+### 自动同步与补偿
+
+- `cmd/dingtalk_stream` 负责实时接收 `bpms_instance_change` 和 `bpms_task_change`。两类事件都复用“读取审批详情 → `org_id + process_id` 幂等 upsert → `ApprovalBusinessReconciliationService` 对账”链路；任务事件是实例事件延迟或漏发时的第二触发器。
+- 主服务启动 `ApprovalSyncJobScheduler`，默认每 15 分钟补拉最近 48 小时，覆盖 Stream 断线、进程重启和第三方通知延迟，并控制第三方接口压力及任务记录增长。配置项为 `APPROVAL_AUTO_SYNC_ENABLED`、`APPROVAL_AUTO_SYNC_INTERVAL`、`APPROVAL_AUTO_SYNC_LOOKBACK`。
+- 自动补偿只遍历 active 组织，并仍以各组织 `ProcessCodes` 为唯一同步白名单；缺流程配置的组织跳过，不得回退默认组织。
+- 自动补偿、异步手动同步和兼容手动同步统一使用 `ApprovalSyncTask(type=approvals)` 的数据库 `active_key` 门闩；同组织已有任务时自动补偿跳过本轮，下一轮继续，不并发重复拉取。
+- 手动同步入口继续保留，用于指定历史范围、运维补拉和人工验收；日常数据更新不依赖人工点击。
+- Stream 与定时补偿都复用 `ApprovalSyncService` 的映射、写入和对账规则，不维护第二套审批转换或下游入账实现。
+
 审批实例页和统计页未选择模板时显示“同步全部”，选择后显示“同步当前模板”。模板页和详情页始终传显式 `process_code`，继续保持单模板同步。
 
 `/approvals/instances` 常用 query：
@@ -102,7 +111,7 @@ update_when:
 
 审批流程不新增数据库列：同步时解析钉钉审批详情的 `operation_records` 与当前待办 `tasks`，标准化为 `node_name`、`approver_id`、`approver_name`、`action`、`comment`、`time` 后保存到 `Approval.Extension.flow_history`。审批人姓名只按当前组织员工解析，失败时回退 userid 且不阻塞同步。详情查询由仓储将该 JSON 恢复为顶层 `flow_history`；前端不得依赖钉钉原始任务或操作记录结构。部署相关代码后必须重新同步历史审批，已有记录才会补齐流程。
 
-审批同步按 `org_id + process_id` upsert，重复同步不得新增重复记录；`extension.result`、`extension.process_code`、`extension.source=dingtalk_sync` 必须保留并与已有扩展字段合并。Stream 已写入的同一实例再次全量同步时更新原记录。
+审批同步按 `org_id + process_id` upsert，重复同步不得新增重复记录；`extension.result`、`extension.process_code`、`extension.source` 必须保留并与已有扩展字段合并，来源分别可为 `dingtalk_stream` 或 `dingtalk_sync`。Stream、自动补偿和手动同步命中同一实例时更新原记录。
 
 ### 下游业务对账
 

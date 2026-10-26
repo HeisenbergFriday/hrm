@@ -354,6 +354,17 @@ func (s *ApprovalSyncService) syncProcess(ctx context.Context, processCode, star
 }
 
 func approvalFromDingTalk(orgID, processCode, applicantName string, instance dingtalk.ApprovalInstance, flowHistory []database.ApprovalFlowNode) *database.Approval {
+	return approvalFromDingTalkWithSource(orgID, processCode, applicantName, instance, flowHistory, "dingtalk_sync")
+}
+
+func approvalFromDingTalkWithSource(
+	orgID string,
+	processCode string,
+	applicantName string,
+	instance dingtalk.ApprovalInstance,
+	flowHistory []database.ApprovalFlowNode,
+	source string,
+) *database.Approval {
 	location := dingtalk.ApprovalBusinessLocation()
 	createTime, _ := time.ParseInLocation("2006-01-02 15:04:05", instance.CreateTime, location)
 	finishTime, _ := time.ParseInLocation("2006-01-02 15:04:05", instance.FinishTime, location)
@@ -366,9 +377,12 @@ func approvalFromDingTalk(orgID, processCode, applicantName string, instance din
 		content[name] = formValue["value"]
 	}
 	extension := map[string]interface{}{
-		"result":       instance.Result,
-		"process_code": processCode,
-		"source":       "dingtalk_sync",
+		"result":     instance.Result,
+		"raw_status": instance.Status,
+		"source":     strings.TrimSpace(source),
+	}
+	if processCode = strings.TrimSpace(processCode); processCode != "" {
+		extension["process_code"] = processCode
 	}
 	if len(flowHistory) > 0 {
 		extension["flow_history"] = flowHistory
@@ -379,7 +393,7 @@ func approvalFromDingTalk(orgID, processCode, applicantName string, instance din
 		Title:         instance.Title,
 		ApplicantID:   instance.OriginatorUserID,
 		ApplicantName: applicantName,
-		Status:        instance.Status,
+		Status:        mapDingTalkApprovalStatus(instance.Status, instance.Result),
 		CreateTime:    createTime,
 		FinishTime:    finishTime,
 		Content:       content,

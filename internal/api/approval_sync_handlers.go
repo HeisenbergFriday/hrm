@@ -198,15 +198,7 @@ func approvalSyncResultMessage(result service.ApprovalSyncResult) string {
 }
 
 func approvalSyncResultErrorCode(result service.ApprovalSyncResult) string {
-	for _, process := range result.Processes {
-		if process.ErrorCode != "" {
-			return process.ErrorCode
-		}
-	}
-	if result.Status == service.ApprovalSyncStatusFailed {
-		return service.ApprovalSyncErrorInternal
-	}
-	return ""
+	return service.ApprovalSyncResultErrorCode(result)
 }
 
 func approvalSyncPanicResult(plan service.ApprovalSyncPlan, requestID string, startedAt time.Time) service.ApprovalSyncResult {
@@ -241,14 +233,7 @@ func respondApprovalSyncConflict(c *gin.Context, requestID string) {
 }
 
 func newRunningApprovalSyncTask(orgID, requestID string, plan service.ApprovalSyncPlan, now time.Time) *database.ApprovalSyncTask {
-	return &database.ApprovalSyncTask{
-		OrgID: orgID, Type: approvalSyncType, RequestID: requestID,
-		Status: "running", Message: "审批数据正在后台同步", StartedAt: now, HeartbeatAt: now,
-		Details: map[string]interface{}{
-			"start_date": plan.StartDate, "end_date": plan.EndDate,
-			"process_count": len(plan.ProcessCodes),
-		},
-	}
+	return service.NewRunningApprovalSyncTask(orgID, approvalSyncType, requestID, "审批数据正在后台同步", plan, now)
 }
 
 func acquireApprovalSyncTask(store approvalSyncTaskStore, task *database.ApprovalSyncTask, now time.Time) (*database.ApprovalSyncTask, error) {
@@ -258,14 +243,13 @@ func acquireApprovalSyncTask(store approvalSyncTaskStore, task *database.Approva
 func completeApprovalSyncTask(store approvalSyncTaskStore, result service.ApprovalSyncResult, message string) error {
 	result = safeApprovalSyncPersistedResult(result)
 	finishedAt := time.Now().In(service.ApprovalSyncLocation())
-	return store.Complete(&database.ApprovalSyncTask{
-		Type: approvalSyncType, RequestID: result.RequestID,
-		Status: result.Status, Message: message, ErrorCode: approvalSyncResultErrorCode(result),
-		SuccessCount: result.SuccessCount, FailCount: result.FailCount + result.FetchFailCount + result.ReconcileFailCount,
-		FailedProcesses: result.FailedProcesses, DurationMS: result.DurationMS,
-		HeartbeatAt: finishedAt, FinishedAt: &finishedAt,
-		Details: map[string]interface{}{"result": result, "failed_processes": result.FailedProcesses},
-	})
+	return store.Complete(service.CompletedApprovalSyncTask(
+		approvalSyncType,
+		result,
+		message,
+		approvalSyncResultErrorCode(result),
+		finishedAt,
+	))
 }
 
 func respondApprovalSyncResult(c *gin.Context, result service.ApprovalSyncResult) {

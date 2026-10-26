@@ -64,6 +64,11 @@ func main() {
 	externalAttendanceJobs := service.NewExternalAttendanceJobScheduler(database.DB)
 	externalAttendanceJobs.Start()
 
+	// 审批实时同步由 DingTalk Stream 负责；这里定期补拉近期数据，
+	// 用于修复断线、重启或第三方事件延迟造成的遗漏。
+	approvalSyncJobs := service.NewApprovalSyncJobScheduler(database.DB)
+	approvalSyncJobs.Start()
+
 	// 启动服务器
 	port := os.Getenv("PORT")
 	if port == "" {

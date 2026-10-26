@@ -204,10 +204,11 @@ go build -o .\dingtalk_stream.exe .\cmd\dingtalk_stream
 启动后看到“钉钉 Stream 已连接”或 SDK 的 `connect success` 日志，再到钉钉开发者后台点击“已完成接入，验证连接通道”。
 
 说明：
-- Stream 客户端默认订阅并确认所有已在开发者后台选择的事件，但暂不将事件写入数据库。
+- Stream 客户端接收开发者后台已发布的 `bpms_instance_change` / `bpms_task_change` 后，会读取最新审批详情、幂等写入数据库并触发下游业务对账。
 - 默认不输出事件原始内容；仅联调时可配置 `DINGTALK_STREAM_LOG_PAYLOAD=true`，日志可能包含审批业务信息。
 - 如需代理，可配置 `DINGTALK_STREAM_PROXY`。
 - 生产环境建议将该客户端作为独立常驻进程或服务运行。
+- 主服务默认每 15 分钟补拉最近 48 小时；可通过 `APPROVAL_AUTO_SYNC_ENABLED`、`APPROVAL_AUTO_SYNC_INTERVAL`、`APPROVAL_AUTO_SYNC_LOOKBACK` 调整。手动审批同步入口继续保留。
 
 ### 重新同步加班到钉钉
 ```bash

@@ -51,6 +51,7 @@ type DingTalkStreamService struct {
 	eventRepo       dingTalkEventStore
 	approvalRepo    approvalStore
 	fetchDetail     ApprovalDetailFetcher
+	reconciler      approvalBusinessReconciler
 	logPayload      bool
 	resolveUserName func(orgID, userID string) string
 }
@@ -63,6 +64,7 @@ func NewDingTalkStreamService(db *gorm.DB, orgID string) *DingTalkStreamService 
 		eventRepo:    repository.NewDingTalkEventRepositoryWithOrgID(db, orgID),
 		approvalRepo: repository.NewApprovalRepositoryWithOrgID(db, orgID),
 		fetchDetail:  dingtalk.GetApprovalDetailForOrg,
+		reconciler:   NewApprovalBusinessReconciliationService(db, orgID),
 		resolveUserName: func(orgID, userID string) string {
 			userID = strings.TrimSpace(userID)
 			if userID == "" || db == nil {
@@ -122,7 +124,6 @@ func (s *DingTalkStreamService) HandleDataFrame(ctx context.Context, dataFrame *
 
 // ProcessEvent implements the business pipeline and returns SUCCESS/LATER.
 func (s *DingTalkStreamService) ProcessEvent(ctx context.Context, header *event.EventHeader, rawData string) (StreamEventResult, error) {
-	_ = ctx
 	if header == nil {
 		return StreamEventResultSuccess, nil
 	}
@@ -192,7 +193,7 @@ func (s *DingTalkStreamService) ProcessEvent(ctx context.Context, header *event.
 			log.Printf("钉钉实例事件缺少 processInstanceId，已跳过: event_id=%s", eventID)
 			return StreamEventResultSuccess, nil
 		}
-		if err := s.handleInstanceChange(fields); err != nil {
+		if err := s.handleInstanceChange(ctx, fields); err != nil {
 			_ = s.eventRepo.MarkFailed(s.orgID, eventID, err.Error())
 			log.Printf("钉钉实例事件处理失败，返回 LATER: event_id=%s process_instance_id=%s err=%v", eventID, fields.ProcessInstanceID, err)
 			return StreamEventResultLater, err
@@ -204,12 +205,26 @@ func (s *DingTalkStreamService) ProcessEvent(ctx context.Context, header *event.
 		return StreamEventResultSuccess, nil
 
 	case dingTalkEventTypeTaskChange:
-		// v1: only record task events; do not mutate approvals final status.
+		// Task events are a second trigger for the same idempotent detail refresh.
+		// This closes the gap when an instance-change notification is delayed or
+		// temporarily missed, without introducing a second synchronization path.
+		if strings.TrimSpace(fields.ProcessInstanceID) == "" {
+			reason := "missing processInstanceId"
+			if err := s.eventRepo.MarkSkipped(s.orgID, eventID, reason); err != nil {
+				return StreamEventResultLater, err
+			}
+			return StreamEventResultSuccess, nil
+		}
+		if err := s.handleInstanceChange(ctx, fields); err != nil {
+			_ = s.eventRepo.MarkFailed(s.orgID, eventID, err.Error())
+			log.Printf("钉钉任务事件刷新审批失败，返回 LATER: event_id=%s process_instance_id=%s err=%v", eventID, fields.ProcessInstanceID, err)
+			return StreamEventResultLater, err
+		}
 		if err := s.eventRepo.MarkSuccess(s.orgID, eventID); err != nil {
 			log.Printf("钉钉任务事件标记成功失败，返回 LATER: event_id=%s err=%v", eventID, err)
 			return StreamEventResultLater, err
 		}
-		log.Printf("钉钉任务事件已记录: event_id=%s process_instance_id=%s task_id=%s", eventID, fields.ProcessInstanceID, fields.TaskID)
+		log.Printf("钉钉任务事件已刷新审批: event_id=%s process_instance_id=%s task_id=%s", eventID, fields.ProcessInstanceID, fields.TaskID)
 		return StreamEventResultSuccess, nil
 
 	default:
@@ -232,7 +247,7 @@ func (s *DingTalkStreamService) ProcessEvent(ctx context.Context, header *event.
 	}
 }
 
-func (s *DingTalkStreamService) handleInstanceChange(fields dingTalkEventFields) error {
+func (s *DingTalkStreamService) handleInstanceChange(ctx context.Context, fields dingTalkEventFields) error {
 	processInstanceID := strings.TrimSpace(fields.ProcessInstanceID)
 	if processInstanceID == "" {
 		// Caller should mark skipped; keep defensive guard.
@@ -249,13 +264,44 @@ func (s *DingTalkStreamService) handleInstanceChange(fields dingTalkEventFields)
 	if detail == nil {
 		return errors.New("approval detail is empty")
 	}
-
-	approval, err := buildApprovalFromDetail(s.orgID, fields.ProcessCode, detail, s.resolveUserName)
-	if err != nil {
-		return err
+	if strings.TrimSpace(detail.ProcessInstanceID) == "" {
+		return errors.New("process_instance_id missing in detail")
 	}
+
+	applicantName := strings.TrimSpace(detail.OriginatorUserID)
+	if s.resolveUserName != nil {
+		applicantName = s.resolveUserName(s.orgID, detail.OriginatorUserID)
+	}
+	resolveName := func(userID string) (string, error) {
+		if s.resolveUserName == nil {
+			return strings.TrimSpace(userID), nil
+		}
+		return s.resolveUserName(s.orgID, userID), nil
+	}
+	flowHistory := buildApprovalFlowHistory(*detail, resolveName)
+	approval := approvalFromDingTalkWithSource(
+		s.orgID,
+		fields.ProcessCode,
+		applicantName,
+		*detail,
+		flowHistory,
+		"dingtalk_stream",
+	)
 	if err := s.approvalRepo.UpsertByOrgProcessID(approval); err != nil {
 		return fmt.Errorf("upsert approval: %w", err)
+	}
+	if s.reconciler != nil {
+		reconcileResult, err := s.reconciler.Reconcile(ctx, approval)
+		if err != nil {
+			return fmt.Errorf("reconcile approval: %w", err)
+		}
+		log.Printf(
+			"审批实例自动对账完成: org_id=%s process_id=%s status=%s business=%s",
+			s.orgID,
+			approval.ProcessID,
+			reconcileResult.Status,
+			reconcileResult.Business,
+		)
 	}
 	log.Printf(
 		"审批实例已同步: org_id=%s process_id=%s status=%s result=%s",
@@ -320,6 +366,16 @@ func parseDingTalkEventPayload(raw string) dingTalkEventFields {
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return dingTalkEventFields{}
 	}
+	// Some event envelopes put the business payload under data. Accept both
+	// shapes so a connection can survive DingTalk event-envelope variations.
+	if nested, ok := payload["data"].(map[string]interface{}); ok {
+		payload = nested
+	} else if nestedRaw, ok := payload["data"].(string); ok {
+		var nested map[string]interface{}
+		if json.Unmarshal([]byte(nestedRaw), &nested) == nil {
+			payload = nested
+		}
+	}
 	return dingTalkEventFields{
 		ProcessInstanceID: firstString(payload, "processInstanceId", "process_instance_id"),
 		ProcessCode:       firstString(payload, "processCode", "process_code"),
@@ -346,64 +402,6 @@ func firstString(m map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-func buildApprovalFromDetail(
-	orgID string,
-	processCode string,
-	detail *dingtalk.ApprovalInstance,
-	resolveName func(orgID, userID string) string,
-) (*database.Approval, error) {
-	if detail == nil {
-		return nil, errors.New("nil approval detail")
-	}
-	processID := strings.TrimSpace(detail.ProcessInstanceID)
-	if processID == "" {
-		return nil, errors.New("process_instance_id missing in detail")
-	}
-
-	content := make(map[string]interface{})
-	for _, fv := range detail.FormValues {
-		name, _ := fv["name"].(string)
-		if name == "" {
-			continue
-		}
-		if value, ok := fv["value"]; ok {
-			content[name] = value
-		}
-	}
-
-	applicantID := strings.TrimSpace(detail.OriginatorUserID)
-	applicantName := applicantID
-	if resolveName != nil {
-		applicantName = resolveName(orgID, applicantID)
-	}
-
-	createTime := parseDingTalkTime(detail.CreateTime)
-	finishTime := parseDingTalkTime(detail.FinishTime)
-	status := mapDingTalkApprovalStatus(detail.Status, detail.Result)
-
-	ext := map[string]interface{}{
-		"result":     detail.Result,
-		"raw_status": detail.Status,
-		"source":     "dingtalk_stream",
-	}
-	if code := strings.TrimSpace(processCode); code != "" {
-		ext["process_code"] = code
-	}
-
-	return &database.Approval{
-		OrgID:         database.NormalizeOrganizationID(orgID),
-		ProcessID:     processID,
-		Title:         strings.TrimSpace(detail.Title),
-		ApplicantID:   applicantID,
-		ApplicantName: applicantName,
-		Status:        status,
-		CreateTime:    createTime,
-		FinishTime:    finishTime,
-		Content:       content,
-		Extension:     ext,
-	}, nil
 }
 
 // mapDingTalkApprovalStatus normalizes DingTalk instance status/result into local status values.
@@ -436,26 +434,4 @@ func mapDingTalkApprovalStatus(status, result string) string {
 		}
 		return "RUNNING"
 	}
-}
-
-func parseDingTalkTime(value string) time.Time {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}
-	}
-	layouts := []string{
-		"2006-01-02 15:04:05",
-		time.RFC3339,
-		"2006-01-02T15:04:05",
-		"2006-01-02T15:04:05.000Z07:00",
-	}
-	for _, layout := range layouts {
-		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
-			return t
-		}
-		if t, err := time.Parse(layout, value); err == nil {
-			return t
-		}
-	}
-	return time.Time{}
 }
