@@ -6,7 +6,7 @@ import ApprovalStatusTag from './ApprovalStatusTag'
 describe('ApprovalStatusTag', () => {
   it.each([
     ['completed', '已完成'],
-    ['APPROVED', '已完成'],
+    ['APPROVED', '已通过'],
     ['running', '审批中'],
     ['refuse', '已拒绝'],
     ['terminated', '已终止'],
@@ -23,5 +23,13 @@ describe('ApprovalStatusTag', () => {
 
     rerender(<ApprovalStatusTag status="" />)
     expect(screen.getByText('—')).toBeInTheDocument()
+  })
+
+  it('uses the approval result to distinguish refused completed instances', () => {
+    const { rerender } = render(<ApprovalStatusTag status="COMPLETED" result="refuse" />)
+    expect(screen.getByText('已拒绝')).toBeInTheDocument()
+
+    rerender(<ApprovalStatusTag status="COMPLETED" result="agree" />)
+    expect(screen.getByText('已通过')).toBeInTheDocument()
   })
 })

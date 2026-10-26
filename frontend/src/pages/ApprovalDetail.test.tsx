@@ -6,13 +6,17 @@ import ApprovalDetail from './ApprovalDetail'
 
 const mockGetApproval = vi.fn()
 const mockSync = vi.fn()
+const mockResumeSync = vi.fn()
+const mockPendingRequestID = vi.fn()
 const mockNavigate = vi.fn()
 
 vi.mock('../services/api', () => ({
   approvalAPI: {
     getApproval: (...args: unknown[]) => mockGetApproval(...args),
     sync: (...args: unknown[]) => mockSync(...args),
+    resumeSync: (...args: unknown[]) => mockResumeSync(...args),
   },
+  getPendingApprovalSyncRequestID: () => mockPendingRequestID(),
 }))
 
 vi.mock('react-router-dom', () => ({
@@ -38,6 +42,9 @@ describe('ApprovalDetail 审批内容展示', () => {
   beforeEach(() => {
     mockGetApproval.mockReset()
     mockSync.mockReset()
+    mockResumeSync.mockReset()
+    mockPendingRequestID.mockReset()
+    mockPendingRequestID.mockReturnValue('')
     mockNavigate.mockReset()
   })
 

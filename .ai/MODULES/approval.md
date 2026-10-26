@@ -1,6 +1,6 @@
 ---
 purpose: 审批模块业务规则说明
-last_updated: 2026-09-28
+last_updated: 2026-10-26
 source_of_truth:
   - internal/api/router.go
   - internal/api/handlers.go
@@ -16,6 +16,8 @@ source_of_truth:
   - frontend/src/pages/ApprovalInstance.tsx
   - frontend/src/pages/ApprovalDetail.tsx
   - frontend/src/pages/ApprovalStats.tsx
+  - frontend/src/components/ApprovalSyncStatus.tsx
+  - frontend/src/hooks/useApprovalSync.ts
   - frontend/src/pages/OAApprovalData.tsx
 update_when:
   - 修改审批路由时
@@ -82,7 +84,7 @@ update_when:
 - 手动同步入口继续保留，用于指定历史范围、运维补拉和人工验收；日常数据更新不依赖人工点击。
 - Stream 与定时补偿都复用 `ApprovalSyncService` 的映射、写入和对账规则，不维护第二套审批转换或下游入账实现。
 
-审批实例页和统计页未选择模板时显示“同步全部”，选择后显示“同步当前模板”。模板页和详情页始终传显式 `process_code`，继续保持单模板同步。
+审批实例、详情和统计页统一显示自动同步状态，日常主流程不要求人工点击。异常遗漏或历史数据补录使用共享的“手动补拉”入口；选择模板或进入详情后显示“补拉当前模板”，并传显式 `process_code`。同步执行、刷新后恢复和结果提示必须复用 `useApprovalSync`，禁止各页面重复维护同步状态机。
 
 `/approvals/instances` 常用 query：
 
@@ -144,6 +146,8 @@ update_when:
 | `/oa-approval-data` | `OAApprovalData.tsx` | 沐腾 OA 审批明细与动态字段详情 |
 
 `/approval` 仍保留页面文件和路由，但当前主菜单入口使用模板、实例和统计页。
+
+审批实例列表必须保留 URL 筛选、分页、排序、详情返回地址和滚动位置恢复。`COMPLETED` 状态需要结合 `extension.result` 区分“已通过”和“已拒绝”；详情页使用摘要、审批内容、业务时间、流程轨迹四层信息结构，统计页必须覆盖加载、错误和空数据状态。
 
 ## 注意事项
 

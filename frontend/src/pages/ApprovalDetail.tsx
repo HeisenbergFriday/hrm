@@ -1,14 +1,16 @@
 import React from 'react'
-import { Typography, Descriptions, Timeline, Button, Spin, Alert, Empty, Image, message, Card, Row, Col, Space } from 'antd'
-import { ArrowLeftOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, FileSearchOutlined } from '@ant-design/icons'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { Typography, Descriptions, Timeline, Button, Spin, Alert, Empty, Image, Card, Row, Col, Space } from 'antd'
+import { ArrowLeftOutlined, CheckCircleOutlined, CloseCircleOutlined, FileSearchOutlined } from '@ant-design/icons'
+import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { approvalAPI } from '../services/api'
-import { hasPermission } from '../utils/permission'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import ApprovalStatusTag from '../components/ApprovalStatusTag'
+import ApprovalSyncStatus from '../components/ApprovalSyncStatus'
+import { useApprovalSync } from '../hooks/useApprovalSync'
 import { formatDateTime } from '../utils/format'
+import './approval.css'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -150,11 +152,11 @@ const ApprovalDetail: React.FC = () => {
     queryFn: () => approvalAPI.getApproval(id!),
   })
 
-  const syncMutation = useMutation({
-    mutationFn: (processCode: string) => approvalAPI.sync({ process_code: processCode }),
-    onSuccess: () => {
-      refetch()
-    },
+  const approval = approvalData?.data?.approval
+  const processCode = approval?.extension?.process_code || approval?.template_id
+  const { canSync, isSyncing, notice: syncNotice, startManualSync } = useApprovalSync({
+    processCode,
+    onCompleted: () => { void refetch() },
   })
 
   const unitMap: Record<string, string> = {
@@ -297,19 +299,10 @@ const ApprovalDetail: React.FC = () => {
     }
   }
 
-  const handleSync = () => {
-    const approval = approvalData?.data?.approval
-    const processCode = approval?.extension?.process_code || approval?.template_id
-    if (!processCode) {
-      message.warning('当前审批缺少 process_code，无法同步')
-      return
-    }
-    syncMutation.mutate(processCode)
-  }
-
   return (
     <PageContainer
       title="审批详情"
+      subtitle="集中查看审批内容、业务时间和完整流转轨迹"
       icon={<FileSearchOutlined />}
       extra={
         <Button
@@ -322,7 +315,7 @@ const ApprovalDetail: React.FC = () => {
     >
       <PageCard>
         {isLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+          <div className="approval-loading">
             <Spin size="large" />
           </div>
         ) : isError ? (
@@ -352,29 +345,33 @@ const ApprovalDetail: React.FC = () => {
                 || '—'
 
               return (
-                <>
-                  <Card
-                    bordered={false}
-                    style={{
-                      background: 'var(--color-bg-layout)',
-                      marginBottom: 'var(--space-5)',
-                    }}
-                  >
-                    <Row justify="space-between" align="middle" gutter={[16, 16]}>
-                      <Col flex="1 1 360px">
+                <div className="approval-page-stack">
+                  <ApprovalSyncStatus
+                    notice={syncNotice}
+                    isSyncing={isSyncing}
+                    canSync={canSync}
+                    processCode={processCode}
+                    disabledReason={processCode ? undefined : '当前审批缺少流程编码，无法补拉'}
+                    onManualSync={startManualSync}
+                  />
+
+                  <div className="approval-detail-summary">
+                    <div className="approval-detail-summary-head">
+                      <div className="approval-detail-summary-title">
                         <Space direction="vertical" size={4}>
-                          <Title level={4} style={{ margin: 0 }}>{approval.title || '审批详情'}</Title>
+                          <Title level={4}>{approval.title || '审批详情'}</Title>
                           <Text type="secondary">审批模板：{templateLabel}</Text>
                         </Space>
-                      </Col>
-                      <Col>
-                        <ApprovalStatusTag status={approval.status} emptyLabel="" />
-                      </Col>
-                    </Row>
+                      </div>
+                      <ApprovalStatusTag
+                        status={approval.status}
+                        result={approval.extension?.result}
+                        emptyLabel=""
+                      />
+                    </div>
                     <Descriptions
                       column={{ xs: 1, sm: 2, md: 3 }}
                       size="small"
-                      style={{ marginTop: 'var(--space-5)' }}
                     >
                       <Descriptions.Item label="申请人">{approval.applicant_name || '—'}</Descriptions.Item>
                       <Descriptions.Item label="发起时间">{formatDateTime(approval.create_time)}</Descriptions.Item>
@@ -382,84 +379,80 @@ const ApprovalDetail: React.FC = () => {
                         {approval.finish_time ? formatDateTime(approval.finish_time) : '—'}
                       </Descriptions.Item>
                     </Descriptions>
-                  </Card>
-
-                  <Card title="业务时间" size="small" style={{ marginBottom: 'var(--space-5)' }}>
-                    <Descriptions column={{ xs: 1, sm: 2 }} size="small">
-                      <Descriptions.Item label="业务开始时间">
-                        {formatBusinessTime(approval.business_start_time)}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="业务结束时间">
-                        {formatBusinessTime(approval.business_end_time)}
-                      </Descriptions.Item>
-                    </Descriptions>
-                  </Card>
-
-                  <Card title="审批内容" size="small" style={{ marginBottom: 'var(--space-5)' }}>
-                    {contentEntries.length > 0 ? (
-                      <Descriptions bordered column={{ xs: 1, sm: 1 }} size="small">
-                        {contentEntries.map(([key, value]) => {
-                          const parsedKey = parseNestedJSON(key)
-                          const labelText = Array.isArray(parsedKey)
-                            ? parsedKey.map(stringifyCell).join(' / ')
-                            : String(key)
-                          return (
-                            <Descriptions.Item key={key} label={labelText}>
-                              {renderContentValue(key, value)}
-                            </Descriptions.Item>
-                          )
-                        })}
-                      </Descriptions>
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无有效审批内容" />
-                    )}
-                  </Card>
-
-                  <Card title="审批流程" size="small" style={{ marginBottom: 'var(--space-5)' }}>
-                    {flowHistory.length > 0 ? (
-                      <Timeline
-                        items={flowHistory.map((node: FlowNode) => ({
-                          color: node.action === 'approved' ? 'green' : node.action === 'rejected' ? 'red' : 'blue',
-                          children: (
-                            <div>
-                              <Space size={8} wrap>
-                                <Text strong>{node.node_name || '审批节点'}</Text>
-                                {node.approver_name && <Text>{node.approver_name}</Text>}
-                                {getActionIcon(node.action)}
-                                <Text type={node.action === 'approved' ? 'success' : node.action === 'rejected' ? 'danger' : 'secondary'}>
-                                  {getActionText(node.action)}
-                                </Text>
-                              </Space>
-                              {node.comment && (
-                                <Paragraph style={{ marginTop: 'var(--space-2)', marginBottom: 0 }}>
-                                  备注：{node.comment}
-                                </Paragraph>
-                              )}
-                              {node.time && (
-                                <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
-                                  {formatDateTime(node.time)}
-                                </Text>
-                              )}
-                            </div>
-                          ),
-                        }))}
-                      />
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无审批流程记录" />
-                    )}
-                  </Card>
-
-                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <Button
-                      icon={<SyncOutlined />}
-                      onClick={handleSync}
-                      loading={syncMutation.isPending}
-                      disabled={!hasPermission('approval:sync')}
-                    >
-                      同步数据
-                    </Button>
                   </div>
-                </>
+
+                  <Row className="approval-detail-grid" gutter={[16, 16]}>
+                    <Col xs={24} xl={16}>
+                      <Card className="approval-detail-card" title="审批内容" size="small">
+                        {contentEntries.length > 0 ? (
+                          <Descriptions bordered column={1} size="small">
+                            {contentEntries.map(([key, value]) => {
+                              const parsedKey = parseNestedJSON(key)
+                              const labelText = Array.isArray(parsedKey)
+                                ? parsedKey.map(stringifyCell).join(' / ')
+                                : String(key)
+                              return (
+                                <Descriptions.Item key={key} label={labelText}>
+                                  {renderContentValue(key, value)}
+                                </Descriptions.Item>
+                              )
+                            })}
+                          </Descriptions>
+                        ) : (
+                          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无有效审批内容" />
+                        )}
+                      </Card>
+                    </Col>
+                    <Col xs={24} xl={8}>
+                      <div className="approval-page-stack">
+                        <Card className="approval-detail-card" title="业务时间" size="small">
+                          <Descriptions column={1} size="small">
+                            <Descriptions.Item label="业务开始时间">
+                              {formatBusinessTime(approval.business_start_time)}
+                            </Descriptions.Item>
+                            <Descriptions.Item label="业务结束时间">
+                              {formatBusinessTime(approval.business_end_time)}
+                            </Descriptions.Item>
+                          </Descriptions>
+                        </Card>
+
+                        <Card className="approval-detail-card approval-detail-flow" title="审批流程" size="small">
+                          {flowHistory.length > 0 ? (
+                            <Timeline
+                              items={flowHistory.map((node: FlowNode) => ({
+                                color: node.action === 'approved' ? 'green' : node.action === 'rejected' ? 'red' : 'blue',
+                                children: (
+                                  <div>
+                                    <Space size={8} wrap>
+                                      <Text strong>{node.node_name || '审批节点'}</Text>
+                                      {node.approver_name && <Text>{node.approver_name}</Text>}
+                                      {getActionIcon(node.action)}
+                                      <Text type={node.action === 'approved' ? 'success' : node.action === 'rejected' ? 'danger' : 'secondary'}>
+                                        {getActionText(node.action)}
+                                      </Text>
+                                    </Space>
+                                    {node.comment && (
+                                      <Paragraph style={{ marginTop: 'var(--space-2)', marginBottom: 0 }}>
+                                        备注：{node.comment}
+                                      </Paragraph>
+                                    )}
+                                    {node.time && (
+                                      <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
+                                        {formatDateTime(node.time)}
+                                      </Text>
+                                    )}
+                                  </div>
+                                ),
+                              }))}
+                            />
+                          ) : (
+                            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无审批流程记录" />
+                          )}
+                        </Card>
+                      </div>
+                    </Col>
+                  </Row>
+                </div>
               )
             })()}
           </div>

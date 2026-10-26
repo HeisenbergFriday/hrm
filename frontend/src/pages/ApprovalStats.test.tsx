@@ -80,7 +80,7 @@ describe('ApprovalStats 审批同步', () => {
     const user = userEvent.setup()
     mockSync.mockResolvedValue(result('partial'))
     renderPage()
-    const button = await screen.findByRole('button', { name: /同步全部/ })
+    const button = await screen.findByRole('button', { name: /手动补拉/ })
     const callsBeforeSync = mockGetStats.mock.calls.length
 
     await user.click(button)
@@ -98,7 +98,7 @@ describe('ApprovalStats 审批同步', () => {
     await user.click(selector)
     await user.click(await screen.findByText('请假审批'))
 
-    await user.click(screen.getByRole('button', { name: /同步当前模板/ }))
+    await user.click(screen.getByRole('button', { name: /补拉当前模板/ }))
 
     await waitFor(() => expect(mockSync).toHaveBeenCalledWith(expect.objectContaining({ process_code: 'PROC-LEAVE' })))
   })
@@ -106,6 +106,18 @@ describe('ApprovalStats 审批同步', () => {
   it('无权限时禁用同步入口', async () => {
     mockHasPermission.mockReturnValue(false)
     renderPage()
-    expect(await screen.findByRole('button', { name: /同步全部/ })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: /手动补拉/ })).toBeDisabled()
+  })
+
+  it('统计加载失败时展示错误并支持重试', async () => {
+    const user = userEvent.setup()
+    mockGetStats.mockRejectedValue(new Error('统计服务暂不可用'))
+
+    renderPage()
+
+    expect(await screen.findByText('统计数据加载失败')).toBeInTheDocument()
+    expect(screen.getByText('统计服务暂不可用')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(mockGetStats.mock.calls.length).toBeGreaterThan(1))
   })
 })
