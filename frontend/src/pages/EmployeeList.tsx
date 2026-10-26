@@ -25,6 +25,7 @@ import StatusTag from '../components/StatusTag'
 import { hasPermission } from '../utils/permission'
 import { maskEmail, maskMobile } from '../utils/maskPii'
 import { confirmOrgSync } from '../utils/orgSyncAction'
+import './organization.css'
 
 const { Text } = Typography
 const { Search } = Input
@@ -303,6 +304,7 @@ const EmployeeList: React.FC = () => {
 
   return (
     <PageContainer
+      className="organization-roster-page"
       title="组织花名册"
       icon={<TeamOutlined />}
       subtitle={
@@ -330,7 +332,7 @@ const EmployeeList: React.FC = () => {
       }
     >
       {/* 统计卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 'var(--space-5)' }}>
+      <Row gutter={[16, 16]} className="organization-metric-grid" style={{ marginBottom: 'var(--space-5)' }}>
         {statConfig.map((item, idx) => {
           const isActive = item.filterType ? filterType === item.filterType : !filterType
           const isClickable = !!item.filterType
@@ -398,7 +400,7 @@ const EmployeeList: React.FC = () => {
       </Row>
 
       {/* 分布卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 'var(--space-5)' }}>
+      <Row gutter={[16, 16]} className="organization-distribution-grid" style={{ marginBottom: 'var(--space-5)' }}>
         {[
           { title: '员工类型分布', data: overview?.employee_type_distribution || [] },
           { title: '职级分布', data: overview?.job_level_distribution || [] },
@@ -416,7 +418,8 @@ const EmployeeList: React.FC = () => {
 
       {/* 花名册表格 */}
       <PageCard title={<span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-md)', color: 'var(--color-text-title)' }}>花名册</span>}>
-        <Space wrap style={{ marginBottom: 18 }}>
+        <div className="organization-filter-bar">
+        <Space wrap>
           <Search
             allowClear
             enterButton={<SearchOutlined />}
@@ -453,9 +456,10 @@ const EmployeeList: React.FC = () => {
             <Button type="link" aria-label="清除筛选" onClick={clearFilters} icon={<CloseCircleOutlined />}>清除筛选</Button>
           ) : null}
         </Space>
+        </div>
 
         {filterType && FILTER_TYPE_LABELS[filterType] ? (
-          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="organization-roster-summary" style={{ marginTop: 16 }}>
             <Tag
               color={filterType === 'probation' ? 'blue' : 'orange'}
               closable

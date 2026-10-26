@@ -13,6 +13,7 @@ import {
   confirmOrgSync,
   missingOrgSyncPermissionTip,
 } from '../utils/orgSyncAction'
+import './organization.css'
 
 const { Title, Text } = Typography
 
@@ -324,7 +325,8 @@ const DepartmentTree: React.FC = () => {
   }
 
   return (
-    <PageContainer
+      <PageContainer
+        className="organization-tree-page"
       title="组织架构"
       subtitle={scopeLabel}
       extra={
@@ -348,7 +350,7 @@ const DepartmentTree: React.FC = () => {
       ) : tree.length === 0 ? (
         <Empty description="暂无组织架构数据" />
       ) : (
-        <Row gutter={[16, 16]}>
+        <Row gutter={[16, 16]} className="organization-tree-layout">
           <Col xs={24} lg={14}>
             <PageCard title="组织树">
               <Alert

@@ -1,0 +1,165 @@
+.organization-dashboard-tabs > .ant-tabs-nav {
+  display: none;
+}
+
+.organization-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.organization-overview-card .ant-card-body {
+  padding: var(--space-5);
+}
+
+.organization-overview-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.organization-overview-heading .ant-typography {
+  margin: 0;
+}
+
+.organization-metric-card,
+.organization-quick-card {
+  height: 100%;
+}
+
+.organization-metric-card .ant-card-body {
+  padding: var(--space-4) var(--space-5);
+}
+
+.organization-metric-card .ant-statistic-title {
+  color: var(--color-text-secondary);
+}
+
+.organization-quick-card .ant-card-body {
+  display: flex;
+  min-height: 118px;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+}
+
+.organization-quick-card .ant-typography {
+  margin: 0;
+}
+
+.organization-tree-layout {
+  align-items: stretch;
+}
+
+.organization-tree-panel,
+.organization-department-panel,
+.organization-tree-layout > .ant-col > .ant-card {
+  height: 100%;
+}
+
+.organization-tree-panel .ant-card-body,
+.organization-department-panel .ant-card-body,
+.organization-tree-layout > .ant-col > .ant-card .ant-card-body {
+  min-height: 520px;
+}
+
+.organization-tree-help {
+  margin-bottom: var(--space-3) !important;
+}
+
+.organization-tree-help .ant-alert-message {
+  font-size: var(--font-size-sm);
+}
+
+.organization-tree-help .ant-alert-description {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 20px;
+}
+
+.organization-roster-page .ant-card-body {
+  padding: var(--space-4);
+}
+
+.organization-roster-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.organization-filter-bar {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-subtle);
+}
+
+.organization-filter-bar .ant-space {
+  width: 100%;
+}
+
+.organization-filter-bar .ant-input-affix-wrapper,
+.organization-filter-bar .ant-select {
+  max-width: 100%;
+}
+
+.organization-distribution-card .ant-card-body {
+  min-height: 166px;
+}
+
+.organization-distribution-grid > .ant-col > .ant-card {
+  height: 100%;
+}
+
+.organization-distribution-grid > .ant-col > .ant-card .ant-card-body {
+  min-height: 166px;
+}
+
+.organization-employee-detail .ant-card-body {
+  padding: var(--space-5);
+}
+
+.organization-profile-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.organization-profile-summary-main {
+  min-width: 220px;
+  flex: 1;
+}
+
+.organization-detail-stat-row .ant-card {
+  height: 100%;
+}
+
+.organization-detail-stat-row .ant-card-body {
+  min-height: 88px;
+}
+
+@media (max-width: 768px) {
+  .organization-overview-heading,
+  .organization-roster-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .organization-tree-panel .ant-card-body,
+  .organization-department-panel .ant-card-body,
+  .organization-tree-layout > .ant-col > .ant-card .ant-card-body {
+    min-height: auto;
+  }
+
+  .organization-filter-bar .ant-space-item,
+  .organization-filter-bar .ant-input-affix-wrapper,
+  .organization-filter-bar .ant-select {
+    width: 100%;
+  }
+}

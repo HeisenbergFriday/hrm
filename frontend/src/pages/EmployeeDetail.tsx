@@ -35,6 +35,7 @@ import {
   confirmOrgSync,
   missingOrgSyncPermissionTip,
 } from '../utils/orgSyncAction'
+import './organization.css'
 
 const { Title, Text } = Typography
 
@@ -388,6 +389,7 @@ const EmployeeDetail: React.FC = () => {
 
   return (
     <PageContainer
+      className="organization-employee-detail"
       title={detail?.employee?.name || '员工详情'}
       subtitle={scopeLabel}
       icon={<UserOutlined />}
@@ -416,9 +418,9 @@ const EmployeeDetail: React.FC = () => {
       ) : detail ? (
         <>
           <PageCard style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+            <div className="organization-profile-summary">
               <Avatar size={80} src={detail.employee.avatar} icon={<UserOutlined />} />
-              <div style={{ flex: 1 }}>
+              <div className="organization-profile-summary-main">
                 <div style={{ marginBottom: 8 }}>
                   {detail.employee.position ? (
                     <Text>{detail.employee.position}</Text>
@@ -437,7 +439,7 @@ const EmployeeDetail: React.FC = () => {
             </div>
           </PageCard>
 
-          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          <Row gutter={[16, 16]} className="organization-detail-stat-row" style={{ marginBottom: 16 }}>
             <Col xs={24} sm={12} lg={6}>
               <PageCard>
                 <Statistic title="当前预警" value={detail.warnings.length} />
