@@ -30,11 +30,10 @@ const ApprovalSyncStatus: React.FC<ApprovalSyncStatusProps> = ({
       <div className="approval-sync-status-copy">
         <Space size={8} wrap>
           <Text strong>审批数据自动同步</Text>
-          <Tag color="processing">实时更新</Tag>
-          <Tag>15 分钟补偿</Tag>
+          <Tag color="processing">自动更新</Tag>
         </Space>
         <Text type="secondary">
-          新增和状态变化会自动进入系统；只有发现遗漏或需要补拉历史数据时，才使用手动补拉。
+          有新审批会自动更新；系统每 15 分钟自动查漏补缺。一般不用手动操作。
         </Text>
       </div>
       <Tooltip title={disabledReason || (canSync ? '从钉钉重新拉取所选范围，适用于异常遗漏或历史数据补录' : missingApprovalSyncPermissionTip)}>

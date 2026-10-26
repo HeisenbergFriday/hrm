@@ -84,7 +84,6 @@ export const menuConfig: MenuItem[] = [
     children: [
       { key: menuPermissionKey('approval-templates'), title: '审批模板', label: <Link to="/approval-templates">审批模板</Link>, icon: <FileTextOutlined /> },
       { key: menuPermissionKey('approval-instances'), title: '审批实例', label: <Link to="/approval-instances">审批实例</Link>, icon: <FileOutlined /> },
-      { key: menuPermissionKey('approval-stats'), title: '审批统计', label: <Link to="/approval-stats">审批统计</Link>, icon: <BarChartOutlined /> },
       { key: menuPermissionKey('oa-approval-data'), title: 'OA审批数据', label: <Link to="/oa-approval-data">OA审批数据</Link>, icon: <FileSearchOutlined />, orgIds: ['muteng'] },
     ],
   },

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input, Row, Col, Statistic } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input } from 'antd'
 import type { TableProps } from 'antd'
 import { FileTextOutlined, SearchOutlined, ReloadOutlined, UndoOutlined, EyeOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
@@ -299,16 +299,29 @@ const ApprovalInstance: React.FC = () => {
   }
 
   const approvalItems = (instancesData?.data?.items || []) as ApprovalInstance[]
-  const activeFilterCount = [status, templateID, category, startDate || endDate, debouncedSearch]
-    .filter(Boolean).length
-  const runningCount = approvalItems.filter((item) => ['running', 'in_progress', 'pending'].includes(item.status?.toLowerCase())).length
-
   const sortOptions = [
     { value: 'create_time', label: '发起时间' },
     { value: 'finish_time', label: '完成时间' },
     { value: 'business_start_time', label: '业务开始时间' },
     { value: 'business_end_time', label: '业务结束时间' },
   ]
+
+  const statusLabels: Record<string, string> = {
+    completed: '已完成（含通过/拒绝）',
+    running: '审批中',
+    terminated: '已终止',
+    canceled: '已取消',
+  }
+  const selectedTemplateName = templateID
+    ? templateNameByID.get(templateID) || templateID
+    : ''
+  const filterSummary = [
+    status ? `状态：${statusLabels[status] || status}` : '',
+    selectedTemplateName ? `模板：${selectedTemplateName}` : '',
+    category ? `类型：${CATEGORY_OPTIONS.find((item) => item.value === category)?.label || category}` : '',
+    startDate || endDate ? `业务日期：${startDate || '不限'} 至 ${endDate || '不限'}` : '',
+    debouncedSearch ? `标题：${debouncedSearch}` : '',
+  ].filter(Boolean)
 
   const handleSortFieldChange = (nextField: ApprovalInstanceSortField) => {
     setSortField(nextField)
@@ -410,7 +423,7 @@ const ApprovalInstance: React.FC = () => {
   return (
     <PageContainer
       title="审批实例"
-      subtitle="审批新增和状态变化会自动同步，日常无需手动操作"
+      subtitle="有新审批会自动更新，系统每 15 分钟自动查漏补缺"
       icon={<FileTextOutlined />}
       extra={(
         <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading}>
@@ -419,29 +432,6 @@ const ApprovalInstance: React.FC = () => {
       )}
     >
       <div className="approval-page-stack">
-        <Row gutter={[16, 16]}>
-          <Col xs={12} md={6}>
-            <PageCard className="approval-metric-card">
-              <Statistic title="筛选结果" value={instancesData?.data?.total || 0} suffix="条" />
-            </PageCard>
-          </Col>
-          <Col xs={12} md={6}>
-            <PageCard className="approval-metric-card">
-              <Statistic title="当前页" value={approvalItems.length} suffix="条" />
-            </PageCard>
-          </Col>
-          <Col xs={12} md={6}>
-            <PageCard className="approval-metric-card">
-              <Statistic title="当前页审批中" value={runningCount} suffix="条" />
-            </PageCard>
-          </Col>
-          <Col xs={12} md={6}>
-            <PageCard className="approval-metric-card">
-              <Statistic title="已启用筛选" value={activeFilterCount} suffix="项" />
-            </PageCard>
-          </Col>
-        </Row>
-
         <ApprovalSyncStatus
           notice={syncNotice}
           isSyncing={isSyncing}
@@ -459,10 +449,10 @@ const ApprovalInstance: React.FC = () => {
             value={status || undefined}
             onChange={(v) => { setStatus(v || ''); setPage(1) }}
           >
-            <Option value="completed">已完成</Option>
-            <Option value="in_progress">处理中</Option>
-            <Option value="rejected">已拒绝</Option>
-            <Option value="pending">待处理</Option>
+            <Option value="completed">已完成（含通过/拒绝）</Option>
+            <Option value="running">审批中</Option>
+            <Option value="terminated">已终止</Option>
+            <Option value="canceled">已取消</Option>
           </Select>
           <Select
             placeholder="流程分类"
@@ -508,7 +498,7 @@ const ApprovalInstance: React.FC = () => {
             <Button type="primary" icon={<SearchOutlined />} onClick={() => refetch()}>
               查询结果
             </Button>
-            <Button icon={<UndoOutlined />} onClick={resetFilters} disabled={activeFilterCount === 0}>
+            <Button icon={<UndoOutlined />} onClick={resetFilters}>
               重置
             </Button>
           </Space>
@@ -547,6 +537,9 @@ const ApprovalInstance: React.FC = () => {
                   <Text strong>审批记录</Text>
                   <Text type="secondary">共 {instancesData.data.total} 条</Text>
                 </Space>
+                <Text type="secondary" className="approval-filter-summary">
+                  {filterSummary.length > 0 ? `当前筛选：${filterSummary.join(' · ')}` : '当前显示全部审批记录'}
+                </Text>
                 <Space size={8}>
                   <Text type="secondary">排序</Text>
                   <Select
