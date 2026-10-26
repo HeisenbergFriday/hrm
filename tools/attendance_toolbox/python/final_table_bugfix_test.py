@@ -1148,12 +1148,10 @@ class GenerateRosterActionTests(unittest.TestCase):
                 }
             finally:
                 result_workbook.close()
-            self.assertEqual(values["系统操作"], "未加")
-            self.assertIn("运维组", values["备注"])
-            for field in (
-                "加班类型", "最终加班时长（小时）", "2倍加班小时", "3倍加班小时",
-                "2倍加班天数", "3倍加班天数",
-            ):
+            self.assertIsNone(values["系统操作"])
+            self.assertEqual(values["加班类型"], "调休")
+            self.assertEqual(values["最终加班时长（小时）"], 8)
+            for field in ("2倍加班小时", "3倍加班小时", "2倍加班天数", "3倍加班天数"):
                 self.assertIsNone(values[field], field)
         finally:
             import shutil

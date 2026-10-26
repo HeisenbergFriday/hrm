@@ -6,6 +6,12 @@ import unittest
 
 from openpyxl import Workbook, load_workbook
 from overtime import fill_overtime_fields as ot
+from overtime.rules_engine import (
+    HOLIDAY_ADJUST_REST,
+    LEGAL_HOLIDAY,
+    get_default_config,
+    should_mark_no_punch,
+)
 import runner
 
 
@@ -37,11 +43,24 @@ def _build_attendance_map_for_punch(employee_code: str, punch_dates: dict):
 
 def _build_no_punch_map(employee_code: str, no_punch_dates: set):
     """Build attendance no-punch map for dates with (-) or single-side punch."""
+    ot._reset_attendance_runtime_state()
     ot._ATTENDANCE_NO_PUNCH_BY_CODE[employee_code] = no_punch_dates
+    return {employee_code: no_punch_dates}
 
 
-class OpsGroupUnaddedTest(unittest.TestCase):
-    """运营支撑部运维组强制判定为「未加」的回归测试。"""
+class _FixedHolidayDataSource:
+    def __init__(self, date_type: str):
+        self.date_type = date_type
+
+    def classify(self, _value):
+        return self.date_type
+
+    def validate_year(self, _year):
+        return None
+
+
+class OpsGroupNormalOvertimeTest(unittest.TestCase):
+    """运营支撑部运维组按正常日期和部门规则计算加班。"""
 
     def _build_overtime_ws(self, dept1, dept2, dept3):
         wb = Workbook()
@@ -51,7 +70,7 @@ class OpsGroupUnaddedTest(unittest.TestCase):
         ws.append([
             "MT9999", "测试运维", dept1, dept2, dept3,
             datetime(2026, 6, 15, 9, 0), datetime(2026, 6, 15, 18, 0),
-            None, None, None, None, 8.0, None, None,
+            None, None, None, 8.0, None, None,
         ])
         header_row = ot.find_header_row(ws)
         header_map = ot.build_header_map(ws, header_row)
@@ -76,53 +95,98 @@ class OpsGroupUnaddedTest(unittest.TestCase):
     def _three_x_hours_col(self, header_map):
         return header_map.get(ot.normalize_header_name("3倍加班小时"))
 
-    def test_ops_group_with_bilateral_punch_is_unadded(self):
-        """运营支撑部+运维组+正常双边打卡 → 未加、备注非空、计算列清空。"""
+    def _rules_for_date_type(self, date_type: str):
+        config = get_default_config()
+        config.holiday_data_source = _FixedHolidayDataSource(date_type)
+        return config
+
+    def test_ops_group_with_bilateral_punch_is_comp_time(self):
+        """普通工作日有双边打卡时，运维组按运营支撑部正常规则计调休。"""
         ws, header_row, header_map = self._build_overtime_ws("总部", "运营支撑部", "运维组")
-        # 构造真实双边打卡数据：(09:00, 18:30) → 9.5 小时跨度
         _build_attendance_map_for_punch("MT9999", {date(2026, 6, 15): 9.5})
         result = ot.fill_row(
             ws, header_row + 1, header_map, {}, date(2026, 6, 1),
             None, None, set(), None, None,
         )
-        self.assertEqual(result, "未加")
-        self.assertEqual(ws.cell(header_row + 1, self._system_col(header_map)).value, "未加")
-        remark = ws.cell(header_row + 1, self._remark_col(header_map)).value
-        self.assertTrue(remark and "运维组" in remark, f"备注应包含'运维组'，实际: {remark}")
-        self.assertIsNone(ws.cell(header_row + 1, self._overtime_type_col(header_map)).value)
-        self.assertIsNone(ws.cell(header_row + 1, self._final_hours_col(header_map)).value)
+        self.assertIsNone(result)
+        self.assertIsNone(ws.cell(header_row + 1, self._system_col(header_map)).value)
+        self.assertEqual(ws.cell(header_row + 1, self._overtime_type_col(header_map)).value, "调休")
+        self.assertEqual(ws.cell(header_row + 1, self._final_hours_col(header_map)).value, 8)
         self.assertIsNone(ws.cell(header_row + 1, self._two_x_hours_col(header_map)).value)
         self.assertIsNone(ws.cell(header_row + 1, self._three_x_hours_col(header_map)).value)
 
-    def test_smart_locker_ops_group_with_bilateral_punch_is_unadded(self):
-        """运营支撑部+智慧寄存运维组+正常双边打卡 → 未加、备注非空、计算列清空。"""
+    def test_smart_locker_ops_group_on_adjusted_rest_day_gets_two_x_pay(self):
+        """节假日调休休息日，智慧寄存运维组按运营支撑部规则计2倍工资。"""
         ws, header_row, header_map = self._build_overtime_ws("总部", "运营支撑部", "智慧寄存运维组")
         _build_attendance_map_for_punch("MT9999", {date(2026, 6, 15): 9.5})
         result = ot.fill_row(
             ws, header_row + 1, header_map, {}, date(2026, 6, 1),
-            None, None, set(), None, None,
+            None, self._rules_for_date_type(HOLIDAY_ADJUST_REST), set(), None, None,
         )
-        self.assertEqual(result, "未加")
-        self.assertEqual(ws.cell(header_row + 1, self._system_col(header_map)).value, "未加")
-        remark = ws.cell(header_row + 1, self._remark_col(header_map)).value
-        self.assertTrue(remark and "运维组" in remark)
-        self.assertIsNone(ws.cell(header_row + 1, self._overtime_type_col(header_map)).value)
-        self.assertIsNone(ws.cell(header_row + 1, self._final_hours_col(header_map)).value)
+        self.assertIsNone(result)
+        self.assertEqual(ws.cell(header_row + 1, self._overtime_type_col(header_map)).value, "加班工资")
+        self.assertEqual(ws.cell(header_row + 1, self._final_hours_col(header_map)).value, 8)
+        self.assertEqual(ws.cell(header_row + 1, self._two_x_hours_col(header_map)).value, 8)
+        self.assertIsNone(ws.cell(header_row + 1, self._three_x_hours_col(header_map)).value)
 
-    def test_ops_group_without_punch_is_unadded(self):
-        """运营支撑部+运维组+无打卡 → 未加、备注非空。"""
+    def test_ops_group_on_legal_holiday_gets_three_x_pay(self):
+        """法定节假日，运维组与其他员工一致计3倍工资。"""
         ws, header_row, header_map = self._build_overtime_ws("总部", "运营支撑部", "运维组")
-        _build_no_punch_map("MT9999", {date(2026, 6, 15)})
+        _build_attendance_map_for_punch("MT9999", {date(2026, 6, 15): 9.5})
         result = ot.fill_row(
             ws, header_row + 1, header_map, {}, date(2026, 6, 1),
+            None, self._rules_for_date_type(LEGAL_HOLIDAY), set(), None, None,
+        )
+        self.assertIsNone(result)
+        self.assertEqual(ws.cell(header_row + 1, self._overtime_type_col(header_map)).value, "加班工资")
+        self.assertEqual(ws.cell(header_row + 1, self._final_hours_col(header_map)).value, 8)
+        self.assertIsNone(ws.cell(header_row + 1, self._two_x_hours_col(header_map)).value)
+        self.assertEqual(ws.cell(header_row + 1, self._three_x_hours_col(header_map)).value, 8)
+
+    def test_ops_group_comp_time_with_missing_punch_is_unknown(self):
+        """只有调休记录遇到缺卡或单边卡时，系统操作才标记未知。"""
+        ws, header_row, header_map = self._build_overtime_ws("总部", "运营支撑部", "运维组")
+        no_punch_map = _build_no_punch_map("MT9999", {date(2026, 6, 15)})
+        result = ot.fill_row(
+            ws, header_row + 1, header_map, no_punch_map, date(2026, 6, 1),
             None, None, set(), None, None,
         )
-        self.assertEqual(result, "未加")
-        remark = ws.cell(header_row + 1, self._remark_col(header_map)).value
-        self.assertTrue(remark and "运维组" in remark)
+        self.assertEqual(result, "未知")
+        self.assertEqual(ws.cell(header_row + 1, self._system_col(header_map)).value, "未知")
+        self.assertEqual(ws.cell(header_row + 1, self._overtime_type_col(header_map)).value, "调休")
+        self.assertEqual(ws.cell(header_row + 1, self._final_hours_col(header_map)).value, 8)
 
-    def test_roster_maps_to_ops_group_then_unadded(self):
-        """花名册通过员工编号把员工映射到运营支撑部/智慧寄存运维组 → 最终输出未加。"""
+    def test_ops_group_pay_with_missing_punch_does_not_mark_unknown(self):
+        """加班工资记录即使缺卡，也只写核实备注，不写未知。"""
+        ws, header_row, header_map = self._build_overtime_ws("总部", "运营支撑部", "运维组")
+        no_punch_map = _build_no_punch_map("MT9999", {date(2026, 6, 15)})
+        result = ot.fill_row(
+            ws, header_row + 1, header_map, no_punch_map, date(2026, 6, 1),
+            None, self._rules_for_date_type(LEGAL_HOLIDAY), set(), None, None,
+        )
+        self.assertIsNone(result)
+        self.assertIsNone(ws.cell(header_row + 1, self._system_col(header_map)).value)
+        self.assertEqual(ws.cell(header_row + 1, self._overtime_type_col(header_map)).value, "加班工资")
+        self.assertIn("无打卡", ws.cell(header_row + 1, self._remark_col(header_map)).value)
+
+    def test_no_punch_marker_requires_comp_time_action(self):
+        """空类型和其他非调休类型不得因缺卡误标未知。"""
+        missing_date = date(2026, 6, 15)
+        no_punch_map = {"MT9999": {missing_date}}
+        config = get_default_config()
+
+        self.assertTrue(
+            should_mark_no_punch(config, no_punch_map, "MT9999", missing_date, "调休")
+        )
+        self.assertFalse(
+            should_mark_no_punch(config, no_punch_map, "MT9999", missing_date, "")
+        )
+        self.assertFalse(
+            should_mark_no_punch(config, no_punch_map, "MT9999", missing_date, "其他")
+        )
+
+    def test_roster_maps_ops_group_then_uses_normal_rule(self):
+        """花名册映射到智慧寄存运维组后，最终按运营支撑部正常规则计算。"""
         rows = [
             ["员工编号", "员工姓名", "部门名称"],
             ["MT9999", "测试运维", "总部-运营支撑部-智慧寄存运维组"],
@@ -144,68 +208,9 @@ class OpsGroupUnaddedTest(unittest.TestCase):
             ws, header_row + 1, header_map, {}, date(2026, 6, 1),
             None, None, set(), None, mapping,
         )
-        self.assertEqual(result, "未加")
-        remark = ws.cell(header_row + 1, self._remark_col(header_map)).value
-        self.assertTrue(remark and "运维组" in remark)
-
-    def test_operations_support_non_ops_group_keeps_normal_rule(self):
-        """运营支撑部+客服组 → 不命中运维组规则，走普通规则。"""
-        ws, header_row, header_map = self._build_overtime_ws("总部", "运营支撑部", "客服组")
-        _build_attendance_map_for_punch("MT9999", {date(2026, 6, 15): 9.5})
-        result = ot.fill_row(
-            ws, header_row + 1, header_map, {}, date(2026, 6, 1),
-            None, None, set(), None, None,
-        )
-        self.assertNotEqual(result, "未加")
-        remark = ws.cell(header_row + 1, self._remark_col(header_map)).value
-        self.assertNotEqual(remark, ot.OPS_GROUP_DEPT_REMARK)
-
-    def test_leaf_relative_department_contract_is_exact(self):
-        """与 Go rosterDepartmentLevels 镜像：只按连续 dept2/dept3 精确命中。"""
-        cases = [
-            ("三层路径", "运营管理中心", "运营支撑部", "智慧寄存运维组", True),
-            ("含企业根的四层路径", "运营管理中心", "运营支撑部", "智慧寄存运维组", True),
-            ("超过四层路径", "运营管理中心", "运营支撑部", "智慧寄存运维组", True),
-            ("非目标部门", "研发中心", "平台部", "运维组", False),
-            ("相似但非精确名称", "运营管理中心", "运营支撑部", "智慧寄存运维组一组", False),
-        ]
-        for name, dept1, dept2, dept3, expected in cases:
-            with self.subTest(name=name):
-                self.assertEqual(ot._is_ops_group_by_depts(dept1, dept2, dept3), expected)
-
-    def test_other_dept_with_ops_group_name_not_matched(self):
-        """产品技术部+运维组 → 不命中（二级部门不是运营支撑部）。"""
-        ws, header_row, header_map = self._build_overtime_ws("总部", "产品技术部", "运维组")
-        _build_attendance_map_for_punch("MT9999", {date(2026, 6, 15): 9.5})
-        result = ot.fill_row(
-            ws, header_row + 1, header_map, {}, date(2026, 6, 1),
-            None, None, set(), None, None,
-        )
-        self.assertNotEqual(result, "未加")
-        remark = ws.cell(header_row + 1, self._remark_col(header_map)).value
-        self.assertNotEqual(remark, ot.OPS_GROUP_DEPT_REMARK)
-
-    def test_dept_with_surrounding_whitespace_still_matched(self):
-        """部门字段包含首尾空格与不可见字符，清洗后仍应正确识别运维组。"""
-        ws, header_row, header_map = self._build_overtime_ws(
-            " 总部 ", " 运营支撑部\n ", " 运维组 ",
-        )
-        _build_attendance_map_for_punch("MT9999", {date(2026, 6, 15): 9.5})
-        result = ot.fill_row(
-            ws, header_row + 1, header_map, {}, date(2026, 6, 1),
-            None, None, set(), None, None,
-        )
-        self.assertEqual(result, "未加")
-
-    def test_similar_name_not_in_allowlist_not_matched(self):
-        """名称相似但不在允许名单中的三级部门 → 不命中。"""
-        ws, header_row, header_map = self._build_overtime_ws("总部", "运营支撑部", "运维组（临时）")
-        _build_attendance_map_for_punch("MT9999", {date(2026, 6, 15): 9.5})
-        result = ot.fill_row(
-            ws, header_row + 1, header_map, {}, date(2026, 6, 1),
-            None, None, set(), None, None,
-        )
-        self.assertNotEqual(result, "未加")
+        self.assertIsNone(result)
+        self.assertEqual(ws.cell(header_row + 1, self._overtime_type_col(header_map)).value, "调休")
+        self.assertEqual(ws.cell(header_row + 1, self._final_hours_col(header_map)).value, 8)
 
 
 class RosterDepartmentMapTest(unittest.TestCase):
@@ -405,7 +410,7 @@ class GeneratedRosterOvertimeEndToEndTest(unittest.TestCase):
         workbook.save(path)
         workbook.close()
 
-    def test_generated_roster_maps_ops_group_and_full_overtime_entry_marks_unadded(self):
+    def test_generated_roster_maps_ops_group_and_full_overtime_entry_calculates_comp_time(self):
         with tempfile.TemporaryDirectory() as workdir:
             root = Path(workdir)
             roster_output = root / "roster-output"
@@ -467,10 +472,9 @@ class GeneratedRosterOvertimeEndToEndTest(unittest.TestCase):
             finally:
                 result_workbook.close()
 
-            self.assertEqual(values["系统操作"], "未加")
-            self.assertIn("运维组", values["备注"])
-            self.assertIsNone(values["加班类型"])
-            self.assertIsNone(values["最终加班时长（小时）"])
+            self.assertIsNone(values["系统操作"])
+            self.assertEqual(values["加班类型"], "调休")
+            self.assertEqual(values["最终加班时长（小时）"], 8)
             self.assertIsNone(values["2倍加班小时"])
             self.assertIsNone(values["3倍加班小时"])
 

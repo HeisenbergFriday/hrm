@@ -23,7 +23,7 @@ fill_overtime_fields.py
       最终加班时长（小时）列仅标明月份，不显示具体时长
   - 调休时：
       最终加班时长 = min(系统时长, 8 * 天数)
-      若考勤明细匹配到当日打卡时间为”(-)”（未打卡），系统操作 = 未加
+      若考勤明细匹配到当日完全缺卡或单边卡，系统操作 = 未知
       其余情况系统操作留空
   - 加班工资时：
       最终加班时长按 2倍/3倍加班小时回填；天数由小时 / 标准每日工时派生；
@@ -433,7 +433,7 @@ def should_count_in_target_month(
 
 
 def has_no_punch_record(cell_text: str) -> bool:
-    """判断考勤单元格是否属于"未正常打卡"，即系统操作需标记为"未加"。
+    """判断考勤单元格是否属于"未正常打卡"，即调休记录的系统操作需标记为"未知"。
 
     触发条件（满足任一）：
       1. 打卡时间为 (-) —— 完全无打卡记录
@@ -2638,7 +2638,7 @@ def process_overtime(
     if not _WORK_CALENDAR_LOADED:
         print("[作息表] 未加载作息表，处理月份将按加班数据自动推断")
 
-    marked_unadded_count = 0
+    marked_no_punch_count = 0
     data_row_indices = [
         row_idx
         for row_idx in range(header_row + 1, ws.max_row + 1)
@@ -2666,15 +2666,18 @@ def process_overtime(
             general_overtime_contexts,
             employee_department_map,
         )
-        if system_operation == "未加":
-            marked_unadded_count += 1
+        if system_operation == rules_config.no_punch_mark:
+            marked_no_punch_count += 1
 
     output_dir = os.path.dirname(os.path.abspath(out_file))
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
     wb_out.save(out_file)
-    print(f"[回填] 系统操作列标记“未加” {marked_unadded_count} 行")
+    print(
+        f"[回填] 调休缺卡/单边卡标记“{rules_config.no_punch_mark}” "
+        f"{marked_no_punch_count} 行"
+    )
     if special_chengdu_names is not None:
         print(f"[成都作息名单] 设置 {len(special_chengdu_name_set)} 个姓名（不参与 2 倍加班判断）")
     if skipped_cross_month_rows:

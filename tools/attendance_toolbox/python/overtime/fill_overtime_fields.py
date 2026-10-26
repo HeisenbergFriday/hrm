@@ -25,7 +25,7 @@ fill_overtime_fields.py
       有每日审批时长时保留审批时长，打卡仅用于核对；没有每日审批时长时才使用每日人工核算、打卡或系统推算。
   - 调休时：
       最终加班时长 = min(认定时长, 8 * 天数)
-      若考勤明细匹配到当日打卡时间为”(-)”（未打卡），系统操作 = 未加
+      若考勤明细匹配到当日完全缺卡或单边卡，系统操作 = 未知
       其余情况系统操作留空
   - 加班工资时：
       最终加班时长按 2倍/3倍加班小时回填；天数由小时 / 标准每日工时派生；
@@ -477,7 +477,7 @@ def should_count_in_target_month(
 
 
 def has_no_punch_record(cell_text: str) -> bool:
-    """判断考勤单元格是否属于"未正常打卡"，即系统操作需标记为"未加"。
+    """判断考勤单元格是否属于"未正常打卡"，即调休记录的系统操作需标记为"未知"。
 
     触发条件（满足任一）：
       1. 打卡时间为 (-) —— 完全无打卡记录
@@ -2211,52 +2211,6 @@ def _general_context_group_key(item: dict) -> tuple:
     return ("row", item["row_idx"])
 
 
-# ── 运营支撑部运维组强制「未加」规则 ──────────────────────────────────────
-# 命中条件（先清洗首尾空格/不可见字符）：
-#   1. 二级部门精确等于「运营支撑部」
-#   2. 三级/叶子部门精确命中 OPS_GROUP_DEPT_NAMES
-# 命中后：系统操作=未加、备注写明业务规则、清空所有加班计算列。
-# 该规则优先级高于普通打卡时长/系统总时长/通用加班分支。
-# 新增允许名单前必须与业务方确认真实部门层级，不得自行扩大。
-
-OPS_GROUP_DEPT_REMARK = "运营支撑部运维组按业务规则不计加班，即使存在打卡记录也判定为未加。"
-
-OPS_GROUP_DEPT_NAMES = {
-    "运维组",
-    "智慧寄存运维组",
-}
-OPS_GROUP_PARENT_DEPT_NAMES = {"运营支撑部", "运营支持部"}
-
-
-def _is_ops_group_by_depts(dept1: str | None, dept2: str | None, dept3: str | None) -> bool:
-    """判定员工是否属于运营支撑部运维组。
-
-    仅当二级部门精确等于「运营支撑部」且三级部门精确命中 OPS_GROUP_DEPT_NAMES 时才命中；
-    不做全局「包含运维组」匹配。二级不是运营支撑部或三级不在名单内均不命中。
-    """
-    d2 = normalize_name(dept2)
-    d3 = normalize_name(dept3)
-    if d2 not in OPS_GROUP_PARENT_DEPT_NAMES:
-        return False
-    return d3 in OPS_GROUP_DEPT_NAMES
-
-
-def _apply_ops_group_unadded_override(ws, row_idx: int, header_map: dict[str, int]) -> str | None:
-    """对运营支撑部运维组员工强制标记为「未加」，清空加班计算列、写入规则备注。"""
-    if "备注" in header_map:
-        ws.cell(row_idx, header_map["备注"]).value = OPS_GROUP_DEPT_REMARK
-    system_col = header_map.get(normalize_header_name("系统操作"))
-    if system_col is None:
-        system_col = header_map.get("系统操作")
-    if system_col is not None:
-        ws.cell(row_idx, system_col).value = "未加"
-    for col_name in ("最终加班时长（小时）", "加班类型", "2倍加班小时", "3倍加班小时", "2倍加班天数", "3倍加班天数"):
-        col_key = normalize_header_name(col_name)
-        if col_key in header_map:
-            ws.cell(row_idx, header_map[col_key]).value = None
-    return "未加"
-
-
 def _build_general_overtime_contexts(
     ws,
     header_map: dict[str, int],
@@ -2323,8 +2277,6 @@ def _build_general_overtime_contexts(
         )
         is_span_total_row = len(span_dates) > 1 and raw_hours is not None and detail_hours is None
         if (
-            _is_ops_group_by_depts(dept_d1, dept_d2, dept_d3)
-            or
             _is_special_overtime_rule_row(employee_groups, emp_name, employee_code, span_dates, rules_config)
             and not is_span_total_row
         ):
@@ -2673,10 +2625,6 @@ def fill_row(
     )
     employee_groups = classify_employee(rules_config, dept_d1, dept_d2, dept_d3, att_group)
 
-    # 运营支撑部运维组强制判定为「未加」，优先级高于普通加班判定与通用加班分支。
-    if _is_ops_group_by_depts(dept_d1, dept_d2, dept_d3):
-        return _apply_ops_group_unadded_override(ws, row_idx, header_map)
-
     general_context = (general_overtime_contexts or {}).get(row_idx)
     if general_context is not None:
         return _fill_general_overtime_row(
@@ -2919,7 +2867,7 @@ def process_overtime(
     if not _WORK_CALENDAR_LOADED:
         print("[作息表] 未加载作息表，处理月份将按加班数据自动推断")
 
-    marked_unadded_count = 0
+    marked_no_punch_count = 0
     data_row_indices = [
         row_idx
         for row_idx in range(header_row + 1, ws.max_row + 1)
@@ -2955,15 +2903,18 @@ def process_overtime(
             employee_department_map,
             schedule_only_row_indices,
         )
-        if system_operation == "未加":
-            marked_unadded_count += 1
+        if system_operation == rules_config.no_punch_mark:
+            marked_no_punch_count += 1
 
     output_dir = os.path.dirname(os.path.abspath(out_file))
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
     wb_out.save(out_file)
-    print(f"[回填] 系统操作列标记“未加” {marked_unadded_count} 行")
+    print(
+        f"[回填] 调休缺卡/单边卡标记“{rules_config.no_punch_mark}” "
+        f"{marked_no_punch_count} 行"
+    )
     if schedule_only_row_indices:
         print(f"[回填] 排班无审批记录标记“疑似漏报” {len(schedule_only_row_indices)} 行")
     if special_chengdu_names is not None:

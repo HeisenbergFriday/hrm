@@ -212,7 +212,7 @@ class OvertimeRuleUpdateTests(unittest.TestCase):
         self.assertEqual(contexts[header_row + 1]["final_hours"], 8)
         self.assertEqual(sum(item["final_hours"] for item in contexts.values()), 10)
 
-    def test_excluded_ops_group_stays_unadded_even_with_manual_override(self):
+    def test_ops_group_is_not_excluded_and_keeps_recorded_manual_override(self):
         ws = self._workbook(
             [
                 "MT-OPS", "\u8fd0\u7ef4\u5458\u5de5", "\u603b\u90e8\u95e8", "\u8fd0\u8425\u652f\u6301\u90e8", "\u8fd0\u7ef4\u7ec4",
@@ -227,7 +227,9 @@ class OvertimeRuleUpdateTests(unittest.TestCase):
         contexts = ot._build_general_overtime_contexts(
             ws, header_map, [header_row + 1], None, get_default_config()
         )
-        self.assertNotIn(header_row + 1, contexts)
+        self.assertIn(header_row + 1, contexts)
+        self.assertEqual(contexts[header_row + 1]["basis"], "manual")
+        self.assertEqual(contexts[header_row + 1]["final_hours"], 6)
 
     def _workbook(self, *rows):
         import openpyxl

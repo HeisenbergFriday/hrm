@@ -54,6 +54,7 @@ update_when:
 | `attendance-toolbox` `run-store` | 结果绑定 `user_id+org_id`；磁盘仅 `rootDir/<runID>`；禁止返回服务器绝对路径 | `.ai/MODULES/attendance.md` |
 | `attendance-toolbox` `permission` | 计算/审计/模板需 `attendance_toolbox_operate`；钉钉同步需 `attendance_toolbox_dingtalk_sync`；一键联动 AND | `.ai/MODULES/attendance.md` 权限矩阵 |
 | `attendance-toolbox` `dingtalk-sync` `frontend-refresh` | 工具箱不展示独立“钉钉同步”页签；花名册生成与异动流程同步只保留对应文件卡片入口，固定配置仅展示状态；兼职月度打卡仍在固定配置按月份抓取；导航配置与回归测试必须一致 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
+| `attendance-toolbox` `overtime` `OPS_GROUP` `no-punch` | 运营支撑部运维组按正常日期规则计算，不得按部门身份无条件清空；仅调休记录在完全缺卡/单边卡时将系统操作标记“未知”，加班工资记录不写该标记 | [2026-08-01 花名册选错文件与运维组规则（2026-10-26 更正）](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
 | `attendance-toolbox` `parttime` `leave-priority` | 兼职汇总同一日同时含外出/出差与事假时，必须先按事假处理并停止出勤计算；组合状态判断必须早于外出计出勤的提前返回 | [2026-08-01 外出/出差与事假并存误计出勤](development-issues/2026.md#2026-08-01-p1-外出出差与事假并存误计出勤) |
 | `attendance-toolbox` `parttime` `status-mapping` `roster` | 钉钉月度打卡明确返回的 `NotSigned`、`Absenteeism/Absent`、`SeriousLate`（含下划线/大小写变体）必须转换为可见状态；标准化花名册不得丢失实习生职位和部门；完全没有源记录的日期仍保持空白，禁止默认补出勤 | [2026-08-18 兼职月度打卡异常状态被静默丢弃](development-issues/2026.md#2026-08-18-p1-兼职月度打卡异常状态被静默丢弃) |
 | `attendance-toolbox` `parttime` `schedule-formula` `fixed-staff` | 公式续算日期的作息表必须读取 Excel 已计算值；固定人员出勤由作息表决定，打卡异常只提醒不扣减；简易“姓名+1～31日”矩阵可在无工号时识别 | [2026-09-01 兼职作息公式与固定人员规则导致出勤漏算](development-issues/2026.md#2026-09-01-p1-兼职作息公式与固定人员规则导致出勤漏算) |

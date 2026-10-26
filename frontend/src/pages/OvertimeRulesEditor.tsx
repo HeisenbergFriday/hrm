@@ -238,7 +238,7 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
       department_rules: normalizeDepartmentRules(preview.department_rules),
       params: {
         standard_hours_per_day: preview.params?.standard_hours_per_day ?? 8,
-        no_punch_mark: preview.params?.no_punch_mark ?? '未加',
+        no_punch_mark: preview.params?.no_punch_mark ?? '未知',
         schedule_augment_holidays: preview.params?.schedule_augment_holidays ?? true,
         schedule_augment_rest_dept_group: preview.params?.schedule_augment_rest_dept_group ?? '运营支撑部',
         chengdu_use_separate_calendar: preview.params?.chengdu_use_separate_calendar ?? true,
@@ -475,7 +475,7 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
                     <Input
                       style={{ maxWidth: 200 }}
                       disabled={!canEdit || defaultPreview}
-                      value={preview.params?.no_punch_mark ?? '未加'}
+                      value={preview.params?.no_punch_mark ?? '未知'}
                       onChange={(e) => updateParam('no_punch_mark', e.target.value)}
                     />
                   </div>
