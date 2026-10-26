@@ -139,7 +139,32 @@ describe('ApprovalInstance 标题搜索', () => {
 
     renderPage()
 
-    expect(await screen.findByText('请假审批')).toBeInTheDocument()
+    expect(await screen.findByText('模板：请假审批')).toBeInTheDocument()
+  })
+
+  it('审批标题、模板和实例编号完整展示，不用省略号截断', async () => {
+    mockGetInstances.mockResolvedValue({
+      data: {
+        items: [{
+          id: 'approval-long-1',
+          process_id: 'process-long-1',
+          template_name: '长期出差审批模板',
+          title: '这是一个需要完整展示的超长审批标题，不应被表格省略',
+          applicant_name: '张三',
+          status: 'RUNNING',
+          create_time: '2026-08-17T09:00:00+08:00',
+          finish_time: null,
+          extension: {},
+        }],
+        total: 1,
+      },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('这是一个需要完整展示的超长审批标题，不应被表格省略')).toBeInTheDocument()
+    expect(screen.getByText('模板：长期出差审批模板')).toBeInTheDocument()
+    expect(screen.getByText('实例编号：process-long-1')).toBeInTheDocument()
   })
 
   it('从带查询参数的列表地址进入时恢复筛选、分页和排序', async () => {
@@ -245,26 +270,28 @@ describe('ApprovalInstance 标题搜索', () => {
     renderPage()
     await screen.findByText('请假申请')
 
-    expect(screen.getByRole('columnheader', { name: '审批完成时间' })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: '业务开始时间' })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: '业务结束时间' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '审批时间' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '业务时间' })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: '审批完成时间' })).not.toBeInTheDocument()
 
-    const finishTimeHeader = screen.getByRole('columnheader', { name: /审批完成时间/ })
-    await user.click(finishTimeHeader)
-    await waitFor(() => {
-      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
-      expect(lastCall.sort_field).toBe('finish_time')
-      expect(lastCall.sort_order).toBe('asc')
-    })
-
-    await user.click(screen.getByRole('columnheader', { name: /审批完成时间/ }))
+    const sortFieldSelect = screen.getByRole('combobox', { name: '排序字段' })
+    await user.click(sortFieldSelect)
+    await user.click(await screen.findByText('完成时间'))
     await waitFor(() => {
       const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
       expect(lastCall.sort_field).toBe('finish_time')
       expect(lastCall.sort_order).toBe('desc')
     })
 
-    await user.click(screen.getByRole('columnheader', { name: '业务开始时间' }))
+    await user.click(screen.getByRole('button', { name: '降序' }))
+    await waitFor(() => {
+      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
+      expect(lastCall.sort_field).toBe('finish_time')
+      expect(lastCall.sort_order).toBe('asc')
+    })
+
+    await user.click(screen.getByRole('combobox', { name: '排序字段' }))
+    await user.click(await screen.findByText('业务开始时间'))
     await waitFor(() => {
       const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
       expect(lastCall.sort_field).toBe('business_start_time')

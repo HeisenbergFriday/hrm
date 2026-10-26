@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input, Row, Col, Statistic } from 'antd'
 import type { TableProps } from 'antd'
-import { FileTextOutlined, SearchOutlined, ReloadOutlined, UndoOutlined, EyeOutlined } from '@ant-design/icons'
+import { FileTextOutlined, SearchOutlined, ReloadOutlined, UndoOutlined, EyeOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { approvalAPI } from '../services/api'
@@ -262,19 +262,24 @@ const ApprovalInstance: React.FC = () => {
     if (extra.action !== 'sort') return
     const nextSorter = Array.isArray(sorter) ? sorter[0] : sorter
     const nextSorterField = nextSorter?.field ?? nextSorter?.columnKey
-    if (nextSorterField === 'create_time' || nextSorterField === 'finish_time' || nextSorterField === 'business_start_time' || nextSorterField === 'business_end_time') {
-      const nextSortField = nextSorterField as ApprovalInstanceSortField
+    const nextSortField = nextSorterField === 'approval_time'
+      ? 'create_time'
+      : nextSorterField === 'business_time'
+        ? 'business_start_time'
+        : nextSorterField
+    if (nextSortField === 'create_time' || nextSortField === 'finish_time' || nextSortField === 'business_start_time' || nextSortField === 'business_end_time') {
+      const normalizedSortField = nextSortField as ApprovalInstanceSortField
       const requestedOrder = nextSorter.order === 'ascend' || nextSorter.order === 'descend'
         ? nextSorter.order
         : undefined
-      const nextSortOrder = nextSortField === sortField
+      const nextSortOrder = normalizedSortField === sortField
         ? (requestedOrder && requestedOrder !== sortOrder
           ? requestedOrder
           : (sortOrder === 'ascend' ? 'descend' : 'ascend'))
         : requestedOrder
       if (nextSortOrder) {
-        if (nextSortField !== sortField || nextSortOrder !== sortOrder) {
-          setSortField(nextSortField)
+        if (normalizedSortField !== sortField || nextSortOrder !== sortOrder) {
+          setSortField(normalizedSortField)
           setSortOrder(nextSortOrder)
           setPage(1)
         }
@@ -298,6 +303,23 @@ const ApprovalInstance: React.FC = () => {
     .filter(Boolean).length
   const runningCount = approvalItems.filter((item) => ['running', 'in_progress', 'pending'].includes(item.status?.toLowerCase())).length
 
+  const sortOptions = [
+    { value: 'create_time', label: '发起时间' },
+    { value: 'finish_time', label: '完成时间' },
+    { value: 'business_start_time', label: '业务开始时间' },
+    { value: 'business_end_time', label: '业务结束时间' },
+  ]
+
+  const handleSortFieldChange = (nextField: ApprovalInstanceSortField) => {
+    setSortField(nextField)
+    setPage(1)
+  }
+
+  const toggleSortOrder = () => {
+    setSortOrder((current) => current === 'ascend' ? 'descend' : 'ascend')
+    setPage(1)
+  }
+
   const columns = [
     {
       title: '审批标题',
@@ -313,80 +335,65 @@ const ApprovalInstance: React.FC = () => {
           >
             {text || '未命名审批'}
           </Button>
-          <Text type="secondary" ellipsis>实例编号：{record.process_id || record.id}</Text>
+          <Text type="secondary">
+            模板：{templateNameByID.get(record.template_id || record.extension?.process_code || record.extension?.template_id)
+              || record.template_name
+              || record.template_id
+              || record.extension?.process_code
+              || '未关联模板'}
+          </Text>
+          <Text type="secondary">实例编号：{record.process_id || record.id}</Text>
         </div>
       ),
-    },
-    {
-      title: '审批模板',
-      dataIndex: 'template_name',
-      key: 'template_name',
-      width: 180,
-      render: (templateName: string, record: ApprovalInstance) => {
-        const resolvedTemplateID = record.template_id || record.extension?.process_code || record.extension?.template_id
-        return templateName || templateNameByID.get(resolvedTemplateID) || resolvedTemplateID || '—'
-      },
     },
     {
       title: '发起人',
       dataIndex: 'applicant_name',
       key: 'applicant_name',
-      width: 120,
+      width: 110,
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 110,
+      width: 100,
       render: (status: string, record: ApprovalInstance) => (
         <ApprovalStatusTag status={status} result={record.extension?.result} />
       ),
     },
     {
-      title: '发起时间',
-      dataIndex: 'create_time',
-      key: 'create_time',
-      width: 170,
+      title: '审批时间',
+      key: 'approval_time',
+      width: 190,
       sorter: true,
       sortDirections: APPROVAL_SORT_DIRECTIONS,
       sortOrder: sortField === 'create_time' ? sortOrder : undefined,
-      render: (v: string) => formatDateTime(v),
+      render: (_: unknown, record: ApprovalInstance) => (
+        <div className="approval-time-cell">
+          <Text>{formatDateTime(record.create_time)}</Text>
+          <Text type="secondary">完成：{record.finish_time ? formatDateTime(record.finish_time) : '进行中'}</Text>
+        </div>
+      ),
     },
     {
-      title: '审批完成时间',
-      dataIndex: 'finish_time',
-      key: 'finish_time',
-      width: 170,
-      sorter: true,
-      sortDirections: APPROVAL_SORT_DIRECTIONS,
-      sortOrder: sortField === 'finish_time' ? sortOrder : undefined,
-      render: (finishTime: string | null) => finishTime ? formatDateTime(finishTime) : '-',
-    },
-    {
-      title: '业务开始时间',
-      dataIndex: 'business_start_time',
-      key: 'business_start_time',
-      width: 170,
+      title: '业务时间',
+      key: 'business_time',
+      width: 180,
       sorter: true,
       sortDirections: APPROVAL_SORT_DIRECTIONS,
       sortOrder: sortField === 'business_start_time' ? sortOrder : undefined,
-      render: (value: string | null | undefined) => formatBusinessTime(value),
-    },
-    {
-      title: '业务结束时间',
-      dataIndex: 'business_end_time',
-      key: 'business_end_time',
-      width: 170,
-      sorter: true,
-      sortDirections: APPROVAL_SORT_DIRECTIONS,
-      sortOrder: sortField === 'business_end_time' ? sortOrder : undefined,
-      render: (value: string | null | undefined) => formatBusinessTime(value),
+      render: (_: unknown, record: ApprovalInstance) => (
+        <div className="approval-time-cell">
+          <Text>{formatBusinessTime(record.business_start_time)}</Text>
+          <Text type="secondary">至 {formatBusinessTime(record.business_end_time)}</Text>
+        </div>
+      ),
     },
     {
       title: '操作',
       key: 'action',
       fixed: 'right' as const,
-      width: 110,
+      width: 100,
       render: (_: any, record: ApprovalInstance) => (
         <Button
           type="link"
@@ -533,11 +540,30 @@ const ApprovalInstance: React.FC = () => {
             dataSource={instancesData.data.items as ApprovalInstance[]}
             rowKey="id"
             size="middle"
-            scroll={{ x: 1460 }}
+            scroll={{ x: 980 }}
             title={() => (
               <div className="approval-table-title">
-                <Text strong>审批记录</Text>
-                <Text type="secondary">共 {instancesData.data.total} 条</Text>
+                <Space size={8} wrap>
+                  <Text strong>审批记录</Text>
+                  <Text type="secondary">共 {instancesData.data.total} 条</Text>
+                </Space>
+                <Space size={8}>
+                  <Text type="secondary">排序</Text>
+                  <Select
+                    size="small"
+                    value={sortField}
+                    options={sortOptions}
+                    onChange={handleSortFieldChange}
+                    aria-label="排序字段"
+                  />
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={sortOrder === 'ascend' ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
+                    aria-label={sortOrder === 'ascend' ? '升序' : '降序'}
+                    onClick={toggleSortOrder}
+                  />
+                </Space>
               </div>
             )}
             pagination={{

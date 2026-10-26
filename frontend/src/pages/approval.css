@@ -107,6 +107,23 @@
   gap: var(--space-3);
 }
 
+.approval-table-title .ant-select {
+  min-width: 112px;
+}
+
+.approval-time-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 20px;
+}
+
+.approval-time-cell .ant-typography {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .approval-title-link {
   display: flex;
   min-width: 0;
@@ -121,10 +138,20 @@
 .approval-title-link-button {
   max-width: 100%;
   padding: 0;
-  overflow: hidden;
   font-weight: var(--font-weight-semibold);
   text-align: left;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.approval-table-card .ant-table-cell {
+  vertical-align: top;
+}
+
+.approval-title-link .ant-typography {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .approval-detail-summary {
@@ -247,6 +274,15 @@
   .approval-detail-summary-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .approval-table-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .approval-table-title .ant-space:last-child {
+    justify-content: space-between;
   }
 
   .approval-stats-filter,
