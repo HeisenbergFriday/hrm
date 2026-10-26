@@ -110,7 +110,7 @@ curl.exe -k -I https://hr-platform.motern.com/
 
 本次考勤工具箱改造还应确认：
 
-- `/api/v1/attendance/toolbox/rules/preview` 未登录时返回 401，而不是 404；
+- 使用 `POST /api/v1/attendance/toolbox/rules/preview` 检查未登录状态，必须返回 401；不要用 GET 检查，该路由只注册了 POST，GET 会返回 404；
 - 公网 `AttendanceToolbox` 脚本哈希与本地 `frontend/dist/assets` 对应文件一致；
 - 应用和 Stream 为 `healthy`，重启次数为 0；
 - MySQL、Redis 容器未被重建。
