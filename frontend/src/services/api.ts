@@ -979,6 +979,10 @@ export const leaveAPI = {
   regrant: (data: { user_id: string; year: number }) =>
     api.post('/leave/grants/regrant', data),
   syncToDingTalk: () => api.post('/leave/grants/sync-to-dingtalk', { confirm: true }),
+  syncBalancesFromDingTalk: (data: { user_id?: string; year: number }) =>
+    api.post('/leave/balances/sync-dingtalk', data),
+  getBalanceSnapshots: (params: { user_id: string; year: number }) =>
+    api.get('/leave/balances', { params }),
   consume: (data: { user_id: string; days: number; approval_ref?: string; remark?: string }) =>
     api.post('/leave/consume', data),
   getConsumeLog: (params: { user_id: string }) =>

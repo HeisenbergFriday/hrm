@@ -26,7 +26,35 @@ func (s *LeaveJobScheduler) Start() {
 	go s.runOvertimeMatchJob()
 	go s.runDingTalkRetryJob()
 	go s.runLeaveApprovalConsumeJob()
+	go s.runLeaveBalanceSyncJob()
 	log.Println("[LeaveJobs] 定时任务已启动")
+}
+
+// runLeaveBalanceSyncJob periodically snapshots DingTalk's effective annual
+// and compensatory balances. Local approval reconciliation remains the source
+// of mutations; this job only refreshes the external source-of-truth snapshot.
+func (s *LeaveJobScheduler) runLeaveBalanceSyncJob() {
+	for {
+		next := s.nextDailyAt(3, 0)
+		time.Sleep(time.Until(next))
+		if raw := strings.ToLower(strings.TrimSpace(os.Getenv("DINGTALK_LEAVE_BALANCE_SYNC_ENABLED"))); raw == "false" || raw == "0" || raw == "no" {
+			continue
+		}
+		year := time.Now().Year()
+		orgs, err := s.listActiveOrgIDs()
+		if err != nil {
+			log.Printf("[LeaveJobs] 读取组织失败，跳过钉钉余额同步: %v", err)
+			continue
+		}
+		for _, orgID := range orgs {
+			result, syncErr := NewLeaveBalanceSyncServiceWithOrgID(s.db, orgID).SyncAllUsersYear(year)
+			if syncErr != nil {
+				log.Printf("[LeaveJobs] org=%s 钉钉实际余额同步失败: %v", orgID, syncErr)
+				continue
+			}
+			log.Printf("[LeaveJobs] org=%s 钉钉实际余额同步完成: %d/%d", orgID, result.Succeeded, result.Processed)
+		}
+	}
 }
 
 // runQuarterlyGrantJob 每季度第一天凌晨1点执行年假发放

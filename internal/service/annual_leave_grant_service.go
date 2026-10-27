@@ -46,20 +46,22 @@ func NewAnnualLeaveGrantServiceWithOrgID(db *gorm.DB, orgID string) *AnnualLeave
 }
 
 type GrantRecord struct {
-	ID              uint    `json:"id"`
-	UserID          string  `json:"user_id"`
-	Year            int     `json:"year"`
-	Quarter         int     `json:"quarter"`
-	WorkingYears    float64 `json:"working_years"`
-	BaseDays        float64 `json:"base_days"`
-	GrantedDays     float64 `json:"granted_days"`
-	RetroactiveDays float64 `json:"retroactive_days"`
-	UsedDays        float64 `json:"used_days"`
-	RemainingDays   float64 `json:"remaining_days"`
-	GrantType       string  `json:"grant_type"`
-	Remark          string  `json:"remark"`
-	DingTalkStatus  string  `json:"dingtalk_sync_status"`
-	DingTalkError   string  `json:"dingtalk_sync_error"`
+	ID                    uint       `json:"id"`
+	UserID                string     `json:"user_id"`
+	Year                  int        `json:"year"`
+	Quarter               int        `json:"quarter"`
+	WorkingYears          float64    `json:"working_years"`
+	BaseDays              float64    `json:"base_days"`
+	GrantedDays           float64    `json:"granted_days"`
+	RetroactiveDays       float64    `json:"retroactive_days"`
+	UsedDays              float64    `json:"used_days"`
+	RemainingDays         float64    `json:"remaining_days"`
+	GrantType             string     `json:"grant_type"`
+	Remark                string     `json:"remark"`
+	DingTalkStatus        string     `json:"dingtalk_sync_status"`
+	DingTalkError         string     `json:"dingtalk_sync_error"`
+	DingTalkRemainingDays float64    `json:"dingtalk_remaining_days"`
+	DingTalkSyncedAt      *time.Time `json:"dingtalk_synced_at,omitempty"`
 }
 
 type GrantOperationResult struct {
@@ -244,6 +246,10 @@ func (s *AnnualLeaveGrantService) GetGrantLedger(userID string, year int) ([]Gra
 	currentWorkingYears, hasCurrentWorkingYears := s.lookupCurrentWorkingYears(userID, year)
 
 	records := make([]GrantRecord, 0, len(rows))
+	var balanceSnapshot database.LeaveBalanceSnapshot
+	if err := s.db.Where("org_id = ? AND user_id = ? AND year = ? AND leave_type = ?", s.orgID, userID, year, "annual").First(&balanceSnapshot).Error; err != nil && err != gorm.ErrRecordNotFound && !isLeaveBalanceSnapshotUnavailable(err) {
+		return nil, err
+	}
 	for _, r := range rows {
 		workingYears := r.WorkingYears
 		if hasCurrentWorkingYears {
@@ -256,20 +262,22 @@ func (s *AnnualLeaveGrantService) GetGrantLedger(userID string, year int) ([]Gra
 		}
 
 		records = append(records, GrantRecord{
-			ID:              r.ID,
-			UserID:          r.UserID,
-			Year:            r.Year,
-			Quarter:         r.Quarter,
-			WorkingYears:    workingYears,
-			BaseDays:        r.BaseDays,
-			GrantedDays:     r.GrantedDays + r.RetroactiveDays,
-			RetroactiveDays: r.RetroactiveDays,
-			UsedDays:        r.UsedDays,
-			RemainingDays:   r.RemainingDays,
-			GrantType:       r.GrantType,
-			Remark:          remark,
-			DingTalkStatus:  r.DingTalkSyncStatus,
-			DingTalkError:   r.DingTalkSyncError,
+			ID:                    r.ID,
+			UserID:                r.UserID,
+			Year:                  r.Year,
+			Quarter:               r.Quarter,
+			WorkingYears:          workingYears,
+			BaseDays:              r.BaseDays,
+			GrantedDays:           r.GrantedDays + r.RetroactiveDays,
+			RetroactiveDays:       r.RetroactiveDays,
+			UsedDays:              r.UsedDays,
+			RemainingDays:         r.RemainingDays,
+			GrantType:             r.GrantType,
+			Remark:                remark,
+			DingTalkStatus:        r.DingTalkSyncStatus,
+			DingTalkError:         r.DingTalkSyncError,
+			DingTalkRemainingDays: float64(balanceSnapshot.RemainingMinutes) / (leaveHoursPerDay() * 60),
+			DingTalkSyncedAt:      nullableSnapshotTime(balanceSnapshot),
 		})
 	}
 	return records, nil
@@ -524,10 +532,36 @@ func (s *AnnualLeaveGrantService) consumeAnnualLeave(userID string, days float64
 		default:
 			return fmt.Errorf("unsupported annual leave request status %q", gate.Status)
 		}
+		// A successful DingTalk balance snapshot is the external source of truth
+		// for availability. Local grants remain the audit ledger and are still
+		// checked by consumeAnnualLeaveSegment below.
+		for _, segment := range segments {
+			var snapshot database.LeaveBalanceSnapshot
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("org_id = ? AND user_id = ? AND year = ? AND leave_type = ?", orgID, userID, segment.Year, "annual").First(&snapshot).Error
+			if err == nil && strings.EqualFold(snapshot.SyncStatus, "success") {
+				availableDays := float64(snapshot.RemainingMinutes) / (leaveHoursPerDay() * 60)
+				if availableDays+1e-9 < segment.Days {
+					return fmt.Errorf("钉钉年假实际余额不足：可用%.2f天，请求%.2f天", availableDays, segment.Days)
+				}
+			} else if err != nil && err != gorm.ErrRecordNotFound && !isLeaveBalanceSnapshotUnavailable(err) {
+				return err
+			}
+		}
 
 		for _, segment := range segments {
 			if err := consumeAnnualLeaveSegment(tx, orgID, userID, approvalRef, requestRef, remark, operationNo, segment); err != nil {
 				return err
+			}
+			minutes := int(segment.Days * leaveHoursPerDay() * 60)
+			if minutes > 0 {
+				if err := tx.Model(&database.LeaveBalanceSnapshot{}).
+					Where("org_id = ? AND user_id = ? AND year = ? AND leave_type = ? AND sync_status = ? AND remaining_minutes >= ?", orgID, userID, segment.Year, "annual", "success", minutes).
+					UpdateColumn("remaining_minutes", gorm.Expr("remaining_minutes - ?", minutes)).Error; err != nil {
+					if !isLeaveBalanceSnapshotUnavailable(err) {
+						return err
+					}
+				}
 			}
 		}
 		if err := tx.Model(&database.AnnualLeaveConsumeRequest{}).
@@ -545,6 +579,27 @@ func (s *AnnualLeaveGrantService) consumeAnnualLeave(userID string, days float64
 		return nil
 	})
 	return result, err
+}
+
+func leaveHoursPerDay() float64 {
+	value := 8.0
+	if raw := strings.TrimSpace(os.Getenv("DINGTALK_LEAVE_HOURS_PER_DAY")); raw != "" {
+		if _, err := fmt.Sscanf(raw, "%f", &value); err != nil || value <= 0 {
+			value = 8
+		}
+	}
+	return value
+}
+
+func nullableSnapshotTime(snapshot database.LeaveBalanceSnapshot) *time.Time {
+	if snapshot.SyncedAt.IsZero() {
+		return nil
+	}
+	return &snapshot.SyncedAt
+}
+
+func isLeaveBalanceSnapshotUnavailable(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such table")
 }
 
 func (s *AnnualLeaveGrantService) RollbackAnnualLeave(approvalRef, remark string) (AnnualLeaveMutationResult, error) {
@@ -598,6 +653,16 @@ func (s *AnnualLeaveGrantService) RollbackAnnualLeave(approvalRef, remark string
 					"remaining_days": grant.RemainingDays + entry.Days,
 				}).Error; err != nil {
 				return err
+			}
+			minutes := int(entry.Days * leaveHoursPerDay() * 60)
+			if minutes > 0 {
+				if err := tx.Model(&database.LeaveBalanceSnapshot{}).
+					Where("org_id = ? AND user_id = ? AND year = ? AND leave_type = ? AND sync_status = ?", orgID, entry.UserID, grant.Year, "annual", "success").
+					UpdateColumn("remaining_minutes", gorm.Expr("remaining_minutes + ?", minutes)).Error; err != nil {
+					if !isLeaveBalanceSnapshotUnavailable(err) {
+						return err
+					}
+				}
 			}
 			reversal := database.AnnualLeaveConsumeLog{
 				OrgID:             orgID,

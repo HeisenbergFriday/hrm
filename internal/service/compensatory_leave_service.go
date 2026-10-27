@@ -37,9 +37,17 @@ func NewCompensatoryLeaveServiceWithOrgID(db *gorm.DB, orgID string) *Compensato
 }
 
 type BalanceResult struct {
-	UserID         string  `json:"user_id"`
-	BalanceMinutes int     `json:"balance_minutes"`
-	BalanceHours   float64 `json:"balance_hours"`
+	UserID                   string     `json:"user_id"`
+	BalanceMinutes           int        `json:"balance_minutes"`
+	BalanceHours             float64    `json:"balance_hours"`
+	DingTalkRemainingMinutes int        `json:"dingtalk_remaining_minutes"`
+	DingTalkSyncedAt         *time.Time `json:"dingtalk_synced_at,omitempty"`
+}
+
+type CompensatoryMutationResult struct {
+	Changed     bool
+	Status      string
+	OperationNo int
 }
 
 func (s *CompensatoryLeaveService) GetBalance(userID string) (BalanceResult, error) {
@@ -47,11 +55,19 @@ func (s *CompensatoryLeaveService) GetBalance(userID string) (BalanceResult, err
 	if err != nil {
 		return BalanceResult{}, err
 	}
-	return BalanceResult{
+	result := BalanceResult{
 		UserID:         userID,
 		BalanceMinutes: balance,
 		BalanceHours:   float64(balance) / 60.0,
-	}, nil
+	}
+	if strings.TrimSpace(s.orgID) != "" {
+		var snapshot database.LeaveBalanceSnapshot
+		if err := s.db.Where("org_id = ? AND user_id = ? AND year = ? AND leave_type = ? AND sync_status = ?", s.orgID, userID, time.Now().Year(), "compensatory", "success").First(&snapshot).Error; err == nil {
+			result.DingTalkRemainingMinutes = snapshot.RemainingMinutes
+			result.DingTalkSyncedAt = &snapshot.SyncedAt
+		}
+	}
+	return result, nil
 }
 
 func (s *CompensatoryLeaveService) GetOvertimeBalanceByYear(userID string, year int) (int, error) {
@@ -64,6 +80,89 @@ func (s *CompensatoryLeaveService) CreditFromOvertime(matchID uint) error {
 
 func (s *CompensatoryLeaveService) RollbackCredit(matchID uint) error {
 	return s.mutateOvertimeCredit(matchID, true)
+}
+
+// ConsumeForApproval debits locally available compensatory time for one
+// approved leave request. The approval reference is the idempotency key.
+func (s *CompensatoryLeaveService) ConsumeForApproval(userID string, minutes int, approvalRef, effectiveDate, remark string) (CompensatoryMutationResult, error) {
+	if strings.TrimSpace(s.orgID) == "" {
+		return CompensatoryMutationResult{}, fmt.Errorf("org_id required for compensatory leave mutation")
+	}
+	if strings.TrimSpace(userID) == "" || minutes <= 0 || strings.TrimSpace(approvalRef) == "" {
+		return CompensatoryMutationResult{}, fmt.Errorf("user_id, minutes and approval_ref are required")
+	}
+	if effectiveDate == "" {
+		effectiveDate = time.Now().Format("2006-01-02")
+	}
+	result := CompensatoryMutationResult{}
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var existing database.CompensatoryLeaveLedger
+		if err := tx.Where("org_id = ? AND user_id = ? AND source_type = ? AND source_match_ref = ? AND ledger_type = ?", s.orgID, userID, "leave", approvalRef, "debit").First(&existing).Error; err == nil {
+			result = CompensatoryMutationResult{Changed: false, Status: "applied"}
+			return nil
+		} else if err != gorm.ErrRecordNotFound {
+			return err
+		}
+		var current int
+		if err := tx.Model(&database.CompensatoryLeaveLedger{}).Where("org_id = ? AND user_id = ?", s.orgID, userID).
+			Clauses(clause.Locking{Strength: "UPDATE"}).Select("COALESCE(SUM(credit_minutes) - SUM(debit_minutes), 0)").Scan(&current).Error; err != nil {
+			return err
+		}
+		if current < minutes {
+			return fmt.Errorf("调休余额不足：可用%d分钟，请求%d分钟", current, minutes)
+		}
+		entry := database.CompensatoryLeaveLedger{
+			OrgID: s.orgID, UserID: userID, SourceType: "leave", SourceMatchRef: approvalRef,
+			DebitMinutes: minutes, BalanceMinutes: current - minutes, LedgerType: "debit",
+			EffectiveDate: effectiveDate, Remark: remark,
+		}
+		if err := tx.Create(&entry).Error; err != nil {
+			return err
+		}
+		result = CompensatoryMutationResult{Changed: true, Status: "applied", OperationNo: 1}
+		return nil
+	})
+	return result, err
+}
+
+// RollbackApproval restores a debit exactly once when a leave approval is
+// later rejected/cancelled.
+func (s *CompensatoryLeaveService) RollbackApproval(approvalRef, remark string) (CompensatoryMutationResult, error) {
+	if strings.TrimSpace(s.orgID) == "" || strings.TrimSpace(approvalRef) == "" {
+		return CompensatoryMutationResult{}, fmt.Errorf("org_id and approval_ref are required")
+	}
+	result := CompensatoryMutationResult{Status: "reversed"}
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var debit database.CompensatoryLeaveLedger
+		if err := tx.Where("org_id = ? AND source_type = ? AND source_match_ref = ? AND ledger_type = ?", s.orgID, "leave", approvalRef, "debit").First(&debit).Error; err == gorm.ErrRecordNotFound {
+			result.Status = "skipped"
+			return nil
+		} else if err != nil {
+			return err
+		}
+		var rollback database.CompensatoryLeaveLedger
+		if err := tx.Where("org_id = ? AND source_type = ? AND source_match_ref = ? AND ledger_type = ?", s.orgID, "leave", approvalRef, "rollback").First(&rollback).Error; err == nil {
+			result.Status = "skipped"
+			return nil
+		} else if err != gorm.ErrRecordNotFound {
+			return err
+		}
+		var current int
+		if err := tx.Model(&database.CompensatoryLeaveLedger{}).Where("org_id = ? AND user_id = ?", s.orgID, debit.UserID).
+			Select("COALESCE(SUM(credit_minutes) - SUM(debit_minutes), 0)").Scan(&current).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&database.CompensatoryLeaveLedger{
+			OrgID: s.orgID, UserID: debit.UserID, SourceType: "leave", SourceMatchRef: approvalRef,
+			CreditMinutes: debit.DebitMinutes, BalanceMinutes: current + debit.DebitMinutes,
+			LedgerType: "rollback", EffectiveDate: debit.EffectiveDate, Remark: remark,
+		}).Error; err != nil {
+			return err
+		}
+		result = CompensatoryMutationResult{Changed: true, Status: "reversed", OperationNo: 2}
+		return nil
+	})
+	return result, err
 }
 
 func (s *CompensatoryLeaveService) mutateOvertimeCredit(matchID uint, rollback bool) error {

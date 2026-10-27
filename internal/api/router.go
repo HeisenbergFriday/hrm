@@ -373,6 +373,8 @@ func SetupRouter() *gin.Engine {
 				leave.GET("/eligibility", leaveOvertimeRead, GetLeaveEligibility)
 				leave.POST("/eligibility/recalculate", middleware.RequirePermission("attendance_manage"), RecalculateLeaveEligibility)
 				leave.GET("/grants", leaveOvertimeRead, GetLeaveGrants)
+				leave.GET("/balances", leaveOvertimeRead, GetLeaveBalanceSnapshots)
+				leave.POST("/balances/sync-dingtalk", middleware.RequirePermission("attendance_manage"), SyncLeaveBalancesFromDingTalk)
 				leave.POST("/grants/run-quarter", middleware.RequirePermission("attendance_manage"), RunQuarterGrant)
 				leave.POST("/grants/regrant", middleware.RequirePermission("attendance_manage"), RegrantLeave)
 				leave.POST("/grants/sync-to-dingtalk", middleware.RequirePermission("attendance_manage"), SyncGrantsToDingTalk)

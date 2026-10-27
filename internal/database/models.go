@@ -751,6 +751,25 @@ type AnnualLeaveGrant struct {
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
+// LeaveBalanceSnapshot stores the last successful leave quota read from DingTalk.
+type LeaveBalanceSnapshot struct {
+	ID               uint       `gorm:"primaryKey" json:"id"`
+	OrgID            string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_leave_balance_snapshot_org_user_year_type,priority:1;index" json:"org_id"`
+	UserID           string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_leave_balance_snapshot_org_user_year_type,priority:2;index" json:"user_id"`
+	Year             int        `gorm:"not null;uniqueIndex:idx_leave_balance_snapshot_org_user_year_type,priority:3" json:"year"`
+	LeaveType        string     `gorm:"type:varchar(32);not null;uniqueIndex:idx_leave_balance_snapshot_org_user_year_type,priority:4" json:"leave_type"`
+	LeaveCode        string     `gorm:"type:varchar(128)" json:"leave_code"`
+	TotalMinutes     int        `gorm:"default:0" json:"total_minutes"`
+	UsedMinutes      int        `gorm:"default:0" json:"used_minutes"`
+	RemainingMinutes int        `gorm:"default:0" json:"remaining_minutes"`
+	SyncStatus       string     `gorm:"type:varchar(32);not null;default:success" json:"sync_status"`
+	SyncError        string     `gorm:"type:text" json:"sync_error"`
+	SourceUpdatedAt  *time.Time `json:"source_updated_at"`
+	SyncedAt         time.Time  `json:"synced_at"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
 // OvertimeRuleConfig 加班规则配置
 type OvertimeRuleConfig struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`

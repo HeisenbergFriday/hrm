@@ -146,6 +146,7 @@ var entries = []Table{
 	{Name: "overtime_sync_histories", Kind: KindTenant, Priority: PriorityP2, HasOrgID: true, ParentTable: "overtime_match_results"},
 	{Name: "overtime_supplementary_requests", Kind: KindTenant, Priority: PriorityP2, HasOrgID: true, ParentTable: "overtime_match_results"},
 	{Name: "compensatory_leave_ledgers", Kind: KindTenant, Priority: PriorityP2, HasOrgID: true, ParentTable: "overtime_match_results"},
+	{Name: "leave_balance_snapshots", Kind: KindTenant, Priority: PriorityP2, HasOrgID: true, Notes: "DingTalk leave balance snapshots"},
 
 	// ===== P3 绩效全链路 =====
 	{Name: "performance_templates", Kind: KindTenant, Priority: PriorityP3, HasOrgID: true, Notes: "既有 organization_id 是企业内部范围，不能替代 tenant org_id"},

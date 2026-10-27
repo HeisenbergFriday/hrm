@@ -36,6 +36,7 @@ func TestHasOrgIDMatchesDatabaseModels(t *testing.T) {
 		"leave_rule_configs":                   database.LeaveRuleConfig{},
 		"annual_leave_eligibilities":           database.AnnualLeaveEligibility{},
 		"annual_leave_grants":                  database.AnnualLeaveGrant{},
+		"leave_balance_snapshots":              database.LeaveBalanceSnapshot{},
 		"annual_leave_consume_logs":            database.AnnualLeaveConsumeLog{},
 		"overtime_rule_configs":                database.OvertimeRuleConfig{},
 		"overtime_match_results":               database.OvertimeMatchResult{},

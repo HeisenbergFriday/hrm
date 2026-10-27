@@ -324,6 +324,12 @@ func (s *PermissionService) normalizeUserIDInOrg(orgID, userID string) string {
 	if user, err := s.userRepo.FindByUserID(normalized); err == nil && user.UserID != "" {
 		return user.UserID
 	}
+	// DingTalk logins may carry the external user ID while the local user_id
+	// is organization-scoped (for example, xiaotie:<userid>). Resolve the
+	// external ID within the current organization before checking roles.
+	if user, err := s.userRepo.FindByDingTalkUserID(normalized); err == nil && user.UserID != "" {
+		return user.UserID
+	}
 	// 再按主键 id 查询（JWT 中可能直接传数字主键）
 	if looksNumericID(normalized) {
 		if user, err := s.userRepo.FindByID(normalized); err == nil && user.UserID != "" {

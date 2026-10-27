@@ -97,6 +97,68 @@ func GetLeaveGrants(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": records})
 }
 
+// SyncLeaveBalancesFromDingTalk pulls DingTalk's current annual/compensatory
+// quotas into local snapshots. Leave and balance pages never call DingTalk
+// directly; they read these snapshots.
+func SyncLeaveBalancesFromDingTalk(c *gin.Context) {
+	var req struct {
+		UserID string `json:"user_id"`
+		Year   int    `json:"year"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	if req.Year == 0 {
+		req.Year = time.Now().Year()
+	}
+	svc := service.NewLeaveBalanceSyncServiceWithOrgID(database.DB, orgID)
+	var result *service.LeaveBalanceSyncResult
+	var err error
+	if strings.TrimSpace(req.UserID) != "" {
+		if _, ok := ensureCanAccessAttendanceUser(c, req.UserID); !ok {
+			return
+		}
+		result, err = svc.SyncUserYear(req.UserID, req.Year)
+	} else {
+		result, err = svc.SyncAllUsersYear(req.Year)
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "data": result})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "钉钉实际假期余额同步完成", "data": result})
+}
+
+func GetLeaveBalanceSnapshots(c *gin.Context) {
+	userID := strings.TrimSpace(c.Query("user_id"))
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id 必填"})
+		return
+	}
+	if _, ok := ensureCanAccessAttendanceUser(c, userID); !ok {
+		return
+	}
+	year := time.Now().Year()
+	if raw := strings.TrimSpace(c.Query("year")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			year = parsed
+		}
+	}
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	svc := service.NewLeaveBalanceSyncServiceWithOrgID(database.DB, orgID)
+	snapshots, err := svc.GetSnapshots(userID, year)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": snapshots})
+}
+
 func RunQuarterGrant(c *gin.Context) {
 	var req struct {
 		Year    int `json:"year"`
