@@ -349,6 +349,14 @@ const Attendance: React.FC = () => {
     with_approval: 0,
   }
   const latestExternalUpdate = syncStatusData?.data?.external_last_attendance_update
+  const activeSyncJob = syncStatusData?.data?.active_job as { id?: number; started_at?: string } | undefined
+  const selectedStatusLabel = statusOptions.find((option) => option.value === status)?.label || '全部状态'
+  const activeFilterCount = [
+    user,
+    department,
+    status !== 'all' ? status : '',
+  ].filter(Boolean).length
+  const queryRangeLabel = `${dateRange[0].format('YYYY-MM-DD')} 至 ${dateRange[1].format('YYYY-MM-DD')}`
 
   const syncMutation = useMutation({
     mutationFn: () => attendanceAPI.externalSync.run({ source: 'attendance' }),
@@ -614,6 +622,23 @@ const Attendance: React.FC = () => {
         </Col>
       </Row>
 
+      {activeSyncJob ? (
+        <Alert
+          className="attendance-sync-alert"
+          type="info"
+          showIcon
+          icon={<SyncOutlined spin />}
+          role="status"
+          message={`外部考勤同步任务 #${activeSyncJob.id ?? '—'} 正在运行`}
+          description={`数据完成后会自动刷新当前查询结果${activeSyncJob.started_at ? ` · 开始于 ${formatDateTime(activeSyncJob.started_at)}` : ''}`}
+          action={canOpenExternalSync ? (
+            <Button size="small" onClick={() => navigate('/attendance/external-sync')}>
+              查看任务
+            </Button>
+          ) : undefined}
+        />
+      ) : null}
+
       <PageCard className="attendance-filter-card">
         <div className="attendance-filter-primary">
           <Segmented
@@ -702,6 +727,19 @@ const Attendance: React.FC = () => {
             <Text type="secondary">筛选条件改变后会自动刷新结果</Text>
           </div>
         ) : null}
+
+        <div className="attendance-filter-summary" role="status" aria-live="polite">
+          <Space size={[8, 4]} wrap>
+            <Text>
+              <CalendarOutlined /> 查询范围：{queryRangeLabel}
+            </Text>
+            <Text type="secondary">当前结果 {total} 条</Text>
+            <Tag color={status === 'all' ? 'default' : 'processing'}>状态：{selectedStatusLabel}</Tag>
+            {user ? <Tag color="blue">员工：{selectedEmployeeOption?.label || user}</Tag> : null}
+            {department ? <Tag color="blue">部门：已选择</Tag> : null}
+            {activeFilterCount ? <Tag color="geekblue">已应用 {activeFilterCount} 项筛选</Tag> : null}
+          </Space>
+        </div>
       </PageCard>
 
       <PageCard className="attendance-result-card">

@@ -345,6 +345,17 @@ const AttendanceExternalSync: React.FC = () => {
           </Space>
         </PageCard>
 
+        {activeJob ? (
+          <Alert
+            type="info"
+            showIcon
+            icon={<SyncOutlined spin />}
+            role="status"
+            message={`同步任务 #${activeJob.id} 正在运行`}
+            description="系统每 2 秒更新一次任务进度，完成后会自动刷新任务记录。"
+          />
+        ) : null}
+
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={12}>
             <Card title="数据源状态">

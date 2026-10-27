@@ -135,6 +135,13 @@ describe('Attendance daily result view', () => {
     expect(screen.getByText(/2026-07-16 14:00:00 至 2026-07-16 16:00:00/)).toBeInTheDocument()
   })
 
+  it('keeps the active query context visible above the result list', async () => {
+    renderPage()
+
+    expect(await screen.findByText(/查询范围：/)).toBeInTheDocument()
+    expect(screen.getByText('状态：全部状态')).toBeInTheDocument()
+  })
+
   it('searches employees remotely instead of limiting results to the first page', async () => {
     const user = userEvent.setup()
     renderPage()
