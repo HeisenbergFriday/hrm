@@ -160,7 +160,7 @@ const PeopleDataCenter: React.FC = () => {
     { title: '岗位', dataIndex: 'position', key: 'position', render: (value: string) => value || '—' },
     { title: '状态', dataIndex: 'status', key: 'status', render: (value: string) => statusLabels[value] || (value ? '其他' : '—') },
     { title: '来源组织', key: 'source', render: (_: unknown, row: PeopleDataCenterEmployee) => <Tag color={row.is_mirror ? 'blue' : 'green'}>{sourceLabel(row.is_mirror)}</Tag> },
-    { title: '最后同步', dataIndex: 'last_synced_at', key: 'last_synced_at', render: formatDate },
+    { title: '人员状态最后变更时间', dataIndex: 'source_updated_at', key: 'source_updated_at', render: formatDate },
   ], [navigate])
   const businessColumns = useMemo(() => [
     { title: '业务类型', dataIndex: 'entity_type', key: 'entity_type', render: (value: string) => businessLabels[value] || '其他' },
@@ -221,7 +221,7 @@ const PeopleDataCenter: React.FC = () => {
             </Descriptions>
           </Card>
           <Text type="secondary">原始字段仅用于核对，不代表沐腾侧可执行的业务数据。</Text>
-        </> : selectedEmployee && <><Text strong>{selectedEmployee.name}</Text>{selectedEmployee.is_mirror && <Alert type="info" showIcon style={{ margin: '12px 0' }} message="文娱员工镜像，仅供查看" description="如需修改员工资料，请在文娱组织处理；本页不会回写文娱或钉钉。" />}<p>员工来源：{sourceLabel(selectedEmployee.is_mirror)}</p><p>工号：{selectedEmployee.employee_id || '—'}</p><p>邮箱：{selectedEmployee.email || '—'}</p><p>手机：{selectedEmployee.mobile || '—'}</p><p>部门：{selectedEmployee.department_name || '—'}</p><p>岗位：{selectedEmployee.position || '—'}</p><p>状态：{statusLabels[selectedEmployee.status] || (selectedEmployee.status ? '其他' : '—')}</p></>}
+        </> : selectedEmployee && <><Text strong>{selectedEmployee.name}</Text>{selectedEmployee.is_mirror && <Alert type="info" showIcon style={{ margin: '12px 0' }} message="文娱员工镜像，仅供查看" description="如需修改员工资料，请在文娱组织处理；本页不会回写文娱或钉钉。" />}<p>员工来源：{sourceLabel(selectedEmployee.is_mirror)}</p><p>工号：{selectedEmployee.employee_id || '—'}</p><p>邮箱：{selectedEmployee.email || '—'}</p><p>手机：{selectedEmployee.mobile || '—'}</p><p>部门：{selectedEmployee.department_name || '—'}</p><p>岗位：{selectedEmployee.position || '—'}</p><p>状态：{statusLabels[selectedEmployee.status] || (selectedEmployee.status ? '其他' : '—')}</p><p>人员状态最后变更时间：{formatDate(selectedEmployee.source_updated_at)}</p></>}
       </Drawer>
     </PageContainer>
   )

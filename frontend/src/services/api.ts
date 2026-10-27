@@ -98,8 +98,10 @@ export type PeopleDataCenterEmployee = {
   department_name: string
   position: string
   status: string
-  last_synced_at: string
+  /** 源系统员工资料（包括人员状态）最后变更时间。 */
   source_updated_at?: string
+  /** 数据中心最近一次同步该员工记录的时间。 */
+  last_synced_at: string
   is_mirror: boolean
 }
 
