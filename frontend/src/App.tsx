@@ -580,7 +580,7 @@ function App() {
               aria-label="打开菜单"
               onClick={() => setMobileMenuOpen(true)}
             />
-            <span className="app-header-title">{isMobile ? currentTitle : ''}</span>
+            <span className="app-header-title" aria-live="polite">{currentTitle}</span>
             <span className="app-header-spacer" />
             <Tooltip title={canSwitchOrganization ? undefined : '你缺少 organization_switch 权限，需要联系管理员添加'}>
               <Select

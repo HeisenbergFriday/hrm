@@ -5,10 +5,11 @@ interface PageCardProps extends CardProps {
   children: React.ReactNode
 }
 
-const PageCard: React.FC<PageCardProps> = ({ children, style, styles, ...props }) => {
+const PageCard: React.FC<PageCardProps> = ({ children, className, style, styles, ...props }) => {
   return (
     <Card
       {...props}
+      className={['page-card', className].filter(Boolean).join(' ')}
       style={{
         borderRadius: 'var(--radius-xl)',
         border: '1px solid var(--color-border)',
