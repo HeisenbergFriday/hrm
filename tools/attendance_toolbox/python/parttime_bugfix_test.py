@@ -60,10 +60,10 @@ class OffsitePersonalLeavePriorityTests(unittest.TestCase):
 
 
 class FixedScheduleAttendanceTests(unittest.TestCase):
-    def test_default_fixed_names_excludes_chang_yufan(self) -> None:
+    def test_default_fixed_names_preserve_previous_and_add_new(self) -> None:
         self.assertEqual(
             parttime.DEFAULT_SPECIAL_DEFAULT_NAMES,
-            ("王心英", "刘芮", "周代林", "汤颖", "汤树宏"),
+            ("王心英", "刘芮", "周代林", "汤颖", "陈富庆", "汤树宏"),
         )
         self.assertEqual(parttime.DEFAULT_SPECIAL_CHENGDU_NAMES, {"王心英"})
 
@@ -113,7 +113,7 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
         self.assertEqual(sum(parttime._entry_value(entry) or 0 for entry in resolved.values()), 3.0)
         self.assertIn("迟到12分钟", parttime._entry_note(resolved[15]))
         self.assertIn("旷工", parttime._entry_note(resolved[29]))
-        self.assertIn("按规则计1天", parttime._entry_comment(resolved[15]))
+        self.assertIn("固定人员按作息表计 1 天出勤", parttime._entry_comment(resolved[15]))
         self.assertTrue(parttime._is_alert_entry(resolved[15]))
         self.assertFalse(parttime._is_deducted_entry(resolved[29]))
 

@@ -159,6 +159,7 @@ DEFAULT_SPECIAL_DEFAULT_NAMES = tuple(
             "\u5218\u82ae",
             "\u5468\u4ee3\u6797",
             "\u6c64\u9896",
+            "\u9648\u5bcc\u5e86",
             "\u6c64\u6811\u5b8f",
         )
     )
