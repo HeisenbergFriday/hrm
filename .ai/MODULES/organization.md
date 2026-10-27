@@ -35,11 +35,14 @@ update_when:
 |---|---|---|
 | `/organization` | `Organization.tsx` | 组织管理/驾驶舱入口 |
 | `/department-tree` | `DepartmentTree.tsx` | 部门树与部门统计 |
-| `/employees` | `EmployeeList.tsx` | 员工列表 |
-| `/employees/:id` | `EmployeeDetail.tsx` | 聚合员工详情 |
+| `/employees` | `EmployeeList.tsx` | 员工中心：员工列表与档案入口 |
+| `/employees/:id` | `EmployeeDetail.tsx` | 聚合员工详情与人事档案维护 |
 | `/talent-analysis` | `TalentAnalysis.tsx` | 人才分析 |
 
 ## 维护说明
+
+- 组织管理菜单以“员工中心”作为员工日常入口；`/employee-profile` 保留为兼容入口，员工档案编辑权限仍由 `user_manage` 控制。
+- “人事数据中心”属于跨系统只读数据与同步管理，单独放在“数据中心”菜单，不与员工中心合并。
 
 - 组织统计、员工详情聚合、部门树人数口径请优先更新 `.ai/MODULES/org.md`。
 - 不要在新文档中继续引用 `/api/v1/org/dashboard`、`/api/v1/org/structure-analysis`、`/api/v1/org/departments/overview`，除非代码中重新注册这些路由。

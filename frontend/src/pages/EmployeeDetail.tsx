@@ -400,7 +400,7 @@ const EmployeeDetail: React.FC = () => {
           </Button>
           <Tooltip title={canMaintainManager ? undefined : '你缺少 user_manage 权限，需要联系管理员添加'}>
             <Button icon={<EditOutlined />} onClick={openEdit} disabled={!canMaintainManager}>
-              编辑档案
+              编辑人事档案
             </Button>
           </Tooltip>
           <Tooltip title={canSync ? undefined : missingOrgSyncPermissionTip}>

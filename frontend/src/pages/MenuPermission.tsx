@@ -56,11 +56,18 @@ const MenuPermission: React.FC = () => {
       children: [
         { title: '人才管理驾驶舱', key: 'organization-dashboard' },
         { title: '组织架构', key: 'department-tree' },
-        { title: '组织花名册', key: 'employees' },
-        { title: '员工档案', key: 'employee-profile' },
+        { title: '员工中心', key: 'employees' },
+        { title: '员工档案（兼容入口）', key: 'employee-profile' },
         { title: '入转调离', key: 'employee-flow' },
         { title: '人才分析', key: 'talent-analysis' },
         { title: '同步日志', key: 'sync-log' },
+      ],
+    },
+    {
+      title: '数据中心',
+      key: 'data-center',
+      children: [
+        { title: '人事数据中心', key: 'people-data-center' },
       ],
     },
     {

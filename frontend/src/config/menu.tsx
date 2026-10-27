@@ -53,12 +53,19 @@ export const menuConfig: MenuItem[] = [
       // title 保持完整（顶栏/权限树/tooltip）；label 侧栏可缩短防截断。menu key 禁止改动
       { key: menuPermissionKey('organization-dashboard'), title: '人才管理驾驶舱', label: <Link to="/organization">人才驾驶舱</Link>, icon: <TeamOutlined /> },
       { key: menuPermissionKey('department-tree'), title: '组织架构', label: <Link to="/department-tree">组织架构</Link>, icon: <TeamOutlined /> },
-      { key: menuPermissionKey('employees'), title: '组织花名册', label: <Link to="/employees">组织花名册</Link>, icon: <UserOutlined /> },
-      { key: menuPermissionKey('employee-profile'), title: '员工档案', label: <Link to="/employee-profile">员工档案</Link>, icon: <UserOutlined /> },
+      { key: menuPermissionKey('employees'), title: '员工中心', label: <Link to="/employees">员工中心</Link>, icon: <UserOutlined /> },
       { key: menuPermissionKey('employee-flow'), title: '入转调离', label: <Link to="/employee-flow">入转调离</Link>, icon: <SwapOutlined /> },
       { key: menuPermissionKey('talent-analysis'), title: '人才分析', label: <Link to="/talent-analysis">人才分析</Link>, icon: <BarChartOutlined /> },
-      { key: menuPermissionKey('people-data-center'), title: '人事数据中心', label: <Link to="/people-data-center">人事数据中心</Link>, icon: <DatabaseOutlined />, orgIds: ['muteng'] },
       { key: menuPermissionKey('sync-log'), title: '同步日志', label: <Link to="/sync-log">同步日志</Link>, icon: <HistoryOutlined /> },
+    ],
+  },
+  {
+    key: menuPermissionKey('data-center-group'),
+    title: '数据中心',
+    label: '数据中心',
+    icon: <DatabaseOutlined />,
+    children: [
+      { key: menuPermissionKey('people-data-center'), title: '人事数据中心', label: <Link to="/people-data-center">人事数据中心</Link>, icon: <DatabaseOutlined />, orgIds: ['muteng'] },
     ],
   },
   {

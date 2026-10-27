@@ -136,6 +136,7 @@ const routeMenuKeys: Record<string, string> = {
   '/organization': menuPermissionKey('organization-dashboard'),
   '/department-tree': menuPermissionKey('department-tree'),
   '/employees': menuPermissionKey('employees'),
+  '/people-data-center': menuPermissionKey('people-data-center'),
   '/sync-log': menuPermissionKey('sync-log'),
   '/attendance': menuPermissionKey('attendance'),
   '/attendance-export': menuPermissionKey('attendance-export'),
@@ -181,6 +182,7 @@ function defaultOpenKeysForPath(pathname: string) {
     return [menuPermissionKey('attendance-group')]
   }
   if (pathname.startsWith('/approval') || pathname.startsWith('/oa-approval-data')) return [menuPermissionKey('approval-group')]
+  if (pathname.startsWith('/people-data-center')) return [menuPermissionKey('data-center-group')]
   if (pathname.startsWith('/sync-jobs')) return [menuPermissionKey('jobs-group')]
   if (pathname.startsWith('/audit')) return [menuPermissionKey('audit-group')]
   return [menuPermissionKey('organization-group')]
@@ -647,7 +649,7 @@ function App() {
                 <Route path="/role-management" element={<RouteGuard menuKey="menu:permission"><RoleManagement /></RouteGuard>} />
                 <Route path="/sync-jobs" element={<RouteGuard menuKey="menu:sync-jobs"><SyncJobs /></RouteGuard>} />
                 <Route path="/audit-logs" element={<RouteGuard menuKey="menu:audit-logs" permissionCode="audit_log:read"><AuditLogs /></RouteGuard>} />
-                <Route path="/employee-profile" element={<RouteGuard menuKey="menu:employee-profile"><EmployeeProfile /></RouteGuard>} />
+                <Route path="/employee-profile" element={<RouteGuard menuKey={['menu:employee-profile', 'menu:employees']}><EmployeeProfile /></RouteGuard>} />
                 <Route path="/employee-flow" element={<RouteGuard menuKey="menu:employee-flow"><EmployeeFlow /></RouteGuard>} />
                 <Route path="/talent-analysis" element={<RouteGuard menuKey="menu:talent-analysis"><TalentAnalysis /></RouteGuard>} />
                 <Route path="/leave-overtime" element={<RouteGuard menuKey="menu:leave-overtime"><LeaveOvertime /></RouteGuard>} />

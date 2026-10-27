@@ -12,7 +12,6 @@ import {
 } from 'antd'
 import {
   ApartmentOutlined,
-  ProfileOutlined,
   ReloadOutlined,
   SwapOutlined,
   TeamOutlined,
@@ -47,13 +46,6 @@ interface OrgOverviewData {
 
 const connectedEntries = [
   {
-    key: 'employee-profile',
-    title: '员工档案',
-    description: '查询、新建和维护员工档案信息。',
-    path: '/employee-profile',
-    icon: <ProfileOutlined />,
-  },
-  {
     key: 'employee-flow',
     title: '入转调离',
     description: '查询和新建员工入职、调岗、离职记录。',
@@ -62,8 +54,8 @@ const connectedEntries = [
   },
   {
     key: 'employees',
-    title: '组织花名册',
-    description: '查看组织同步后的员工信息。',
+    title: '员工中心',
+    description: '查看员工、查看档案、维护人事信息。',
     path: '/employees',
     icon: <UserOutlined />,
   },

@@ -305,12 +305,12 @@ const EmployeeList: React.FC = () => {
   return (
     <PageContainer
       className="organization-roster-page"
-      title="组织花名册"
+      title="员工中心"
       icon={<TeamOutlined />}
       subtitle={
         loading && !overview?.scope
           ? <span style={{ color: 'var(--color-text-secondary)' }}>数据范围加载中…</span>
-          : <>数据范围：<span style={{ color: 'var(--color-primary)', fontWeight: 'var(--font-weight-semibold)' }}>{scopeLabel}</span></>
+          : <>组织范围：<span style={{ color: 'var(--color-primary)', fontWeight: 'var(--font-weight-semibold)' }}>{scopeLabel}</span>；点击员工可查看人事档案</>
       }
       extra={
         <Space>
