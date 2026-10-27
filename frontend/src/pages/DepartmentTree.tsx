@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Avatar, Button, Col, Empty, List, Row, Space, Spin, Statistic, Tabs, Tree, Tooltip, Typography, message } from 'antd'
+import { Alert, Avatar, Button, Col, Empty, Input, List, Row, Space, Spin, Statistic, Tabs, Tree, Tooltip, Typography, message } from 'antd'
 import { ApartmentOutlined, ReloadOutlined, SyncOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -102,6 +102,7 @@ const DepartmentTree: React.FC = () => {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [departmentOverview, setDepartmentOverview] = useState<DepartmentOverview | null>(null)
   const [overviewLoading, setOverviewLoading] = useState(false)
+  const [treeSearch, setTreeSearch] = useState('')
 
   const loadTree = async (showLoading = true) => {
     if (showLoading) {
@@ -231,6 +232,14 @@ const DepartmentTree: React.FC = () => {
   }, [scope])
 
   const treeData = useMemo<DataNode[]>(() => {
+    const keyword = treeSearch.trim().toLowerCase()
+    const filterNodes = (nodes: DepartmentTreeNode[]): DepartmentTreeNode[] => nodes.flatMap((node) => {
+      const children = filterNodes(node.children || [])
+      if (!keyword || node.name.toLowerCase().includes(keyword) || children.length > 0) {
+        return [{ ...node, children }]
+      }
+      return []
+    })
     const mapNodes = (nodes: DepartmentTreeNode[]): DataNode[] =>
       nodes.map((node) => ({
         key: node.id,
@@ -258,8 +267,8 @@ const DepartmentTree: React.FC = () => {
         ),
         children: mapNodes(node.children || []),
       }))
-    return mapNodes(tree)
-  }, [tree])
+    return mapNodes(filterNodes(tree))
+  }, [tree, treeSearch])
 
   const nodeMap = useMemo(() => {
     const result = new Map<string, DepartmentTreeNode>()
@@ -353,6 +362,14 @@ const DepartmentTree: React.FC = () => {
         <Row gutter={[16, 16]} className="organization-tree-layout">
           <Col xs={24} lg={14}>
             <PageCard title="组织树">
+              <Input.Search
+                allowClear
+                value={treeSearch}
+                onChange={(event) => setTreeSearch(event.target.value)}
+                placeholder="搜索部门名称"
+                aria-label="搜索部门名称"
+                style={{ marginBottom: 12 }}
+              />
               <Alert
                 style={{ marginBottom: 16 }}
                 type="info"

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
+  Avatar,
   Button,
   Col,
   Empty,
@@ -44,6 +45,7 @@ interface EmployeeItem {
   mobile: string
   department_id: string
   position: string
+  avatar?: string
   status: string
   extension?: Record<string, any>
   created_at?: string
@@ -252,7 +254,9 @@ const EmployeeList: React.FC = () => {
     {
       title: '员工', dataIndex: 'name', key: 'name',
       render: (_: string, record: EmployeeItem) => (
-        <div>
+        <Space size={10}>
+          <Avatar size={34} src={record.avatar} icon={<UserOutlined />} />
+          <div>
           <a
             href={`/employees/${record.id}`}
             onClick={(e) => {
@@ -263,8 +267,9 @@ const EmployeeList: React.FC = () => {
           >
             {record.name}
           </a>
-          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>{record.user_id}</div>
-        </div>
+            <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>{record.user_id}</div>
+          </div>
+        </Space>
       ),
     },
     {
@@ -419,7 +424,7 @@ const EmployeeList: React.FC = () => {
       {/* 花名册表格 */}
       <PageCard title={<span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-md)', color: 'var(--color-text-title)' }}>花名册</span>}>
         <div className="organization-filter-bar">
-        <Space wrap>
+        <Space wrap className="organization-filter-controls">
           <Search
             allowClear
             enterButton={<SearchOutlined />}
@@ -435,6 +440,8 @@ const EmployeeList: React.FC = () => {
           />
           <Select
             allowClear
+            showSearch
+            optionFilterProp="label"
             placeholder="按部门筛选"
             style={{ width: 220 }}
             value={departmentID}
@@ -456,6 +463,10 @@ const EmployeeList: React.FC = () => {
             <Button type="link" aria-label="清除筛选" onClick={clearFilters} icon={<CloseCircleOutlined />}>清除筛选</Button>
           ) : null}
         </Space>
+        <div className="organization-filter-meta">
+          <Text type="secondary">{loading ? '正在加载员工数据…' : `当前结果 ${total} 人`}</Text>
+          {hasActiveFilters ? <Text type="secondary">已应用筛选</Text> : <Text type="secondary">支持按姓名、工号、联系方式和岗位搜索</Text>}
+        </div>
         </div>
 
         {filterType && FILTER_TYPE_LABELS[filterType] ? (
@@ -494,11 +505,13 @@ const EmployeeList: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={employees}
+            scroll={{ x: 760 }}
             pagination={{
               current: page,
               pageSize,
               total,
-              showSizeChanger: false,
+              showSizeChanger: true,
+              pageSizeOptions: ['10', '20', '50'],
               showTotal: (value) => <span style={{ color: 'var(--color-text-secondary)' }}>共 {value} 人</span>,
               onChange: (nextPage, nextPageSize) => updateSearchParams({ page: nextPage, page_size: nextPageSize }),
             }}
