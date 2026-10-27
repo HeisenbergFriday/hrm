@@ -499,7 +499,7 @@ const EmployeeDetail: React.FC = () => {
                   <Timeline
                     items={detail.timeline.map((item) => ({
                       color:
-                        item.type === 'resignation'
+                        item.type === 'resignation' || item.type === 'status_change'
                           ? 'red'
                           : item.type === 'transfer'
                             ? 'gold'

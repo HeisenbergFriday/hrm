@@ -2388,6 +2388,10 @@ func syncDingTalkUsers(ctx context.Context, orgID string, users []dingtalk.UserI
 			logOrgSyncError(requestID, maskedOrgID, "employees", "user_lookup", findErr, startTime, result.SuccessCount, result.FailCount+1)
 		} else if errors.Is(findErr, gorm.ErrRecordNotFound) {
 			newUser := newLocalUserFromDingTalk(orgID, user, deptID, status)
+			if status != "active" {
+				changedAt := time.Now()
+				newUser.StatusChangedAt = &changedAt
+			}
 			newUser.DepartmentID = localDepartmentID
 			newUser.ManagerUserID = localManagerUserID
 			if err := deps.CreateUser(newUser); err != nil {
@@ -2405,7 +2409,12 @@ func syncDingTalkUsers(ctx context.Context, orgID string, users []dingtalk.UserI
 				}
 			}
 		} else {
+			previousStatus := existing.Status
 			applyDingTalkOrgUser(existing, orgID, user, deptID, status, overwriteEmpty)
+			if previousStatus != status {
+				changedAt := time.Now()
+				existing.StatusChangedAt = &changedAt
+			}
 			existing.DepartmentID = localDepartmentID
 			existing.ManagerUserID = localManagerUserID
 			if err := deps.UpdateUser(existing); err != nil {
@@ -2600,6 +2609,9 @@ func SyncUsers(c *gin.Context) {
 		"deactivated_missing_count":         result.DeactivatedMissingCount,
 		"deactivation_status":               result.DeactivationStatus,
 		"deactivation_error":                result.DeactivationError,
+		"dismission_sync_status":            result.DismissionSyncStatus,
+		"dismission_count":                  result.DismissionCount,
+		"dismission_error":                  result.DismissionError,
 	})
 }
 
@@ -2728,7 +2740,78 @@ func executeOrgUserSync(c *gin.Context, orgID, requestID, maskedOrgID string, st
 		errorCode, safeMessage := orgSyncErrorDetails(err, employeeSyncFailedErrorCode, employeeSyncFailedMessage)
 		return orgSyncEmployeeStageResult{Status: "failed", FailCount: 1, Error: safeMessage, ErrorCode: errorCode}
 	}
-	return syncDingTalkUsers(c.Request.Context(), orgID, users, shouldOverwriteEmptyDingTalkOrgFields(c), orgSyncUserDependenciesForRequest(c, orgID), requestID, maskedOrgID, startTime)
+	result := syncDingTalkUsers(c.Request.Context(), orgID, users, shouldOverwriteEmptyDingTalkOrgFields(c), orgSyncUserDependenciesForRequest(c, orgID), requestID, maskedOrgID, startTime)
+	return syncDismissionDatesIntoResult(c.Request.Context(), middleware.RequestDB(c), orgID, result, requestID, maskedOrgID, startTime)
+}
+
+func syncDingTalkDismissionDates(ctx context.Context, db *gorm.DB, orgID string) (int, error) {
+	rows, err := dingtalk.ListDingTalkDismissionsForOrg(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+	updated := 0
+	for _, row := range rows {
+		resignDate := normalizeDingTalkDate(row.ResignDate)
+		lastWorkingDay := normalizeDingTalkDate(row.LastWorkDay)
+		if resignDate == "" && lastWorkingDay == "" {
+			continue
+		}
+		var user database.User
+		if err := db.WithContext(ctx).Where("org_id = ? AND ding_talk_user_id = ? AND deleted_at IS NULL", orgID, strings.TrimSpace(row.UserID)).First(&user).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return updated, err
+		}
+		var profile database.EmployeeProfile
+		if err := db.WithContext(ctx).Where("org_id = ? AND user_id = ? AND deleted_at IS NULL", orgID, user.UserID).First(&profile).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return updated, err
+		}
+		updates := map[string]interface{}{}
+		if resignDate != "" {
+			updates["dingtalk_resign_date"] = resignDate
+		}
+		if lastWorkingDay != "" {
+			updates["dingtalk_last_working_day"] = lastWorkingDay
+		}
+		if err := db.WithContext(ctx).Model(&profile).Updates(updates).Error; err != nil {
+			return updated, err
+		}
+		updated++
+	}
+	return updated, nil
+}
+
+func syncDismissionDatesIntoResult(ctx context.Context, db *gorm.DB, orgID string, result orgSyncEmployeeStageResult, requestID, maskedOrgID string, startTime time.Time) orgSyncEmployeeStageResult {
+	result.DismissionSyncStatus = "success"
+	count, err := syncDingTalkDismissionDates(ctx, db, orgID)
+	if err != nil {
+		result.DismissionSyncStatus = "failed"
+		result.DismissionError = safeSyncErrorSummary(err)
+		logOrgSyncError(requestID, maskedOrgID, "employees", "dismission_sync", err, startTime, result.SuccessCount, result.FailCount)
+		return result
+	}
+	result.DismissionCount = count
+	return result
+}
+
+func normalizeDingTalkDate(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	for _, layout := range []string{"2006-01-02", "2006/01/02", time.RFC3339, "2006-01-02 15:04:05"} {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return parsed.Format("2006-01-02")
+		}
+	}
+	if millis, err := strconv.ParseInt(value, 10, 64); err == nil && millis > 0 {
+		return time.UnixMilli(millis).In(time.Local).Format("2006-01-02")
+	}
+	return ""
 }
 
 func orgUserSyncStatusMessage(result orgSyncEmployeeStageResult) string {
@@ -2769,6 +2852,9 @@ type orgUserSyncTaskResult struct {
 	DeactivatedMissingCount        int    `json:"deactivated_missing_count"`
 	DeactivationStatus             string `json:"deactivation_status"`
 	DeactivationError              string `json:"deactivation_error"`
+	DismissionSyncStatus           string `json:"dismission_sync_status"`
+	DismissionCount                int    `json:"dismission_count"`
+	DismissionError                string `json:"dismission_error"`
 }
 
 func buildOrgUserSyncTaskResult(result orgSyncEmployeeStageResult, requestID string, duration time.Duration) orgUserSyncTaskResult {
@@ -2781,6 +2867,7 @@ func buildOrgUserSyncTaskResult(result orgSyncEmployeeStageResult, requestID str
 		HRMFieldError: result.HRMFieldError, OverwriteEmpty: result.OverwriteEmpty,
 		DefaultRoleAssignedCount: result.DefaultRoleAssignedCount, DeactivatedMissingCount: result.DeactivatedMissingCount,
 		DeactivationStatus: result.DeactivationStatus, DeactivationError: result.DeactivationError,
+		DismissionSyncStatus: result.DismissionSyncStatus, DismissionCount: result.DismissionCount, DismissionError: result.DismissionError,
 	}
 }
 
@@ -4163,6 +4250,9 @@ type orgSyncEmployeeStageResult struct {
 	DeactivatedMissingCount        int    `json:"deactivated_missing_count"`
 	DeactivationStatus             string `json:"deactivation_status"`
 	DeactivationError              string `json:"deactivation_error"`
+	DismissionSyncStatus           string `json:"dismission_sync_status"`
+	DismissionCount                int    `json:"dismission_count"`
+	DismissionError                string `json:"dismission_error"`
 }
 
 type orgSyncResponseData struct {
@@ -4681,6 +4771,7 @@ func performOrgSync(c *gin.Context, orgID, requestID string, startTime time.Time
 		logOrgSyncError(requestID, maskedOrgID, "employees", "source_or_skipped", userErr, startTime, 0, userResult.FailCount)
 	} else {
 		userResult = syncDingTalkUsers(c.Request.Context(), orgID, users, overwriteEmpty, orgSyncUserDependenciesForRequest(c, orgID), requestID, maskedOrgID, startTime)
+		userResult = syncDismissionDatesIntoResult(c.Request.Context(), middleware.RequestDB(c), orgID, userResult, requestID, maskedOrgID, startTime)
 	}
 
 	userSyncMessage := fmt.Sprintf("同步 %d 个用户", userResult.SuccessCount)

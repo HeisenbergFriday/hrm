@@ -1838,6 +1838,17 @@ func (s *OrgService) buildEmployeeTimeline(user *database.User, profile *databas
 	for _, resignation := range resignations {
 		addDateEvent("resignation", "离职", "离职流程留痕。", firstNonEmpty(resignation.ResignDate, resignation.LastWorkingDay), resignation.Status)
 	}
+	if len(resignations) == 0 && profile != nil {
+		addDateEvent("resignation", "离职", "钉钉 HRM 离职日期。", firstNonEmpty(profile.DingTalkResignDate, profile.DingTalkLastWorkingDay), "synced")
+	}
+	hasFormalResignationDate := profile != nil && strings.TrimSpace(firstNonEmpty(profile.DingTalkResignDate, profile.DingTalkLastWorkingDay)) != ""
+	if user.StatusChangedAt != nil && strings.TrimSpace(user.Status) != "active" && len(resignations) == 0 && !hasFormalResignationDate {
+		title := "停用"
+		if strings.EqualFold(strings.TrimSpace(user.Status), "resigned") {
+			title = "离职"
+		}
+		addDateEvent("status_change", title, "员工状态变更。", user.StatusChangedAt.Format("2006-01-02"), user.Status)
+	}
 
 	var logs []database.OperationLog
 	if err := s.db.Where("resource = ?", "employee_profile:"+user.UserID).
