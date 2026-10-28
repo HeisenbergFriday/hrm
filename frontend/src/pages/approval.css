@@ -212,6 +212,25 @@
   width: 220px;
 }
 
+.approval-stats-filter .ant-segmented {
+  max-width: 100%;
+}
+
+.approval-stats-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-light);
+}
+
+.approval-stats-context .anticon {
+  margin-right: 4px;
+  color: var(--color-primary);
+}
+
 .approval-status-distribution {
   display: grid;
   grid-template-columns: repeat(5, minmax(150px, 1fr));
@@ -223,6 +242,13 @@
   border: 1px solid var(--color-border-light);
   border-radius: var(--radius-lg);
   background: var(--color-bg-subtle);
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal), transform var(--transition-normal);
+}
+
+.approval-status-item:hover {
+  border-color: var(--color-primary-light);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
 }
 
 .approval-status-item-head {
@@ -296,6 +322,15 @@
   .approval-stats-filter .ant-select,
   .approval-stats-filter .ant-picker,
   .approval-stats-filter .ant-btn {
+    width: 100%;
+  }
+
+  .approval-stats-context {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .approval-stats-filter .ant-segmented {
     width: 100%;
   }
 }

@@ -120,4 +120,25 @@ describe('ApprovalStats 审批同步', () => {
     await user.click(screen.getByRole('button', { name: '重试' }))
     await waitFor(() => expect(mockGetStats.mock.calls.length).toBeGreaterThan(1))
   })
+
+  it('显示统计口径并支持快捷日期范围', async () => {
+    const user = userEvent.setup()
+    mockGetStats.mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { summary: { total: 8, completed: 6, refused: 1, running: 1, terminated: 0, canceled: 0, approval_rate: '75.00%' }, template_stats: [] },
+    })
+    renderPage()
+
+    expect(await screen.findByText('模板：全部模板')).toBeInTheDocument()
+    expect(screen.getByText('业务日期：全部业务日期')).toBeInTheDocument()
+    await user.click(screen.getByText('近 30 天'))
+
+    await waitFor(() => {
+      const lastCall = mockGetStats.mock.calls.at(-1)![0] as Record<string, unknown>
+      expect(lastCall.start_date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(lastCall.end_date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    })
+    expect(screen.getByText('共 8 条审批')).toBeInTheDocument()
+  })
 })

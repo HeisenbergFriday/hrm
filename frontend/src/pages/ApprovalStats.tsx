@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
-import { Typography, DatePicker, Alert, Button, Row, Col, Statistic, Table, Select, Progress, Spin, Empty } from 'antd'
-import { BarChartOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Typography, DatePicker, Alert, Button, Row, Col, Statistic, Table, Select, Progress, Spin, Empty, Segmented, Space, Tag } from 'antd'
+import { BarChartOutlined, ReloadOutlined, CalendarOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { approvalAPI, type ApprovalStatsAPIResponse } from '../services/api'
 import PageContainer from '../components/PageContainer'
@@ -18,6 +18,7 @@ dayjs.locale('zh-cn')
 const { Text } = Typography
 const { RangePicker } = DatePicker
 const { Option } = Select
+type QuickRange = 'all' | '7days' | '30days' | 'thisMonth' | 'lastMonth' | 'custom'
 
 interface TemplateStat {
   template_id: string
@@ -41,6 +42,7 @@ interface StatusStat {
 const ApprovalStats: React.FC = () => {
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null]>([null, null])
   const [templateID, setTemplateID] = useState<string>('')
+  const [quickRange, setQuickRange] = useState<QuickRange>('all')
 
   const { data: templatesData } = useQuery({
     queryKey: ['approval-templates'],
@@ -85,6 +87,26 @@ const ApprovalStats: React.FC = () => {
     { status: '已取消', count: summary.canceled, percentage: percentage(summary.canceled), color: 'var(--color-text-tertiary)' },
   ]
   const templateStats = (statsPayload?.template_stats || []) as TemplateStat[]
+  const selectedTemplateName = templateID
+    ? templatesData?.data?.items?.find((template: { template_id: string }) => template.template_id === templateID)?.name || templateID
+    : '全部模板'
+  const rangeLabel = dateRange[0] && dateRange[1]
+    ? `${dateRange[0].format('YYYY-MM-DD')} 至 ${dateRange[1].format('YYYY-MM-DD')}`
+    : '全部业务日期'
+
+  const changeQuickRange = (value: QuickRange) => {
+    const now = dayjs()
+    let nextRange: [dayjs.Dayjs | null, dayjs.Dayjs | null] = [null, null]
+    if (value === '7days') nextRange = [now.subtract(6, 'day').startOf('day'), now.endOf('day')]
+    if (value === '30days') nextRange = [now.subtract(29, 'day').startOf('day'), now.endOf('day')]
+    if (value === 'thisMonth') nextRange = [now.startOf('month'), now.endOf('day')]
+    if (value === 'lastMonth') {
+      const lastMonth = now.subtract(1, 'month')
+      nextRange = [lastMonth.startOf('month'), lastMonth.endOf('month')]
+    }
+    setQuickRange(value)
+    setDateRange(nextRange)
+  }
 
   const columns = [
     {
@@ -158,9 +180,24 @@ const ApprovalStats: React.FC = () => {
                 </Option>
               ))}
             </Select>
+            <Segmented
+              aria-label="快捷日期范围"
+              value={quickRange}
+              options={[
+                { value: 'all', label: '全部' },
+                { value: '7days', label: '近 7 天' },
+                { value: '30days', label: '近 30 天' },
+                { value: 'thisMonth', label: '本月' },
+                { value: 'lastMonth', label: '上月' },
+              ]}
+              onChange={(value) => changeQuickRange(value as QuickRange)}
+            />
             <RangePicker
               value={dateRange}
-              onChange={(range) => setDateRange(range || [null, null])}
+              onChange={(range) => {
+                setDateRange(range || [null, null])
+                setQuickRange(range?.[0] && range?.[1] ? 'custom' : 'all')
+              }}
               placeholder={['业务开始日期', '业务结束日期']}
               format="YYYY-MM-DD"
               locale={datePickerZhCN}
@@ -168,6 +205,15 @@ const ApprovalStats: React.FC = () => {
             <Button type="primary" icon={<BarChartOutlined />} onClick={() => refetchStats()}>
               刷新统计
             </Button>
+          </div>
+          <div className="approval-stats-context" role="status" aria-live="polite">
+            <Space size={[8, 4]} wrap>
+              <Text strong><CalendarOutlined /> 统计口径</Text>
+              <Tag color="blue">模板：{selectedTemplateName}</Tag>
+              <Tag>业务日期：{rangeLabel}</Tag>
+              {statsPayload ? <Text type="secondary">共 {summary.total} 条审批</Text> : null}
+            </Space>
+            <Text type="secondary">快捷范围会立即刷新统计结果</Text>
           </div>
         </PageCard>
 
