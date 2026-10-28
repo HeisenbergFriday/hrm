@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useId } from 'react'
 import { Grid, Typography } from 'antd'
 import { resolveMobileLayout, useMobileRuntime } from '../utils/responsive'
 
@@ -24,6 +24,7 @@ const PageContainer: React.FC<PageContainerProps> = ({
   noPadding = false,
   ...props
 }) => {
+  const titleId = useId()
   const screens = Grid.useBreakpoint()
   const mobileRuntime = useMobileRuntime()
   const isMobile = resolveMobileLayout(screens.md, mobileRuntime)
@@ -43,10 +44,11 @@ const PageContainer: React.FC<PageContainerProps> = ({
   }
 
   return (
-    <div
+    <main
       {...props}
       className={containerClassName}
       style={containerStyle}
+      aria-labelledby={title ? titleId : undefined}
     >
       {showHeader && (
         <div
@@ -58,7 +60,7 @@ const PageContainer: React.FC<PageContainerProps> = ({
         >
           <div className="page-container-heading">
             {title && (
-              <h1 className="page-container-title">
+              <h1 id={titleId} className="page-container-title">
                 {icon && (
                   <span className="page-container-title-icon" aria-hidden="true">
                     {icon}
@@ -81,7 +83,7 @@ const PageContainer: React.FC<PageContainerProps> = ({
         </div>
       )}
       {children}
-    </div>
+    </main>
   )
 }
 

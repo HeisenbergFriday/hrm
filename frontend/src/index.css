@@ -170,9 +170,57 @@ code {
   transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
 }
 
-.page-card:hover {
+.page-card-interactive:hover,
+.page-card-interactive:focus-within {
   border-color: #d5e3f4;
   box-shadow: var(--shadow-card-hover);
+}
+
+.page-card > .ant-card-head {
+  color: var(--color-text-title);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.page-card > .ant-card-body > .ant-table-wrapper:first-child {
+  margin-top: calc(var(--space-2) * -1);
+}
+
+.page-filter-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-1) 0 var(--space-4);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.page-filter-toolbar > .ant-select,
+.page-filter-toolbar > .ant-picker,
+.page-filter-toolbar > .ant-input,
+.page-filter-toolbar > .ant-input-affix-wrapper {
+  min-width: 180px;
+}
+
+@media (max-width: 767px) {
+  .page-filter-toolbar {
+    align-items: stretch;
+  }
+
+  .page-filter-toolbar > .ant-select,
+  .page-filter-toolbar > .ant-picker,
+  .page-filter-toolbar > .ant-input,
+  .page-filter-toolbar > .ant-input-affix-wrapper,
+  .page-filter-toolbar > .ant-btn {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .page-container-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 .ant-table {
@@ -224,6 +272,11 @@ code {
   margin-bottom: var(--space-5);
   padding: var(--space-1) 0 var(--space-4);
   border-bottom: 1px solid var(--color-border-light);
+}
+
+.page-container-header + .ant-card,
+.page-container-header + .page-card {
+  margin-top: 0;
 }
 
 .page-container-heading {
@@ -298,6 +351,17 @@ code {
   font-weight: var(--font-weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.app-header-title::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 16px;
+  margin-right: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  vertical-align: -2px;
 }
 
 .app-header-spacer {

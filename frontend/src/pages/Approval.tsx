@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Typography, DatePicker, Table, Spin, Empty, Alert, Button, Select, Badge } from 'antd'
-import { CalendarOutlined } from '@ant-design/icons'
+import { CalendarOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
@@ -79,9 +79,15 @@ const Approval: React.FC = () => {
   ]
 
   return (
-    <PageContainer title="审批管理" icon={<CalendarOutlined />} subtitle="查询审批记录与审批状态">
-      <PageCard>
-        <div style={{ marginBottom: 18, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+    <PageContainer
+      className="approval-page"
+      title="审批管理"
+      icon={<CalendarOutlined />}
+      subtitle="统一查看审批记录、处理状态和关键时间"
+      extra={<Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading}>刷新</Button>}
+    >
+      <PageCard title="审批记录" className="approval-record-card">
+        <div className="page-filter-toolbar">
           <Select placeholder="选择申请人" style={{ width: 200 }} allowClear onChange={setUser}>
             <Option value="">全部申请人</Option>
             <Option value="1">张三</Option>
@@ -100,9 +106,10 @@ const Approval: React.FC = () => {
             format="YYYY-MM-DD"
             locale={datePickerZhCN}
           />
-          <Button type="primary" onClick={() => refetch()} icon={<CalendarOutlined />}>
+          <Button type="primary" onClick={() => refetch()} icon={<SearchOutlined />}>
             查询
           </Button>
+          <Button onClick={() => { setUser(''); setStatus(''); setDateRange([null, null]) }}>重置</Button>
         </div>
 
         {isLoading ? (
