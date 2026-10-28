@@ -373,7 +373,7 @@ const DepartmentTree: React.FC = () => {
       title="组织架构"
       subtitle={scopeLabel}
       extra={
-        <div className="organization-tree-page-actions">
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           <Button icon={<ReloadOutlined />} onClick={() => void loadTree()} loading={loading}>
             刷新
           </Button>
@@ -391,14 +391,7 @@ const DepartmentTree: React.FC = () => {
           <Spin size="large" />
         </div>
       ) : tree.length === 0 ? (
-        <div className="organization-tree-empty-state">
-          <Empty description="暂无组织架构数据">
-            <Space wrap>
-              <Button icon={<ReloadOutlined />} onClick={() => void loadTree()} loading={loading}>重新加载</Button>
-              {canSync ? <Button type="primary" icon={<SyncOutlined />} onClick={handleSync} loading={syncing}>同步组织数据</Button> : null}
-            </Space>
-          </Empty>
-        </div>
+        <Empty description="暂无组织架构数据" />
       ) : (
         <Row gutter={[16, 16]} className="organization-tree-layout">
           <Col xs={24} lg={14}>
@@ -412,7 +405,7 @@ const DepartmentTree: React.FC = () => {
                   aria-label="搜索部门名称"
                   className="organization-tree-search"
                 />
-                <Space size={4} className="organization-tree-toolbar-actions">
+                <Space size={4}>
                   <Button size="small" icon={<DownOutlined />} onClick={expandAll}>展开全部</Button>
                   <Button size="small" icon={<UpOutlined />} onClick={collapseAll}>收起全部</Button>
                 </Space>
@@ -446,11 +439,11 @@ const DepartmentTree: React.FC = () => {
               {selectedNode ? (
                 <>
                   <div className="organization-selected-department">
-                    <Title level={4} className="organization-selected-title">
+                    <Title level={4} style={{ marginTop: 0, marginBottom: 8, color: 'var(--color-text)' }}>
                       {selectedNode.name}
                     </Title>
                     <Text type="secondary" className="organization-selected-hint">已加载该部门的统计、员工和变更记录</Text>
-                    <Space size={[12, 8]} wrap className="organization-selected-meta">
+                    <Space size={16}>
                       <Tooltip title={selectedNode.virtual_kind === 'organization' || !selectedNode.parent_id || selectedNode.parent_id === '0' || selectedNode.parent_id === '1'
                         ? '根部门人数 = 全组织去重员工总数（含在职+停用，已排除软删除和管理员）'
                         : '含下级部门去重汇总人数（在职+停用）'
@@ -477,14 +470,14 @@ const DepartmentTree: React.FC = () => {
                     </div>
                   ) : (
                     <>
-                      <div className="organization-stat-caption">
+                      <div style={{ marginTop: 12, marginBottom: 8 }}>
                         <Tooltip title="主数字为含下级部门去重的在职人数；括号内为直属本部门人数。多部门员工在父部门汇总时按员工 ID 去重。">
                           <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>统计口径：含下级部门汇总数据</Text>
                         </Tooltip>
                       </div>
-                      <Row gutter={[12, 12]} className="organization-stat-grid">
+                      <Row gutter={[12, 12]}>
                         <Col span={8}>
-                          <div className="organization-stat-box" style={statBoxStyle}>
+                          <div style={statBoxStyle}>
                             <Statistic
                               title={<Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>在职人数</Text>}
                               value={departmentOverview?.summary.active_employees ?? selectedNode.active_count}
@@ -496,7 +489,7 @@ const DepartmentTree: React.FC = () => {
                           </div>
                         </Col>
                         <Col span={8}>
-                          <div className="organization-stat-box" style={statBoxStyle}>
+                          <div style={statBoxStyle}>
                             <Statistic
                               title={<Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>试用期</Text>}
                               value={departmentOverview?.summary.probation_employee_count ?? 0}
@@ -505,7 +498,7 @@ const DepartmentTree: React.FC = () => {
                           </div>
                         </Col>
                         <Col span={8}>
-                          <div className="organization-stat-box" style={statBoxStyle}>
+                          <div style={statBoxStyle}>
                             <Statistic
                               title={<Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>转正预警</Text>}
                               value={departmentOverview?.summary.planned_regularization_count ?? 0}
@@ -517,14 +510,14 @@ const DepartmentTree: React.FC = () => {
                     </>
                   )}
                   <Tabs
-                    className="organization-detail-tabs"
+                    style={{ marginTop: 20 }}
                     items={[
                       {
                         key: 'members',
                         label: '员工列表',
                         children: (
                           <>
-                            <div className="organization-members-meta">
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
                               <Text type="secondary">含下级部门 {departmentEmployeeTotal} 人</Text>
                             </div>
                             <List
@@ -592,7 +585,7 @@ const DepartmentTree: React.FC = () => {
                             dataSource={departmentHistory}
                             renderItem={(item) => (
                               <List.Item>
-                                  <div className="organization-history-item">
+                                <div style={{ width: '100%' }}>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
                                     <Space size={4} wrap>
                                       {changeTypeTag(item.change_type)}
@@ -600,12 +593,12 @@ const DepartmentTree: React.FC = () => {
                                     </Space>
                                     <Text type="secondary">{formatDateTime(item.changed_at || item.created_at)}</Text>
                                   </div>
-                                  <div className="organization-history-change">
+                                  <div style={{ marginTop: 6 }}>
                                     <Text type="secondary">{item.old_value || '-'}</Text>
                                     <Text type="secondary"> {'->'} </Text>
                                     <Text>{item.new_value || '-'}</Text>
                                   </div>
-                                  <div className="organization-history-source">
+                                  <div style={{ marginTop: 4, color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>
                                     来源：{item.source || 'system'}
                                   </div>
                                 </div>
