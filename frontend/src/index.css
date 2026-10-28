@@ -203,6 +203,34 @@ code {
   min-width: 180px;
 }
 
+.attendance-export-info {
+  margin-bottom: var(--space-5);
+}
+
+.attendance-export-table-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.attendance-export-table-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attendance-export-modal-form {
+  padding: var(--space-3) 0 0;
+}
+
+.attendance-export-modal-form .ant-form-item:last-child {
+  margin-bottom: 0;
+}
+
 @media (max-width: 767px) {
   .page-filter-toolbar {
     align-items: stretch;
@@ -220,6 +248,11 @@ code {
   .page-container-actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .attendance-export-table-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
-import { Typography, Table, Spin, Empty, Alert, Button, Space, message, DatePicker, Select, Modal } from 'antd'
-import { DownloadOutlined, SyncOutlined, FileExcelOutlined, EyeOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Typography, Table, Spin, Empty, Alert, Button, Space, message, DatePicker, Select, Modal, Form } from 'antd'
+import { DownloadOutlined, FileExcelOutlined, EyeOutlined, InfoCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { attendanceAPI, departmentAPI, userAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
@@ -14,7 +14,7 @@ import { downloadAuthorizedFile } from '../utils/authFileUrl'
 
 dayjs.locale('zh-cn')
 
-const { Title } = Typography
+const { Text } = Typography
 const { RangePicker } = DatePicker
 
 interface ExportRecord {
@@ -87,6 +87,14 @@ const AttendanceExport: React.FC = () => {
       department_id: department || undefined,
       user_id: user || undefined,
     })
+  }
+
+  const handleCloseExportModal = () => {
+    if (exportMutation.isPending) return
+    setExportModalVisible(false)
+    setDateRange([null, null])
+    setDepartment('')
+    setUser('')
   }
 
   const handleDownload = async (record: ExportRecord) => {
@@ -172,18 +180,36 @@ const AttendanceExport: React.FC = () => {
   ]
 
   return (
-    <PageContainer title="导出记录" icon={<FileExcelOutlined />} subtitle="考勤数据导出记录管理">
-      <PageCard
-        extra={
-          <Button
-            type="primary"
-            icon={<FileExcelOutlined />}
-            onClick={() => setExportModalVisible(true)}
-          >
+    <PageContainer
+      className="attendance-export-page"
+      title="考勤导出"
+      icon={<FileExcelOutlined />}
+      subtitle="创建、跟踪和下载考勤数据导出任务"
+      extra={(
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} onClick={() => void refetch()} loading={isLoading}>刷新</Button>
+          <Button type="primary" icon={<FileExcelOutlined />} onClick={() => setExportModalVisible(true)}>
             新建导出
           </Button>
-        }
-      >
+        </Space>
+      )}
+    >
+      <PageCard title="导出任务">
+        <Alert
+          className="attendance-export-info"
+          type="info"
+          showIcon
+          icon={<InfoCircleOutlined />}
+          message="导出任务为后台异步处理"
+          description="创建任务后可在列表中查看处理状态；完成后使用“下载”获取 Excel 文件。"
+        />
+        <div className="attendance-export-table-heading">
+          <div>
+            <Text strong>任务列表</Text>
+            <Text type="secondary">按创建时间查看最近的导出任务</Text>
+          </div>
+          <Text type="secondary">{isLoading ? '正在加载…' : `共 ${exportsData?.data?.total ?? 0} 条`}</Text>
+        </div>
         {isLoading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-10)' }}>
             <Spin size="large" />
@@ -228,15 +254,14 @@ const AttendanceExport: React.FC = () => {
       <Modal
         title="新建考勤导出"
         open={exportModalVisible}
-        onCancel={() => setExportModalVisible(false)}
+        onCancel={handleCloseExportModal}
         onOk={handleExport}
         confirmLoading={exportMutation.isPending}
         okText="确定"
         cancelText="取消"
       >
-        <div style={{ padding: 'var(--space-5) 0' }}>
-          <div style={{ marginBottom: 'var(--space-4)' }}>
-            <label style={{ display: 'block', marginBottom: 'var(--space-2)' }}>日期范围</label>
+        <Form layout="vertical" className="attendance-export-modal-form">
+          <Form.Item label="日期范围" required>
             <RangePicker
               style={{ width: '100%' }}
               onChange={handleDateChange}
@@ -244,9 +269,8 @@ const AttendanceExport: React.FC = () => {
               format="YYYY-MM-DD"
               locale={datePickerZhCN}
             />
-          </div>
-          <div style={{ marginBottom: 'var(--space-4)' }}>
-            <label style={{ display: 'block', marginBottom: 'var(--space-2)' }}>部门（可选）</label>
+          </Form.Item>
+          <Form.Item label="部门（可选）">
             <Select
               placeholder="选择部门"
               style={{ width: '100%' }}
@@ -256,9 +280,8 @@ const AttendanceExport: React.FC = () => {
               onChange={setDepartment}
               options={(departmentsData || []).map((d: any) => ({ label: d.name, value: d.id }))}
             />
-          </div>
-          <div style={{ marginBottom: 'var(--space-4)' }}>
-            <label style={{ display: 'block', marginBottom: 'var(--space-2)' }}>员工（可选）</label>
+          </Form.Item>
+          <Form.Item label="员工（可选）">
             <Select
               placeholder="选择员工"
               style={{ width: '100%' }}
@@ -268,8 +291,8 @@ const AttendanceExport: React.FC = () => {
               onChange={setUser}
               options={(usersData || []).map((u: any) => ({ label: u.name || u.username, value: u.id }))}
             />
-          </div>
-        </div>
+          </Form.Item>
+        </Form>
       </Modal>
     </PageContainer>
   )
