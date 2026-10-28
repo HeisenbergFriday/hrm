@@ -77,10 +77,18 @@
   height: 100%;
 }
 
+.organization-tree-layout > .ant-col:first-child > .ant-card {
+  height: auto;
+}
+
 .organization-tree-panel .ant-card-body,
 .organization-department-panel .ant-card-body,
 .organization-tree-layout > .ant-col > .ant-card .ant-card-body {
   min-height: 520px;
+}
+
+.organization-tree-layout > .ant-col:first-child > .ant-card .ant-card-body {
+  min-height: 0;
 }
 
 .organization-tree-help {
