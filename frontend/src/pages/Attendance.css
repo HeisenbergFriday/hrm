@@ -65,6 +65,11 @@
   margin-bottom: var(--attendance-card-gap);
 }
 
+.attendance-exception-alert {
+  margin-bottom: var(--attendance-card-gap);
+  border-left: 4px solid var(--color-warning);
+}
+
 .attendance-filter-primary {
   display: flex;
   align-items: center;
@@ -102,6 +107,10 @@
 .attendance-filter-summary .anticon {
   margin-right: 4px;
   color: var(--color-primary);
+}
+
+.attendance-filter-summary .ant-tag {
+  margin-inline-end: 0;
 }
 
 .attendance-result-header {

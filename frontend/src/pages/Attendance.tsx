@@ -423,6 +423,21 @@ const Attendance: React.FC = () => {
     setPage(1)
   }
 
+  const clearFilter = (filter: 'user' | 'department' | 'status' | 'dateRange') => {
+    if (filter === 'user') {
+      setUser('')
+      setEmployeeKeyword('')
+      setSelectedEmployeeOption(null)
+    }
+    if (filter === 'department') setDepartment('')
+    if (filter === 'status') setStatus('all')
+    if (filter === 'dateRange') {
+      setQuickRange('7days')
+      setDateRange(defaultRange())
+    }
+    setPage(1)
+  }
+
   const openDetails = (record: AttendanceDailyResult) => setSelectedRecord(record)
 
   const columns = [
@@ -639,6 +654,18 @@ const Attendance: React.FC = () => {
         />
       ) : null}
 
+      {summary.exception > 0 && status !== 'exception' ? (
+        <Alert
+          className="attendance-exception-alert"
+          type="warning"
+          showIcon
+          icon={<WarningOutlined />}
+          message={`当前范围有 ${summary.exception} 条异常考勤记录`}
+          description="优先处理迟到、缺卡和旷工记录，点击下方按钮快速进入异常视图。"
+          action={<Button size="small" onClick={() => { setStatus('exception'); setPage(1) }}>查看结果</Button>}
+        />
+      ) : null}
+
       <PageCard className="attendance-filter-card">
         <div className="attendance-filter-primary">
           <Segmented
@@ -734,10 +761,12 @@ const Attendance: React.FC = () => {
               <CalendarOutlined /> 查询范围：{queryRangeLabel}
             </Text>
             <Text type="secondary">当前结果 {total} 条</Text>
-            <Tag color={status === 'all' ? 'default' : 'processing'}>状态：{selectedStatusLabel}</Tag>
-            {user ? <Tag color="blue">员工：{selectedEmployeeOption?.label || user}</Tag> : null}
-            {department ? <Tag color="blue">部门：已选择</Tag> : null}
+            <Tag color={status === 'all' ? 'default' : 'processing'} closable={status !== 'all'} onClose={(event) => { event.preventDefault(); clearFilter('status') }}>状态：{selectedStatusLabel}</Tag>
+            {user ? <Tag color="blue" closable onClose={(event) => { event.preventDefault(); clearFilter('user') }}>员工：{selectedEmployeeOption?.label || user}</Tag> : null}
+            {department ? <Tag color="blue" closable onClose={(event) => { event.preventDefault(); clearFilter('department') }}>部门：已选择</Tag> : null}
+            {quickRange === 'custom' ? <Tag color="purple" closable onClose={(event) => { event.preventDefault(); clearFilter('dateRange') }}>自定义日期</Tag> : null}
             {activeFilterCount ? <Tag color="geekblue">已应用 {activeFilterCount} 项筛选</Tag> : null}
+            {activeFilterCount || quickRange === 'custom' ? <Button type="link" size="small" onClick={resetFilters}>清除全部条件</Button> : null}
           </Space>
         </div>
       </PageCard>
