@@ -54,6 +54,23 @@
   align-items: stretch;
 }
 
+.organization-tree-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.organization-tree-empty-state {
+  display: flex;
+  min-height: 360px;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  border: 1px dashed var(--color-border-dashed);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-card);
+}
+
 .organization-tree-panel,
 .organization-department-panel,
 .organization-tree-layout > .ant-col > .ant-card {
@@ -101,6 +118,10 @@
   margin-bottom: var(--space-3);
 }
 
+.organization-tree-toolbar-actions {
+  flex: 0 0 auto;
+}
+
 .organization-tree-search {
   flex: 1;
   min-width: 180px;
@@ -128,6 +149,64 @@
   margin-bottom: 16px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--color-border-light);
+}
+
+.organization-selected-title {
+  margin: 0 0 var(--space-2) !important;
+  color: var(--color-text-title) !important;
+}
+
+.organization-selected-meta {
+  width: 100%;
+}
+
+.organization-stat-caption {
+  margin: var(--space-3) 0 var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.organization-stat-grid {
+  margin-bottom: var(--space-2);
+}
+
+.organization-stat-box {
+  height: 100%;
+  padding: var(--space-3) !important;
+  border-radius: var(--radius-lg) !important;
+  background: linear-gradient(135deg, var(--color-bg-container) 0%, var(--color-bg-subtle) 100%) !important;
+  border: 1px solid var(--color-border-light) !important;
+}
+
+.organization-detail-tabs {
+  margin-top: var(--space-5);
+}
+
+.organization-detail-tabs .ant-tabs-nav {
+  margin-bottom: var(--space-3);
+}
+
+.organization-members-meta {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-2);
+}
+
+.organization-history-item {
+  width: 100%;
+}
+
+.organization-history-change {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: var(--space-2);
+}
+
+.organization-history-source {
+  margin-top: var(--space-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
 }
 
 .organization-selected-hint {
@@ -500,6 +579,27 @@
 }
 
 @media (max-width: 768px) {
+  .organization-tree-page-actions {
+    width: 100%;
+  }
+
+  .organization-tree-page-actions .ant-btn {
+    flex: 1;
+  }
+
+  .organization-tree-empty-state {
+    min-height: 280px;
+    padding: var(--space-5);
+  }
+
+  .organization-stat-grid .ant-col {
+    width: 100%;
+  }
+
+  .organization-members-meta {
+    justify-content: flex-start;
+  }
+
   .organization-overview-heading,
   .organization-roster-summary {
     align-items: stretch;
