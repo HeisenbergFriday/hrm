@@ -89,6 +89,14 @@
 
 .organization-tree-layout > .ant-col:first-child > .ant-card .ant-card-body {
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.organization-tree-layout > .ant-col:first-child > .ant-card .organization-tree-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 .organization-tree-help {
@@ -682,6 +690,12 @@
     max-height: 420px;
     min-height: 180px;
     overflow-y: auto;
+  }
+
+  .organization-tree-layout > .ant-col:first-child > .ant-card .organization-tree-scroll {
+    flex: 0 0 auto;
+    max-height: 420px;
+    min-height: 180px;
   }
 
   .organization-employee-hero .ant-card-body {
