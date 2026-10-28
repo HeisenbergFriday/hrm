@@ -41,6 +41,7 @@ describe('Home empty permission', () => {
     expect(
       screen.getByText('您尚未被分配任何角色，请联系管理员配置权限后再使用系统功能。'),
     ).toBeInTheDocument()
+    expect(screen.getByText('工作台')).toBeInTheDocument()
     expect(screen.getByText('系统概览')).toBeInTheDocument()
   })
 })
