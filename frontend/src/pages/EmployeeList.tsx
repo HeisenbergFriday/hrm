@@ -3,13 +3,16 @@ import {
   Alert,
   Avatar,
   Button,
+  Card,
   Col,
+  Collapse,
   Empty,
   Input,
   Row,
   Select,
   Skeleton,
   Space,
+  Segmented,
   Spin,
   Tag,
   Table,
@@ -17,7 +20,7 @@ import {
   Typography,
   message,
 } from 'antd'
-import { CloseCircleOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons'
+import { CloseCircleOutlined, EyeOutlined, FilterOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { departmentAPI, orgAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
@@ -138,6 +141,8 @@ const EmployeeList: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(true)
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table')
   const [total, setTotal] = useState(0)
   const page = Math.max(1, Number(searchParams.get('page')) || 1)
   const pageSize = Math.max(1, Number(searchParams.get('page_size')) || 10)
@@ -305,7 +310,42 @@ const EmployeeList: React.FC = () => {
         </StatusTag>
       ),
     },
+    {
+      title: '操作', key: 'actions', fixed: 'right' as const, width: 112,
+      render: (_: unknown, record: EmployeeItem) => (
+        <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/employees/${record.id}`)}>
+          查看档案
+        </Button>
+      ),
+    },
   ]
+
+  const renderEmployeeCard = (record: EmployeeItem) => (
+    <Card className="organization-employee-card" key={record.id} size="small">
+      <div className="organization-employee-card-heading">
+        <Space size={10}>
+          <Avatar size={40} src={record.avatar} icon={<UserOutlined />} />
+          <div>
+            <Button type="link" className="organization-employee-card-name" onClick={() => navigate(`/employees/${record.id}`)}>
+              {record.name}
+            </Button>
+            <Text className="organization-employee-card-id">{record.user_id}</Text>
+          </div>
+        </Space>
+        <StatusTag color={record.status === 'active' ? 'success' : 'default'}>
+          {record.status === 'active' ? '在职' : record.status === 'inactive' ? '离职' : record.status}
+        </StatusTag>
+      </div>
+      <div className="organization-employee-card-details">
+        <div><Text type="secondary">部门</Text><span>{departmentNameMap[record.department_id] || record.department_id || '未分配部门'}</span></div>
+        <div><Text type="secondary">岗位</Text><span>{record.position || '未同步岗位'}</span></div>
+        <div><Text type="secondary">联系方式</Text><span>{maskMobile(record.mobile) || maskEmail(record.email) || '未填写'}</span></div>
+      </div>
+      <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/employees/${record.id}`)}>
+        查看人事档案
+      </Button>
+    </Card>
+  )
 
   return (
     <PageContainer
@@ -424,7 +464,24 @@ const EmployeeList: React.FC = () => {
           <Text type="secondary">{loading ? '正在加载…' : `共 ${total} 人`}</Text>
         </div>
       <PageCard className="organization-roster-card" title="员工列表">
-        <div className="organization-filter-bar" aria-label="员工筛选条件">
+        <div className="organization-roster-toolbar">
+          <div>
+            <Text strong>人员名册</Text>
+            <Text type="secondary">按条件筛选后，可切换表格或卡片视图</Text>
+          </div>
+          <Space wrap>
+            <Button icon={<FilterOutlined />} onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen}>
+              {filtersOpen ? '收起筛选' : '展开筛选'}
+            </Button>
+            <Segmented
+              value={viewMode}
+              onChange={(value) => setViewMode(value as 'table' | 'cards')}
+              options={[{ label: '表格', value: 'table' }, { label: '卡片', value: 'cards' }]}
+            />
+          </Space>
+        </div>
+
+        {filtersOpen ? <div className="organization-filter-bar" aria-label="员工筛选条件">
         <Space wrap className="organization-filter-controls">
           <Search
             allowClear
@@ -468,7 +525,11 @@ const EmployeeList: React.FC = () => {
           <Text type="secondary">{loading ? '正在加载员工数据…' : `当前结果 ${total} 人`}</Text>
           {hasActiveFilters ? <Text type="secondary">已应用筛选</Text> : <Text type="secondary">支持按姓名、工号、联系方式和岗位搜索</Text>}
         </div>
-        </div>
+        </div> : (
+          <div className="organization-filter-collapsed">
+            {hasActiveFilters ? <Text type="secondary">已应用筛选条件，点击“展开筛选”可调整</Text> : <Text type="secondary">未设置筛选条件，当前显示全部可见员工</Text>}
+          </div>
+        )}
 
         {filterType && FILTER_TYPE_LABELS[filterType] ? (
           <div className="organization-roster-summary" style={{ marginTop: 16 }}>
@@ -501,6 +562,16 @@ const EmployeeList: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
             <Spin size="large" />
           </div>
+        ) : viewMode === 'cards' ? (
+          employees.length > 0 ? (
+            <div className="organization-employee-card-grid">
+              {employees.map(renderEmployeeCard)}
+            </div>
+          ) : (
+            <Empty description={hasActiveFilters ? '当前筛选条件下无员工' : '暂无员工数据'}>
+              {hasActiveFilters ? <Button type="link" onClick={clearFilters}>清除筛选</Button> : null}
+            </Empty>
+          )
         ) : (
           <Table
             rowKey="id"
