@@ -959,10 +959,17 @@ func NormalizeMenuPermissionKey(key string) string {
 
 // NormalizeMenuPermissionKeys 去重、规范化并排序菜单权限码。
 func NormalizeMenuPermissionKeys(keys []string) []string {
+	removed := map[string]struct{}{
+		"menu:approval-stats":   {},
+		"menu:attendance-stats": {},
+	}
 	keySet := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
 		normalized := NormalizeMenuPermissionKey(key)
 		if normalized == "" {
+			continue
+		}
+		if _, isRemoved := removed[normalized]; isRemoved {
 			continue
 		}
 		keySet[normalized] = struct{}{}

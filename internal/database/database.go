@@ -181,6 +181,7 @@ func Init() error {
 	migratePermissions()
 	migratePerformanceIndicatorRolePresets()
 	migrateMenuPermissions()
+	migrateRemovedMenuPermissions()
 	migratePerformanceReportMenuPermissions()
 	migratePerformanceFollowupMenuPermissions()
 	migrateAttendanceToolboxMenuPermissions()
@@ -2928,6 +2929,10 @@ func ensureRoleDataPermissionInOrg(orgID string, roleID uint, scope string, depa
 }
 
 func normalizeMenuPermissionKeys(keys []string) []string {
+	removed := map[string]struct{}{
+		"menu:approval-stats":   {},
+		"menu:attendance-stats": {},
+	}
 	keySet := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
 		normalized := strings.TrimSpace(key)
@@ -2936,6 +2941,9 @@ func normalizeMenuPermissionKeys(keys []string) []string {
 		}
 		if !strings.HasPrefix(normalized, "menu:") {
 			normalized = "menu:" + normalized
+		}
+		if _, isRemoved := removed[normalized]; isRemoved {
+			continue
 		}
 		keySet[normalized] = struct{}{}
 	}
@@ -2998,6 +3006,49 @@ func migrateMenuPermissions() {
 		}
 		if err := DB.Create(&MenuPermission{OrgID: NormalizeOrganizationID(role.OrgID), RoleID: role.ID, MenuKeys: string(payload)}).Error; err != nil {
 			log.Printf("迁移菜单权限：写入角色 %d 菜单失败: %v", role.ID, err)
+		}
+	}
+}
+
+// migrateRemovedMenuPermissions removes menu keys whose pages and routes have
+// been retired. The migration is idempotent and only updates changed records.
+func migrateRemovedMenuPermissions() {
+	var records []MenuPermission
+	if err := DB.Where("deleted_at IS NULL").Find(&records).Error; err != nil {
+		log.Printf("迁移已删除菜单权限：读取菜单权限失败: %v", err)
+		return
+	}
+	for _, record := range records {
+		var keys []string
+		if err := json.Unmarshal([]byte(strings.TrimSpace(record.MenuKeys)), &keys); err != nil {
+			log.Printf("迁移已删除菜单权限：解析角色 %d 菜单失败: %v", record.RoleID, err)
+			continue
+		}
+		hasRemovedKey := false
+		for _, key := range keys {
+			normalized := strings.TrimSpace(key)
+			if !strings.HasPrefix(normalized, "menu:") {
+				normalized = "menu:" + normalized
+			}
+			if normalized == "menu:approval-stats" || normalized == "menu:attendance-stats" {
+				hasRemovedKey = true
+				break
+			}
+		}
+		if !hasRemovedKey {
+			continue
+		}
+		filtered := normalizeMenuPermissionKeys(keys)
+		payload, err := json.Marshal(filtered)
+		if err != nil {
+			log.Printf("迁移已删除菜单权限：序列化角色 %d 菜单失败: %v", record.RoleID, err)
+			continue
+		}
+		if string(payload) == strings.TrimSpace(record.MenuKeys) {
+			continue
+		}
+		if err := DB.Model(&MenuPermission{}).Where("id = ?", record.ID).Update("menu_keys", string(payload)).Error; err != nil {
+			log.Printf("迁移已删除菜单权限：更新角色 %d 菜单失败: %v", record.RoleID, err)
 		}
 	}
 }
