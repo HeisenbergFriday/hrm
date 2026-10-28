@@ -128,11 +128,11 @@
 }
 
 .organization-tree-scroll {
-  /* 组织树按完整内容展开，交给页面整体滚动，避免在左侧卡片底部提前截断。 */
-  max-height: none;
+  max-height: 520px;
   min-height: 260px;
-  overflow: visible;
+  overflow-y: auto;
   padding: 4px 2px;
+  scrollbar-gutter: stable;
 }
 
 .organization-tree-scroll .ant-tree-treenode {
@@ -671,9 +671,9 @@
   }
 
   .organization-tree-scroll {
-    max-height: none;
+    max-height: 420px;
     min-height: 180px;
-    overflow: visible;
+    overflow-y: auto;
   }
 
   .organization-employee-hero .ant-card-body {
