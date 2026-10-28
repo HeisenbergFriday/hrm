@@ -695,33 +695,6 @@ export type ApprovalSyncAPIResponse = {
   data: ApprovalSyncResult
 }
 
-export type ApprovalStatsAPIResponse = {
-  code: 200
-  message: 'success'
-  data: {
-    summary: {
-      total: number
-      completed: number
-      refused: number
-      running: number
-      terminated: number
-      canceled: number
-      approval_rate: string
-    }
-    template_stats: Array<{
-      template_id: string
-      template_name: string
-      total: number
-      completed: number
-      refused: number
-      running: number
-      terminated: number
-      canceled: number
-      approval_rate: string
-    }>
-  }
-}
-
 function approvalSyncStorage(): Storage | undefined {
   return typeof window === 'undefined' ? undefined : window.sessionStorage
 }
@@ -787,8 +760,6 @@ export const approvalAPI = {
     sort_order?: 'asc' | 'desc'
   }) => api.get('/approvals/instances', { params }),
   getApproval: (id: string) => api.get(`/approvals/${id}`),
-  getStats: (params: { template_id?: string; start_date?: string; end_date?: string }) =>
-    api.get<ApprovalStatsAPIResponse, ApprovalStatsAPIResponse>('/approvals/stats', { params }),
   resumeSync: async (): Promise<ApprovalSyncAPIResponse> => {
     const requestID = getPendingApprovalSyncRequestID()
     if (!requestID) throw new Error('没有可恢复的审批同步任务')

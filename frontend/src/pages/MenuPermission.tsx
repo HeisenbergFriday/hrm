@@ -88,7 +88,6 @@ const MenuPermission: React.FC = () => {
         { title: 'OA审批数据', key: 'oa-approval-data' },
         { title: '审批模板', key: 'approval-templates' },
         { title: '审批实例', key: 'approval-instances' },
-        { title: '审批统计', key: 'approval-stats' },
       ],
     },
     {

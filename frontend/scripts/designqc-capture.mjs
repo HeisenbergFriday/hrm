@@ -29,7 +29,6 @@ const menuKeys = [
   'menu:approval-group',
   'menu:approval-templates',
   'menu:approval-instances',
-  'menu:approval-stats',
   'menu:permission',
   'menu:jobs-group',
   'menu:sync-jobs',

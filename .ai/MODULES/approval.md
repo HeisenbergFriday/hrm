@@ -15,7 +15,6 @@ source_of_truth:
   - frontend/src/pages/ApprovalTemplate.tsx
   - frontend/src/pages/ApprovalInstance.tsx
   - frontend/src/pages/ApprovalDetail.tsx
-  - frontend/src/pages/ApprovalStats.tsx
   - frontend/src/components/ApprovalSyncStatus.tsx
   - frontend/src/hooks/useApprovalSync.ts
   - frontend/src/pages/OAApprovalData.tsx
@@ -84,7 +83,7 @@ update_when:
 - 手动同步入口继续保留，用于指定历史范围、运维补拉和人工验收；日常数据更新不依赖人工点击。
 - Stream 与定时补偿都复用 `ApprovalSyncService` 的映射、写入和对账规则，不维护第二套审批转换或下游入账实现。
 
-审批实例、详情和统计页统一显示自动同步状态，日常主流程不要求人工点击。异常遗漏或历史数据补录使用共享的“手动补拉”入口；选择模板或进入详情后显示“补拉当前模板”，并传显式 `process_code`。同步执行、刷新后恢复和结果提示必须复用 `useApprovalSync`，禁止各页面重复维护同步状态机。
+审批实例和详情页统一显示自动同步状态，日常主流程不要求人工点击。异常遗漏或历史数据补录使用共享的“手动补拉”入口；选择模板或进入详情后显示“补拉当前模板”，并传显式 `process_code`。同步执行、刷新后恢复和结果提示必须复用 `useApprovalSync`，禁止各页面重复维护同步状态机。
 
 `/approvals/instances` 常用 query：
 
@@ -105,7 +104,7 @@ update_when:
 核心模型定义在 `internal/database/models.go`：
 
 - `Approval`：审批实例，`process_id` 保存钉钉审批实例 ID。
-- `ApprovalTemplate`：审批模板，`template_id` 保存钉钉模板标识。模板页/详情页同步时传显式 `process_code`；实例页/统计页允许省略以触发全量同步。
+- `ApprovalTemplate`：审批模板，`template_id` 保存钉钉模板标识。模板页/详情页同步时传显式 `process_code`；实例页允许省略以触发全量同步。
 
 模板目录查询以当前 JWT 组织的 `dingtalk.ConfigForOrgID(orgID).ProcessCodes` 为配置兜底：当 `approval_templates` 没有对应记录时，仍返回配置流程模板（已有数据库模板的表单/节点信息优先）。审批实例同步写入的 `extension.process_code` 是实例与模板目录的稳定关联键，模板筛选必须同时兼容 `process_code` 与历史 `template_id`。
 
@@ -142,12 +141,12 @@ update_when:
 | `/approval-templates` | `ApprovalTemplate.tsx` | 审批模板 |
 | `/approval-instances` | `ApprovalInstance.tsx` | 审批实例 |
 | `/approval-detail/:id` | `ApprovalDetail.tsx` | 审批详情 |
-| `/approval-stats` | `ApprovalStats.tsx` | 审批统计 |
+
 | `/oa-approval-data` | `OAApprovalData.tsx` | 沐腾 OA 审批明细与动态字段详情 |
 
-`/approval` 仍保留页面文件和路由，审批管理主菜单以模板和实例工作台为主；统计页保留路由和权限控制，暂不作为日常入口。
+`/approval` 仍保留页面文件和路由，审批管理主菜单以模板和实例工作台为主。
 
-审批实例列表必须保留 URL 筛选、分页、排序、详情返回地址和滚动位置恢复。列表采用紧凑信息层级：模板作为标题辅助信息，审批时间和业务时间合并展示，四种后端排序字段通过表头排序控件切换。`COMPLETED` 状态需要结合 `extension.result` 区分“已通过”和“已拒绝”；详情页使用摘要、审批内容、业务时间、流程轨迹四层信息结构，统计页必须覆盖加载、错误和空数据状态。
+审批实例列表必须保留 URL 筛选、分页、排序、详情返回地址和滚动位置恢复。列表采用紧凑信息层级：模板作为标题辅助信息，审批时间和业务时间合并展示，四种后端排序字段通过表头排序控件切换。`COMPLETED` 状态需要结合 `extension.result` 区分“已通过”和“已拒绝”；详情页使用摘要、审批内容、业务时间、流程轨迹四层信息结构。
 
 ## 注意事项
 

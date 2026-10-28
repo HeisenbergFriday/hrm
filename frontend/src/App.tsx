@@ -50,7 +50,6 @@ const Approval = lazy(() => import('./pages/Approval'))
 const ApprovalTemplate = lazy(() => import('./pages/ApprovalTemplate'))
 const ApprovalInstance = lazy(() => import('./pages/ApprovalInstance'))
 const ApprovalDetail = lazy(() => import('./pages/ApprovalDetail'))
-const ApprovalStats = lazy(() => import('./pages/ApprovalStats'))
 const OAApprovalData = lazy(() => import('./pages/OAApprovalData'))
 const RoleManagement = lazy(() => import('./pages/RoleManagement'))
 const SyncJobs = lazy(() => import('./pages/SyncJobs'))
@@ -148,7 +147,6 @@ const routeMenuKeys: Record<string, string> = {
   '/approval': menuPermissionKey('approval-templates'),
   '/approval-templates': menuPermissionKey('approval-templates'),
   '/approval-instances': menuPermissionKey('approval-instances'),
-  '/approval-stats': menuPermissionKey('approval-stats'),
   '/oa-approval-data': menuPermissionKey('oa-approval-data'),
   '/role-management': menuPermissionKey('permission'),
   '/sync-jobs': menuPermissionKey('sync-jobs'),
@@ -644,7 +642,6 @@ function App() {
                 <Route path="/approval-templates" element={<RouteGuard menuKey="menu:approval-templates"><ApprovalTemplate /></RouteGuard>} />
                 <Route path="/approval-instances" element={<RouteGuard menuKey="menu:approval-instances"><ApprovalInstance /></RouteGuard>} />
                 <Route path="/approval-detail/:id" element={<RouteGuard menuKey="menu:approval-instances"><ApprovalDetail /></RouteGuard>} />
-                <Route path="/approval-stats" element={<RouteGuard menuKey="menu:approval-stats"><ApprovalStats /></RouteGuard>} />
                 <Route path="/oa-approval-data" element={<RouteGuard menuKey="menu:oa-approval-data"><OAApprovalData /></RouteGuard>} />
                 <Route path="/role-management" element={<RouteGuard menuKey="menu:permission"><RoleManagement /></RouteGuard>} />
                 <Route path="/sync-jobs" element={<RouteGuard menuKey="menu:sync-jobs"><SyncJobs /></RouteGuard>} />

@@ -2,7 +2,6 @@ package service
 
 import (
 	"testing"
-	"time"
 
 	"peopleops/internal/database"
 	"peopleops/internal/dingtalk"
@@ -52,31 +51,5 @@ func TestApprovalServiceCompletesTemplateCatalogFromOrganizationConfig(t *testin
 	}
 	if _, leaked := byCode["PROC-FOREIGN"]; leaked {
 		t.Fatal("foreign organization template leaked into catalog")
-	}
-}
-
-func TestApprovalStatsUsesConfiguredTemplateNameWhenTemplateTableIsEmpty(t *testing.T) {
-	db := openLeaveJobsDB(t)
-	if err := db.AutoMigrate(&database.Approval{}, &database.ApprovalTemplate{}); err != nil {
-		t.Fatalf("migrate approval tables: %v", err)
-	}
-	if err := db.Create(&database.Approval{
-		OrgID: "org-a", ProcessID: "approval-1", Title: "张三提交的请假", ApplicantID: "u1", ApplicantName: "张三",
-		Status: "COMPLETED", CreateTime: time.Now().In(ApprovalSyncLocation()),
-		Extension: map[string]interface{}{"result": "agree", "process_code": "PROC-LEAVE"},
-	}).Error; err != nil {
-		t.Fatalf("create approval: %v", err)
-	}
-
-	svc := NewApprovalStatsServiceWithOrgID(db, "org-a")
-	svc.configForOrg = func(string) (dingtalk.Config, error) {
-		return dingtalk.Config{OrgID: "org-a", ProcessCodes: map[string]string{"leave": "PROC-LEAVE"}}, nil
-	}
-	stats, err := svc.Get(map[string]string{})
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if len(stats.TemplateStats) != 1 || stats.TemplateStats[0].TemplateName != "请假审批" {
-		t.Fatalf("template stats = %#v", stats.TemplateStats)
 	}
 }

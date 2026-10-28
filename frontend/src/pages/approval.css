@@ -201,64 +201,6 @@
   margin-top: var(--space-2);
 }
 
-.approval-stats-filter {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.approval-stats-filter .ant-select {
-  width: 220px;
-}
-
-.approval-stats-filter .ant-segmented {
-  max-width: 100%;
-}
-
-.approval-stats-context {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border-light);
-}
-
-.approval-stats-context .anticon {
-  margin-right: 4px;
-  color: var(--color-primary);
-}
-
-.approval-status-distribution {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(150px, 1fr));
-  gap: var(--space-3);
-}
-
-.approval-status-item {
-  padding: var(--space-4);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-subtle);
-  transition: border-color var(--transition-normal), box-shadow var(--transition-normal), transform var(--transition-normal);
-}
-
-.approval-status-item:hover {
-  border-color: var(--color-primary-light);
-  box-shadow: var(--shadow-sm);
-  transform: translateY(-1px);
-}
-
-.approval-status-item-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-}
-
 .approval-loading {
   display: flex;
   justify-content: center;
@@ -270,9 +212,6 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .approval-status-distribution {
-    grid-template-columns: repeat(3, minmax(150px, 1fr));
-  }
 }
 
 @media (max-width: 768px) {
@@ -290,8 +229,7 @@
     width: 100%;
   }
 
-  .approval-filter-grid,
-  .approval-status-distribution {
+  .approval-filter-grid {
     grid-template-columns: 1fr;
   }
 
@@ -318,19 +256,4 @@
     justify-content: space-between;
   }
 
-  .approval-stats-filter,
-  .approval-stats-filter .ant-select,
-  .approval-stats-filter .ant-picker,
-  .approval-stats-filter .ant-btn {
-    width: 100%;
-  }
-
-  .approval-stats-context {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .approval-stats-filter .ant-segmented {
-    width: 100%;
-  }
 }

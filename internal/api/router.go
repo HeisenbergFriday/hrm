@@ -250,8 +250,7 @@ func SetupRouter() *gin.Engine {
 					[]string{"approval_manage"},
 					[]string{"menu:oa-approval-data"},
 				), ExternalApprovalDetails)
-				approvals.GET("/templates", middleware.RequireMenuPermission("menu:approval-templates", "menu:approval-stats"), GetApprovalTemplates)
-				approvals.GET("/stats", middleware.RequireMenuPermission("menu:approval-stats"), GetApprovalStats)
+				approvals.GET("/templates", middleware.RequireMenuPermission("menu:approval-templates"), GetApprovalTemplates)
 				approvals.GET("/instances", middleware.RequireMenuPermission("menu:approval-instances"), GetApprovalInstances)
 				approvals.GET("/:id", middleware.RequireMenuPermission("menu:approval-instances"), GetApproval)
 			}
