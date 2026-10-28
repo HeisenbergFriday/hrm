@@ -336,8 +336,15 @@ const EmployeeList: React.FC = () => {
         </Space>
       }
     >
-      {/* 统计卡片 */}
-      <Row gutter={[16, 16]} className="organization-metric-grid" style={{ marginBottom: 'var(--space-5)' }}>
+      <section className="organization-roster-section" aria-labelledby="employee-overview-title">
+        <div className="organization-section-heading">
+          <div>
+            <h2 id="employee-overview-title">员工概览</h2>
+            <Text>快速查看当前组织的人员状态</Text>
+          </div>
+          <span className="organization-section-kicker">实时数据</span>
+        </div>
+      <Row gutter={[16, 16]} className="organization-metric-grid">
         {statConfig.map((item, idx) => {
           const isActive = item.filterType ? filterType === item.filterType : !filterType
           const isClickable = !!item.filterType
@@ -353,77 +360,71 @@ const EmployeeList: React.FC = () => {
           }
           return (
             <Col xs={24} md={8} key={item.key}>
-              <div
-                role={isClickable ? 'button' : undefined}
-                tabIndex={isClickable ? 0 : undefined}
+              <button
+                type="button"
+                className={`organization-metric-card${isActive ? ' organization-metric-card-active' : ''}`}
                 aria-label={isClickable ? `筛选${item.title}` : undefined}
                 aria-pressed={isClickable ? isActive : undefined}
+                disabled={!isClickable}
                 onClick={handleCardClick}
                 onKeyDown={handleCardKeyDown}
                 style={{
-                  background: 'var(--color-bg-card)',
-                  borderRadius: 'var(--radius-xl)',
-                  padding: '20px 22px',
-                  boxShadow: 'var(--shadow-card)',
-                  border: isClickable && isActive ? `2px solid ${item.color}` : '1px solid var(--color-border)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  cursor: isClickable ? 'pointer' : 'default',
-                  transition: 'border-color 0.2s, box-shadow 0.2s',
-                  ...(isClickable && isActive ? { boxShadow: `0 0 0 1px ${item.color}` } : {}),
-                }}
+                  '--metric-accent': item.color,
+                  '--metric-background': item.bg,
+                } as React.CSSProperties}
               >
-                <div style={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: 'var(--radius-lg)',
-                  background: item.bg,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 'var(--font-size-xl)',
-                  color: item.color,
-                  flexShrink: 0,
-                }}>
+                <span className="organization-metric-icon" aria-hidden="true">
                   {item.icon}
-                </div>
-                <div>
-                  <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.title}</Text>
-                  <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text-title)', lineHeight: 1.2, marginTop: 2, minHeight: 34 }}>
+                </span>
+                <span className="organization-metric-copy">
+                  <span className="organization-metric-title">{item.title}</span>
+                  <span className="organization-metric-value">
                     {overviewLoading ? (
-                      <Skeleton.Input active size="small" style={{ width: 56, height: 28 }} />
+                      <Skeleton.Input active size="small" />
                     ) : (
                       summaryValues[idx]
                     )}
-                  </div>
-                </div>
-              </div>
+                  </span>
+                </span>
+              </button>
             </Col>
           )
         })}
       </Row>
+      </section>
 
-      {/* 分布卡片 */}
-      <Row gutter={[16, 16]} className="organization-distribution-grid" style={{ marginBottom: 'var(--space-5)' }}>
+      <section className="organization-roster-section" aria-labelledby="employee-distribution-title">
+        <div className="organization-section-heading">
+          <div>
+            <h2 id="employee-distribution-title">人员分布</h2>
+            <Text>从员工类型、职级和岗位序列了解人员结构</Text>
+          </div>
+        </div>
+      <Row gutter={[16, 16]} className="organization-distribution-grid">
         {[
           { title: '员工类型分布', data: overview?.employee_type_distribution || [] },
           { title: '职级分布', data: overview?.job_level_distribution || [] },
           { title: '岗位序列分布', data: overview?.job_family_distribution || [] },
         ].map((section) => (
           <Col xs={24} lg={8} key={section.title}>
-            <PageCard
-              title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>{section.title}</span>}
-            >
+            <PageCard title={section.title} className="organization-distribution-card">
               {renderDistributionItems(section.data, overviewLoading)}
             </PageCard>
           </Col>
         ))}
       </Row>
+      </section>
 
-      {/* 花名册表格 */}
-      <PageCard title={<span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-md)', color: 'var(--color-text-title)' }}>花名册</span>}>
-        <div className="organization-filter-bar">
+      <section className="organization-roster-section" aria-labelledby="employee-roster-title">
+        <div className="organization-section-heading">
+          <div>
+            <h2 id="employee-roster-title">花名册</h2>
+            <Text>搜索、筛选并进入员工人事档案</Text>
+          </div>
+          <Text type="secondary">{loading ? '正在加载…' : `共 ${total} 人`}</Text>
+        </div>
+      <PageCard className="organization-roster-card" title="员工列表">
+        <div className="organization-filter-bar" aria-label="员工筛选条件">
         <Space wrap className="organization-filter-controls">
           <Search
             allowClear
@@ -436,14 +437,14 @@ const EmployeeList: React.FC = () => {
               if (value === '' && search !== '') updateSearchParams({ search: undefined }, true)
             }}
             onSearch={(value) => updateSearchParams({ search: value.trim() }, true)}
-            style={{ width: 320 }}
+            className="organization-search-input"
           />
           <Select
             allowClear
             showSearch
             optionFilterProp="label"
             placeholder="按部门筛选"
-            style={{ width: 220 }}
+            className="organization-department-select"
             value={departmentID}
             onChange={(value) => updateSearchParams({ department_id: value }, true)}
             options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
@@ -451,7 +452,7 @@ const EmployeeList: React.FC = () => {
           <Select
             allowClear
             placeholder="按状态筛选"
-            style={{ width: 160 }}
+            className="organization-status-select"
             value={status}
             onChange={(value) => updateSearchParams({ status: value }, true)}
             options={[
@@ -535,6 +536,7 @@ const EmployeeList: React.FC = () => {
           />
         )}
       </PageCard>
+      </section>
     </PageContainer>
   )
 }
