@@ -110,6 +110,7 @@ interface MaternityLeaveOverride {
 interface ToolboxEmployeeOption {
   user_id: string
   name: string
+  status?: string
 }
 
 interface ToolboxDepartmentNode {
@@ -136,6 +137,25 @@ const flattenToolboxDepartmentOptions = (
   const childParentPath = node.virtual_kind === 'organization' ? parentPath : path
   return [...current, ...flattenToolboxDepartmentOptions(node.children || [], childParentPath)]
 })
+
+async function loadAllToolboxEmployees() {
+  const pageSize = 1000
+  const employees: ToolboxEmployeeOption[] = []
+  let page = 1
+  let total = Number.POSITIVE_INFINITY
+
+  while (employees.length < total && page <= 100) {
+    const response = await orgAPI.getEmployees({ page, page_size: pageSize })
+    const data = (response as unknown as { data?: { items?: ToolboxEmployeeOption[]; total?: number } })?.data
+    const items = Array.isArray(data?.items) ? data.items : []
+    total = Number.isFinite(data?.total) ? Number(data?.total) : employees.length + items.length
+    employees.push(...items)
+    if (items.length === 0 || items.length < pageSize) break
+    page += 1
+  }
+
+  return employees
+}
 
 export const getAttendanceToolboxDownloadableFiles = (run: AttendanceToolboxRunResponse | null | undefined) =>
   (run?.files || []).filter((file) => file.kind !== 'meta')
@@ -567,6 +587,7 @@ const OVERTIME_SYNC_PADDING_DAYS = 31
 const AttendanceToolbox: React.FC = () => {
   const [messageApi, messageContextHolder] = message.useMessage()
   const permissions = useAuthStore((s) => s.permissions) || []
+  const orgId = useAuthStore((s) => s.orgId)
   const hasPerm = useCallback((code: string) => {
     if (permissions.includes(code)) return true
     // Compat: legacy attendance_manage still enables toolbox actions.
@@ -718,6 +739,15 @@ const AttendanceToolbox: React.FC = () => {
 
   useEffect(() => {
     let mounted = true
+    setSavedConfigSnapshot('')
+    setFixedDraftValues({})
+    setMaternityLeaveOverrides([])
+    setSavedMaternityLeaveOverrides([])
+    setTextValues((prev) => {
+      const next = { ...prev }
+      FIXED_CONFIG_LIST_KEYS.forEach((key) => { next[key] = '' })
+      return next
+    })
     setConfigLoading(true)
     Promise.all([
       attendanceToolboxAPI.getDefaults(),
@@ -728,6 +758,12 @@ const AttendanceToolbox: React.FC = () => {
       if (!mounted) return
       const defaults = normalizeDefaults(defaultsResponse)
       const payload = (configResponse as unknown as { data?: AttendanceToolboxConfig })?.data
+      const fixedValues: Record<string, string> = {}
+      for (const key of FIXED_CONFIG_LIST_KEYS) {
+        const defaultValues = defaults[key] || []
+        const configuredValues = payload?.configured && Array.isArray(payload[key]) ? payload[key] : defaultValues
+        fixedValues[key] = formatNameList(configuredValues)
+      }
       setTextValues((prev) => {
         const next = { ...prev }
         for (const [key, values] of Object.entries(defaults)) {
@@ -739,13 +775,9 @@ const AttendanceToolbox: React.FC = () => {
             if (Array.isArray(values)) next[key] = formatNameList(values)
           }
         }
-        setFixedDraftValues((draft) => {
-          const fixed = { ...draft }
-          for (const key of FIXED_CONFIG_LIST_KEYS) fixed[key] = next[key] || ''
-          return fixed
-        })
         return next
       })
+      setFixedDraftValues(fixedValues)
       if (payload?.configured) {
         const loadedMaternity = (payload.maternity_leave_overrides || []).map((item, index) => ({
           key: `maternity-${Date.now()}-${index}`,
@@ -788,7 +820,7 @@ const AttendanceToolbox: React.FC = () => {
       }
     })
     return () => { mounted = false }
-  }, [])
+  }, [messageApi, orgId])
 
   const refreshTemplateMeta = useCallback(async () => {
     try {
@@ -811,14 +843,22 @@ const AttendanceToolbox: React.FC = () => {
     let mounted = true
     setFixedOptionsLoading(true)
     Promise.all([
-      orgAPI.getEmployees({ page: 1, page_size: 2000, status: 'active' }),
+      loadAllToolboxEmployees(),
       orgAPI.getDepartmentTree({ all: true }),
     ]).then(([employeeResponse, departmentResponse]) => {
       if (!mounted) return
-      const employees = ((employeeResponse as unknown as { data?: { items?: ToolboxEmployeeOption[] } })?.data?.items || [])
+      const employees = employeeResponse
         .filter((employee) => employee?.user_id && employee?.name && employee.user_id !== 'admin')
-        .map((employee) => ({ user_id: String(employee.user_id), name: String(employee.name) }))
-        .sort((left, right) => left.name.localeCompare(right.name) || left.user_id.localeCompare(right.user_id))
+        .map((employee) => ({
+          user_id: String(employee.user_id),
+          name: String(employee.name),
+          status: String(employee.status || 'active'),
+        }))
+        .sort((left, right) => (
+          left.name.localeCompare(right.name)
+          || (left.status === 'active' ? -1 : 1)
+          || left.user_id.localeCompare(right.user_id)
+        ))
       const tree = (departmentResponse as unknown as { data?: { tree?: ToolboxDepartmentNode[] } })?.data?.tree || []
       setEmployeeOptions(employees)
       setDepartmentOptions(flattenToolboxDepartmentOptions(tree))
@@ -829,7 +869,13 @@ const AttendanceToolbox: React.FC = () => {
       if (mounted) setFixedOptionsLoading(false)
     })
     return () => { mounted = false }
-  }, [fixedConfigOpen, fixedOptionsLoaded, messageApi])
+  }, [fixedConfigOpen, fixedOptionsLoaded, messageApi, orgId])
+
+  useEffect(() => {
+    setFixedOptionsLoaded(false)
+    setEmployeeOptions([])
+    setDepartmentOptions([])
+  }, [orgId])
 
   const setFieldFiles = useCallback((fieldName: string, list: UploadFile[]) => {
     const next = { ...fileListsRef.current, [fieldName]: list }
@@ -2469,15 +2515,29 @@ const AttendanceToolbox: React.FC = () => {
   ) => {
     const names = parseNameList(fixedDraftValues[key])
     const isDepartmentConfig = key === 'sub_dept_keywords'
+    const employeeByName = new Map<string, ToolboxEmployeeOption>()
+    const duplicateEmployeeNames = new Set<string>()
+    employeeOptions.forEach((employee) => {
+      const existing = employeeByName.get(employee.name)
+      if (existing) {
+        duplicateEmployeeNames.add(employee.name)
+        if (existing.status !== 'active' && employee.status === 'active') {
+          employeeByName.set(employee.name, employee)
+        }
+        return
+      }
+      employeeByName.set(employee.name, employee)
+    })
     const options = isDepartmentConfig
       ? departmentOptions
-      : employeeOptions.map((employee) => ({
+      : Array.from(employeeByName.values()).map((employee) => ({
         value: employee.name,
-        label: `${employee.name}（${employee.user_id}）`,
+        label: `${employee.name}（${employee.user_id}${employee.status === 'active' ? '，在职' : '，已停用'}）`,
       }))
     const selectedOptions = names
       .filter((name) => !options.some((option) => option.value === name))
       .map((name) => ({ value: name, label: `${name}（已保存）` }))
+    const missingSavedNames = names.filter((name) => !employeeByName.has(name) && !isDepartmentConfig)
     return (
       <div style={{ padding: '4px 0 16px' }}>
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -2505,6 +2565,22 @@ const AttendanceToolbox: React.FC = () => {
             style={{ width: '100%' }}
             onChange={(values) => setFixedDraftValues((prev) => ({ ...prev, [key]: formatNameList(values) }))}
           />
+          {!isDepartmentConfig && duplicateEmployeeNames.size > 0 && (
+            <Alert
+              type="info"
+              showIcon
+              message={`发现 ${duplicateEmployeeNames.size} 个同名员工`}
+              description="固定名单按姓名保存，同名员工会按同一姓名处理；如需区分，请先在组织数据中完善姓名或改用部门规则。"
+            />
+          )}
+          {missingSavedNames.length > 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              message={`有 ${missingSavedNames.length} 项已保存名单未在当前组织员工列表中找到`}
+              description={`${missingSavedNames.slice(0, 5).join('、')}${missingSavedNames.length > 5 ? '等' : ''}。可能已离职、停用或组织数据尚未同步，请确认后再保存。`}
+            />
+          )}
           {names.length > 0 && (
             <Space wrap size={[4, 4]}>
               <Text type="secondary" style={{ fontSize: 12 }}>已选：</Text>
