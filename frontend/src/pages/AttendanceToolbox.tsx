@@ -2555,13 +2555,24 @@ const AttendanceToolbox: React.FC = () => {
             showSearch
             allowClear
             optionFilterProp="label"
+            optionLabelProp="label"
             value={names}
             options={[...selectedOptions, ...options]}
             loading={fixedOptionsLoading}
             disabled={!canOperate}
             placeholder={isDepartmentConfig ? '搜索并选择部门' : '搜索并选择员工'}
             notFoundContent={fixedOptionsLoading ? '正在加载列表…' : '暂无匹配项'}
-            maxTagCount={3}
+            popupMatchSelectWidth={false}
+            listHeight={480}
+            optionRender={(option) => (
+              <span
+                title={String(option.label || '')}
+                style={{ display: 'block', whiteSpace: 'normal', lineHeight: '20px', padding: '2px 0' }}
+              >
+                {option.label}
+              </span>
+            )}
+            styles={{ popup: { root: { minWidth: 420, maxWidth: 680 } } }}
             style={{ width: '100%' }}
             onChange={(values) => setFixedDraftValues((prev) => ({ ...prev, [key]: formatNameList(values) }))}
           />
@@ -2582,12 +2593,11 @@ const AttendanceToolbox: React.FC = () => {
             />
           )}
           {names.length > 0 && (
-            <Space wrap size={[4, 4]}>
+            <Space wrap size={[4, 4]} style={{ maxHeight: 132, overflowY: 'auto', width: '100%' }}>
               <Text type="secondary" style={{ fontSize: 12 }}>已选：</Text>
-              {names.slice(0, 3).map((name) => (
+              {names.map((name) => (
                 <Text key={name} type="secondary" style={{ fontSize: 12 }}>{name}</Text>
               ))}
-              {names.length > 3 && <Text type="secondary" style={{ fontSize: 12 }}>等 {names.length} 项</Text>}
             </Space>
           )}
         </Space>
