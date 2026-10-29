@@ -109,6 +109,12 @@ update_when:
 | `week-schedule` `notification-copy` `date-aware` | 作息表通知必须定位最近周六并读取实际日历状态；周五写“明天”、周六写“今天”、周一至周四写“本周六”、周日写“下周六”；是否上班置于首行，大/小周仅作补充 | [2026-07-29 作息表推送只判断明天导致周六提醒不灵活](development-issues/2026.md#2026-07-29-p2-作息表推送只判断明天导致周六上班提醒不灵活) |
 | `frontend` `date-picker` `locale` `i18n` | 所有 Ant Design 日期选择器必须显式传入 `antd/es/date-picker/locale/zh_CN`；页面格式和 Day.js 语言设置不能替代组件 locale | [2026-10-14 日期选择器 locale 未统一导致部分页面显示英文](development-issues/2026.md#2026-10-14-p2-日期选择器-locale-未统一导致部分页面显示英文) |
 
+### 前端 / 组织架构
+
+| 标签 | 约束摘要 | 条目 / 文档 |
+|---|---|---|
+| `frontend` `org` `department-tree` `ui` `layout` | 组织树工作区必须明确卡片高度与滚动边界，节点人数同时展示含下级去重与直属口径；禁止通过无限高度或页面整体滚动撑开树卡片 | [2026-10-28 组织架构树高度与滚动边界异常](development-issues/2026.md#2026-10-28-p2-组织架构树高度与滚动边界异常) |
+
 ### 测试 / 验证
 
 | 标签 | 约束摘要 | 条目 |

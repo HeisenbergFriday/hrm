@@ -277,21 +277,14 @@ const DepartmentTree: React.FC = () => {
         key: node.id,
         selectable: node.virtual_kind !== 'unassigned',
         title: (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, width: '100%', padding: '4px 0' }}>
-            <span style={{ fontWeight: node.children?.length ? 500 : 400 }}>{node.name}</span>
+          <div className="organization-tree-node-title">
+            <span className={`organization-tree-node-name${node.children?.length ? ' is-parent' : ''}`}>{node.name}</span>
             <Tooltip title={
               node.direct_active_count !== node.active_count
                 ? `含下级部门去重：${node.active_count} 人 | 直属本部门：${node.direct_active_count} 人`
                 : `直属本部门：${node.active_count} 人`
             }>
-              <span style={{
-                color: 'var(--color-text-tertiary)',
-                fontSize: 'var(--font-size-xs)',
-                background: 'var(--color-bg-light)',
-                padding: '2px 8px',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'default'
-              }}>
+              <span className="organization-tree-node-count">
                 {node.active_count} 人{node.direct_active_count !== node.active_count ? ` (直属 ${node.direct_active_count})` : ''}
               </span>
             </Tooltip>
@@ -458,10 +451,12 @@ const DepartmentTree: React.FC = () => {
               />
               <div className="organization-tree-scroll">
               {treeData.length > 0 ? <Tree
+                blockNode
                 expandedKeys={searchExpandedKeys}
                 onExpand={(keys) => setExpandedKeys(keys)}
                 selectedKeys={selectedNode ? [selectedNode.id] : []}
                 treeData={treeData}
+                showLine={{ showLeafIcon: false }}
                 onSelect={(keys) => {
                   const nextKey = String(keys[0] || '')
                   if (!nextKey) return
