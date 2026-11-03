@@ -115,6 +115,7 @@ APPROVAL_IDENTITY_COLUMNS = (
 ORDINARY_HOUR_LEAVE_TYPES = {"事假", "病假", "年假", "调休"}
 APPLICATION_DURATION_LEAVE_TYPES = {"产检假"}
 MARRIAGE_LEAVE_TYPE = "婚假"
+FULL_DAY_HOURS = 8.0
 
 
 def row_value(row, index, default=None):
@@ -251,6 +252,15 @@ def review_leave_record(row, schedule_ctx, *, is_chengdu=False, is_all_month_sch
         if value:
             daily[cur.isoformat()] = {"days": value, "hours": None if natural else _round2(hours)}
         cur += timedelta(days=1)
+    if not natural and not maternity and daily:
+        eligible_days = [day for day, item in daily.items() if (item.get("hours") or 0) > 0]
+        full_day = kind in ORDINARY_HOUR_LEAVE_TYPES and is_full_day_duration(
+            row[ROW_SYS_DURATION], len(eligible_days)
+        )
+        for item in daily.values():
+            raw_hours = item.get("hours") or 0
+            item["hours"] = FULL_DAY_HOURS if full_day and raw_hours > 0 else _round_leave_hours(raw_hours)
+            item["days"] = _round2(item["hours"] / FULL_DAY_HOURS) if item["hours"] else 0
     schedule_hours = _round2(sum(item["hours"] or 0 for item in daily.values())) if not natural else None
     raw_system = row[ROW_SYS_DURATION]
     system_days = parse_day_text(raw_system)
@@ -275,8 +285,14 @@ def review_leave_record(row, schedule_ctx, *, is_chengdu=False, is_all_month_sch
     if kind not in ORDINARY_HOUR_LEAVE_TYPES:
         reasons.append("假别计算口径未明确")
     if system_days is not None:
-        reasons.append("普通请假系统单位为天，需确认小时口径")
-        system_hours = None
+        eligible_days = sum(1 for item in daily.values() if (item.get("hours") or 0) > 0)
+        if is_full_day_duration(raw_system, eligible_days):
+            system_hours = system_days * FULL_DAY_HOURS
+        else:
+            reasons.append("普通请假系统单位为天，需确认小时口径")
+            system_hours = None
+    elif system_hours is not None:
+        system_hours = _round_leave_hours(system_hours)
     same_month = (start.year, start.month) == (end.year, end.month)
     if system_hours is not None and same_month:
         if abs(system_hours - schedule_hours) > 0.000001:
@@ -438,9 +454,12 @@ def has_time_component(val):
 
 
 def parse_day_text(sys_val):
-    """从 '4天'、'0.5天' 等文本中提取天数，失败返回 None。"""
+    """从天数文本中提取天数；“整天/全天”按 1 天处理。"""
     if isinstance(sys_val, str):
-        m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*天', sys_val.strip())
+        text = sys_val.strip()
+        if text in {"整天", "全天"}:
+            return 1.0
+        m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*天', text)
         if m:
             return finite_nonnegative(m.group(1))
     return None
@@ -844,6 +863,23 @@ def _round_to_half_hour(hours):
         return 0
     import math
     return math.ceil(hours * 2) / 2
+
+
+def _round_leave_hours(hours):
+    """按请假口径向上取到半小时，并保持两位小数。"""
+    value = finite_nonnegative(hours)
+    return _round2(_round_to_half_hour(value)) if value else 0.0
+
+
+def is_full_day_duration(raw_system_duration, eligible_day_count):
+    """判断审批时长是否表达为覆盖所有请假日的整天。"""
+    if eligible_day_count <= 0:
+        return False
+    days = parse_day_text(raw_system_duration)
+    if days is not None:
+        return abs(days - eligible_day_count) < 0.000001
+    hours = finite_nonnegative(raw_system_duration)
+    return hours is not None and abs(hours - eligible_day_count * FULL_DAY_HOURS) < 0.000001
 
 
 def _dept_text(value):

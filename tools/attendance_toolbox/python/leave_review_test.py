@@ -78,6 +78,32 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         wb.close()
         return data, count
 
+    def test_full_day_duration_is_eight_hours_at_review_entry(self):
+        result = calc_leave.review_leave_record(
+            self.row(
+                8,
+                start=datetime(2026, 9, 1, 9, 30),
+                end=datetime(2026, 9, 1, 18, 30),
+            ),
+            self.ctx,
+        )
+        self.assertEqual(result[0], 8.0)
+        self.assertEqual(result[1], 1.0)
+        self.assertEqual(result[2]["2026-09-01"]["hours"], 8.0)
+
+    def test_fractional_hours_round_up_to_half_hour_at_review_entry(self):
+        result = calc_leave.review_leave_record(
+            self.row(
+                1.17,
+                start=datetime(2026, 9, 1, 10, 20),
+                end=datetime(2026, 9, 1, 11, 30),
+            ),
+            self.ctx,
+        )
+        self.assertEqual(result[0], 1.5)
+        self.assertEqual(result[1], 0.19)
+        self.assertEqual(result[2]["2026-09-01"]["hours"], 1.5)
+
     def test_matching_same_month_is_automatic_and_ledger_is_shared(self):
         self.generate([self.row()])
         values, issues = self.values()
@@ -86,6 +112,61 @@ class LeaveReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(calc_finally.parse_leave_summary(str(self.path), self.ctx)["MT0001"]["事假"], 1)
         details = calc_finally.parse_leave_day_details(str(self.path), self.ctx)
         self.assertEqual(details["MT0001"][date(2026, 9, 1)]["事假"], 1)
+
+    def test_maternity_leave_uses_calendar_days_for_same_and_cross_month(self):
+        rows = [
+            self.row(
+                8,
+                kind="产假",
+                emp_id="MT-YM",
+                name="银梦",
+                start=datetime(2026, 9, 14, 9),
+                end=datetime(2026, 9, 28, 18, 30),
+                approval="MAT-YM",
+            ),
+            self.row(
+                8,
+                kind="产假",
+                emp_id="MT-WSL",
+                name="王思铃",
+                start=datetime(2026, 8, 18, 9),
+                end=datetime(2026, 9, 1, 18, 30),
+                approval="MAT-WSL",
+            ),
+        ]
+        self.generate(rows)
+
+        workbook = openpyxl.load_workbook(self.path, data_only=True)
+        try:
+            worksheet = workbook["请假明细"]
+            columns = {cell.value: cell.column for cell in worksheet[1]}
+            by_name = {
+                worksheet.cell(row, columns["发起人姓名"]).value: {
+                    "days": worksheet.cell(row, columns["最终请假天数"]).value,
+                    "ledger": json.loads(worksheet.cell(row, columns["日分摊"]).value),
+                    "state": worksheet.cell(row, columns["复核状态"]).value,
+                }
+                for row in range(2, worksheet.max_row + 1)
+            }
+        finally:
+            workbook.close()
+
+        self.assertEqual(by_name["银梦"]["days"], 15)
+        self.assertEqual(len(by_name["银梦"]["ledger"]), 15)
+        self.assertEqual(by_name["王思铃"]["days"], 1)
+        self.assertEqual(
+            by_name["王思铃"]["ledger"],
+            {"2026-09-01": {"days": 1.0, "hours": None}},
+        )
+        self.assertEqual({item["state"] for item in by_name.values()}, {"自动通过"})
+
+        summary = calc_finally.parse_leave_summary(str(self.path), self.ctx)
+        self.assertEqual(summary["MT-YM"]["产假"], 15)
+        self.assertEqual(summary["MT-WSL"]["产假"], 1)
+
+    def test_maternity_type_with_detail_suffix_keeps_natural_day_unit(self):
+        self.assertTrue(calc_leave.is_natural_day_leave("产假（顺延）"))
+        self.assertFalse(calc_leave.is_natural_day_leave("产检假"))
 
     def test_mismatch_uses_schedule_result_without_exception(self):
         self.generate([self.row(4)])

@@ -114,6 +114,7 @@ APPROVAL_IDENTITY_COLUMNS = (
 ORDINARY_HOUR_LEAVE_TYPES = {"事假", "病假", "年假", "调休"}
 APPLICATION_DURATION_LEAVE_TYPES = {"产检假"}
 MARRIAGE_LEAVE_TYPE = "婚假"
+FULL_DAY_HOURS = 8.0
 
 
 def row_value(row, index, default=None):
@@ -244,12 +245,32 @@ def review_leave_record(row, schedule_ctx, *, is_chengdu=False, is_all_month_sch
     if is_all_month_scheduled:
         days = {first + timedelta(days=i) for i in range((last - first).days + 1)}
     cur = max(start.date(), first)
-    while cur <= min(end.date(), last):
-        hours = calc_target_month_working_hours(start, end, days, cur, cur)
-        value = 1.0 if natural else _round2(hours) / 8
-        if value:
-            daily[cur.isoformat()] = {"days": value, "hours": None if natural else _round2(hours)}
+    end_date = min(end.date(), last)
+    while cur <= end_date:
+        if natural:
+            # Natural-day leave is independent of the work schedule.  Building
+            # the ledger from `days` silently drops weekends, statutory
+            # holidays, and any date absent from an incomplete schedule file.
+            daily[cur.isoformat()] = {"days": 1.0, "hours": None}
+        else:
+            hours = calc_target_month_working_hours(start, end, days, cur, cur)
+            value = _round2(hours) / 8
+            if value:
+                daily[cur.isoformat()] = {"days": value, "hours": _round2(hours)}
         cur += timedelta(days=1)
+
+    # 普通小时制请假统一执行两个口径：整天按 8 小时，不足半小时按半小时向上取整。
+    # 系统按整天/8 小时提交且覆盖一个完整请假日时，作息区间可能因晚到早退
+    # 只算出 7.5 小时；此处以审批时长的整天语义覆盖该日的作息计算结果。
+    if not natural and not maternity and daily:
+        eligible_days = [day for day, item in daily.items() if (item.get("hours") or 0) > 0]
+        full_day = kind in ORDINARY_HOUR_LEAVE_TYPES and is_full_day_duration(
+            row[ROW_SYS_DURATION], len(eligible_days)
+        )
+        for item in daily.values():
+            raw_hours = item.get("hours") or 0
+            item["hours"] = FULL_DAY_HOURS if full_day and raw_hours > 0 else _round_leave_hours(raw_hours)
+            item["days"] = _round2(item["hours"] / FULL_DAY_HOURS) if item["hours"] else 0
     schedule_hours = _round2(sum(item["hours"] or 0 for item in daily.values())) if not natural else None
     if natural or maternity:
         # Calendar leave has its own unit; calculate from the approved interval.
@@ -397,9 +418,12 @@ def has_time_component(val):
 
 
 def parse_day_text(sys_val):
-    """从 '4天'、'0.5天' 等文本中提取天数，失败返回 None。"""
+    """从天数文本中提取天数；“整天/全天”按 1 天处理。"""
     if isinstance(sys_val, str):
-        m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*天', sys_val.strip())
+        text = sys_val.strip()
+        if text in {"整天", "全天"}:
+            return 1.0
+        m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*天', text)
         if m:
             return finite_nonnegative(m.group(1))
     return None
@@ -805,6 +829,23 @@ def _round_to_half_hour(hours):
     return math.ceil(hours * 2) / 2
 
 
+def _round_leave_hours(hours):
+    """按请假口径向上取到半小时，并保持两位小数。"""
+    value = finite_nonnegative(hours)
+    return _round2(_round_to_half_hour(value)) if value else 0.0
+
+
+def is_full_day_duration(raw_system_duration, eligible_day_count):
+    """判断审批时长是否表达为覆盖所有请假日的整天。"""
+    if eligible_day_count <= 0:
+        return False
+    days = parse_day_text(raw_system_duration)
+    if days is not None:
+        return abs(days - eligible_day_count) < 0.000001
+    hours = finite_nonnegative(raw_system_duration)
+    return hours is not None and abs(hours - eligible_day_count * FULL_DAY_HOURS) < 0.000001
+
+
 def _dept_text(value):
     return str(value).strip() if value is not None else ""
 
@@ -830,7 +871,13 @@ EXPECTED_ATTENDANCE_DAY_LEAVE_TYPES = set()
 
 def is_natural_day_leave(leave_type):
     """检查是否为按自然日计算的假期类型（产假、陪产假、丧假）。"""
-    return str(leave_type).strip() in NATURAL_DAY_LEAVE_TYPES
+    text = str(leave_type or "").strip()
+    # DingTalk exports may append a parenthetical/detail suffix to the leave
+    # type (for example, "产假（顺延）").  Match a canonical type prefix
+    # while keeping 产检假 as its separate application-duration leave type.
+    if "产检假" in text:
+        return False
+    return any(text.startswith(kind) for kind in NATURAL_DAY_LEAVE_TYPES)
 
 
 def is_expected_attendance_day_leave(leave_type):
