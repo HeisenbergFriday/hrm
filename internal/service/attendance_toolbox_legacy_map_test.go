@@ -90,7 +90,7 @@ func TestMapLegacyProcessingForm_FinalSubsidyParttime(t *testing.T) {
 	pt := mapLegacyProcessingForm("parttime", &multipart.Form{
 		File: map[string][]*multipart.FileHeader{
 			"default_schedule":  {{Filename: "d.xlsx", Size: 1}},
-			"attendance_detail": {{Filename: "ad.xlsx", Size: 1}},
+			"attendance_detail": {{Filename: "ad-1.xlsx", Size: 1}, {Filename: "ad-2.xlsx", Size: 1}},
 			"monthly_summary":   {{Filename: "m1.xlsx", Size: 1}, {Filename: "m2.xlsx", Size: 1}},
 			"schedule":          {{Filename: "s1.xlsx", Size: 1}},
 		},
@@ -98,8 +98,24 @@ func TestMapLegacyProcessingForm_FinalSubsidyParttime(t *testing.T) {
 	if len(pt.File["parttime_monthly"]) != 2 {
 		t.Fatalf("parttime_monthly want 2")
 	}
+	if len(pt.File["parttime_attendance_detail"]) != 2 {
+		t.Fatalf("parttime_attendance_detail want 2")
+	}
 	if len(pt.File["parttime_schedules"]) != 1 {
 		t.Fatalf("parttime_schedules want 1")
+	}
+}
+
+func TestAttendanceToolboxSpecs_ParttimeAttendanceDetailIsMultiFile(t *testing.T) {
+	spec, ok := attendanceToolboxSpecs()["parttime"]
+	if !ok {
+		t.Fatal("parttime toolbox spec missing")
+	}
+	if _, ok := spec.SingleFiles["parttime_attendance_detail"]; ok {
+		t.Fatal("parttime attendance detail must not be single file")
+	}
+	if got := spec.MultiFiles["parttime_attendance_detail"]; got != "parttime_attendance_detail" {
+		t.Fatalf("parttime attendance detail mapping = %q", got)
 	}
 }
 

@@ -43,7 +43,10 @@ def path_or_empty(config: dict, key: str) -> str:
 
 def paths(config: dict, key: str) -> list[str]:
     result = []
-    for value in config.get(key) or []:
+    raw = config.get(key) or []
+    if isinstance(raw, str):
+        raw = [raw]
+    for value in raw:
         value = str(value or "").strip()
         if value and os.path.exists(value):
             result.append(value)
@@ -571,7 +574,7 @@ def run_parttime(config: dict, output_dir: Path) -> list[dict]:
         raise ValueError("请上传默认作息表。")
     part.generate_parttime_summary(
         output_path=str(out_path),
-        attendance_detail_path=path_or_empty(config, "parttime_attendance_detail") or None,
+        attendance_detail_paths=paths(config, "parttime_attendance_detail"),
         monthly_summary_paths=paths(config, "parttime_monthly"),
         schedule_paths=paths(config, "parttime_schedules"),
         default_schedule_path=default_schedule_path,
@@ -867,9 +870,15 @@ def action_validate(config: dict, output_dir: Path) -> list[dict]:
         if schedule_path:
             results["final_schedule"] = _check_headers(schedule_path, EXPECTED_HEADERS["final"]["schedule"])
     elif module == "parttime":
-        detail_path = path_or_empty(config, "parttime_attendance_detail")
-        if detail_path:
-            results["parttime_detail"] = _check_parttime_detail_headers(detail_path)
+        detail_paths = paths(config, "parttime_attendance_detail")
+        if detail_paths:
+            detail_results = [
+                _check_parttime_detail_headers(detail_path) for detail_path in detail_paths
+            ]
+            results["parttime_detail"] = {
+                "ok": all(item.get("ok", False) for item in detail_results),
+                "files": detail_results,
+            }
 
     all_ok = all(r.get("ok", False) for r in results.values()) if results else True
     preview_path = output_dir / "validation_result.json"

@@ -478,12 +478,12 @@ func attendanceToolboxSpecs() map[string]attendanceToolboxModuleSpec {
 		},
 		"parttime": {
 			SingleFiles: map[string]string{
-				"parttime_default_schedule":  "parttime_default_schedule",
-				"parttime_attendance_detail": "parttime_attendance_detail",
+				"parttime_default_schedule": "parttime_default_schedule",
 			},
 			MultiFiles: map[string]string{
-				"parttime_monthly":   "parttime_monthly",
-				"parttime_schedules": "parttime_schedules",
+				"parttime_attendance_detail": "parttime_attendance_detail",
+				"parttime_monthly":           "parttime_monthly",
+				"parttime_schedules":         "parttime_schedules",
 			},
 			TextFields: []string{"part_special_names"},
 		},

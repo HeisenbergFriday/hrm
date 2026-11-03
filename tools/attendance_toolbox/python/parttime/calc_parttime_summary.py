@@ -552,7 +552,7 @@ def _extract_year_month_from_title(text: str) -> tuple[int | None, int | None]:
 
 
 def _infer_year_month(
-    attendance_detail_path: str | None,
+    attendance_detail_path: str | list[str] | None,
     monthly_summary_paths: list[str],
     schedule_paths: list[str],
     default_schedule_path: str | None = None,
@@ -567,8 +567,9 @@ def _infer_year_month(
         candidates.append(_extract_year_month_from_title(_normalize_text(value)))
         wb.close()
 
-    if attendance_detail_path:
-        _collect_from_workbook(attendance_detail_path)
+    detail_paths = ([attendance_detail_path] if isinstance(attendance_detail_path, str) else attendance_detail_path) or []
+    for detail_path in detail_paths:
+        _collect_from_workbook(detail_path)
     for ms_path in monthly_summary_paths:
         _collect_from_workbook(ms_path)
 
@@ -1922,10 +1923,14 @@ def generate_parttime_summary(
     schedule_paths: list[str] | None = None,
     default_schedule_path: str | None = None,
     special_default_names: list[str] | tuple[str, ...] | set[str] | None = None,
+    attendance_detail_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     schedule_paths = schedule_paths or []
     monthly_summary_paths = monthly_summary_paths or []
-    if not any([attendance_detail_path, monthly_summary_paths, schedule_paths]):
+    detail_paths = list(attendance_detail_paths or [])
+    if attendance_detail_path and attendance_detail_path not in detail_paths:
+        detail_paths.insert(0, attendance_detail_path)
+    if not any([detail_paths, monthly_summary_paths, schedule_paths]):
         raise ValueError("至少需要上传一份考勤来源文件。")
 
     resolved_special_default_names = _normalize_name_collection(
@@ -1939,14 +1944,18 @@ def generate_parttime_summary(
     )
 
     year, month = _infer_year_month(
-        attendance_detail_path=attendance_detail_path,
+        attendance_detail_path=detail_paths,
         monthly_summary_paths=monthly_summary_paths,
         schedule_paths=schedule_paths,
         default_schedule_path=default_schedule_path,
     )
     _, days_in_month = calendar.monthrange(year, month)
 
-    attendance_detail = parse_attendance_detail(attendance_detail_path) if attendance_detail_path else {}
+    attendance_detail: SourceMap = {}
+    for detail_path in detail_paths:
+        parsed = parse_attendance_detail(detail_path)
+        for name, day_map in parsed.items():
+            _merge_daily_maps(attendance_detail, name, day_map)
 
     monthly_summary: SourceMap = {}
     for ms_path in monthly_summary_paths:
@@ -2011,7 +2020,7 @@ def generate_parttime_summary(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="生成兼职汇总表")
-    parser.add_argument("--attendance-detail", help="考勤明细.xlsx")
+    parser.add_argument("--attendance-detail", action="append", default=[], help="考勤明细.xlsx，可多次传入")
     parser.add_argument("--monthly-summary", action="append", default=[], help="月度汇总.xlsx，可多次传入")
     parser.add_argument("--schedule", action="append", default=[], help="排班表，可多次传入")
     parser.add_argument("--default-schedule", help="默认作息表，用于免打卡/兜底员工")
@@ -2023,7 +2032,7 @@ def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
     generate_parttime_summary(
-        attendance_detail_path=args.attendance_detail,
+        attendance_detail_paths=args.attendance_detail,
         monthly_summary_paths=args.monthly_summary,
         schedule_paths=args.schedule,
         default_schedule_path=args.default_schedule,

@@ -550,6 +550,14 @@ func mapLegacyProcessingForm(module string, form *multipart.Form) *multipart.For
 			}
 		}
 	}
+	copyFilesAll := func(target string, aliases ...string) {
+		for _, alias := range aliases {
+			if files := form.File[alias]; len(files) > 0 {
+				out.File[target] = append(out.File[target], files...)
+				return
+			}
+		}
+	}
 	switch strings.TrimSpace(module) {
 	case "leave":
 		copyFiles("leave_src", "input", "leave_src")
@@ -579,7 +587,7 @@ func mapLegacyProcessingForm(module string, form *multipart.Form) *multipart.For
 		copyFiles("final_transfer", "transfer", "final_transfer")
 	case "parttime":
 		copyFiles("parttime_default_schedule", "default_schedule", "parttime_default_schedule")
-		copyFiles("parttime_attendance_detail", "attendance_detail", "parttime_attendance_detail")
+		copyFilesAll("parttime_attendance_detail", "attendance_detail", "parttime_attendance_detail")
 		copyFiles("parttime_monthly", "monthly_summary", "parttime_monthly")
 		copyFiles("parttime_schedules", "schedule", "parttime_schedules")
 	}

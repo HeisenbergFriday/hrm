@@ -297,7 +297,7 @@ const modules: ModuleConfig[] = [
     outputName: '兼职汇总.xlsx',
     fileFields: [
       { name: 'parttime_default_schedule', label: '默认作息表', required: true, templateId: 'schedule' },
-      { name: 'parttime_attendance_detail', label: '考勤明细', templateId: 'parttime_monthly_summary' },
+      { name: 'parttime_attendance_detail', label: '考勤明细（可多选）', multiple: true, templateId: 'parttime_monthly_summary' },
       { name: 'parttime_monthly', label: '腾小宝月度汇总（可多选）', multiple: true, templateId: 'parttime_monthly_summary' },
       { name: 'parttime_schedules', label: '排班表（可多选）', multiple: true, templateId: 'parttime_schedule' },
     ],
