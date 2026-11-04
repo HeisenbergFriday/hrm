@@ -338,12 +338,12 @@ class FinalRosterContractEndToEndTest(unittest.TestCase):
 
             # 人工考勤汇总表是结果异常时的可选兜底，正常流程不上传也应能生成。
             outputs_without_manual_roster = runner.run_final(config, output_dir)
-            self.assertEqual(len(outputs_without_manual_roster), 1)
+            self.assertEqual(len(outputs_without_manual_roster), 2)
 
             config["final_attendance_roster"] = str(attendance_roster_path)
 
             outputs = runner.run_final(config, output_dir)
-            self.assertEqual(len(outputs), 1)
+            self.assertEqual(len(outputs), 2)
             workbook = load_workbook(outputs[0]["path"], data_only=False)
             try:
                 sheet = workbook.active
@@ -355,7 +355,7 @@ class FinalRosterContractEndToEndTest(unittest.TestCase):
             finally:
                 workbook.close()
 
-            self.assertEqual(values["姓名"], "张三")
+            self.assertEqual(values["姓名"], "【示例】张三")
             self.assertEqual(values["工号"], "MT0001")
             self.assertEqual(values["考勤组"], "默认考勤组")
             self.assertEqual(

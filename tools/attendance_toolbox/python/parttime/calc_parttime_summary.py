@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import json
 import os
 import re
 import sys
@@ -22,8 +23,9 @@ if _LEAVE_PATH not in sys.path:
 import calc_leave  # noqa: E402
 
 
-STATIC_HEADERS = ["姓名", "所属公司"]
+STATIC_HEADERS = ["工号", "姓名", "所属公司"]
 ROW_KEY_SEPARATOR = "\x1f"
+IDENTITY_SEPARATOR = "\x1e"
 
 OUTPUT_TITLE_PREFIX = "兼职&实习生"
 OUTPUT_TITLE_SUFFIX = "月份出勤数据"
@@ -192,22 +194,31 @@ def _normalize_code(value: Any) -> str:
     return _normalize_text(value).upper()
 
 
-def _make_person_key(name: Any, company: Any = "") -> str:
+def _make_person_key(name: Any, company: Any = "", employee_code: Any = "") -> str:
     normalized_name = _normalize_name(name)
     normalized_company = _normalize_text(company)
     if not normalized_name:
         return ""
-    if normalized_company:
-        return f"{normalized_name}{ROW_KEY_SEPARATOR}{normalized_company}"
-    return normalized_name
+    key = f"{normalized_name}{ROW_KEY_SEPARATOR}{normalized_company}" if normalized_company else normalized_name
+    normalized_code = _normalize_code(employee_code)
+    return f"{normalized_code}{IDENTITY_SEPARATOR}{key}" if normalized_code else key
 
 
 def _split_person_key(key: Any) -> tuple[str, str]:
     text = _normalize_text(key)
+    if IDENTITY_SEPARATOR in text:
+        _, text = text.split(IDENTITY_SEPARATOR, 1)
     if ROW_KEY_SEPARATOR not in text:
         return _normalize_name(text), ""
     name, company = text.split(ROW_KEY_SEPARATOR, 1)
     return _normalize_name(name), _normalize_text(company)
+
+
+def _person_code(key: Any) -> str:
+    text = _normalize_text(key)
+    if IDENTITY_SEPARATOR not in text:
+        return ""
+    return _normalize_code(text.split(IDENTITY_SEPARATOR, 1)[0])
 
 
 def _contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
@@ -233,6 +244,10 @@ def _normalize_name_collection(values: list[str] | tuple[str, ...] | set[str] | 
     return tuple(normalized_values)
 
 
+def _is_template_placeholder_name(name: str, employee_code: Any = "") -> bool:
+    return _normalize_name(name).startswith("【示例】")
+
+
 def _round2(value: float) -> float:
     return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
@@ -255,6 +270,7 @@ def _make_daily_entry(
     unscheduled_punch: bool = False,
     comment: str = "",
     overtime_hours: float | None = None,
+    system_fill: bool = False,
 ) -> DailyEntry:
     entry = {
         "value": None if value is None else _round3(max(value, 0.0)),
@@ -265,6 +281,7 @@ def _make_daily_entry(
         "offsite": offsite,
         "unscheduled_punch": unscheduled_punch,
         "comment": comment,
+        "system_fill": system_fill,
     }
     if overtime_hours is not None:
         entry["overtime_hours"] = _round2(max(overtime_hours, 0.0))
@@ -347,6 +364,10 @@ def _entry_overtime_hours(entry: DailyEntry | None) -> float:
 
 def _is_overtime_entry(entry: DailyEntry | None) -> bool:
     return _entry_overtime_hours(entry) > 0
+
+
+def _is_system_fill_entry(entry: DailyEntry | None) -> bool:
+    return bool(isinstance(entry, dict) and entry.get("system_fill"))
 
 
 def _find_header_row(ws, required_keywords: tuple[str, ...], max_rows: int = 10) -> tuple[int | None, list[Any]]:
@@ -630,6 +651,9 @@ def _collect_detected_months(
             ws = wb[wb.sheetnames[0]]
             add(path, ws.cell(1, 1).value, f"{kind}:A1")
             add(path, ws.cell(5, 4).value, f"{kind}:D5")
+            for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 12), values_only=True):
+                for value in row:
+                    add(path, value, f"{kind}:header")
             wb.close()
     if default_schedule_path:
         add(default_schedule_path, os.path.basename(default_schedule_path), "default_schedule:filename")
@@ -654,6 +678,119 @@ def _validate_detected_months(detected: list[dict[str, Any]]) -> tuple[int | Non
     return (next(iter(years)) if years else None, next(iter(months)) if months else None)
 
 
+def _parse_requested_month(value: Any) -> tuple[int, int] | None:
+    text = _normalize_text(value).replace("/", "-")
+    if not text:
+        return None
+    match = re.fullmatch(r"(\d{4})-(\d{1,2})", text)
+    if not match or not 1 <= int(match.group(2)) <= 12:
+        raise ValueError("处理月份格式不正确，请选择 YYYY-MM")
+    return int(match.group(1)), int(match.group(2))
+
+
+def _inspect_parttime_file(path: str, kind: str, target_month: tuple[int, int] | None) -> dict[str, Any]:
+    """Read-only preflight: classify file, validate identity/date columns and month hints."""
+    item: dict[str, Any] = {"file_name": os.path.basename(path), "type": kind, "status": "正常", "说明": ""}
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        ws = wb[wb.sheetnames[0]]
+        headers: list[Any] = []
+        header_row = None
+        if kind == "attendance_detail":
+            header_row, headers = _find_attendance_detail_header(ws)
+            detected_type = SOURCE_ATTENDANCE_DETAIL
+        elif kind == "monthly_summary":
+            header_row, headers = _find_header_row(ws, ("姓名", "出勤天数"))
+            if header_row is None:
+                header_row, headers = _find_header_row(ws, ("姓名", "考勤结果"))
+            detected_type = SOURCE_MONTHLY_SUMMARY
+        elif kind == "default_schedule":
+            calc_leave.load_schedule_context(path, data_only=True)
+            detected_type = "作息表"
+        else:
+            detected_type, _ = parse_schedule_file(path)
+            if detected_type is None:
+                item.update(status="失败", 说明="缺少姓名列或日期列，无法识别为排班表")
+        if detected_type:
+            item["type"] = detected_type
+        if kind in {"attendance_detail", "monthly_summary"} and header_row is None:
+            item.update(status="失败", 说明="无法识别考勤明细或月度汇总表头")
+            wb.close()
+            return item
+        if kind in {"attendance_detail", "monthly_summary"}:
+            name_col = (_find_col_by_aliases(headers, ATTENDANCE_DETAIL_NAME_HEADERS)
+                        if kind == "attendance_detail" else _find_col(headers, "姓名"))
+            code_col = (_find_col_by_aliases(headers, ATTENDANCE_DETAIL_CODE_HEADERS)
+                        if kind == "attendance_detail" else _find_col(headers, "工号"))
+            if name_col is None:
+                item.update(status="失败", 说明="缺少姓名列")
+            monthly_result_col = _find_col(headers, "考勤结果") if kind == "monthly_summary" else None
+            day_columns = (_find_day_columns(ws, header_row) if kind == "attendance_detail"
+                           else list(range(monthly_result_col, ws.max_column + 1)) if monthly_result_col else [])
+            if not day_columns:
+                item.update(status="失败", 说明="缺少日期列")
+            names_seen: list[str] = []
+            codes_seen: list[str] = []
+            names_to_codes: dict[str, set[str]] = {}
+            if name_col:
+                for row_idx in range(header_row + 1, ws.max_row + 1):
+                    name = _normalize_name(ws.cell(row_idx, name_col).value)
+                    code = _normalize_code(ws.cell(row_idx, code_col).value) if code_col else ""
+                    if not name and code:
+                        item.setdefault("issues", []).append(f"第{row_idx}行姓名为空")
+                    if name:
+                        names_seen.append(name)
+                        names_to_codes.setdefault(name, set()).add(code)
+                        if _is_template_placeholder_name(name, code):
+                            item.setdefault("issues", []).append(f"第{row_idx}行姓名“{name}”是模板示例，请替换为真实员工")
+                    if code:
+                        codes_seen.append(code)
+            duplicate_codes = sorted({code for code in codes_seen if codes_seen.count(code) > 1})
+            duplicate_names = sorted({name for name in names_seen if names_seen.count(name) > 1})
+            same_name_different_codes = sorted(name for name, codes in names_to_codes.items() if len(codes - {""}) > 1)
+            if duplicate_codes:
+                item.setdefault("issues", []).append("重复工号：" + ", ".join(duplicate_codes[:10]))
+            if any("" in names_to_codes[name] for name in duplicate_names):
+                item.setdefault("issues", []).append("无工号且存在同名员工，需人工确认")
+            if same_name_different_codes:
+                item["same_name_different_codes"] = same_name_different_codes
+            if item.get("issues"):
+                item.update(status="失败", 说明="；".join(item["issues"]))
+        detected_months = _collect_detected_months([path] if kind == "attendance_detail" else [], [path] if kind == "monthly_summary" else [], [path] if kind == "schedule" else [], path if kind == "default_schedule" else None)
+        item["detected_months"] = detected_months
+        if kind != "default_schedule" and not detected_months:
+            item.update(status="失败", 说明="文件缺少可识别的日期或月份")
+        if target_month:
+            mismatches = [entry for entry in detected_months if entry.get("month") and (entry.get("year") or target_month[0], entry.get("month")) != target_month]
+            if mismatches:
+                item.update(status="失败", 说明=f"文件月份与处理月份 {target_month[0]}-{target_month[1]:02d} 不一致")
+        if not item.get("说明"):
+            item["说明"] = f"识别为{detected_type or kind}"
+        wb.close()
+        return item
+    except Exception as exc:
+        item.update(status="失败", 说明=f"文件无法读取或格式错误：{exc}")
+        return item
+
+
+def preflight_parttime_inputs(
+    attendance_detail_paths: list[str], monthly_summary_paths: list[str], schedule_paths: list[str],
+    default_schedule_path: str | None, target_month: str | None = None,
+) -> dict[str, Any]:
+    requested = _parse_requested_month(target_month)
+    files = []
+    for path in attendance_detail_paths:
+        files.append(_inspect_parttime_file(path, "attendance_detail", requested))
+    for path in monthly_summary_paths:
+        files.append(_inspect_parttime_file(path, "monthly_summary", requested))
+    for path in schedule_paths:
+        files.append(_inspect_parttime_file(path, "schedule", requested))
+    if default_schedule_path:
+        files.append(_inspect_parttime_file(default_schedule_path, "default_schedule", requested))
+    errors = [item for item in files if item.get("status") != "正常"]
+    return {"ok": not errors, "files": files, "errors": errors, "target_month": f"{requested[0]:04d}-{requested[1]:02d}" if requested else ""}
+
+
 def _collect_source_conflicts(
     attendance_detail: SourceMap,
     monthly_summary: SourceMap,
@@ -667,15 +804,16 @@ def _collect_source_conflicts(
     by_person_day: dict[tuple[str, int], list[tuple[str, float | None]]] = {}
     for source_name, source_map in sources.items():
         for name, day_map in source_map.items():
+            identity = _person_code(name) or name
             plain_name, _ = _split_person_key(name)
             for day, entry in day_map.items():
-                by_person_day.setdefault((plain_name, day), []).append((source_name, _entry_value(entry)))
+                by_person_day.setdefault((identity, day), []).append((source_name, _entry_value(entry)))
     conflicts: list[dict[str, Any]] = []
-    for (name, day), values in by_person_day.items():
+    for (identity, day), values in by_person_day.items():
         distinct = {value for _, value in values}
         if len(distinct) > 1:
             conflicts.append({
-                "name": name,
+                "name": identity if IDENTITY_SEPARATOR not in identity else identity,
                 "day": day,
                 "values": [{"source": source, "value": value} for source, value in values],
             })
@@ -694,7 +832,7 @@ def _merge_source_map_with_conflicts(
         for day, incoming in day_map.items():
             if day in existing and _entry_value(existing[day]) != _entry_value(incoming):
                 conflicts.append({
-                    "name": _split_person_key(name)[0],
+                    "name": (_person_code(name) + " " if _person_code(name) else "") + _split_person_key(name)[0],
                     "day": day,
                     "values": [
                         {"source": "已合并文件", "value": _entry_value(existing[day])},
@@ -722,8 +860,8 @@ def _build_default_day_maps(
     if not default_schedule_path:
         weekday_day_map = _build_weekday_day_map(year, month)
         return {
-            "main": {day: _make_daily_entry(value) for day, value in weekday_day_map.items()},
-            "chengdu": {day: _make_daily_entry(value) for day, value in weekday_day_map.items()},
+            "main": {day: _make_daily_entry(value, note="系统按工作日补填", comment="系统按工作日补填", alert=True, system_fill=True) for day, value in weekday_day_map.items()},
+            "chengdu": {day: _make_daily_entry(value, note="系统按工作日补填", comment="系统按工作日补填", alert=True, system_fill=True) for day, value in weekday_day_map.items()},
         }
 
     # 用户上传的作息表常用公式递推后续周的日期。兼职固定人员
@@ -735,8 +873,8 @@ def _build_default_day_maps(
             f"目标月份 {year}-{month:02d}"
         )
 
-    main_day_map = {current.day: _make_daily_entry(1.0) for current in sorted(ctx["main_working_days"])}
-    chengdu_day_map = {current.day: _make_daily_entry(1.0) for current in sorted(ctx["chengdu_working_days"])}
+    main_day_map = {current.day: _make_daily_entry(1.0, note="系统按工作日补填", comment="系统按工作日补填", alert=True, system_fill=True) for current in sorted(ctx["main_working_days"])}
+    chengdu_day_map = {current.day: _make_daily_entry(1.0, note="系统按工作日补填", comment="系统按工作日补填", alert=True, system_fill=True) for current in sorted(ctx["chengdu_working_days"])}
     return {
         "main": main_day_map,
         "chengdu": chengdu_day_map or dict(main_day_map),
@@ -1220,29 +1358,81 @@ def _build_output_rows(
     schedules: dict[str, SourceMap],
     special_default_names: tuple[str, ...],
     special_chengdu_names: set[str],
+    expected_people: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     output_rows: list[dict[str, Any]] = []
     row_names = _build_row_specs(attendance_detail, monthly_summary, schedules)
     existing_names = {name for name in row_names}
     existing_plain_names = {_split_person_key(name)[0] for name in row_names}
     special_default_name_set = set(special_default_names)
-    for name in special_default_names:
+    for name in (() if expected_people is not None else special_default_names):
         if name not in existing_plain_names:
             row_names.append(name)
             existing_names.add(name)
             existing_plain_names.add(name)
 
+    # The organisation roster is the authoritative person set. Keep people
+    # with no source rows so a missing punch cannot silently reduce the output.
+    for person in expected_people or []:
+        code = _normalize_code(person.get("工号") or person.get("emp_no"))
+        name = _normalize_name(person.get("姓名") or person.get("name"))
+        company = _normalize_text(person.get("所属公司") or person.get("company"))
+        if not name:
+            continue
+        key = _make_person_key(name, company, code)
+        if key not in existing_names:
+            row_names.append(key)
+            existing_names.add(key)
+
     for key in row_names:
         name, company = _split_person_key(key)
         output_rows.append(
             {
+                "工号": _person_code(key),
                 "姓名": name,
                 "所属公司": company,
+                "_source_key": key,
                 "_allow_default_fill": name in special_default_name_set,
                 "_default_schedule_key": "chengdu" if name in special_chengdu_names else "main",
             }
         )
     return output_rows
+
+
+def _load_expected_people(path: str | None) -> list[dict[str, Any]]:
+    """Load the current organisation roster and keep兼职/实习人员 only."""
+    if not path:
+        return []
+    if path.lower().endswith(".json"):
+        with open(path, encoding="utf-8") as source:
+            return json.load(source).get("employees", [])
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    headers = [_normalize_text(cell.value) for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    def col(*aliases):
+        for alias in aliases:
+            if alias in headers:
+                return headers.index(alias) + 1
+        return None
+    name_col = col("姓名", "员工姓名")
+    code_col = col("工号", "员工工号", "员工编号")
+    role_cols = [col("职位", "岗位", "岗位名称"), col("人员类型", "员工类型"), col("类别"), col("考勤组")]
+    if name_col is None:
+        wb.close()
+        raise ValueError("钉钉花名册缺少姓名列")
+    people: list[dict[str, Any]] = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        name = _normalize_name(row[name_col - 1] if len(row) >= name_col else "")
+        if not name:
+            continue
+        code = _normalize_code(row[code_col - 1] if code_col and len(row) >= code_col else "")
+        role_text = " ".join(_normalize_text(row[idx - 1]) for idx in role_cols if idx and len(row) >= idx)
+        if any(word in role_text for word in ("兼职", "实习")) or code.startswith("TXB"):
+            people.append({"工号": code, "姓名": name})
+    wb.close()
+    if not people:
+        raise ValueError("钉钉花名册未识别到兼职或实习人员")
+    return people
 
 
 def parse_attendance_detail(path: str) -> SourceMap:
@@ -1278,10 +1468,13 @@ def parse_attendance_detail(path: str) -> SourceMap:
         attendance_group = ws.cell(row_idx, col_group).value if col_group else None
         department = ws.cell(row_idx, col_department).value if col_department else None
         employee_code = ws.cell(row_idx, col_code).value if col_code else None
+        if _is_template_placeholder_name(name, employee_code):
+            continue
         position = ws.cell(row_idx, col_position).value if col_position else None
         is_intern_row = _is_intern_attendance_row(attendance_group, department, position)
         has_intern_exemption = _has_intern_monthly_exemption(_normalize_text(position))
-        remaining = intern_exemption_remaining.setdefault(name, [MONTHLY_EXEMPT_MINUTES]) if has_intern_exemption else None
+        person_key = _make_person_key(name, employee_code=employee_code)
+        remaining = intern_exemption_remaining.setdefault(person_key, [MONTHLY_EXEMPT_MINUTES]) if has_intern_exemption else None
         if has_scope_columns and not _is_attendance_row_in_scope(
             attendance_group=attendance_group,
             department=department,
@@ -1307,7 +1500,7 @@ def parse_attendance_detail(path: str) -> SourceMap:
             (_entry_value(entry) or 0) > 0 for entry in day_map.values()
         ):
             continue
-        _merge_daily_maps(result, name, day_map)
+        _merge_daily_maps(result, person_key, day_map)
 
     wb.close()
     print(f"[{SOURCE_ATTENDANCE_DETAIL}] 解析 {len(result)} 人")
@@ -1350,10 +1543,13 @@ def parse_monthly_summary(path: str) -> SourceMap:
         attendance_group = ws.cell(row_idx, col_group).value if col_group else None
         department = ws.cell(row_idx, col_department).value if col_department else None
         employee_code = ws.cell(row_idx, col_code).value if col_code else None
+        if _is_template_placeholder_name(name, employee_code):
+            continue
         position = ws.cell(row_idx, col_position).value if col_position else None
         is_intern_row = _is_intern_attendance_row(attendance_group, department, position)
         has_intern_exemption = _has_intern_monthly_exemption(_normalize_text(position))
-        remaining = intern_exemption_remaining.setdefault(name, [MONTHLY_EXEMPT_MINUTES]) if has_intern_exemption else None
+        person_key = _make_person_key(name, employee_code=employee_code)
+        remaining = intern_exemption_remaining.setdefault(person_key, [MONTHLY_EXEMPT_MINUTES]) if has_intern_exemption else None
         if has_scope_columns and not _is_monthly_row_in_scope(
             attendance_group=attendance_group,
             department=department,
@@ -1375,7 +1571,7 @@ def parse_monthly_summary(path: str) -> SourceMap:
             (_entry_value(entry) or 0) > 0 for entry in day_map.values()
         ):
             continue
-        _merge_daily_maps(result, name, day_map)
+        _merge_daily_maps(result, person_key, day_map)
 
     wb.close()
     print(f"[{SOURCE_MONTHLY_SUMMARY}] 解析 {len(result)} 人")
@@ -1612,10 +1808,12 @@ def parse_matrix_schedule(path: str, source_name: str | None = None) -> SourceMa
 
     for row_idx in range(header_row_idx + 1, ws.max_row + 1):
         name = _normalize_name(ws.cell(row_idx, col_name).value)
-        if not name or name in SCHEDULE_PLACEHOLDER_NAMES:
+        if not name or _is_template_placeholder_name(name):
             continue
         company = _normalize_text(ws.cell(row_idx, col_company).value) if col_company else ""
-        person_key = _make_person_key(name, company)
+        code_col = _find_col_by_aliases(header_values, ATTENDANCE_DETAIL_CODE_HEADERS)
+        code = ws.cell(row_idx, code_col).value if code_col else ""
+        person_key = _make_person_key(name, company, code)
 
         day_map: DailyMap = {}
         for day, col_idx in day_columns:
@@ -1669,6 +1867,19 @@ def _lookup_source_day_map(source_map: SourceMap, name: str) -> DailyMap | None:
     if day_map:
         return dict(day_map)
     return None
+
+
+def _lookup_row_day_map(source_map: SourceMap, row: dict[str, Any]) -> DailyMap | None:
+    key = _normalize_text(row.get("_source_key"))
+    if key and key in source_map:
+        return dict(source_map[key])
+    code = _normalize_code(row.get("工号"))
+    if code:
+        matches = [value for candidate, value in source_map.items() if _person_code(candidate) == code]
+        if len(matches) == 1:
+            return dict(matches[0])
+    name = _normalize_name(row.get("姓名"))
+    return _lookup_source_day_map(source_map, name)
 
 
 def _lookup_schedule_day_map(source_map: SourceMap, name: str, company: str) -> DailyMap | None:
@@ -1770,6 +1981,13 @@ def _merge_fixed_schedule_anomalies(
         anomaly_comments: list[str] = []
         for attendance_day_map in attendance_day_maps:
             attendance_entry = attendance_day_map.get(day)
+            if attendance_entry is not None and _entry_value(attendance_entry) == _entry_value(scheduled_entry):
+                scheduled_entry["system_fill"] = False
+                scheduled_entry["note"] = _entry_note(scheduled_entry).replace("系统按工作日补填", "")
+                scheduled_entry["comment"] = _merge_comment(
+                    _entry_comment(scheduled_entry).replace("系统按工作日补填", ""),
+                    _entry_comment(attendance_entry),
+                )
             note = _fixed_schedule_anomaly_note(attendance_entry)
             if not note:
                 continue
@@ -1815,8 +2033,8 @@ def _resolve_row_days(
         return (
             _merge_fixed_schedule_anomalies(
                 dict(fallback_day_map),
-                _lookup_source_day_map(monthly_summary, name) or {},
-                _lookup_source_day_map(attendance_detail, name) or {},
+                _lookup_row_day_map(monthly_summary, row) or {},
+                _lookup_row_day_map(attendance_detail, row) or {},
             ),
             SOURCE_SPECIAL_DEFAULT_WEEKDAYS,
             warnings,
@@ -1825,20 +2043,20 @@ def _resolve_row_days(
     schedule_sources = [
         source_name
         for source_name in SCHEDULE_SOURCE_ORDER
-        if _lookup_schedule_day_map(schedules.get(source_name, {}), name, company)
+        if _lookup_row_day_map(schedules.get(source_name, {}), row) or _lookup_schedule_day_map(schedules.get(source_name, {}), name, company)
     ]
     if schedule_sources:
         schedule_day_maps = [
             day_map
             for source_name in schedule_sources
-            if (day_map := _lookup_schedule_day_map(schedules[source_name], name, company))
+            if (day_map := _lookup_row_day_map(schedules[source_name], row) or _lookup_schedule_day_map(schedules[source_name], name, company))
         ]
         merged_schedule = _merge_day_maps(*schedule_day_maps)
         if merged_schedule:
             schedule_source_name = "、".join(schedule_sources)
             attendance_day_map = _merge_day_maps(
-                _lookup_source_day_map(monthly_summary, name) or {},
-                _lookup_source_day_map(attendance_detail, name) or {},
+                _lookup_row_day_map(monthly_summary, row) or {},
+                _lookup_row_day_map(attendance_detail, row) or {},
             )
             if not attendance_day_map:
                 warnings.append(f"{name} 排班存在，但原始考勤没有覆盖日期，保持空白。")
@@ -1849,11 +2067,11 @@ def _resolve_row_days(
                 warnings,
             )
 
-    day_map = _lookup_source_day_map(monthly_summary, name)
+    day_map = _lookup_row_day_map(monthly_summary, row)
     if day_map:
         return day_map, SOURCE_MONTHLY_SUMMARY, warnings
 
-    day_map = _lookup_source_day_map(attendance_detail, name)
+    day_map = _lookup_row_day_map(attendance_detail, row)
     if day_map:
         return day_map, SOURCE_ATTENDANCE_DETAIL, warnings
 
@@ -1866,7 +2084,7 @@ def _resolve_row_days(
 
 
 def _write_title_and_headers(ws, month: int, days_in_month: int) -> None:
-    total_cols = len(STATIC_HEADERS) + days_in_month + 2
+    total_cols = len(STATIC_HEADERS) + days_in_month + 4
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
     title_cell = ws.cell(1, 1)
     title_cell.value = f"{OUTPUT_TITLE_PREFIX}{month}{OUTPUT_TITLE_SUFFIX}"
@@ -1893,13 +2111,27 @@ def _write_title_and_headers(ws, month: int, days_in_month: int) -> None:
         cell.border = THIN_BORDER
 
     total_cell = ws.cell(2, start_day_col + days_in_month)
-    total_cell.value = "实际出勤天数"
+    total_cell.value = "出勤天数"
     total_cell.font = Font(bold=True)
     total_cell.alignment = Alignment(horizontal="center", vertical="center")
     total_cell.fill = HEADER_FILL
     total_cell.border = THIN_BORDER
 
-    reminder_cell = ws.cell(2, start_day_col + days_in_month + 1)
+    real_cell = ws.cell(2, start_day_col + days_in_month + 1)
+    real_cell.value = "真实记录天数"
+    real_cell.font = Font(bold=True)
+    real_cell.alignment = Alignment(horizontal="center", vertical="center")
+    real_cell.fill = HEADER_FILL
+    real_cell.border = THIN_BORDER
+
+    fill_cell = ws.cell(2, start_day_col + days_in_month + 2)
+    fill_cell.value = "系统补填天数"
+    fill_cell.font = Font(bold=True)
+    fill_cell.alignment = Alignment(horizontal="center", vertical="center")
+    fill_cell.fill = HEADER_FILL
+    fill_cell.border = THIN_BORDER
+
+    reminder_cell = ws.cell(2, start_day_col + days_in_month + 3)
     reminder_cell.value = "提醒"
     reminder_cell.font = Font(bold=True)
     reminder_cell.alignment = Alignment(horizontal="center", vertical="center")
@@ -1921,7 +2153,9 @@ def _apply_layout(ws, days_in_month: int) -> None:
     for col_idx in range(start_day_col, start_day_col + days_in_month):
         ws.column_dimensions[get_column_letter(col_idx)].width = 5
     ws.column_dimensions[get_column_letter(start_day_col + days_in_month)].width = 12
-    ws.column_dimensions[get_column_letter(start_day_col + days_in_month + 1)].width = 42
+    ws.column_dimensions[get_column_letter(start_day_col + days_in_month + 1)].width = 14
+    ws.column_dimensions[get_column_letter(start_day_col + days_in_month + 2)].width = 14
+    ws.column_dimensions[get_column_letter(start_day_col + days_in_month + 3)].width = 42
 
     ws.freeze_panes = ws.cell(3, start_day_col)
     ws.sheet_view.showGridLines = True
@@ -1938,6 +2172,7 @@ def _write_data_rows(
     special_default_name_set: set[str],
     fallback_names: list[str] | None = None,
     blank_names: list[str] | None = None,
+    fallback_days: list[dict[str, Any]] | None = None,
 ) -> tuple[list[str], int]:
     warnings: list[str] = []
     start_day_col = len(STATIC_HEADERS) + 1
@@ -1960,12 +2195,16 @@ def _write_data_rows(
         name = str(output_row.get("姓名") or "").strip()
         if source_name in {SOURCE_DEFAULT_WEEKDAYS, SOURCE_SPECIAL_DEFAULT_WEEKDAYS} and fallback_names is not None:
             fallback_names.append(name)
-        if not daily_map and blank_names is not None:
+        if not any(_entry_value(entry) is not None for entry in daily_map.values()) and blank_names is not None:
             blank_names.append(name)
 
         total_value = _round3(
             sum(_entry_value(value) or 0.0 for value in daily_map.values() if value is not None)
         )
+        real_days = _round3(sum(_entry_value(value) or 0 for value in daily_map.values() if not _is_system_fill_entry(value)))
+        fill_days = _round3(sum(_entry_value(value) or 0 for value in daily_map.values() if _is_system_fill_entry(value)))
+        if fallback_days is not None:
+            fallback_days.extend({"name": name, "day": day} for day, value in daily_map.items() if _is_system_fill_entry(value))
         row_idx = next_row_idx
         row_reminders: list[str] = []
         for col_idx, header in enumerate(STATIC_HEADERS, start=1):
@@ -2009,7 +2248,16 @@ def _write_data_rows(
         total_cell.border = THIN_BORDER
         total_cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        reminder_cell = ws.cell(row_idx, reminder_col)
+        real_cell = ws.cell(row_idx, total_col + 1)
+        real_cell.value = real_days
+        real_cell.border = THIN_BORDER
+        real_cell.alignment = Alignment(horizontal="center", vertical="center")
+        fill_cell = ws.cell(row_idx, total_col + 2)
+        fill_cell.value = fill_days
+        fill_cell.border = THIN_BORDER
+        fill_cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        reminder_cell = ws.cell(row_idx, total_col + 3)
         if row_reminders:
             reminder_cell.value = "；".join(row_reminders)
             reminder_cell.fill = ATTENDANCE_ALERT_FILL
@@ -2031,6 +2279,9 @@ def generate_parttime_summary(
     default_schedule_path: str | None = None,
     special_default_names: list[str] | tuple[str, ...] | set[str] | None = None,
     attendance_detail_paths: list[str] | None = None,
+    target_month: str | None = None,
+    expected_roster_path: str | None = None,
+    resignation_path: str | None = None,
 ) -> dict[str, Any]:
     schedule_paths = schedule_paths or []
     monthly_summary_paths = monthly_summary_paths or []
@@ -2039,6 +2290,13 @@ def generate_parttime_summary(
         detail_paths.insert(0, attendance_detail_path)
     if not any([detail_paths, monthly_summary_paths, schedule_paths]):
         raise ValueError("至少需要上传一份考勤来源文件。")
+
+    preflight = preflight_parttime_inputs(
+        detail_paths, monthly_summary_paths, schedule_paths, default_schedule_path, target_month
+    )
+    if not preflight["ok"]:
+        details = "；".join(f"{item['file_name']}：{item.get('说明', '检查失败')}" for item in preflight["errors"])
+        raise ValueError("文件检查未通过，请处理后再计算：" + details)
 
     resolved_special_default_names = _normalize_name_collection(
         DEFAULT_SPECIAL_DEFAULT_NAMES if special_default_names is None else special_default_names
@@ -2060,7 +2318,36 @@ def generate_parttime_summary(
         schedule_paths=schedule_paths,
         default_schedule_path=default_schedule_path,
     )
+    requested_month = _parse_requested_month(target_month)
+    if requested_month and (year, month) != requested_month:
+        year, month = requested_month
     _, days_in_month = calendar.monthrange(year, month)
+    expected_people = _load_expected_people(expected_roster_path)
+    if resignation_path:
+        for person in _load_expected_people(resignation_path):
+            resigned = str(person.get("resign_date") or person.get("last_work_day") or "")[:10]
+            if resigned >= f"{year:04d}-{month:02d}-01":
+                expected_people.append(person)
+    expected_people = [
+        {**person, "工号": _normalize_code(person.get("工号") or person.get("emp_no")),
+         "姓名": _normalize_name(person.get("姓名") or person.get("name"))}
+        for person in expected_people
+        if (any(word in " ".join(str(person.get(field) or "") for field in ("emp_type", "position", "姓名", "name"))
+                for word in ("兼职", "实习", *resolved_special_default_names))
+            or _normalize_code(person.get("工号") or person.get("emp_no")).startswith("TXB"))
+        and (not person.get("hire_date") or str(person["hire_date"])[:10] <= f"{year:04d}-{month:02d}-{days_in_month:02d}")
+    ]
+    if expected_roster_path and not expected_people:
+        raise ValueError("钉钉花名册没有识别到目标月兼职/实习人员，请补充人员类型和岗位")
+    expected_by_code = {}
+    for person in expected_people:
+        if not person["姓名"]:
+            raise ValueError("钉钉花名册存在空姓名，请补充后重试")
+        code = person["工号"]
+        if code and code in expected_by_code and expected_by_code[code]["姓名"] != person["姓名"]:
+            raise ValueError(f"钉钉花名册工号 {code} 对应多个姓名，请确认")
+        expected_by_code[code or person["姓名"]] = person
+    expected_people = list(expected_by_code.values())
 
     attendance_detail: SourceMap = {}
     source_conflicts: list[dict[str, Any]] = []
@@ -2094,12 +2381,41 @@ def generate_parttime_summary(
     if skipped_files:
         raise ValueError("排班文件无法识别，已停止计算：" + ", ".join(skipped_files))
 
+    # Resolve missing numbers only against a unique name across every source.
+    maps = [attendance_detail, monthly_summary, *schedules.values()]
+    names_to_codes: dict[str, set[str]] = {}
+    code_to_name: dict[str, str] = {}
+    keys = [key for source in maps for key in source]
+    keys.extend(_make_person_key(person["姓名"], employee_code=person["工号"]) for person in expected_people)
+    for key in keys:
+        name, _ = _split_person_key(key)
+        code = _person_code(key)
+        if code:
+            if code in code_to_name and code_to_name[code] != name:
+                raise ValueError(f"工号 {code} 对应不同姓名，等待确认")
+            code_to_name[code] = name
+            names_to_codes.setdefault(name, set()).add(code)
+    for source in maps:
+        normalized: SourceMap = {}
+        for key, values in source.items():
+            name, _ = _split_person_key(key)
+            code = _person_code(key)
+            codes = names_to_codes.get(name, set())
+            if not code and len(codes) > 1:
+                raise ValueError(f"同名员工 {name} 缺少工号，等待人工确认")
+            code = code or (next(iter(codes)) if codes else "")
+            canonical = _make_person_key(name, employee_code=code)
+            _merge_source_map_with_conflicts(normalized, {canonical: values}, "同工号来源", source_conflicts)
+        source.clear()
+        source.update(normalized)
+
     output_rows = _build_output_rows(
         attendance_detail=attendance_detail,
         monthly_summary=monthly_summary,
         schedules=schedules,
         special_default_names=resolved_special_default_names,
         special_chengdu_names=special_chengdu_names,
+        expected_people=expected_people if expected_roster_path else None,
     )
     default_day_maps = _build_default_day_maps(year, month, default_schedule_path)
 
@@ -2109,6 +2425,7 @@ def generate_parttime_summary(
     _write_title_and_headers(ws, month=month, days_in_month=days_in_month)
     fallback_names: list[str] = []
     blank_names: list[str] = []
+    fallback_days: list[dict[str, Any]] = []
     warnings, written_rows = _write_data_rows(
         ws,
         output_rows=output_rows,
@@ -2120,16 +2437,49 @@ def generate_parttime_summary(
         special_default_name_set=special_default_name_set,
         fallback_names=fallback_names,
         blank_names=blank_names,
+        fallback_days=fallback_days,
     )
     _apply_layout(ws, days_in_month=days_in_month)
 
     conflicts = source_conflicts + _collect_source_conflicts(attendance_detail, monthly_summary, schedules)
+    file_ws = wb.create_sheet("文件检查", 0)
+    file_ws.append(["文件名", "类型", "状态", "说明"])
+    for file_item in preflight["files"]:
+        file_ws.append([file_item.get("file_name"), file_item.get("type"), file_item.get("status"), file_item.get("说明")])
+    for col, width in enumerate((30, 20, 12, 72), start=1):
+        file_ws.column_dimensions[get_column_letter(col)].width = width
+    file_ws.freeze_panes = "A2"
+
     audit_ws = wb.create_sheet("数据检查")
     audit_ws.append(["检查项", "对象", "结果", "说明"])
     audit_ws.append(["目标月份", "", "通过", f"{year:04d}-{month:02d}"])
-    audit_ws.append(["输出人数", "", "通过", str(written_rows)])
+    expected_count = len(expected_people) if expected_people else written_rows
+    source_keys = set(attendance_detail) | set(monthly_summary)
+    for source_map in schedules.values():
+        source_keys.update(source_map)
+    recognized_people = 0 if expected_people else written_rows
+    missing_expected: list[str] = []
+    for person in expected_people:
+        code = _normalize_code(person.get("工号"))
+        name = _normalize_name(person.get("姓名"))
+        matched = any((code and _person_code(key) == code) or (not code and _split_person_key(key)[0] == name) for key in source_keys)
+        if matched:
+            recognized_people += 1
+        else:
+            missing_expected.append(f"{code} {name}".strip())
+    audit_ws.append(["应处理人员", "", "通过" if not missing_expected else "待处理", str(expected_count)])
+    audit_ws.append(["目标月份天数", "", "通过", str(days_in_month)])
+    audit_ws.append(["实际识别人员", "", "通过" if not missing_expected else "待处理", str(recognized_people)])
+    audit_ws.append(["人员匹配状态", "", "通过" if not missing_expected else "待处理", f"应处理 {expected_count} 人，实际识别 {recognized_people} 人"])
+    for person in missing_expected:
+        audit_ws.append(["缺少人员", person, "待处理", "钉钉花名册存在，但输入文件没有匹配记录"])
+    for file_item in preflight["files"]:
+        for name in file_item.get("same_name_different_codes", []):
+            audit_ws.append(["同名不同工号", name, "待确认", f"文件 {file_item.get('file_name')} 中存在多个工号，按工号分别输出"])
     for name in sorted(set(fallback_names)):
         audit_ws.append(["自动补填", name, "待核对", "未匹配到日明细，按工作日填充"])
+    for item in fallback_days:
+        audit_ws.append(["系统补填日期", f"{item['name']} / {item['day']}日", "待核对", "系统按工作日补填"])
     for name in sorted(set(blank_names)):
         audit_ws.append(["缺少明细", name, "待核对", "没有可用的日明细，结果保持空白"])
     for conflict in conflicts:
@@ -2141,6 +2491,16 @@ def generate_parttime_summary(
 
     wb.save(output_path)
     wb.close()
+    # Re-open the generated workbook in value mode. This catches formula-only
+    # totals and malformed output before the file is handed to the user.
+    check_wb = openpyxl.load_workbook(output_path, read_only=True, data_only=True)
+    check_ws = check_wb[f"{month}{OUTPUT_SHEET_SUFFIX}"]
+    total_col = len(STATIC_HEADERS) + days_in_month + 1
+    for row_idx in range(3, 3 + written_rows):
+        if not isinstance(check_ws.cell(row_idx, total_col).value, (int, float)):
+            check_wb.close()
+            raise ValueError("结果 Excel 合计未写入数字，已停止输出")
+    check_wb.close()
 
     warning_count = len(warnings)
     if warnings:
@@ -2159,13 +2519,19 @@ def generate_parttime_summary(
             "input_files": [os.path.basename(path) for path in detail_paths + monthly_summary_paths + schedule_paths + ([default_schedule_path] if default_schedule_path else [])],
             "detected_months": detected_months,
             "rows": written_rows,
-            "fallback_count": len(set(fallback_names)),
+            "expected_people": expected_count,
+            "recognized_people": recognized_people,
+            "missing_people": len(missing_expected),
+            "missing_person_names": missing_expected,
+            "days_in_month": days_in_month,
+            "fallback_count": len(fallback_days),
             "fallback_names": sorted(set(fallback_names)),
             "blank_count": len(set(blank_names)),
             "blank_names": sorted(set(blank_names)),
             "conflict_count": len(conflicts),
             "conflicts": conflicts,
-            "status": "needs_review" if fallback_names or blank_names or conflicts else "passed",
+            "file_check_count": len(preflight["files"]),
+            "status": "needs_review" if fallback_names or blank_names or conflicts or missing_expected else "passed",
         },
         "output_path": output_path,
     }

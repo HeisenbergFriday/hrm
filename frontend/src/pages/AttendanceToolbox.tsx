@@ -228,6 +228,20 @@ export const getParttimeAuditMeta = (
   }
 }
 
+type IntegrityAudit = {
+  status: string
+  issues: Array<{ kind: string; person: string; detail: string; file_name?: string }>
+  files: Array<{ file_name: string; type: string; status: string; detail: string }>
+  expected_people?: number
+  recognized_people?: number
+  missing_people?: number
+}
+
+const getIntegrityAudit = (run: AttendanceToolboxRunResponse | null): IntegrityAudit | null => {
+  const value = run?.meta?.integrity_audit
+  return value && typeof value === 'object' ? value as IntegrityAudit : null
+}
+
 export const buildAttendanceToolboxWorkflowOptionFields = (
   moduleKey: ToolboxModuleKey,
   textValues: Record<string, string>,
@@ -241,6 +255,10 @@ export const buildAttendanceToolboxWorkflowOptionFields = (
   if (moduleKey === 'subsidy') {
     const month = (textValues.subsidy_target_month || '').trim()
     if (month) result.subsidy_target_month = month
+  }
+  if (moduleKey === 'parttime') {
+    const month = (textValues.parttime_target_month || '').trim()
+    if (month) result.parttime_target_month = month
   }
   if (
     (moduleKey === 'overtime' || moduleKey === 'subsidy')
@@ -717,6 +735,7 @@ const AttendanceToolbox: React.FC = () => {
       messageApi.warning('你没有考勤工具箱操作权限，无法保存固定配置')
       return
     }
+
     const maternity = getMaternityLeaveOverridesForSubmit()
     if (maternity === null) return
     setConfigSaving(true)
@@ -1362,6 +1381,13 @@ const AttendanceToolbox: React.FC = () => {
     if (data.module) {
       setRunLogByModule((prev) => ({ ...prev, [data.module as ToolboxModuleKey]: data.log || '' }))
     }
+    const integrityAudit = getIntegrityAudit(data)
+    const auditMeta = data.module === 'parttime' && data.meta?.parttime_audit && typeof data.meta.parttime_audit === 'object'
+      ? data.meta.parttime_audit as Record<string, unknown>
+      : null
+    if (auditMeta?.status === 'needs_review') {
+      messageApi.warning('检查未通过，结果已保留供核对；处理问题后再重新计算。')
+    }
     // Prefer zip when multiple files; otherwise single file. Meta files are technical details, not user results.
     const downloadables = getAttendanceToolboxDownloadableFiles(data)
     if (downloadables.length === 0) {
@@ -1390,14 +1416,20 @@ const AttendanceToolbox: React.FC = () => {
       }
     }
 
+    const needsReview = integrityAudit?.status === 'needs_review' || (data.module === 'parttime'
+      && data.meta?.parttime_audit
+      && typeof data.meta.parttime_audit === 'object'
+      && (data.meta.parttime_audit as Record<string, unknown>).status === 'needs_review')
     if (data.module) {
-      setCompletedModules((prev) => ({ ...prev, [data.module as ToolboxModuleKey]: true }))
+      setCompletedModules((prev) => ({ ...prev, [data.module as ToolboxModuleKey]: !needsReview }))
     }
     // Best-effort 200-row preview for overtime only; never re-runs calculation.
     void loadOvertimePreview(data)
     const subsidyAudit = getSubsidyAuditMeta(data)
     const parttimeAudit = getParttimeAuditMeta(data)
-    if (subsidyAudit?.missingAttendanceCount) {
+    if (needsReview) {
+      messageApi.warning('计算未完成，请处理检查报告中的问题后重新计算')
+    } else if (subsidyAudit?.missingAttendanceCount) {
       const preview = subsidyAudit.missingAttendanceNames.slice(0, 5).join('、')
       const suffix = subsidyAudit.missingAttendanceCount > 5 ? '等' : ''
       messageApi.warning(
@@ -1588,9 +1620,18 @@ const AttendanceToolbox: React.FC = () => {
       messageApi.warning('你缺少考勤工具箱操作权限，需要联系管理员添加')
       return
     }
+    if (moduleKey === 'parttime' && !canDingtalkSync) {
+      messageApi.warning('兼职计算需要拉取钉钉花名册，请开通钉钉同步权限')
+      return
+    }
 
     // 尽早占位，避免 audit 窗口双提交 / 跨 Tab 并发
     setRunningModule(moduleKey)
+    if (!(textValues[`${moduleKey}_target_month`] || '').trim()) {
+      messageApi.warning('请先选择处理月份')
+      setRunningModule(null)
+      return
+    }
     try {
       if (config.fileFields.length > 0) {
         await runAuditForFiles(config)
@@ -1615,6 +1656,12 @@ const AttendanceToolbox: React.FC = () => {
     }
 
     if (moduleKey === 'parttime') {
+      const selectedMonth = (textValues.parttime_target_month || '').trim()
+      if (!selectedMonth) {
+        messageApi.warning('请先选择处理月份')
+        setRunningModule(null)
+        return
+      }
       const parttimeSourceFields = ['parttime_attendance_detail', 'parttime_monthly', 'parttime_schedules']
       const hasSource = parttimeSourceFields.some((key) => (fileLists[key] || []).length > 0)
       if (!hasSource) {
@@ -1626,6 +1673,7 @@ const AttendanceToolbox: React.FC = () => {
     }
 
     const formData = new FormData()
+    formData.append(`${moduleKey}_target_month`, (textValues[`${moduleKey}_target_month`] || '').trim())
     for (const field of config.fileFields) {
       for (const file of fileLists[field.name] || []) {
         const rawFile = file.originFileObj
@@ -1641,7 +1689,7 @@ const AttendanceToolbox: React.FC = () => {
     for (const [field, value] of Object.entries(
       buildAttendanceToolboxWorkflowOptionFields(moduleKey, textValues, appliedRules),
     )) {
-      formData.append(field, value)
+      formData.set(field, value)
     }
 
     try {
@@ -2017,11 +2065,8 @@ const AttendanceToolbox: React.FC = () => {
     const requiredFields = config.fileFields.filter((f) => f.required)
     const optionalFields = config.fileFields.filter((f) => !f.required)
     const requiredReadyCount = requiredFields.filter((f) => (fileLists[f.name] || []).length > 0).length
-    const monthField = config.key === 'overtime'
-      ? 'overtime_target_month'
-      : config.key === 'subsidy'
-        ? 'subsidy_target_month'
-        : null
+    const monthField = `${config.key}_target_month`
+    const integrityAudit = lastRun?.module === config.key ? getIntegrityAudit(lastRun) : null
     const lockedMonth = monthField ? (textValues[monthField] || '') : ''
     const subsidyAudit = config.key === 'subsidy' ? getSubsidyAuditMeta(lastRun) : null
     const parttimeAudit = config.key === 'parttime' ? getParttimeAuditMeta(lastRun) : null
@@ -2056,8 +2101,8 @@ const AttendanceToolbox: React.FC = () => {
                 format="YYYY-MM"
                 allowClear
                 value={lockedMonth ? dayjs(`${lockedMonth}-01`) : null}
-                placeholder="自动识别月份"
-                aria-label={config.key === 'overtime' ? '加班处理月份' : '补贴考勤月份'}
+                placeholder="请选择处理月份"
+                aria-label={`${config.title}处理月份`}
                 onChange={(value) => {
                   setTextValues((prev) => ({
                     ...prev,
@@ -2066,7 +2111,7 @@ const AttendanceToolbox: React.FC = () => {
                 }}
               locale={datePickerZhCN} />
               <Text type="secondary" style={{ fontSize: 12 }}>
-                默认自动识别；文件跨月或标题不规范时可手动锁定。锁定月份与作息表不一致时会停止计算。
+                计算前必须确认月份。月度文件与作息表应一致；跨月审批只计入目标月部分。
               </Text>
               {config.key === 'subsidy' && (
                 <Alert
@@ -2351,8 +2396,8 @@ const AttendanceToolbox: React.FC = () => {
           <Card size="small" title="最近结果" style={{ borderRadius: 'var(--radius-lg)' }}>
             <Space direction="vertical" style={{ width: '100%' }} size={8}>
               <Space wrap>
-                {parttimeAudit?.status === 'needs_review' ? (
-                  <Tag color="warning" icon={<WarningOutlined />}>已生成，待核对</Tag>
+                {integrityAudit?.status === 'needs_review' || parttimeAudit?.status === 'needs_review' ? (
+                  <Tag color="warning" icon={<WarningOutlined />}>计算未完成，请处理检查问题</Tag>
                 ) : (
                   <Tag color="success" icon={<CheckCircleOutlined />}>计算成功</Tag>
                 )}
@@ -2360,6 +2405,20 @@ const AttendanceToolbox: React.FC = () => {
                   <Text type="secondary" style={{ fontSize: 12 }}>结果有效至 {lastRun.expires_at}</Text>
                 )}
               </Space>
+              {integrityAudit && (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {integrityAudit.expected_people !== undefined && (
+                    <Text>应处理人员：{integrityAudit.expected_people} 人；实际识别：{integrityAudit.recognized_people || 0} 人；缺少人员：{integrityAudit.missing_people || 0} 人</Text>
+                  )}
+                  <Table size="small" rowKey={(row) => `${row.file_name}-${row.type}`} dataSource={integrityAudit.files} pagination={{ pageSize: 5 }} columns={[
+                    { title: '文件名', dataIndex: 'file_name' },
+                    { title: '类型', dataIndex: 'type' },
+                    { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={value === '正常' ? 'success' : 'error'}>{value}</Tag> },
+                    { title: '说明', dataIndex: 'detail' },
+                  ]} />
+                  {integrityAudit.issues?.length > 0 && <Alert type="error" showIcon message="计算未完成，请处理以下问题" description={integrityAudit.issues.map((item, index) => <div key={index}>{item.file_name} {item.person}：{item.detail}</div>)} />}
+                </Space>
+              )}
               {subsidyAudit?.missingAttendanceCount ? (
                 <Alert
                   type="warning"
@@ -2381,7 +2440,7 @@ const AttendanceToolbox: React.FC = () => {
                   type="warning"
                   showIcon
                   message="兼职汇总已生成，但存在待核对数据"
-                  description={`输出 ${parttimeAudit.rows} 人；自动补填 ${parttimeAudit.fallbackCount} 人，空白人员 ${parttimeAudit.blankCount} 人，来源冲突 ${parttimeAudit.conflictCount} 条。详情见结果文件“数据检查”工作表。`}
+                  description={`识别 ${parttimeAudit.rows} 人；系统补填 ${parttimeAudit.fallbackCount} 条；空白人员 ${parttimeAudit.blankCount} 人；来源冲突 ${parttimeAudit.conflictCount} 条。详情见“文件检查”和“数据检查”。`}
                 />
               ) : null}
               {formatRunStats(lastRun.stats as Record<string, unknown> | undefined).length > 0 && (

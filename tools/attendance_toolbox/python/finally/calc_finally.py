@@ -1605,7 +1605,7 @@ def merge_employee_sources(
         target = by_emp_no.get(incoming_emp_no) if incoming_emp_no else None
         if target is None and incoming_name_key:
             candidates = by_name.get(incoming_name_key, [])
-            if len(candidates) == 1:
+            if len(candidates) == 1 and (not incoming_emp_no or not _is_business_employee_number(_normalize_emp_no(candidates[0].get("emp_no")))):
                 target = candidates[0]
 
         if target is None:
@@ -1749,7 +1749,8 @@ def apply_attendance_identity(employees: list[dict], attendance_records: list[di
             candidates = [matched]
         else:
             # 花名册无工号或旧工号未命中时，都必须按规范化姓名回退。
-            candidates = by_name.get(_normalize_name_key(roster_name), [])
+            candidates = [record for record in by_name.get(_normalize_name_key(roster_name), [])
+                          if not roster_emp_no or not _is_business_employee_number(_normalize_emp_no(record.get("emp_no")))]
         if len(candidates) > 1:
             raise ValueError(
                 f"钉钉考勤记录中姓名“{roster_name}”匹配到 {len(candidates)} 个员工身份，"
@@ -2834,6 +2835,8 @@ def generate(
             "2倍加班（天）": ot_data.get("2x") if ot_data.get("2x") else None,
             "3倍加班（天）": ot_data.get("3x") if ot_data.get("3x") else None,
         })
+        row_values["实际出勤天数"] = _round2(attendance_days - sum(float(row_values.get(field) or 0) for field in actual_deductions))
+        row_values["计薪出勤天数"] = _round2(row_values["实际出勤天数"] + sum(float(row_values.get(field) or 0) for field in payroll_additions))
         row_values_by_key = {
             _field_key(field): value
             for field, value in row_values.items()

@@ -186,6 +186,10 @@ func RunDingtalkSync(c *gin.Context) {
 // quick and dingtalk_sync have dedicated handlers with dedicated permissions.
 func RunAttendanceToolboxWorkflow(c *gin.Context) {
 	module := strings.TrimSpace(c.Param("module"))
+	if module == "parttime" && !toolboxHasPermission(c, "attendance_toolbox_dingtalk_sync") {
+		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "兼职计算需要拉取钉钉花名册，请开通钉钉同步权限"})
+		return
+	}
 	if !service.IsAttendanceToolboxStandardModule(module) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "不支持的考勤工具箱模块；quick/dingtalk_sync 请使用专用路由"})
 		return

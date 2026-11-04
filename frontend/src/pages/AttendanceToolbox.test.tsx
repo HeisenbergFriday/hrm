@@ -486,6 +486,8 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     expect(messageApi.warning).toHaveBeenCalledWith('请上传请假系统导出表')
     expect(mockRunWorkflow).not.toHaveBeenCalled()
@@ -511,6 +513,8 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await user.click(screen.getByRole('tab', { name: /兼职汇总/ }))
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     expect(messageApi.warning).toHaveBeenCalledWith('请上传默认作息表')
   })
@@ -1075,6 +1079,8 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await uploadLeaveRequiredFiles(user)
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     await waitFor(() => expect(mockRunWorkflow).toHaveBeenCalled())
     expect(mockRun).not.toHaveBeenCalled()
@@ -1090,6 +1096,8 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await uploadLeaveRequiredFiles(user)
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     await waitFor(() => expect(mockRunWorkflow).toHaveBeenCalled())
     await waitFor(() => expect(mockRun).toHaveBeenCalled())
@@ -1101,6 +1109,8 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await uploadLeaveRequiredFiles(user)
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     await waitFor(() => expect(mockDownloadRunFile).toHaveBeenCalled())
     expect(await screen.findByText('计算成功')).toBeInTheDocument()
@@ -1124,6 +1134,8 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await uploadLeaveRequiredFiles(user)
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     await waitFor(() => expect(screen.getByText('计算成功')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /结果\.xlsx/ }))
@@ -1158,6 +1170,8 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await uploadLeaveRequiredFiles(user)
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
 
     await waitFor(() => expect(mockRunWorkflow).toHaveBeenCalled())
@@ -1178,14 +1192,14 @@ describe('AttendanceToolbox', () => {
     expect(screen.getByText('月末结账向导')).toBeInTheDocument()
   })
 
-  it('renders optional month locks for overtime and subsidy', async () => {
+  it('renders required month selectors for overtime and subsidy', async () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await user.click(screen.getByRole('tab', { name: /加班明细/ }))
-    expect(await screen.findByLabelText('加班处理月份')).toBeInTheDocument()
+    expect(await screen.findByLabelText('加班明细处理月份')).toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: /补贴扣款/ }))
-    expect(await screen.findByLabelText('补贴考勤月份')).toBeInTheDocument()
+    expect(await screen.findByLabelText('补贴扣款处理月份')).toBeInTheDocument()
   })
 
   it('shows missing attendance warning from subsidy audit metadata', async () => {
@@ -1207,6 +1221,8 @@ describe('AttendanceToolbox', () => {
     await uploadRequiredFileByLabel(user, '钉钉月度汇总表（补贴及扣款）', 'subsidy.xlsx')
     await uploadRequiredFileByLabel(user, '签到表', 'checkin.xlsx')
     await uploadRequiredFileByLabel(user, '作息表', 'schedule.xlsx')
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     expect(await screen.findByText('有 2 人缺少考勤记录')).toBeInTheDocument()
     expect(screen.getByText(/丁俊、任澳辉/)).toBeInTheDocument()

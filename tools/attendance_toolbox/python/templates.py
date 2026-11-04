@@ -70,6 +70,12 @@ def _autosize_worksheet(ws) -> None:
 
 
 def _workbook_to_bytes(wb: Workbook) -> bytes:
+    # Example identities are explicit data, never inferred from a real name.
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value in ("张三", "李四", "王五"):
+                    cell.value = "【示例】" + cell.value
     buf = __import__("io").BytesIO()
     wb.save(buf)
     wb.close()

@@ -143,6 +143,8 @@ func (s *AttendanceToolboxService) RunStructured(ctx context.Context, userID, or
 			}
 		}
 	}
+	// Scope is server-owned; multipart values must never override JWT context.
+	config["toolbox_org_id"] = orgID
 	if module == "dingtalk_sync" || module == "quick" {
 		if err := attachOrgDingtalkConfig(config, orgID); err != nil {
 			return nil, err
@@ -294,6 +296,45 @@ func (s *AttendanceToolboxService) runToolboxWorkflowEngine(ctx context.Context,
 		}
 		spec := structuredToolboxSpec(module)
 		if err := saveAttendanceToolboxFiles(workdir, form, spec, config); err != nil {
+			cleanup()
+			return nil, "", err
+		}
+	}
+	// The person baseline for part-time calculation comes from the current
+	// organisation roster. Generate it at run time so an old manually uploaded
+	// list cannot hide missing employees.
+	if module == "parttime" {
+		orgID := configString(config, "toolbox_org_id")
+		if orgID == "" {
+			cleanup()
+			return nil, "", errors.New("兼职计算需要当前组织人员花名册")
+		}
+		roster, rosterErr := dingtalk.SyncUsersForOrg(orgID)
+		if rosterErr != nil {
+			cleanup()
+			return nil, "", fmt.Errorf("读取钉钉花名册失败：%w", rosterErr)
+		}
+		if err := ctx.Err(); err != nil {
+			cleanup()
+			return nil, "", err
+		}
+		people := make([]rosterEmployee, 0, len(roster))
+		for _, employee := range roster {
+			people = append(people, rosterEmployee{EmpNo: employee.EmployeeID, Name: employee.Name,
+				EmpType: employee.EmploymentType, Position: employee.Position, HireDate: employee.HiredDate})
+		}
+		rosterData, err := json.Marshal(map[string]interface{}{"employees": people})
+		if err != nil {
+			cleanup()
+			return nil, "", err
+		}
+		rosterPath := filepath.Join(workdir, "钉钉花名册.json")
+		if err := os.WriteFile(rosterPath, rosterData, 0600); err != nil {
+			cleanup()
+			return nil, "", fmt.Errorf("保存钉钉花名册快照失败：%w", err)
+		}
+		config["parttime_roster"] = rosterPath
+		if err := s.attachAutomaticDingTalkResignations(ctx, workdir, config); err != nil {
 			cleanup()
 			return nil, "", err
 		}
@@ -588,8 +629,8 @@ func mapLegacyProcessingForm(module string, form *multipart.Form) *multipart.For
 	case "parttime":
 		copyFiles("parttime_default_schedule", "default_schedule", "parttime_default_schedule")
 		copyFilesAll("parttime_attendance_detail", "attendance_detail", "parttime_attendance_detail")
-		copyFiles("parttime_monthly", "monthly_summary", "parttime_monthly")
-		copyFiles("parttime_schedules", "schedule", "parttime_schedules")
+		copyFilesAll("parttime_monthly", "monthly_summary", "parttime_monthly")
+		copyFilesAll("parttime_schedules", "schedule", "parttime_schedules")
 	}
 	return out
 }

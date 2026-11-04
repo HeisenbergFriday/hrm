@@ -607,7 +607,11 @@ def classify_employee(
         "三级部门": str(dept_d3 or ""),
         "考勤组":   str(attendance_group or ""),
     }
-    matched: set[str] = set()
+    # 运营支撑部假日工资是内置业务口径，不能因旧配置漏掉部门组而退回调休。
+    matched: set[str] = {
+        department for department in SPECIAL_DEPARTMENTS
+        if any(department in dept_values[level] for level in ("一级部门", "二级部门", "三级部门"))
+    }
     for group_name, rules in config._dept_group_index.items():
         for rule in rules:
             field_val = dept_values.get(rule.match_field, "")
@@ -642,7 +646,12 @@ def determine_action(
     date_type: str,
     employee_groups: set[str],
 ) -> tuple[str, float]:
-    """按优先级匹配倍数规则，返回 (加班类型, 倍数)。"""
+    """先应用运营支撑部内置假日工资口径，再匹配可配置规则。"""
+    if employee_groups & SPECIAL_DEPARTMENTS:
+        if date_type == LEGAL_HOLIDAY:
+            return "加班工资", 3.0
+        if date_type == HOLIDAY_ADJUST_REST:
+            return "加班工资", 2.0
     for rule in config.premium_rules:
         if rule.date_type != date_type:
             continue

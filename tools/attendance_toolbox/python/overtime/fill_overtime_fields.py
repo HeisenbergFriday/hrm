@@ -183,7 +183,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def normalize_name(value) -> str:
-    return str(value or "").strip()
+    return str(value or "").replace("\u200b", "").replace("\ufeff", "").strip()
 
 
 def _is_effective_approval_status(status, result) -> bool:
@@ -984,9 +984,22 @@ def _resolve_employee_department_fields(
 
     roster_info = _lookup_employee_department(employee_department_map, employee_code, emp_name)
     if roster_info:
-        dept_d1 = roster_info.get("dept1") or dept_d1
-        dept_d2 = roster_info.get("dept2") or dept_d2
-        dept_d3 = roster_info.get("dept3") or dept_d3
+        def path_parts(values):
+            return [part.strip() for value in values
+                    for part in re.split(r"[-/／>＞]+", normalize_name(value)) if part.strip()]
+
+        source_parts = path_parts((dept_d1, dept_d2, dept_d3))
+        roster_parts = path_parts(roster_info.get(key) for key in ("dept1", "dept2", "dept3"))
+        # A suffix-only roster describes the same department; retain its known
+        # parents. A genuinely different roster path still corrects the source.
+        is_truncated_suffix = (
+            bool(roster_parts) and len(roster_parts) < len(source_parts)
+            and source_parts[-len(roster_parts):] == roster_parts
+        )
+        if not is_truncated_suffix:
+            dept_d1 = roster_info.get("dept1") or dept_d1
+            dept_d2 = roster_info.get("dept2") or dept_d2
+            dept_d3 = roster_info.get("dept3") or dept_d3
         att_group = roster_info.get("attendance_group") or att_group
 
     return dept_d1, dept_d2, dept_d3, att_group
@@ -1915,9 +1928,11 @@ def _is_rest_premium_employee_group(
     employee_groups: set[str],
     rules_config,
 ) -> bool:
-    """判断员工是否属于假期安排日可按 2 倍补录的部门组。"""
+    """内置运营支撑部口径与配置的额外部门组共用2倍工资计算路径。"""
+    from rules_engine import SPECIAL_DEPARTMENTS
+
     allowed_groups = _parse_group_names(rules_config.schedule_augment_rest_dept_group)
-    return bool(employee_groups & allowed_groups)
+    return bool(employee_groups & (allowed_groups | SPECIAL_DEPARTMENTS))
 
 
 def _is_rest_premium_excluded_employee(emp_name: str | None, employee_code: str | None = None) -> bool:
@@ -2275,7 +2290,7 @@ def _build_general_overtime_contexts(
             and manual_override_hours >= 0
             and bool(manual_override_note)
         )
-        is_span_total_row = len(span_dates) > 1 and raw_hours is not None and detail_hours is None
+        is_span_total_row = len(span_dates) > 1 and raw_hours is not None
         if (
             _is_special_overtime_rule_row(employee_groups, emp_name, employee_code, span_dates, rules_config)
             and not is_span_total_row
@@ -2811,6 +2826,11 @@ def process_overtime(
         src_rows,
         target_month_anchor,
     )
+    # Historical sheets may include years outside the holiday provider's
+    # coverage. Only validate years that will actually enter this month's run.
+    src_rows, skipped_cross_month_rows = filter_rows_by_target_month(
+        src_rows, current_month_anchor,
+    )
     special_chengdu_name_set = {
         normalize_name(name) for name in (special_chengdu_names or ()) if normalize_name(name)
     }
@@ -2842,11 +2862,6 @@ def process_overtime(
         employee_department_map,
         current_month_anchor,
     )
-    src_rows, skipped_cross_month_rows = filter_rows_by_target_month(
-        src_rows,
-        current_month_anchor,
-    )
-
     wb_out = openpyxl.Workbook()
     ws = wb_out.active
     ws.title = "加班明细"

@@ -184,6 +184,9 @@ func (s *AttendanceToolboxService) Run(ctx context.Context, module string, form 
 			config[field] = values
 		}
 	}
+	if values := form.Value[module+"_target_month"]; len(values) > 0 {
+		config[module+"_target_month"] = values[0]
+	}
 
 	configJSON, err := json.Marshal(config)
 	if err != nil {
@@ -485,7 +488,7 @@ func attendanceToolboxSpecs() map[string]attendanceToolboxModuleSpec {
 				"parttime_monthly":           "parttime_monthly",
 				"parttime_schedules":         "parttime_schedules",
 			},
-			TextFields: []string{"part_special_names"},
+			TextFields: []string{"part_special_names", "parttime_target_month"},
 		},
 		"dingtalk_sync": {
 			TextFields: []string{
@@ -554,7 +557,15 @@ func saveAttendanceToolboxFile(workdir, field string, idx int, file *multipart.F
 		_ = src.Close()
 	}()
 
-	name := fmt.Sprintf("%s_%d%s", field, idx+1, ext)
+	// Keep the original basename for month validation and audit provenance.
+	base := filepath.Base(strings.ReplaceAll(file.Filename, "\\", "/"))
+	base = strings.Map(func(r rune) rune {
+		if r < 32 || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return '_'
+		}
+		return r
+	}, base)
+	name := fmt.Sprintf("%s_%d_%s", field, idx+1, base)
 	dstPath := filepath.Join(workdir, name)
 	dst, err := os.Create(dstPath)
 	if err != nil {
@@ -1105,6 +1116,10 @@ func (s *AttendanceToolboxService) Validate(ctx context.Context, module string, 
 
 	config := map[string]interface{}{
 		"validate_module": module,
+	}
+	config[module+"_target_month"] = form.Value[module+"_target_month"]
+	if values := form.Value[module+"_target_month"]; len(values) > 0 {
+		config[module+"_target_month"] = values[0]
 	}
 	if err := saveAttendanceToolboxFiles(workdir, form, spec, config); err != nil {
 		return nil, err
