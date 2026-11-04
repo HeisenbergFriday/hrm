@@ -604,6 +604,106 @@ def _infer_year_month(
     return year, month
 
 
+def _collect_detected_months(
+    attendance_detail_paths: list[str],
+    monthly_summary_paths: list[str],
+    schedule_paths: list[str],
+    default_schedule_path: str | None,
+) -> list[dict[str, Any]]:
+    """Collect explicit year/month hints so mixed-month uploads fail closed."""
+    detected: list[dict[str, Any]] = []
+
+    def add(path: str, value: Any, source: str) -> None:
+        year, month = _extract_year_month_from_title(_normalize_text(value))
+        if year or month:
+            detected.append({"file": os.path.basename(path), "year": year, "month": month, "source": source})
+
+    paths_by_kind = (
+        (attendance_detail_paths, "attendance_detail"),
+        (monthly_summary_paths, "monthly_summary"),
+        (schedule_paths, "schedule"),
+    )
+    for paths_for_kind, kind in paths_by_kind:
+        for path in paths_for_kind:
+            add(path, os.path.basename(path), f"{kind}:filename")
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            ws = wb[wb.sheetnames[0]]
+            add(path, ws.cell(1, 1).value, f"{kind}:A1")
+            add(path, ws.cell(5, 4).value, f"{kind}:D5")
+            wb.close()
+    if default_schedule_path:
+        add(default_schedule_path, os.path.basename(default_schedule_path), "default_schedule:filename")
+        wb = openpyxl.load_workbook(default_schedule_path, read_only=True, data_only=True)
+        for ws in wb.worksheets:
+            add(default_schedule_path, ws.cell(1, 1).value, f"default_schedule:{ws.title}:A1")
+        wb.close()
+    return detected
+
+
+def _validate_detected_months(detected: list[dict[str, Any]]) -> tuple[int | None, int | None]:
+    known = {(item.get("year"), item.get("month")) for item in detected if item.get("month")}
+    months = {month for _, month in known if month}
+    years = {year for year, _ in known if year}
+    if len(months) > 1 or len(years) > 1:
+        details = ", ".join(
+            f"{item['file']}={item.get('year') or '?'}-{int(item['month']):02d}"
+            for item in detected
+            if item.get("month")
+        )
+        raise ValueError(f"兼职汇总输入文件月份不一致：{details}")
+    return (next(iter(years)) if years else None, next(iter(months)) if months else None)
+
+
+def _collect_source_conflicts(
+    attendance_detail: SourceMap,
+    monthly_summary: SourceMap,
+    schedules: dict[str, SourceMap],
+) -> list[dict[str, Any]]:
+    sources: dict[str, SourceMap] = {
+        SOURCE_ATTENDANCE_DETAIL: attendance_detail,
+        SOURCE_MONTHLY_SUMMARY: monthly_summary,
+    }
+    sources.update(schedules)
+    by_person_day: dict[tuple[str, int], list[tuple[str, float | None]]] = {}
+    for source_name, source_map in sources.items():
+        for name, day_map in source_map.items():
+            plain_name, _ = _split_person_key(name)
+            for day, entry in day_map.items():
+                by_person_day.setdefault((plain_name, day), []).append((source_name, _entry_value(entry)))
+    conflicts: list[dict[str, Any]] = []
+    for (name, day), values in by_person_day.items():
+        distinct = {value for _, value in values}
+        if len(distinct) > 1:
+            conflicts.append({
+                "name": name,
+                "day": day,
+                "values": [{"source": source, "value": value} for source, value in values],
+            })
+    return conflicts
+
+
+def _merge_source_map_with_conflicts(
+    target: SourceMap,
+    source: SourceMap,
+    source_label: str,
+    conflicts: list[dict[str, Any]],
+) -> None:
+    """Merge one uploaded file while preserving conflicting source values."""
+    for name, day_map in source.items():
+        existing = target.get(name, {})
+        for day, incoming in day_map.items():
+            if day in existing and _entry_value(existing[day]) != _entry_value(incoming):
+                conflicts.append({
+                    "name": _split_person_key(name)[0],
+                    "day": day,
+                    "values": [
+                        {"source": "已合并文件", "value": _entry_value(existing[day])},
+                        {"source": source_label, "value": _entry_value(incoming)},
+                    ],
+                })
+        _merge_daily_maps(target, name, day_map)
+
+
 def _build_weekday_day_map(year: int, month: int) -> dict[int, float]:
     _, days_in_month = calendar.monthrange(year, month)
     result: dict[int, float] = {}
@@ -1836,6 +1936,8 @@ def _write_data_rows(
     schedules: dict[str, SourceMap],
     default_day_maps: dict[str, DailyMap],
     special_default_name_set: set[str],
+    fallback_names: list[str] | None = None,
+    blank_names: list[str] | None = None,
 ) -> tuple[list[str], int]:
     warnings: list[str] = []
     start_day_col = len(STATIC_HEADERS) + 1
@@ -1855,6 +1957,11 @@ def _write_data_rows(
 
         for warn in row_warnings:
             warnings.append(f"[{source_name}] {warn}")
+        name = str(output_row.get("姓名") or "").strip()
+        if source_name in {SOURCE_DEFAULT_WEEKDAYS, SOURCE_SPECIAL_DEFAULT_WEEKDAYS} and fallback_names is not None:
+            fallback_names.append(name)
+        if not daily_map and blank_names is not None:
+            blank_names.append(name)
 
         total_value = _round3(
             sum(_entry_value(value) or 0.0 for value in daily_map.values() if value is not None)
@@ -1896,9 +2003,9 @@ def _write_data_rows(
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
         total_cell = ws.cell(row_idx, total_col)
-        start_ref = get_column_letter(start_day_col)
-        end_ref = get_column_letter(total_col - 1)
-        total_cell.value = f"=ROUND(SUM({start_ref}{row_idx}:{end_ref}{row_idx}),2)"
+        # Write the computed number directly so previewers and non-Excel readers
+        # see the total immediately; formula-only cells have no cached value.
+        total_cell.value = total_value
         total_cell.border = THIN_BORDER
         total_cell.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -1943,6 +2050,10 @@ def generate_parttime_summary(
         if name in special_default_name_set
     )
 
+    detected_months = _collect_detected_months(
+        detail_paths, monthly_summary_paths, schedule_paths, default_schedule_path
+    )
+    _validate_detected_months(detected_months)
     year, month = _infer_year_month(
         attendance_detail_path=detail_paths,
         monthly_summary_paths=monthly_summary_paths,
@@ -1952,27 +2063,36 @@ def generate_parttime_summary(
     _, days_in_month = calendar.monthrange(year, month)
 
     attendance_detail: SourceMap = {}
+    source_conflicts: list[dict[str, Any]] = []
     for detail_path in detail_paths:
         parsed = parse_attendance_detail(detail_path)
-        for name, day_map in parsed.items():
-            _merge_daily_maps(attendance_detail, name, day_map)
+        _merge_source_map_with_conflicts(
+            attendance_detail, parsed, os.path.basename(detail_path), source_conflicts
+        )
 
     monthly_summary: SourceMap = {}
     for ms_path in monthly_summary_paths:
         parsed = parse_monthly_summary(ms_path)
-        for name, day_map in parsed.items():
-            _merge_daily_maps(monthly_summary, name, day_map)
+        _merge_source_map_with_conflicts(
+            monthly_summary, parsed, os.path.basename(ms_path), source_conflicts
+        )
 
     schedules: dict[str, SourceMap] = {}
+    skipped_files: list[str] = []
     for path in schedule_paths:
         source_name, parsed = parse_schedule_file(path, month=month)
         if source_name and parsed:
             target = schedules.setdefault(source_name, {})
-            for name, day_map in parsed.items():
-                _merge_daily_maps(target, name, day_map)
+            _merge_source_map_with_conflicts(
+                target, parsed, os.path.basename(path), source_conflicts
+            )
             print(f"[排班] 已识别 {source_name}: {os.path.basename(path)}")
         else:
-            print(f"[排班] 未识别文件，跳过: {os.path.basename(path)}")
+            skipped_files.append(os.path.basename(path))
+            print(f"[排班] 未识别文件: {os.path.basename(path)}")
+
+    if skipped_files:
+        raise ValueError("排班文件无法识别，已停止计算：" + ", ".join(skipped_files))
 
     output_rows = _build_output_rows(
         attendance_detail=attendance_detail,
@@ -1987,6 +2107,8 @@ def generate_parttime_summary(
     ws = wb.active
     ws.title = f"{month}{OUTPUT_SHEET_SUFFIX}"
     _write_title_and_headers(ws, month=month, days_in_month=days_in_month)
+    fallback_names: list[str] = []
+    blank_names: list[str] = []
     warnings, written_rows = _write_data_rows(
         ws,
         output_rows=output_rows,
@@ -1996,8 +2118,26 @@ def generate_parttime_summary(
         schedules=schedules,
         default_day_maps=default_day_maps,
         special_default_name_set=special_default_name_set,
+        fallback_names=fallback_names,
+        blank_names=blank_names,
     )
     _apply_layout(ws, days_in_month=days_in_month)
+
+    conflicts = source_conflicts + _collect_source_conflicts(attendance_detail, monthly_summary, schedules)
+    audit_ws = wb.create_sheet("数据检查")
+    audit_ws.append(["检查项", "对象", "结果", "说明"])
+    audit_ws.append(["目标月份", "", "通过", f"{year:04d}-{month:02d}"])
+    audit_ws.append(["输出人数", "", "通过", str(written_rows)])
+    for name in sorted(set(fallback_names)):
+        audit_ws.append(["自动补填", name, "待核对", "未匹配到日明细，按工作日填充"])
+    for name in sorted(set(blank_names)):
+        audit_ws.append(["缺少明细", name, "待核对", "没有可用的日明细，结果保持空白"])
+    for conflict in conflicts:
+        values_text = "; ".join(f"{item['source']}={item['value']}" for item in conflict["values"])
+        audit_ws.append(["来源冲突", f"{conflict['name']} / {conflict['day']}日", "待核对", values_text])
+    for col in (1, 2, 3, 4):
+        audit_ws.column_dimensions[get_column_letter(col)].width = (16, 24, 12, 64)[col - 1]
+    audit_ws.freeze_panes = "A2"
 
     wb.save(output_path)
     wb.close()
@@ -2014,6 +2154,19 @@ def generate_parttime_summary(
         "month": month,
         "rows": written_rows,
         "warnings": warning_count,
+        "audit": {
+            "target_month": f"{year:04d}-{month:02d}",
+            "input_files": [os.path.basename(path) for path in detail_paths + monthly_summary_paths + schedule_paths + ([default_schedule_path] if default_schedule_path else [])],
+            "detected_months": detected_months,
+            "rows": written_rows,
+            "fallback_count": len(set(fallback_names)),
+            "fallback_names": sorted(set(fallback_names)),
+            "blank_count": len(set(blank_names)),
+            "blank_names": sorted(set(blank_names)),
+            "conflict_count": len(conflicts),
+            "conflicts": conflicts,
+            "status": "needs_review" if fallback_names or blank_names or conflicts else "passed",
+        },
         "output_path": output_path,
     }
 

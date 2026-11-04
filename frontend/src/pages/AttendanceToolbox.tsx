@@ -47,6 +47,7 @@ import {
   SyncOutlined,
   ToolOutlined,
   UploadOutlined,
+  WarningOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
 import dayjs from 'dayjs'
@@ -191,6 +192,39 @@ export const getSubsidyAuditMeta = (
     missingAttendanceNames: Array.isArray(value.missing_attendance_names)
       ? value.missing_attendance_names.map((item) => String(item)).filter(Boolean)
       : [],
+  }
+}
+
+export interface ParttimeAuditMeta {
+  status: 'passed' | 'needs_review'
+  targetMonth: string
+  rows: number
+  fallbackCount: number
+  fallbackNames: string[]
+  blankCount: number
+  blankNames: string[]
+  conflictCount: number
+}
+
+export const getParttimeAuditMeta = (
+  run: AttendanceToolboxRunResponse | null | undefined,
+): ParttimeAuditMeta | null => {
+  const raw = run?.meta?.parttime_audit
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Record<string, unknown>
+  return {
+    status: value.status === 'needs_review' ? 'needs_review' : 'passed',
+    targetMonth: String(value.target_month || ''),
+    rows: Number(value.rows || 0),
+    fallbackCount: Number(value.fallback_count || 0),
+    fallbackNames: Array.isArray(value.fallback_names)
+      ? value.fallback_names.map((item) => String(item)).filter(Boolean)
+      : [],
+    blankCount: Number(value.blank_count || 0),
+    blankNames: Array.isArray(value.blank_names)
+      ? value.blank_names.map((item) => String(item)).filter(Boolean)
+      : [],
+    conflictCount: Number(value.conflict_count || 0),
   }
 }
 
@@ -1362,12 +1396,15 @@ const AttendanceToolbox: React.FC = () => {
     // Best-effort 200-row preview for overtime only; never re-runs calculation.
     void loadOvertimePreview(data)
     const subsidyAudit = getSubsidyAuditMeta(data)
+    const parttimeAudit = getParttimeAuditMeta(data)
     if (subsidyAudit?.missingAttendanceCount) {
       const preview = subsidyAudit.missingAttendanceNames.slice(0, 5).join('、')
       const suffix = subsidyAudit.missingAttendanceCount > 5 ? '等' : ''
       messageApi.warning(
         `计算完成，但有 ${subsidyAudit.missingAttendanceCount} 人缺少考勤记录：${preview}${suffix}；详细名单已写入“异常审计”。`,
       )
+    } else if (parttimeAudit?.status === 'needs_review') {
+      messageApi.warning('兼职汇总已生成，但存在待核对数据；请打开结果中的“数据检查”工作表')
     } else if (downloadOk) {
       messageApi.success(successText)
     }
@@ -1987,6 +2024,7 @@ const AttendanceToolbox: React.FC = () => {
         : null
     const lockedMonth = monthField ? (textValues[monthField] || '') : ''
     const subsidyAudit = config.key === 'subsidy' ? getSubsidyAuditMeta(lastRun) : null
+    const parttimeAudit = config.key === 'parttime' ? getParttimeAuditMeta(lastRun) : null
     const customHolidayCount = appliedRules.rules?.legal_holidays_override?.length || 0
 
     return (
@@ -2313,7 +2351,11 @@ const AttendanceToolbox: React.FC = () => {
           <Card size="small" title="最近结果" style={{ borderRadius: 'var(--radius-lg)' }}>
             <Space direction="vertical" style={{ width: '100%' }} size={8}>
               <Space wrap>
-                <Tag color="success" icon={<CheckCircleOutlined />}>计算成功</Tag>
+                {parttimeAudit?.status === 'needs_review' ? (
+                  <Tag color="warning" icon={<WarningOutlined />}>已生成，待核对</Tag>
+                ) : (
+                  <Tag color="success" icon={<CheckCircleOutlined />}>计算成功</Tag>
+                )}
                 {lastRun.expires_at && (
                   <Text type="secondary" style={{ fontSize: 12 }}>结果有效至 {lastRun.expires_at}</Text>
                 )}
@@ -2332,6 +2374,14 @@ const AttendanceToolbox: React.FC = () => {
                   showIcon
                   message={`法定节假日口径存在 ${subsidyAudit.holidayConflictCount} 个日期差异`}
                   description="本次已优先使用加班规则配置，差异日期已写入结果文件“异常审计”工作表。"
+                />
+              ) : null}
+              {parttimeAudit?.status === 'needs_review' ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="兼职汇总已生成，但存在待核对数据"
+                  description={`输出 ${parttimeAudit.rows} 人；自动补填 ${parttimeAudit.fallbackCount} 人，空白人员 ${parttimeAudit.blankCount} 人，来源冲突 ${parttimeAudit.conflictCount} 条。详情见结果文件“数据检查”工作表。`}
                 />
               ) : null}
               {formatRunStats(lastRun.stats as Record<string, unknown> | undefined).length > 0 && (

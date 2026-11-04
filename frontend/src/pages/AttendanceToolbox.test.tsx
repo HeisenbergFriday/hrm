@@ -8,6 +8,7 @@ import AttendanceToolbox, {
   getAttendanceToolboxDownloadableFiles,
   getDingtalkSyncExportFile,
   getPreviousCalendarMonthRange,
+  getParttimeAuditMeta,
   getSubsidyAuditMeta,
   isRosterDepartmentPathError,
   resolveErrorMessage,
@@ -303,6 +304,32 @@ describe('attendance toolbox workflow options', () => {
       holidayConflictCount: 2,
       missingAttendanceCount: 2,
       missingAttendanceNames: ['丁俊', '任澳辉'],
+    })
+  })
+
+  it('normalizes part-time audit metadata', () => {
+    const run = makeRunResponse('parttime').data
+    run.meta = {
+      parttime_audit: {
+        status: 'needs_review',
+        target_month: '2026-07',
+        rows: 61,
+        fallback_count: 2,
+        fallback_names: ['刘芳', '汤颖'],
+        blank_count: 1,
+        blank_names: ['李四'],
+        conflict_count: 3,
+      },
+    }
+    expect(getParttimeAuditMeta(run)).toEqual({
+      status: 'needs_review',
+      targetMonth: '2026-07',
+      rows: 61,
+      fallbackCount: 2,
+      fallbackNames: ['刘芳', '汤颖'],
+      blankCount: 1,
+      blankNames: ['李四'],
+      conflictCount: 3,
     })
   })
 })

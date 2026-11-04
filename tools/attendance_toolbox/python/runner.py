@@ -572,7 +572,7 @@ def run_parttime(config: dict, output_dir: Path) -> list[dict]:
     default_schedule_path = path_or_empty(config, "parttime_default_schedule")
     if not default_schedule_path:
         raise ValueError("请上传默认作息表。")
-    part.generate_parttime_summary(
+    result = part.generate_parttime_summary(
         output_path=str(out_path),
         attendance_detail_paths=paths(config, "parttime_attendance_detail"),
         monthly_summary_paths=paths(config, "parttime_monthly"),
@@ -580,7 +580,15 @@ def run_parttime(config: dict, output_dir: Path) -> list[dict]:
         default_schedule_path=default_schedule_path,
         special_default_names=names_or_default(config, "part_special_names", part.DEFAULT_SPECIAL_DEFAULT_NAMES),
     )
-    return [{"path": str(out_path), "file_name": out_path.name}]
+    audit_path = output_dir / "parttime_audit.json"
+    audit_path.write_text(
+        json.dumps(result.get("audit") or {}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return [
+        {"path": str(out_path), "file_name": out_path.name, "kind": "export", "row_count": result.get("rows", 0)},
+        {"path": str(audit_path), "file_name": audit_path.name, "kind": "meta"},
+    ]
 
 
 def run_dingtalk_sync(config: dict, output_dir: Path) -> list[dict]:

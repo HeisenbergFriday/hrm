@@ -200,5 +200,43 @@ class BinaryAttendanceValueTests(unittest.TestCase):
         self.assertIn("状态文本无法识别", parttime._entry_comment(unknown))
 
 
+class ParttimeAuditTests(unittest.TestCase):
+    def test_mixed_months_are_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            parttime._validate_detected_months([
+                {"file": "九月.xlsx", "year": 2026, "month": 9, "source": "filename"},
+                {"file": "十月.xlsx", "year": 2026, "month": 10, "source": "filename"},
+            ])
+
+    def test_source_conflicts_are_reported(self) -> None:
+        conflicts = parttime._collect_source_conflicts(
+            {"张三": {12: parttime._make_daily_entry(0.0)}},
+            {"张三": {12: parttime._make_daily_entry(1.0)}},
+            {},
+        )
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["name"], "张三")
+        self.assertEqual(conflicts[0]["day"], 12)
+
+    def test_total_is_written_as_numeric_value(self) -> None:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        parttime._write_title_and_headers(ws, month=7, days_in_month=2)
+        warnings, rows = parttime._write_data_rows(
+            ws,
+            output_rows=[{"姓名": "张三", "所属公司": ""}],
+            days_in_month=2,
+            attendance_detail={"张三": {1: parttime._make_daily_entry(1.0), 2: parttime._make_daily_entry(1.0)}},
+            monthly_summary={},
+            schedules={},
+            default_day_maps={"main": {}, "chengdu": {}},
+            special_default_name_set=set(),
+        )
+        self.assertEqual((warnings, rows), ([], 1))
+        total_col = len(parttime.STATIC_HEADERS) + 2 + 1
+        self.assertEqual(ws.cell(3, total_col).value, 2.0)
+        wb.close()
+
+
 if __name__ == "__main__":
     unittest.main()
