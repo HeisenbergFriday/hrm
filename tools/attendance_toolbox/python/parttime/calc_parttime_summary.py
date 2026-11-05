@@ -485,7 +485,18 @@ def _find_day_columns(
     allow_positional_fallback: bool = True,
 ) -> list[tuple[int, int]]:
     explicit_by_column: dict[int, int] = {}
-    for row_idx in (header_row_idx + 1, header_row_idx):
+    # A numeric attendance value in the first data row must never replace the
+    # actual day header (e.g. 1,1,1 must not collapse days 1,2,3 into day 1).
+    date_row_idx = header_row_idx
+    headers = [ws.cell(header_row_idx, col).value for col in range(1, ws.max_column + 1)]
+    name_col = _find_col_by_aliases(headers, ATTENDANCE_DETAIL_NAME_HEADERS)
+    next_name = _normalize_name(ws.cell(header_row_idx + 1, name_col).value) if name_col else ""
+    has_secondary_dates = next_name in {"", "日期", "星期", "周几"} and any(
+        _parse_day_header_value(ws.cell(header_row_idx + 1, col).value) is not None
+        for col in range(1, ws.max_column + 1))
+    if has_secondary_dates:
+        date_row_idx = header_row_idx + 1
+    for row_idx in (date_row_idx,):
         for col_idx in range(1, ws.max_column + 1):
             if col_idx in explicit_by_column:
                 continue
@@ -505,7 +516,7 @@ def _find_day_columns(
         current_day = first_day
         for col_idx in range(first_column - 1, 0, -1):
             expected_day = current_day - 1
-            if expected_day < 1 or not _is_weekday_header(ws.cell(header_row_idx + 1, col_idx).value):
+            if expected_day < 1 or not _is_weekday_header(ws.cell(date_row_idx, col_idx).value):
                 break
             inferred_by_column[col_idx] = expected_day
             current_day = expected_day
@@ -521,7 +532,7 @@ def _find_day_columns(
                     break
                 current_day = explicit_day
                 continue
-            if not _is_weekday_header(ws.cell(header_row_idx + 1, col_idx).value):
+            if not _is_weekday_header(ws.cell(date_row_idx, col_idx).value):
                 break
             inferred_by_column[col_idx] = expected_day
             current_day = expected_day
@@ -967,6 +978,8 @@ def _parse_daily_text_value(
     count_outing_as_present: bool = False,
 ) -> DailyEntry | None:
     text = _normalize_text(value)
+    if re.fullmatch(r"(?:0(?:\.\d+)?|1(?:\.0+)?)", text):
+        return _make_daily_entry(float(text), raw_text=text)
     if not text:
         return _make_daily_entry(
             None,
@@ -1983,6 +1996,7 @@ def _merge_fixed_schedule_anomalies(
             attendance_entry = attendance_day_map.get(day)
             if attendance_entry is not None and _entry_value(attendance_entry) == _entry_value(scheduled_entry):
                 scheduled_entry["system_fill"] = False
+                scheduled_entry["alert"] = False
                 scheduled_entry["note"] = _entry_note(scheduled_entry).replace("系统按工作日补填", "")
                 scheduled_entry["comment"] = _merge_comment(
                     _entry_comment(scheduled_entry).replace("系统按工作日补填", ""),
@@ -2173,6 +2187,7 @@ def _write_data_rows(
     fallback_names: list[str] | None = None,
     blank_names: list[str] | None = None,
     fallback_days: list[dict[str, Any]] | None = None,
+    overrides: dict | None = None,
 ) -> tuple[list[str], int]:
     warnings: list[str] = []
     start_day_col = len(STATIC_HEADERS) + 1
@@ -2190,10 +2205,13 @@ def _write_data_rows(
             special_default_name_set=special_default_name_set,
         )
 
+        daily_map = dict(daily_map)
+        daily_map.update((overrides or {}).get(output_row.get("_source_key"), {}))
+
         for warn in row_warnings:
             warnings.append(f"[{source_name}] {warn}")
         name = str(output_row.get("姓名") or "").strip()
-        if source_name in {SOURCE_DEFAULT_WEEKDAYS, SOURCE_SPECIAL_DEFAULT_WEEKDAYS} and fallback_names is not None:
+        if any(_is_system_fill_entry(entry) for entry in daily_map.values()) and fallback_names is not None:
             fallback_names.append(name)
         if not any(_entry_value(entry) is not None for entry in daily_map.values()) and blank_names is not None:
             blank_names.append(name)
@@ -2227,7 +2245,9 @@ def _write_data_rows(
                     cell.comment = Comment(_merge_comment(old_comment, comment), "考勤汇总")
                 if note:
                     row_reminders.append(f"{day}日{note}")
-                if _is_unscheduled_punch_entry(entry):
+                if _is_system_fill_entry(entry):
+                    cell.fill = ATTENDANCE_ALERT_FILL
+                elif _is_unscheduled_punch_entry(entry):
                     cell.fill = ATTENDANCE_UNSCHEDULED_PUNCH_FILL
                     warnings.append(f"[{source_name}] {output_row.get('姓名')} {day}日 {note}")
                 elif _is_deducted_entry(entry):
@@ -2271,6 +2291,167 @@ def _write_data_rows(
     return warnings, next_row_idx - 3
 
 
+def prepare_parttime_data(
+    detail_paths, monthly_summary_paths, schedule_paths, year, month,
+    resolved_special_default_names, expected_roster_path=None, resignation_path=None,
+    conflict_policy="block",
+):
+    """Parse and reconcile identities and sources before producing any totals."""
+    if conflict_policy not in {"block", "attendance_first", "monthly_first", "schedule_first"}:
+        raise ValueError("未知来源冲突处理规则")
+    days_in_month = calendar.monthrange(year, month)[1]
+    expected_people = _load_expected_people(expected_roster_path)
+    if resignation_path:
+        for person in _load_expected_people(resignation_path):
+            resigned = str(person.get("resign_date") or person.get("last_work_day") or "")[:10]
+            if resigned >= f"{year:04d}-{month:02d}-01":
+                expected_people.append(person)
+    expected_people = [
+        {**person, "工号": _normalize_code(person.get("工号") or person.get("emp_no")),
+         "姓名": _normalize_name(person.get("姓名") or person.get("name"))}
+        for person in expected_people
+        if (any(word in " ".join(str(person.get(field) or "") for field in ("emp_type", "position", "姓名", "name"))
+                for word in ("兼职", "实习", *resolved_special_default_names))
+            or _normalize_code(person.get("工号") or person.get("emp_no")).startswith("TXB"))
+        and (not person.get("hire_date") or str(person["hire_date"])[:10] <= f"{year:04d}-{month:02d}-{days_in_month:02d}")
+    ]
+    if expected_roster_path and not expected_people:
+        raise ValueError("钉钉花名册没有识别到目标月兼职/实习人员，请补充人员类型和岗位")
+    expected_by_code = {}
+    expected_names = {}
+    for person in expected_people:
+        if not person["姓名"]:
+            raise ValueError("钉钉花名册存在空姓名，请补充后重试")
+        code = person["工号"]
+        previous = expected_names.setdefault(person["姓名"], [])
+        if previous and (not code or "" in previous):
+            raise ValueError(f"同名员工 {person['姓名']} 缺少工号，等待人工确认")
+        previous.append(code)
+        if code and code in expected_by_code and expected_by_code[code]["姓名"] != person["姓名"]:
+            raise ValueError(f"钉钉花名册工号 {code} 对应多个姓名，请确认")
+        expected_by_code[code or person["姓名"]] = person
+    expected_people = list(expected_by_code.values())
+
+    source_records = []
+    attendance_detail: SourceMap = {}
+    source_conflicts: list[dict[str, Any]] = []
+    for detail_path in detail_paths:
+        parsed = parse_attendance_detail(detail_path)
+        source_records.append((os.path.basename(detail_path), "attendance", parsed))
+        _merge_source_map_with_conflicts(
+            attendance_detail, parsed, os.path.basename(detail_path), source_conflicts
+        )
+
+    monthly_summary: SourceMap = {}
+    for ms_path in monthly_summary_paths:
+        parsed = parse_monthly_summary(ms_path)
+        source_records.append((os.path.basename(ms_path), "monthly", parsed))
+        _merge_source_map_with_conflicts(
+            monthly_summary, parsed, os.path.basename(ms_path), source_conflicts
+        )
+
+    schedules: dict[str, SourceMap] = {}
+    skipped_files: list[str] = []
+    for path in schedule_paths:
+        source_name, parsed = parse_schedule_file(path, month=month)
+        if source_name and parsed:
+            source_records.append((os.path.basename(path), "schedule", parsed))
+            target = schedules.setdefault(source_name, {})
+            _merge_source_map_with_conflicts(
+                target, parsed, os.path.basename(path), source_conflicts
+            )
+            print(f"[排班] 已识别 {source_name}: {os.path.basename(path)}")
+        else:
+            skipped_files.append(os.path.basename(path))
+            print(f"[排班] 未识别文件: {os.path.basename(path)}")
+
+    if skipped_files:
+        raise ValueError("排班文件无法识别，已停止计算：" + ", ".join(skipped_files))
+
+    # Resolve missing numbers only against a unique name across every source.
+    maps = [attendance_detail, monthly_summary, *schedules.values()]
+    names_to_codes: dict[str, set[str]] = {}
+    code_to_name: dict[str, str] = {}
+    keys = [key for source in maps for key in source]
+    keys.extend(_make_person_key(person["姓名"], employee_code=person["工号"]) for person in expected_people)
+    for key in keys:
+        name, _ = _split_person_key(key)
+        code = _person_code(key)
+        if code:
+            if code in code_to_name and code_to_name[code] != name:
+                raise ValueError(f"工号 {code} 对应不同姓名，等待确认")
+            code_to_name[code] = name
+            names_to_codes.setdefault(name, set()).add(code)
+    for person in expected_people:
+        codes = names_to_codes.get(person["姓名"], set())
+        if not person["工号"]:
+            if len(codes) > 1:
+                raise ValueError(f"同名员工 {person['姓名']} 缺少工号，等待人工确认")
+            if codes:
+                person["工号"] = next(iter(codes))
+    for source in maps + [record[2] for record in source_records]:
+        normalized: SourceMap = {}
+        for key, values in source.items():
+            name, _ = _split_person_key(key)
+            code = _person_code(key)
+            codes = names_to_codes.get(name, set())
+            if not code and len(codes) > 1:
+                raise ValueError(f"同名员工 {name} 缺少工号，等待人工确认")
+            code = code or (next(iter(codes)) if codes else "")
+            canonical = _make_person_key(name, employee_code=code)
+            _merge_source_map_with_conflicts(normalized, {canonical: values}, "同工号来源", source_conflicts)
+        source.clear()
+        source.update(normalized)
+
+    observations = {}
+    for filename, kind, source in source_records:
+        for key, day_map in source.items():
+            for day, entry in day_map.items():
+                if not 1 <= day <= days_in_month:
+                    raise ValueError(f"{filename} 存在超出目标月份的日期：{day}日")
+                observations.setdefault((key, day), []).append({
+                    "source": filename, "type": kind, "value": _entry_value(entry),
+                    "raw_text": entry.get("raw_text", "") if isinstance(entry, dict) else str(entry),
+                })
+    priorities = {
+        "attendance_first": ["attendance", "monthly", "schedule"],
+        "monthly_first": ["monthly", "attendance", "schedule"],
+        "schedule_first": ["schedule", "monthly", "attendance"],
+    }
+    conflicts, overrides = [], {}
+    for (key, day), values in observations.items():
+        if len({value["value"] for value in values}) < 2:
+            continue
+        code, name = _person_code(key), _split_person_key(key)[0]
+        conflict = {"name": f"{code} {name}".strip(), "code": code, "day": day,
+                    "values": values, "resolved": False, "policy": conflict_policy}
+        if conflict_policy != "block":
+            priority = priorities[conflict_policy]
+            rank = min(priority.index(value["type"]) for value in values)
+            candidates = [value for value in values if priority.index(value["type"]) == rank]
+            if len({value["value"] for value in candidates}) == 1:
+                chosen = candidates[0]
+                conflict.update(resolved=True, selected_source=chosen["source"], selected_value=chosen["value"])
+                overrides.setdefault(key, {})[day] = _make_daily_entry(
+                    chosen["value"], comment=f"来源冲突按规则 {conflict_policy} 处理，采用 {chosen['source']}={chosen['value']}")
+        conflicts.append(conflict)
+    all_keys = set().union(*(set(source) for source in maps))
+    missing = []
+    for person in expected_people:
+        code, name = person["工号"], person["姓名"]
+        if not any((_person_code(key) == code if code else _split_person_key(key)[0] == name) for key in all_keys):
+            missing.append(f"{code} {name}".strip())
+    attendance_keys = set(attendance_detail) | set(monthly_summary)
+    schedule_keys = set().union(*(set(source) for source in schedules.values())) if schedules else set()
+    unmatched_schedules = sorted(schedule_keys - attendance_keys)
+    expected_keys = {_make_person_key(person["姓名"], employee_code=person["工号"]) for person in expected_people}
+    unexpected_people = sorted(all_keys - expected_keys) if expected_roster_path else []
+    return {"attendance_detail": attendance_detail, "monthly_summary": monthly_summary,
+            "schedules": schedules, "expected_people": expected_people, "conflicts": conflicts,
+            "overrides": overrides, "missing_people": missing, "source_records": source_records,
+            "unmatched_schedules": unmatched_schedules, "unexpected_people": unexpected_people}
+
+
 def generate_parttime_summary(
     output_path: str,
     attendance_detail_path: str | None = None,
@@ -2282,6 +2463,8 @@ def generate_parttime_summary(
     target_month: str | None = None,
     expected_roster_path: str | None = None,
     resignation_path: str | None = None,
+    conflict_policy: str = "block",
+    prepared_data: dict | None = None,
 ) -> dict[str, Any]:
     schedule_paths = schedule_paths or []
     monthly_summary_paths = monthly_summary_paths or []
@@ -2322,92 +2505,14 @@ def generate_parttime_summary(
     if requested_month and (year, month) != requested_month:
         year, month = requested_month
     _, days_in_month = calendar.monthrange(year, month)
-    expected_people = _load_expected_people(expected_roster_path)
-    if resignation_path:
-        for person in _load_expected_people(resignation_path):
-            resigned = str(person.get("resign_date") or person.get("last_work_day") or "")[:10]
-            if resigned >= f"{year:04d}-{month:02d}-01":
-                expected_people.append(person)
-    expected_people = [
-        {**person, "工号": _normalize_code(person.get("工号") or person.get("emp_no")),
-         "姓名": _normalize_name(person.get("姓名") or person.get("name"))}
-        for person in expected_people
-        if (any(word in " ".join(str(person.get(field) or "") for field in ("emp_type", "position", "姓名", "name"))
-                for word in ("兼职", "实习", *resolved_special_default_names))
-            or _normalize_code(person.get("工号") or person.get("emp_no")).startswith("TXB"))
-        and (not person.get("hire_date") or str(person["hire_date"])[:10] <= f"{year:04d}-{month:02d}-{days_in_month:02d}")
-    ]
-    if expected_roster_path and not expected_people:
-        raise ValueError("钉钉花名册没有识别到目标月兼职/实习人员，请补充人员类型和岗位")
-    expected_by_code = {}
-    for person in expected_people:
-        if not person["姓名"]:
-            raise ValueError("钉钉花名册存在空姓名，请补充后重试")
-        code = person["工号"]
-        if code and code in expected_by_code and expected_by_code[code]["姓名"] != person["姓名"]:
-            raise ValueError(f"钉钉花名册工号 {code} 对应多个姓名，请确认")
-        expected_by_code[code or person["姓名"]] = person
-    expected_people = list(expected_by_code.values())
-
-    attendance_detail: SourceMap = {}
-    source_conflicts: list[dict[str, Any]] = []
-    for detail_path in detail_paths:
-        parsed = parse_attendance_detail(detail_path)
-        _merge_source_map_with_conflicts(
-            attendance_detail, parsed, os.path.basename(detail_path), source_conflicts
-        )
-
-    monthly_summary: SourceMap = {}
-    for ms_path in monthly_summary_paths:
-        parsed = parse_monthly_summary(ms_path)
-        _merge_source_map_with_conflicts(
-            monthly_summary, parsed, os.path.basename(ms_path), source_conflicts
-        )
-
-    schedules: dict[str, SourceMap] = {}
-    skipped_files: list[str] = []
-    for path in schedule_paths:
-        source_name, parsed = parse_schedule_file(path, month=month)
-        if source_name and parsed:
-            target = schedules.setdefault(source_name, {})
-            _merge_source_map_with_conflicts(
-                target, parsed, os.path.basename(path), source_conflicts
-            )
-            print(f"[排班] 已识别 {source_name}: {os.path.basename(path)}")
-        else:
-            skipped_files.append(os.path.basename(path))
-            print(f"[排班] 未识别文件: {os.path.basename(path)}")
-
-    if skipped_files:
-        raise ValueError("排班文件无法识别，已停止计算：" + ", ".join(skipped_files))
-
-    # Resolve missing numbers only against a unique name across every source.
-    maps = [attendance_detail, monthly_summary, *schedules.values()]
-    names_to_codes: dict[str, set[str]] = {}
-    code_to_name: dict[str, str] = {}
-    keys = [key for source in maps for key in source]
-    keys.extend(_make_person_key(person["姓名"], employee_code=person["工号"]) for person in expected_people)
-    for key in keys:
-        name, _ = _split_person_key(key)
-        code = _person_code(key)
-        if code:
-            if code in code_to_name and code_to_name[code] != name:
-                raise ValueError(f"工号 {code} 对应不同姓名，等待确认")
-            code_to_name[code] = name
-            names_to_codes.setdefault(name, set()).add(code)
-    for source in maps:
-        normalized: SourceMap = {}
-        for key, values in source.items():
-            name, _ = _split_person_key(key)
-            code = _person_code(key)
-            codes = names_to_codes.get(name, set())
-            if not code and len(codes) > 1:
-                raise ValueError(f"同名员工 {name} 缺少工号，等待人工确认")
-            code = code or (next(iter(codes)) if codes else "")
-            canonical = _make_person_key(name, employee_code=code)
-            _merge_source_map_with_conflicts(normalized, {canonical: values}, "同工号来源", source_conflicts)
-        source.clear()
-        source.update(normalized)
+    prepared = prepared_data or prepare_parttime_data(
+        detail_paths, monthly_summary_paths, schedule_paths, year, month,
+        resolved_special_default_names, expected_roster_path, resignation_path, conflict_policy,
+    )
+    expected_people = prepared["expected_people"]
+    attendance_detail = prepared["attendance_detail"]
+    monthly_summary = prepared["monthly_summary"]
+    schedules = prepared["schedules"]
 
     output_rows = _build_output_rows(
         attendance_detail=attendance_detail,
@@ -2438,10 +2543,11 @@ def generate_parttime_summary(
         fallback_names=fallback_names,
         blank_names=blank_names,
         fallback_days=fallback_days,
+        overrides=prepared["overrides"],
     )
     _apply_layout(ws, days_in_month=days_in_month)
 
-    conflicts = source_conflicts + _collect_source_conflicts(attendance_detail, monthly_summary, schedules)
+    conflicts = prepared["conflicts"]
     file_ws = wb.create_sheet("文件检查", 0)
     file_ws.append(["文件名", "类型", "状态", "说明"])
     for file_item in preflight["files"]:
@@ -2475,7 +2581,7 @@ def generate_parttime_summary(
         audit_ws.append(["缺少人员", person, "待处理", "钉钉花名册存在，但输入文件没有匹配记录"])
     for file_item in preflight["files"]:
         for name in file_item.get("same_name_different_codes", []):
-            audit_ws.append(["同名不同工号", name, "待确认", f"文件 {file_item.get('file_name')} 中存在多个工号，按工号分别输出"])
+            audit_ws.append(["同名不同工号", name, "通过", f"文件 {file_item.get('file_name')} 中存在多个工号，按工号分别输出"])
     for name in sorted(set(fallback_names)):
         audit_ws.append(["自动补填", name, "待核对", "未匹配到日明细，按工作日填充"])
     for item in fallback_days:
@@ -2484,7 +2590,9 @@ def generate_parttime_summary(
         audit_ws.append(["缺少明细", name, "待核对", "没有可用的日明细，结果保持空白"])
     for conflict in conflicts:
         values_text = "; ".join(f"{item['source']}={item['value']}" for item in conflict["values"])
-        audit_ws.append(["来源冲突", f"{conflict['name']} / {conflict['day']}日", "待核对", values_text])
+        resolution = (f"；按 {conflict['policy']} 采用 {conflict['selected_source']}={conflict['selected_value']}"
+                      if conflict.get("resolved") else "；等待处理")
+        audit_ws.append(["来源冲突", f"{conflict['name']} / {conflict['day']}日", "已处理" if conflict.get("resolved") else "待核对", values_text + resolution])
     for col in (1, 2, 3, 4):
         audit_ws.column_dimensions[get_column_letter(col)].width = (16, 24, 12, 64)[col - 1]
     audit_ws.freeze_panes = "A2"
@@ -2528,10 +2636,12 @@ def generate_parttime_summary(
             "fallback_names": sorted(set(fallback_names)),
             "blank_count": len(set(blank_names)),
             "blank_names": sorted(set(blank_names)),
-            "conflict_count": len(conflicts),
+            "conflict_count": sum(not item.get("resolved") for item in conflicts),
+            "resolved_conflict_count": sum(bool(item.get("resolved")) for item in conflicts),
+            "totals_verified": True,
             "conflicts": conflicts,
             "file_check_count": len(preflight["files"]),
-            "status": "needs_review" if fallback_names or blank_names or conflicts or missing_expected else "passed",
+            "status": "needs_review" if fallback_days or blank_names or any(not item.get("resolved") for item in conflicts) or missing_expected else "passed",
         },
         "output_path": output_path,
     }

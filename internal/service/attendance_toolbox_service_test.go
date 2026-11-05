@@ -1,10 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/multipart"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +21,81 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func TestAttendanceToolboxAuditPreservesFilenameAndChecksMonth(t *testing.T) {
+	python := toolboxTestPython(t)
+	path := filepath.Join(t.TempDir(), "input.xlsx")
+	cmd := exec.Command(python, "-c", `import openpyxl,sys
+wb=openpyxl.Workbook()
+wb.active.append(["2026年10月"])
+wb.active.append(["姓名","工号",1,2,3])
+wb.active.append(["测试员工","MT001",1,1,1])
+wb.save(sys.argv[1])`, path)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create workbook: %v %s", err, output)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	file, err := writer.CreateFormFile("parttime_attendance_detail", "9月考勤.xlsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = file.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{"audit_module": "parttime", "target_month": "2026-09"} {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/audit", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if err := req.ParseMultipartForm(1 << 20); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = req.MultipartForm.RemoveAll() }()
+	svc := NewAttendanceToolboxService()
+	svc.pythonBin = python
+	result, err := svc.AuditUploads(context.Background(), AttendanceToolboxAuditRequest{
+		Form:  req.MultipartForm,
+		Files: []map[string]interface{}{{"field": "parttime_attendance_detail", "name": "9月考勤.xlsx", "size": len(raw)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, ok := result.Meta["integrity_audit"].(map[string]interface{})
+	if !ok || report["status"] != "needs_review" {
+		t.Fatalf("expected blocked month audit, got %+v", result)
+	}
+	if len(result.Files) != 1 || result.Files[0]["file_name"] != "9月考勤.xlsx" || result.Files[0]["status"] != "失败" {
+		t.Fatalf("unexpected file checks: %+v", result.Files)
+	}
+}
+
+func TestAttendanceToolboxAuditRejectsFailedRunnerAndMissingResult(t *testing.T) {
+	for _, script := range []string{
+		`import sys; print('{"ok": true, "outputs": []}'); sys.exit(1)`,
+		`print('{"ok": true, "outputs": []}')`,
+	} {
+		t.Run(script, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "runner.py"), []byte(script), 0600); err != nil {
+				t.Fatal(err)
+			}
+			svc := &AttendanceToolboxService{engineDir: dir, pythonBin: toolboxTestPython(t), timeout: time.Second * 10}
+			if _, err := svc.AuditUploads(context.Background(), AttendanceToolboxAuditRequest{}); err == nil {
+				t.Fatal("failed or empty audit must not be reported as passed")
+			}
+		})
+	}
+}
 
 func TestAttendanceToolboxDefaultsPreserveChinese(t *testing.T) {
 	defaults, err := NewAttendanceToolboxService().Defaults(context.Background())

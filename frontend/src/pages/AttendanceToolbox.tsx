@@ -231,10 +231,17 @@ export const getParttimeAuditMeta = (
 type IntegrityAudit = {
   status: string
   issues: Array<{ kind: string; person: string; detail: string; file_name?: string }>
-  files: Array<{ file_name: string; type: string; status: string; detail: string }>
+  files: Array<{ file_name: string; field?: string; type: string; status: string; detail: string }>
   expected_people?: number
   recognized_people?: number
   missing_people?: number
+  unrecognized_files?: number
+  same_name_groups?: number
+  fallback_count?: number
+  conflict_count?: number
+  resolved_conflict_count?: number
+  days_in_month?: number
+  totals_verified?: boolean
 }
 
 const getIntegrityAudit = (run: AttendanceToolboxRunResponse | null): IntegrityAudit | null => {
@@ -682,6 +689,11 @@ const AttendanceToolbox: React.FC = () => {
   const [savedConfigSnapshot, setSavedConfigSnapshot] = useState('')
   const [uploadWarnings, setUploadWarnings] = useState<Record<string, string[]>>({})
   const [auditWarningsByModule, setAuditWarningsByModule] = useState<Partial<Record<ToolboxModuleKey, string[]>>>({})
+  const [uploadAudits, setUploadAudits] = useState<Partial<Record<ToolboxModuleKey, IntegrityAudit>>>({})
+  const [checkingModules, setCheckingModules] = useState<Partial<Record<ToolboxModuleKey, boolean>>>({})
+  const auditVersions = useRef<Partial<Record<ToolboxModuleKey, number>>>({})
+  const auditScope = useRef({ orgId, fileLists, textValues })
+  auditScope.current = { orgId, fileLists, textValues }
   const [templateMeta, setTemplateMeta] = useState<TemplateMetaItem[]>([])
   const [downloadingTemplate, setDownloadingTemplate] = useState<string | null>(null)
   const [requirementView, setRequirementView] = useState<Record<string, string>>({})
@@ -928,6 +940,9 @@ const AttendanceToolbox: React.FC = () => {
     setFixedOptionsLoaded(false)
     setEmployeeOptions([])
     setDepartmentOptions([])
+    setLastRun(null)
+    setUploadAudits({})
+    setCompletedModules({})
   }, [orgId])
 
   const setFieldFiles = useCallback((fieldName: string, list: UploadFile[]) => {
@@ -1217,36 +1232,71 @@ const AttendanceToolbox: React.FC = () => {
     })
   }
 
-  const runAuditForFiles = useCallback(async (config: ModuleConfig) => {
+  const runAuditForFiles = useCallback(async (config: ModuleConfig, silent = false) => {
     const moduleKey = config.key
+    const scope = auditScope.current
+    const version = (auditVersions.current[moduleKey] || 0) + 1
+    auditVersions.current[moduleKey] = version
+    const isCurrent = () => auditVersions.current[moduleKey] === version && auditScope.current.orgId === scope.orgId
+      && config.fileFields.every((field) => auditScope.current.fileLists[field.name] === scope.fileLists[field.name])
+      && auditScope.current.textValues[`${moduleKey}_target_month`] === scope.textValues[`${moduleKey}_target_month`]
+      && auditScope.current.textValues.parttime_conflict_policy === scope.textValues.parttime_conflict_policy
     const items = config.fileFields.flatMap((field) => (fileLists[field.name] || []).map((file) => ({
       file,
       field,
     })))
     if (items.length === 0) {
       setAuditWarningsByModule((prev) => ({ ...prev, [moduleKey]: [] }))
-      return
+      return true
     }
     const formData = new FormData()
+    formData.append('audit_module', moduleKey)
+    formData.append('target_month', textValues[`${moduleKey}_target_month`] || '')
+    formData.append('conflict_policy', textValues.parttime_conflict_policy || 'block')
     items.forEach(({ file, field }) => {
       if (file.originFileObj) formData.append(field.name, file.originFileObj)
     })
+    setCheckingModules((prev) => ({ ...prev, [moduleKey]: true }))
     try {
       const response = await attendanceToolboxAPI.auditUploads(formData) as unknown as {
-        data?: { warnings?: string[] }
+        data?: { warnings?: string[]; meta?: { integrity_audit?: IntegrityAudit } }
       }
+      if (!isCurrent()) return false
+      const report = response?.data?.meta?.integrity_audit
+      if (!report) throw new Error('文件检查未返回完整结果，请更新服务后重试')
+      setUploadAudits((prev) => ({ ...prev, [moduleKey]: report }))
       const warnings = response?.data?.warnings || []
       setAuditWarningsByModule((prev) => ({ ...prev, [moduleKey]: warnings }))
-      if (warnings.length > 0) {
-        warnings.forEach((warning) => messageApi.warning(warning))
-      } else {
-        messageApi.success('文件检测通过')
+      if (report.status !== 'passed') {
+        if (!silent) messageApi.warning('文件检查未通过，请处理标红文件及数据问题')
+        return false
       }
+      if (!silent && warnings.length > 0) {
+        warnings.forEach((warning) => messageApi.warning(warning))
+      }
+      return true
     } catch (error) {
-      messageApi.warning(`文件检测失败：${error instanceof Error ? error.message : '未知错误'}`)
-      setAuditWarningsByModule((prev) => ({ ...prev, [moduleKey]: [] }))
+      if (!isCurrent()) return false
+      const detail = `文件检测失败：${error instanceof Error ? error.message : '未知错误'}`
+      setUploadAudits((prev) => ({ ...prev, [moduleKey]: { status: 'needs_review', files: [], issues: [{ kind: '文件检测', person: '', detail }] } }))
+      if (!silent) messageApi.warning(detail)
+      return false
+    } finally {
+      if (auditVersions.current[moduleKey] === version) setCheckingModules((prev) => ({ ...prev, [moduleKey]: false }))
     }
-  }, [fileLists, messageApi])
+  }, [fileLists, textValues, messageApi])
+
+  useEffect(() => {
+    setUploadAudits((prev) => ({ ...prev, [activeModule]: undefined }))
+    setCompletedModules((prev) => ({ ...prev, [activeModule]: false }))
+  }, [activeModule, runAuditForFiles, orgId])
+
+  useEffect(() => {
+    const config = moduleMap.get(activeModule)
+    if (!config || !canOperate || runningModule) return
+    const timer = window.setTimeout(() => { void runAuditForFiles(config, true) }, 400)
+    return () => { window.clearTimeout(timer) }
+  }, [activeModule, moduleMap, runAuditForFiles, canOperate, runningModule, orgId])
 
   const downloadTemplate = useCallback(async (templateId: string) => {
     setDownloadingTemplate(templateId)
@@ -1307,6 +1357,7 @@ const AttendanceToolbox: React.FC = () => {
   }, [])
 
   const uploadProps = (field: FileField): UploadProps => ({
+    disabled: !!runningModule,
     accept: acceptExcel,
     multiple: field.multiple,
     maxCount: field.multiple ? undefined : 1,
@@ -1385,9 +1436,8 @@ const AttendanceToolbox: React.FC = () => {
     const auditMeta = data.module === 'parttime' && data.meta?.parttime_audit && typeof data.meta.parttime_audit === 'object'
       ? data.meta.parttime_audit as Record<string, unknown>
       : null
-    if (auditMeta?.status === 'needs_review') {
-      messageApi.warning('检查未通过，结果已保留供核对；处理问题后再重新计算。')
-    }
+    const needsReview = integrityAudit?.status !== 'passed' || integrityAudit?.totals_verified !== true
+      || auditMeta?.status === 'needs_review' || Boolean(getSubsidyAuditMeta(data)?.missingAttendanceCount)
     // Prefer zip when multiple files; otherwise single file. Meta files are technical details, not user results.
     const downloadables = getAttendanceToolboxDownloadableFiles(data)
     if (downloadables.length === 0) {
@@ -1412,14 +1462,10 @@ const AttendanceToolbox: React.FC = () => {
       if (detail.includes('过期')) {
         messageApi.error(detail)
       } else {
-        messageApi.warning(`计算已完成，但自动下载失败：${detail}。可在下方结果区手动下载。`)
+        messageApi.warning(`${needsReview ? '计算未完成，检查报告' : '计算已完成，结果'}自动下载失败：${detail}。可在下方手动下载。`)
       }
     }
 
-    const needsReview = integrityAudit?.status === 'needs_review' || (data.module === 'parttime'
-      && data.meta?.parttime_audit
-      && typeof data.meta.parttime_audit === 'object'
-      && (data.meta.parttime_audit as Record<string, unknown>).status === 'needs_review')
     if (data.module) {
       setCompletedModules((prev) => ({ ...prev, [data.module as ToolboxModuleKey]: !needsReview }))
     }
@@ -1428,7 +1474,7 @@ const AttendanceToolbox: React.FC = () => {
     const subsidyAudit = getSubsidyAuditMeta(data)
     const parttimeAudit = getParttimeAuditMeta(data)
     if (needsReview) {
-      messageApi.warning('计算未完成，请处理检查报告中的问题后重新计算')
+      messageApi.warning(`计算未完成，${subsidyAudit?.missingAttendanceCount ? `${subsidyAudit.missingAttendanceCount} 人缺少考勤记录；` : ''}请处理检查报告中的问题后重新计算`)
     } else if (subsidyAudit?.missingAttendanceCount) {
       const preview = subsidyAudit.missingAttendanceNames.slice(0, 5).join('、')
       const suffix = subsidyAudit.missingAttendanceCount > 5 ? '等' : ''
@@ -1634,7 +1680,10 @@ const AttendanceToolbox: React.FC = () => {
     }
     try {
       if (config.fileFields.length > 0) {
-        await runAuditForFiles(config)
+        if (!await runAuditForFiles(config)) {
+          setRunningModule(null)
+          return
+        }
       }
     } catch {
       setRunningModule(null)
@@ -1674,6 +1723,7 @@ const AttendanceToolbox: React.FC = () => {
 
     const formData = new FormData()
     formData.append(`${moduleKey}_target_month`, (textValues[`${moduleKey}_target_month`] || '').trim())
+    if (moduleKey === 'parttime') formData.append('parttime_conflict_policy', textValues.parttime_conflict_policy || 'block')
     for (const field of config.fileFields) {
       for (const file of fileLists[field.name] || []) {
         const rawFile = file.originFileObj
@@ -1695,6 +1745,7 @@ const AttendanceToolbox: React.FC = () => {
     try {
       try {
         const response = await attendanceToolboxAPI.runWorkflow(moduleKey, formData)
+        if (auditScope.current.orgId !== orgId) return
         await applyRunResponse(
           response,
           moduleKey === 'overtime' && appliedRules.source === 'custom'
@@ -1709,7 +1760,7 @@ const AttendanceToolbox: React.FC = () => {
         }
         const blob = await attendanceToolboxAPI.run(moduleKey, formData) as unknown as Blob
         downloadBlob(blob, getDownloadName(config, blob))
-        messageApi.success('计算完成，结果已下载')
+        messageApi.warning('文件已下载；旧接口未返回完整审计状态，请查看 Excel 检查页')
       }
     } catch (error) {
       messageApi.error(await resolveErrorMessage(error))
@@ -1806,7 +1857,12 @@ const AttendanceToolbox: React.FC = () => {
 
     return (
       <Space direction="vertical" size={6} style={{ width: '100%', marginTop: 12 }}>
-        {files.map((file) => (
+        {files.map((file) => {
+          const report = Object.values(uploadAudits).flatMap((audit) => audit?.files || [])
+            .find((item) => item.field === field.name && item.file_name === file.name)
+          const failed = report?.status === '失败'
+          const color = failed ? 'error' : report?.status === '正常' ? 'success' : 'warning'
+          return (
           <div
             key={file.uid}
             style={{
@@ -1815,24 +1871,28 @@ const AttendanceToolbox: React.FC = () => {
               gap: 8,
               minHeight: 32,
               padding: '4px 10px',
-              border: '1px solid var(--color-success)',
+              border: `1px solid var(--color-${color})`,
               borderRadius: 6,
-              background: 'var(--color-success-bg)',
+              background: `var(--color-${color}-bg)`,
             }}
           >
-            <CheckCircleOutlined style={{ color: 'var(--color-success)', flex: '0 0 auto' }} />
+            {color === 'success' ? <CheckCircleOutlined /> : <WarningOutlined />}
             <Text ellipsis={{ tooltip: file.name }} style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
               {file.name}
             </Text>
+            <Tooltip title={report?.detail || '选择处理月份后检查文件'}>
+              <Tag color={color}>{report?.status || '待检查'}</Tag>
+            </Tooltip>
             <Button
               type="text"
               size="small"
               icon={<CloseOutlined />}
               aria-label={`移除${file.name}`}
+              disabled={!!runningModule}
               onClick={() => removeFieldFile(field.name, file.uid)}
             />
           </div>
-        ))}
+        )})}
       </Space>
     )
   }
@@ -2100,6 +2160,7 @@ const AttendanceToolbox: React.FC = () => {
                 picker="month"
                 format="YYYY-MM"
                 allowClear
+                disabled={!!runningModule}
                 value={lockedMonth ? dayjs(`${lockedMonth}-01`) : null}
                 placeholder="请选择处理月份"
                 aria-label={`${config.title}处理月份`}
@@ -2113,6 +2174,19 @@ const AttendanceToolbox: React.FC = () => {
               <Text type="secondary" style={{ fontSize: 12 }}>
                 计算前必须确认月份。月度文件与作息表应一致；跨月审批只计入目标月部分。
               </Text>
+              {config.key === 'parttime' && <Space wrap>
+                <Text>来源冲突处理</Text>
+                <Select aria-label="来源冲突处理" style={{ minWidth: 220 }} disabled={!!runningModule}
+                  value={textValues.parttime_conflict_policy || 'block'}
+                  onChange={(value) => setTextValues((prev) => ({ ...prev, parttime_conflict_policy: value }))}
+                  options={[
+                    { value: 'block', label: '发现冲突时停止（默认）' },
+                    { value: 'attendance_first', label: '明细 → 月度汇总 → 排班' },
+                    { value: 'monthly_first', label: '月度汇总 → 明细 → 排班' },
+                    { value: 'schedule_first', label: '排班 → 月度汇总 → 明细' },
+                  ]} />
+                <Text type="secondary">同一优先级仍有冲突时需修正源文件；处理结果写入检查页。</Text>
+              </Space>}
               {config.key === 'subsidy' && (
                 <Alert
                   type="info"
@@ -2127,6 +2201,12 @@ const AttendanceToolbox: React.FC = () => {
           </Card>
         )}
 
+        {checkingModules[config.key] && <Alert type="info" showIcon message="正在检查文件格式、月份和人员身份…" />}
+        {uploadAudits[config.key]?.status === 'needs_review' && <Alert type="error" showIcon
+          message="文件检查未通过，请处理以下问题"
+          description={uploadAudits[config.key]?.issues.map((item, index) => (
+            <div key={index}>{item.file_name} {item.person}：{item.detail}</div>
+          ))} />}
         {(auditWarningsByModule[config.key] || []).length > 0 && (
           <Alert
             type="warning"
@@ -2396,10 +2476,10 @@ const AttendanceToolbox: React.FC = () => {
           <Card size="small" title="最近结果" style={{ borderRadius: 'var(--radius-lg)' }}>
             <Space direction="vertical" style={{ width: '100%' }} size={8}>
               <Space wrap>
-                {integrityAudit?.status === 'needs_review' || parttimeAudit?.status === 'needs_review' ? (
+                {integrityAudit?.status !== 'passed' || integrityAudit?.totals_verified !== true || parttimeAudit?.status === 'needs_review' ? (
                   <Tag color="warning" icon={<WarningOutlined />}>计算未完成，请处理检查问题</Tag>
                 ) : (
-                  <Tag color="success" icon={<CheckCircleOutlined />}>计算成功</Tag>
+                  <Tag color="success" icon={<CheckCircleOutlined />}>计算完成</Tag>
                 )}
                 {lastRun.expires_at && (
                   <Text type="secondary" style={{ fontSize: 12 }}>结果有效至 {lastRun.expires_at}</Text>
@@ -2407,9 +2487,21 @@ const AttendanceToolbox: React.FC = () => {
               </Space>
               {integrityAudit && (
                 <Space direction="vertical" style={{ width: '100%' }}>
+                  <Text>目标月份天数：{integrityAudit.days_in_month || '待确认'} 天</Text>
                   {integrityAudit.expected_people !== undefined && (
                     <Text>应处理人员：{integrityAudit.expected_people} 人；实际识别：{integrityAudit.recognized_people || 0} 人；缺少人员：{integrityAudit.missing_people || 0} 人</Text>
                   )}
+                  {integrityAudit.status === 'passed' && integrityAudit.totals_verified ? (
+                    <Alert type="success" showIcon message="检查通过"
+                      description={`${integrityAudit.expected_people !== undefined ? `${integrityAudit.expected_people} 人全部匹配；` : ''}无月份冲突；无未处理来源冲突；合计已写入数字并回读验证${integrityAudit.resolved_conflict_count ? `；已按规则处理 ${integrityAudit.resolved_conflict_count} 条冲突` : ''}`} />
+                  ) : <Alert type="warning" showIcon message="计算未完成，请处理以下问题"
+                    description={<Space wrap>
+                      <Text>缺少人员：{integrityAudit.missing_people || 0} 人</Text>
+                      <Text>未识别或异常文件：{integrityAudit.unrecognized_files || 0} 个</Text>
+                      <Text>来源冲突：{integrityAudit.conflict_count || 0} 条</Text>
+                      <Text>自动补填：{integrityAudit.fallback_count || 0} 条</Text>
+                      <Text>同名待确认：{integrityAudit.same_name_groups || 0} 组</Text>
+                    </Space>} />}
                   <Table size="small" rowKey={(row) => `${row.file_name}-${row.type}`} dataSource={integrityAudit.files} pagination={{ pageSize: 5 }} columns={[
                     { title: '文件名', dataIndex: 'file_name' },
                     { title: '类型', dataIndex: 'type' },

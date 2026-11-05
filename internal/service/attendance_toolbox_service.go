@@ -488,7 +488,7 @@ func attendanceToolboxSpecs() map[string]attendanceToolboxModuleSpec {
 				"parttime_monthly":           "parttime_monthly",
 				"parttime_schedules":         "parttime_schedules",
 			},
-			TextFields: []string{"part_special_names", "parttime_target_month"},
+			TextFields: []string{"part_special_names", "parttime_target_month", "parttime_conflict_policy"},
 		},
 		"dingtalk_sync": {
 			TextFields: []string{
@@ -926,6 +926,11 @@ func (s *AttendanceToolboxService) AuditUploads(ctx context.Context, req Attenda
 	// workdir and add per-file ``path`` entries so the Python audit action can
 	// inspect the real bytes on disk.
 	if req.Form != nil {
+		for _, key := range []string{"audit_module", "target_month", "conflict_policy"} {
+			if values := req.Form.Value[key]; len(values) > 0 {
+				cfg[key] = values[0]
+			}
+		}
 		// Track a field-specific index so multiple files sharing the same
 		// form field name can be matched back to their saved location.
 		counter := map[string]int{}
@@ -942,9 +947,10 @@ func (s *AttendanceToolboxService) AuditUploads(ctx context.Context, req Attenda
 				idx := counter[field]
 				counter[field] = idx + 1
 				savedPath, err := s.saveAuditFile(workdir, field, idx, name, req.Form)
-				if err == nil && savedPath != "" {
-					aug["path"] = savedPath
+				if err != nil {
+					return nil, fmt.Errorf("保存待检查文件失败：%w", err)
 				}
+				aug["path"] = savedPath
 			}
 			augmentedFiles = append(augmentedFiles, aug)
 		}
@@ -963,7 +969,8 @@ func (s *AttendanceToolboxService) AuditUploads(ctx context.Context, req Attenda
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil && runCtx.Err() == context.DeadlineExceeded {
+	err = cmd.Run()
+	if runCtx.Err() == context.DeadlineExceeded {
 		return nil, errors.New("考勤工具箱审计超时")
 	}
 
@@ -986,7 +993,7 @@ func (s *AttendanceToolboxService) AuditUploads(ctx context.Context, req Attenda
 	}
 
 	if len(runner.Outputs) == 0 {
-		return &AttendanceToolboxAuditResult{}, nil
+		return nil, errors.New("文件检查未返回结果，请重试")
 	}
 
 	var auditPayload struct {
@@ -996,13 +1003,14 @@ func (s *AttendanceToolboxService) AuditUploads(ctx context.Context, req Attenda
 		Files    []map[string]interface{} `json:"files"`
 		Meta     map[string]interface{}   `json:"meta"`
 	}
+	parsedAudit := false
 	for _, out := range runner.Outputs {
 		if !strings.HasSuffix(out.FileName, ".json") {
 			continue
 		}
 		raw, err := readAttendanceToolboxOutput(workdir, out.Path)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("读取文件检查结果失败：%w", err)
 		}
 		var parsed struct {
 			OK       bool                     `json:"ok"`
@@ -1013,7 +1021,11 @@ func (s *AttendanceToolboxService) AuditUploads(ctx context.Context, req Attenda
 		}
 		if jsonErr := json.Unmarshal(raw, &parsed); jsonErr == nil {
 			auditPayload = parsed
+			parsedAudit = true
 		}
+	}
+	if !parsedAudit {
+		return nil, errors.New("文件检查结果格式异常，请重试")
 	}
 
 	return &AttendanceToolboxAuditResult{
@@ -1038,8 +1050,11 @@ func (s *AttendanceToolboxService) saveAuditFile(workdir string, field string, i
 		_ = src.Close()
 	}()
 
-	ext := strings.ToLower(filepath.Ext(name))
-	dstPath := filepath.Join(workdir, fmt.Sprintf("audit_%s_%d%s", field, idx+1, ext))
+	dir, err := os.MkdirTemp(workdir, "audit-*")
+	if err != nil {
+		return "", err
+	}
+	dstPath := filepath.Join(dir, filepath.Base(strings.ReplaceAll(name, "\\", "/")))
 	dst, err := os.Create(dstPath)
 	if err != nil {
 		return "", err

@@ -11,14 +11,14 @@ from datetime import date
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
-from leave.calc_leave import REVIEW_COLUMNS
+from leave.calc_leave import REVIEW_COLUMNS, WORKING_DAY_COLOR, STATUTORY_HOLIDAY_COLOR, COMPANY_WELFARE_COLOR
 
 # Shared styling for all built templates.
 _HEADER_FILL = PatternFill("solid", fgColor="FFE2E8F0")
 _SAMPLE_FILL = PatternFill("solid", fgColor="FFF8FAFC")
-_WORKDAY_FILL = PatternFill("solid", fgColor="FFCCFFCC")
-_HOLIDAY_FILL = PatternFill("solid", fgColor="FFFFC7CE")
-_WELFARE_FILL = PatternFill("solid", fgColor="FFD6EAF8")
+_WORKDAY_FILL = PatternFill("solid", fgColor=WORKING_DAY_COLOR)
+_HOLIDAY_FILL = PatternFill("solid", fgColor=STATUTORY_HOLIDAY_COLOR)
+_WELFARE_FILL = PatternFill("solid", fgColor=COMPANY_WELFARE_COLOR)
 
 
 # ── Column tuples reused by several final-table templates ─────────────────────

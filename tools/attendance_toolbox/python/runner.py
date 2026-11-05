@@ -609,6 +609,8 @@ def run_parttime(config: dict, output_dir: Path) -> list[dict]:
         target_month=str(config.get("parttime_target_month") or "").strip() or None,
         expected_roster_path=path_or_empty(config, "parttime_roster") or None,
         resignation_path=path_or_empty(config, "final_auto_resign_json") or None,
+        conflict_policy=config.get("parttime_conflict_policy", "block"),
+        prepared_data=config.get("_parttime_prepared"),
     )
     audit_path = output_dir / "parttime_audit.json"
     audit_path.write_text(
@@ -1121,6 +1123,17 @@ def action_audit(config: dict, output_dir: Path) -> list[dict]:
             "scan_content": scan_content,
         },
     }
+    module = config.get("audit_module")
+    if module in {"leave", "overtime", "subsidy", "final", "parttime"}:
+        check_config = {f"{module}_target_month": config.get("target_month", ""),
+                        "parttime_conflict_policy": config.get("conflict_policy", "block"), "_original_names": {}}
+        for raw in files_meta:
+            field, path = raw.get("field", ""), raw.get("path", "")
+            if field.startswith(module + "_") and path:
+                check_config.setdefault(field, []).append(path)
+                check_config["_original_names"][path] = raw.get("name")
+        report = integrity.preflight(module, check_config)
+        out.update(ok=report["status"] == "passed", files=report["files"], meta={"integrity_audit": report})
     audit_path = output_dir / "audit_result.json"
     audit_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     return [{"path": str(audit_path), "file_name": audit_path.name}]

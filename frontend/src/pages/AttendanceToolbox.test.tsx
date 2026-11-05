@@ -111,7 +111,7 @@ function makeRunResponse(module = 'leave') {
       module,
       log: 'ok-log',
       stats: { rows: 2 },
-      meta: {},
+      meta: { integrity_audit: { status: 'passed', files: [], issues: [], totals_verified: true, days_in_month: 31 } },
       files: [
         {
           file_key: '1_result.xlsx',
@@ -405,7 +405,9 @@ describe('AttendanceToolbox', () => {
       },
     })
     mockPreviewRun.mockResolvedValue({ data: { rows: [{ 姓名: '甲', 工号: 'E01' }] } })
-    mockAuditUploads.mockResolvedValue({ data: { warnings: [] } })
+    mockAuditUploads.mockResolvedValue({ data: { warnings: [], meta: {
+      integrity_audit: { status: 'passed', files: [], issues: [], days_in_month: 31 },
+    } } })
     mockExportTemplates.mockResolvedValue(new Blob(['tpl']))
     mockParttimeMonthlyPunch.mockResolvedValue(new Blob(['xlsx'], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1101,6 +1103,53 @@ describe('AttendanceToolbox', () => {
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     await waitFor(() => expect(mockRunWorkflow).toHaveBeenCalled())
     await waitFor(() => expect(mockRun).toHaveBeenCalled())
+    expect(messageApi.success).not.toHaveBeenCalledWith(expect.stringContaining('计算完成'))
+    expect(messageApi.warning).toHaveBeenCalledWith(expect.stringContaining('旧接口未返回完整审计状态'))
+  })
+
+  it('blocks calculation when upload inspection fails and renders file reason', async () => {
+    mockAuditUploads.mockResolvedValue({ data: { meta: { integrity_audit: {
+      status: 'needs_review', files: [{ field: 'leave_src', file_name: 'leave.xlsx', type: '待识别', status: '失败', detail: '缺少姓名列' }],
+      issues: [{ kind: '未识别文件', file_name: 'leave.xlsx', person: '', detail: '缺少姓名列' }],
+    } } } })
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await uploadLeaveRequiredFiles(user)
+    await user.type(screen.getByLabelText('请假明细处理月份'), '2026-07{Enter}')
+    await user.click(screen.getByRole('button', { name: /开始计算/ }))
+    expect(await screen.findByText('文件检查未通过，请处理以下问题')).toBeInTheDocument()
+    expect(screen.getByText(/leave.xlsx.*缺少姓名列/)).toBeInTheDocument()
+    expect(mockRunWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('does not calculate after an inspection transport error', async () => {
+    mockAuditUploads.mockRejectedValue(new Error('检查服务超时'))
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await uploadLeaveRequiredFiles(user)
+    await user.type(screen.getByLabelText('请假明细处理月份'), '2026-07{Enter}')
+    await user.click(screen.getByRole('button', { name: /开始计算/ }))
+    expect(await screen.findByText(/文件检测失败：检查服务超时/)).toBeInTheDocument()
+    expect(mockRunWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('keeps pending status when downloading a blocked check report fails', async () => {
+    const response = makeRunResponse('leave')
+    response.data.meta.integrity_audit = { status: 'needs_review', files: [], issues: [], totals_verified: false, days_in_month: 31 }
+    mockRunWorkflow.mockResolvedValue(response)
+    mockDownloadRunFile.mockRejectedValue(new Error('下载失败'))
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await uploadLeaveRequiredFiles(user)
+    await user.type(screen.getByLabelText('请假明细处理月份'), '2026-07{Enter}')
+    await user.click(screen.getByRole('button', { name: /开始计算/ }))
+    expect(await screen.findByText('计算未完成，请处理检查问题')).toBeInTheDocument()
+    expect(screen.queryByText('计算完成')).not.toBeInTheDocument()
+    await waitFor(() => expect(messageApi.warning).toHaveBeenCalledWith(expect.stringContaining('检查报告自动下载失败')))
+    expect(messageApi.warning).not.toHaveBeenCalledWith(expect.stringContaining('计算已完成'))
   })
 
   it('structured success shows stats and download buttons', async () => {
@@ -1113,7 +1162,7 @@ describe('AttendanceToolbox', () => {
     await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     await waitFor(() => expect(mockDownloadRunFile).toHaveBeenCalled())
-    expect(await screen.findByText('计算成功')).toBeInTheDocument()
+    expect(await screen.findByText('计算完成')).toBeInTheDocument()
     expect(screen.getByText((content) => content.includes('rows') && content.includes('2'))).toBeInTheDocument()
     expect(screen.getByText('技术信息')).toBeInTheDocument()
   })
@@ -1137,7 +1186,7 @@ describe('AttendanceToolbox', () => {
     const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
     await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
-    await waitFor(() => expect(screen.getByText('计算成功')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('计算完成')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /结果\.xlsx/ }))
     await waitFor(() => {
       expect(messageApi.error).toHaveBeenCalled()
