@@ -9,12 +9,14 @@ import {
   Collapse,
   DatePicker,
   Divider,
+  Drawer,
   Empty,
   Input,
   InputNumber,
   Popover,
   Radio,
   Row,
+  Select,
   Space,
   Steps,
   Table,
@@ -25,6 +27,7 @@ import {
   Upload,
   message,
 } from 'antd'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import type { UploadFile, UploadProps } from 'antd'
 import type { RcFile } from 'antd/es/upload/interface'
 import type { RangePickerProps } from 'antd/es/date-picker'
@@ -44,12 +47,13 @@ import {
   SyncOutlined,
   ToolOutlined,
   UploadOutlined,
+  WarningOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
 import dayjs from 'dayjs'
 import PageContainer from '../components/PageContainer'
 import OvertimeRulesEditor, { AppliedRulesState } from './OvertimeRulesEditor'
-import { attendanceToolboxAPI, AttendanceToolboxRunResponse } from '../services/api'
+import { attendanceToolboxAPI, AttendanceToolboxConfig, AttendanceToolboxRunResponse, orgAPI } from '../services/api'
 import { useAuthStore } from '../store/authStore'
 import { confirmOrgSync } from '../utils/orgSyncAction'
 import { shouldFallbackToLegacyToolboxAPI } from '../utils/toolboxFallback'
@@ -87,12 +91,6 @@ interface TemplateMetaItem {
   file_name: string
 }
 
-interface TextField {
-  name: string
-  label: string
-  placeholder: string
-}
-
 interface ModuleConfig {
   key: ToolboxModuleKey
   title: string
@@ -100,7 +98,6 @@ interface ModuleConfig {
   outputName: string
   zipOutputName?: string
   fileFields: FileField[]
-  textFields?: TextField[]
 }
 
 interface MaternityLeaveOverride {
@@ -109,6 +106,56 @@ interface MaternityLeaveOverride {
   name: string
   start_date: string
   end_date: string
+}
+
+interface ToolboxEmployeeOption {
+  user_id: string
+  name: string
+  status?: string
+}
+
+interface ToolboxDepartmentNode {
+  id: string
+  name: string
+  virtual_kind?: string
+  children?: ToolboxDepartmentNode[]
+}
+
+interface ToolboxDepartmentOption {
+  value: string
+  label: string
+}
+
+const flattenToolboxDepartmentOptions = (
+  nodes: ToolboxDepartmentNode[],
+  parentPath = '',
+): ToolboxDepartmentOption[] => nodes.flatMap((node) => {
+  if (node.virtual_kind === 'unassigned') return []
+  const path = parentPath ? `${parentPath}-${node.name}` : node.name
+  const current = node.virtual_kind === 'organization' || !node.name
+    ? []
+    : [{ value: path, label: path.split('-').join(' / ') }]
+  const childParentPath = node.virtual_kind === 'organization' ? parentPath : path
+  return [...current, ...flattenToolboxDepartmentOptions(node.children || [], childParentPath)]
+})
+
+async function loadAllToolboxEmployees() {
+  const pageSize = 1000
+  const employees: ToolboxEmployeeOption[] = []
+  let page = 1
+  let total = Number.POSITIVE_INFINITY
+
+  while (employees.length < total && page <= 100) {
+    const response = await orgAPI.getEmployees({ page, page_size: pageSize })
+    const data = (response as unknown as { data?: { items?: ToolboxEmployeeOption[]; total?: number } })?.data
+    const items = Array.isArray(data?.items) ? data.items : []
+    total = Number.isFinite(data?.total) ? Number(data?.total) : employees.length + items.length
+    employees.push(...items)
+    if (items.length === 0 || items.length < pageSize) break
+    page += 1
+  }
+
+  return employees
 }
 
 export const getAttendanceToolboxDownloadableFiles = (run: AttendanceToolboxRunResponse | null | undefined) =>
@@ -148,6 +195,60 @@ export const getSubsidyAuditMeta = (
   }
 }
 
+export interface ParttimeAuditMeta {
+  status: 'passed' | 'needs_review'
+  targetMonth: string
+  rows: number
+  fallbackCount: number
+  fallbackNames: string[]
+  blankCount: number
+  blankNames: string[]
+  conflictCount: number
+}
+
+export const getParttimeAuditMeta = (
+  run: AttendanceToolboxRunResponse | null | undefined,
+): ParttimeAuditMeta | null => {
+  const raw = run?.meta?.parttime_audit
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Record<string, unknown>
+  return {
+    status: value.status === 'needs_review' ? 'needs_review' : 'passed',
+    targetMonth: String(value.target_month || ''),
+    rows: Number(value.rows || 0),
+    fallbackCount: Number(value.fallback_count || 0),
+    fallbackNames: Array.isArray(value.fallback_names)
+      ? value.fallback_names.map((item) => String(item)).filter(Boolean)
+      : [],
+    blankCount: Number(value.blank_count || 0),
+    blankNames: Array.isArray(value.blank_names)
+      ? value.blank_names.map((item) => String(item)).filter(Boolean)
+      : [],
+    conflictCount: Number(value.conflict_count || 0),
+  }
+}
+
+type IntegrityAudit = {
+  status: string
+  issues: Array<{ kind: string; person: string; detail: string; file_name?: string }>
+  files: Array<{ file_name: string; field?: string; type: string; status: string; detail: string }>
+  expected_people?: number
+  recognized_people?: number
+  missing_people?: number
+  unrecognized_files?: number
+  same_name_groups?: number
+  fallback_count?: number
+  conflict_count?: number
+  resolved_conflict_count?: number
+  days_in_month?: number
+  totals_verified?: boolean
+}
+
+const getIntegrityAudit = (run: AttendanceToolboxRunResponse | null): IntegrityAudit | null => {
+  const value = run?.meta?.integrity_audit
+  return value && typeof value === 'object' ? value as IntegrityAudit : null
+}
+
 export const buildAttendanceToolboxWorkflowOptionFields = (
   moduleKey: ToolboxModuleKey,
   textValues: Record<string, string>,
@@ -161,6 +262,10 @@ export const buildAttendanceToolboxWorkflowOptionFields = (
   if (moduleKey === 'subsidy') {
     const month = (textValues.subsidy_target_month || '').trim()
     if (month) result.subsidy_target_month = month
+  }
+  if (moduleKey === 'parttime') {
+    const month = (textValues.parttime_target_month || '').trim()
+    if (month) result.parttime_target_month = month
   }
   if (
     (moduleKey === 'overtime' || moduleKey === 'subsidy')
@@ -177,25 +282,6 @@ export const getPreviousCalendarMonthRange = (
 ): [dayjs.Dayjs, dayjs.Dayjs] => {
   const previousMonth = reference.subtract(1, 'month')
   return [previousMonth.startOf('month'), previousMonth.endOf('month')]
-}
-
-const MATERNITY_LEAVE_STORAGE_KEY = 'attendance-toolbox-maternity-leave-overrides'
-
-const loadMaternityLeaveOverrides = (): MaternityLeaveOverride[] => {
-  if (typeof window === 'undefined') return []
-  try {
-    const value = JSON.parse(window.localStorage.getItem(MATERNITY_LEAVE_STORAGE_KEY) || '[]')
-    if (!Array.isArray(value)) return []
-    return value.filter((item) => item && typeof item === 'object').map((item, index) => ({
-      key: String(item.key || `maternity-${Date.now()}-${index}`),
-      employee_no: String(item.employee_no || ''),
-      name: String(item.name || ''),
-      start_date: String(item.start_date || ''),
-      end_date: String(item.end_date || ''),
-    }))
-  } catch {
-    return []
-  }
 }
 
 /** Recommended month-end order (UI guide only; tabs stay free to switch). */
@@ -216,11 +302,8 @@ const modules: ModuleConfig[] = [
     fileFields: [
       { name: 'leave_src', label: '请假系统导出表', required: true, templateId: 'leave_export' },
       { name: 'leave_schedule', label: '作息表', required: true, templateId: 'schedule' },
+      { name: 'leave_reviewed', label: '上次请假明细表（保留人工确认，可选）', templateId: 'final_leave_detail' },
       { name: 'leave_offsite_duration', label: '月度汇总表（异地外勤，可选）', templateId: 'offsite_duration' },
-    ],
-    textFields: [
-      { name: 'leave_special_names', label: '特殊名单', placeholder: '不填则使用原工具默认特殊名单，多个姓名用逗号分隔' },
-      { name: 'chengdu_schedule_names', label: '成都作息名单', placeholder: '不填则使用原工具默认成都作息名单，多个姓名用逗号分隔' },
     ],
   },
   {
@@ -235,9 +318,6 @@ const modules: ModuleConfig[] = [
       { name: 'overtime_calendar', label: '作息表', templateId: 'schedule' },
       { name: 'overtime_roster', label: '花名册/员工信息表', templateId: 'roster' },
     ],
-    textFields: [
-      { name: 'chengdu_schedule_names', label: '成都作息名单', placeholder: '不填则使用原工具默认成都作息名单，多个姓名用逗号分隔' },
-    ],
   },
   {
     key: 'subsidy',
@@ -251,10 +331,6 @@ const modules: ModuleConfig[] = [
       { name: 'subsidy_schedule', label: '作息表', required: true, templateId: 'schedule' },
       { name: 'subsidy_attendance', label: '考勤表', templateId: 'subsidy_attendance' },
       { name: 'subsidy_attendance_result', label: '考勤结果表', templateId: 'attendance_result' },
-    ],
-    textFields: [
-      { name: 'sub_dept_keywords', label: '产研部门关键字', placeholder: '不填则使用原工具默认部门关键字，多个用逗号分隔' },
-      { name: 'sub_late22_names', label: '晚走补贴人员', placeholder: '不填则使用原工具默认人员名单，多个姓名用逗号分隔' },
     ],
   },
   {
@@ -272,9 +348,6 @@ const modules: ModuleConfig[] = [
       { name: 'final_overtime', label: '加班明细表', required: true, templateId: 'final_overtime_detail' },
       { name: 'final_subsidy', label: '补贴扣款表', required: true, templateId: 'subsidy_source' },
     ],
-    textFields: [
-      { name: 'chengdu_schedule_names', label: '成都作息名单', placeholder: '不填则使用原工具默认成都作息名单，多个姓名用逗号分隔' },
-    ],
   },
   {
     key: 'parttime',
@@ -283,15 +356,20 @@ const modules: ModuleConfig[] = [
     outputName: '兼职汇总.xlsx',
     fileFields: [
       { name: 'parttime_default_schedule', label: '默认作息表', required: true, templateId: 'schedule' },
-      { name: 'parttime_attendance_detail', label: '考勤明细', templateId: 'parttime_monthly_summary' },
+      { name: 'parttime_attendance_detail', label: '考勤明细（可多选）', multiple: true, templateId: 'parttime_monthly_summary' },
       { name: 'parttime_monthly', label: '腾小宝月度汇总（可多选）', multiple: true, templateId: 'parttime_monthly_summary' },
       { name: 'parttime_schedules', label: '排班表（可多选）', multiple: true, templateId: 'parttime_schedule' },
     ],
-    textFields: [
-      { name: 'part_special_names', label: '特殊人员名单', placeholder: '不填则使用原工具默认特殊人员名单，多个姓名用逗号分隔' },
-    ],
   },
 ]
+
+const MODULE_FIXED_CONFIG_KEYS: Record<ToolboxModuleKey, string[]> = {
+  leave: ['leave_special_names', 'chengdu_schedule_names'],
+  overtime: ['chengdu_schedule_names'],
+  subsidy: ['sub_dept_keywords', 'sub_late22_names'],
+  final: ['chengdu_schedule_names'],
+  parttime: ['part_special_names'],
+}
 
 const templateDownloadItems: Array<{ key: string; label: string; templateId: string }> = [
   { key: 'leave_export', label: '请假系统导出表', templateId: 'leave_export' },
@@ -328,6 +406,42 @@ function normalizeDefaults(response: unknown): ToolboxDefaults {
 
 function formatNameList(values: string[]) {
   return values.join('、')
+}
+
+const FIXED_CONFIG_LIST_KEYS = [
+  'leave_special_names',
+  'chengdu_schedule_names',
+  'sub_dept_keywords',
+  'sub_late22_names',
+  'part_special_names',
+] as const
+
+function parseNameList(value: string | undefined): string[] {
+  return String(value || '')
+    .split(/[、,，\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+// One-time compatibility read for configurations created by the previous
+// browser-only version. Once a server configuration is saved, the browser
+// value is ignored and no longer acts as the source of truth.
+const LEGACY_MATERNITY_STORAGE_KEY = 'attendance-toolbox-maternity-leave-overrides'
+function loadLegacyMaternityLeaveOverrides(): MaternityLeaveOverride[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(LEGACY_MATERNITY_STORAGE_KEY) || '[]')
+    if (!Array.isArray(raw)) return []
+    return raw.filter((item) => item && typeof item === 'object').map((item, index) => ({
+      key: String(item.key || `legacy-maternity-${index}`),
+      employee_no: String(item.employee_no || ''),
+      name: String(item.name || ''),
+      start_date: String(item.start_date || ''),
+      end_date: String(item.end_date || ''),
+    }))
+  } catch {
+    return []
+  }
 }
 
 /** Exported for unit tests to mock without triggering jsdom navigation. */
@@ -517,14 +631,6 @@ const fieldRequirements: Record<string, { label: string; badges: FieldBadge[] }[
   ],
 }
 
-// ── Hero badge data ──
-
-const heroBadges = [
-  { label: 'Excel 导入', icon: <UploadOutlined /> },
-  { label: '规则校验', icon: <FileProtectOutlined /> },
-  { label: '结果导出', icon: <CloudDownloadOutlined /> },
-]
-
 const AUTO_SYNC_UPLOADS = {
   leave: ['leave_src'],
   overtime: ['overtime_src'],
@@ -540,6 +646,7 @@ const OVERTIME_SYNC_PADDING_DAYS = 31
 const AttendanceToolbox: React.FC = () => {
   const [messageApi, messageContextHolder] = message.useMessage()
   const permissions = useAuthStore((s) => s.permissions) || []
+  const orgId = useAuthStore((s) => s.orgId)
   const hasPerm = useCallback((code: string) => {
     if (permissions.includes(code)) return true
     // Compat: legacy attendance_manage still enables toolbox actions.
@@ -551,6 +658,11 @@ const AttendanceToolbox: React.FC = () => {
   const canEditRules = hasPerm('attendance_toolbox_rules_edit') || hasPerm('attendance_manage')
 
   const [activeModule, setActiveModule] = useState<ToolboxModuleKey>('leave')
+  const [fixedConfigOpen, setFixedConfigOpen] = useState(false)
+  const [fixedOptionsLoading, setFixedOptionsLoading] = useState(false)
+  const [fixedOptionsLoaded, setFixedOptionsLoaded] = useState(false)
+  const [employeeOptions, setEmployeeOptions] = useState<ToolboxEmployeeOption[]>([])
+  const [departmentOptions, setDepartmentOptions] = useState<ToolboxDepartmentOption[]>([])
   const [completedModules, setCompletedModules] = useState<Partial<Record<ToolboxModuleKey, boolean>>>({})
   const [missingFieldName, setMissingFieldName] = useState<string | null>(null)
   const fieldCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -558,7 +670,7 @@ const AttendanceToolbox: React.FC = () => {
   const fileListsRef = useRef<Record<string, UploadFile[]>>({})
   const userFileChangeVersionsRef = useRef<Record<string, number>>({})
   const [textValues, setTextValues] = useState<Record<string, string>>({})
-  const [defaultsLoading, setDefaultsLoading] = useState(false)
+  const [fixedDraftValues, setFixedDraftValues] = useState<Record<string, string>>({})
   const [runningModule, setRunningModule] = useState<ToolboxModuleKey | null>(null)
   // 按模块隔离，避免请假 audit/log 泄漏到加班/汇总 Tab
   const [runLogByModule, setRunLogByModule] = useState<Partial<Record<ToolboxModuleKey, string>>>({})
@@ -570,9 +682,18 @@ const AttendanceToolbox: React.FC = () => {
     rules: null,
     rulesJson: null,
   })
-  const [maternityLeaveOverrides, setMaternityLeaveOverrides] = useState<MaternityLeaveOverride[]>(loadMaternityLeaveOverrides)
+  const [maternityLeaveOverrides, setMaternityLeaveOverrides] = useState<MaternityLeaveOverride[]>([])
+  const [savedMaternityLeaveOverrides, setSavedMaternityLeaveOverrides] = useState<MaternityLeaveOverride[]>([])
+  const [configLoading, setConfigLoading] = useState(false)
+  const [configSaving, setConfigSaving] = useState(false)
+  const [savedConfigSnapshot, setSavedConfigSnapshot] = useState('')
   const [uploadWarnings, setUploadWarnings] = useState<Record<string, string[]>>({})
   const [auditWarningsByModule, setAuditWarningsByModule] = useState<Partial<Record<ToolboxModuleKey, string[]>>>({})
+  const [uploadAudits, setUploadAudits] = useState<Partial<Record<ToolboxModuleKey, IntegrityAudit>>>({})
+  const [checkingModules, setCheckingModules] = useState<Partial<Record<ToolboxModuleKey, boolean>>>({})
+  const auditVersions = useRef<Partial<Record<ToolboxModuleKey, number>>>({})
+  const auditScope = useRef({ orgId, fileLists, textValues })
+  auditScope.current = { orgId, fileLists, textValues }
   const [templateMeta, setTemplateMeta] = useState<TemplateMetaItem[]>([])
   const [downloadingTemplate, setDownloadingTemplate] = useState<string | null>(null)
   const [requirementView, setRequirementView] = useState<Record<string, string>>({})
@@ -600,41 +721,171 @@ const AttendanceToolbox: React.FC = () => {
 
   const moduleMap = useMemo(() => new Map(modules.map((item) => [item.key, item])), [])
 
-  useEffect(() => {
-    window.localStorage.setItem(MATERNITY_LEAVE_STORAGE_KEY, JSON.stringify(maternityLeaveOverrides))
-  }, [maternityLeaveOverrides])
+  const buildFixedConfigPayload = useCallback((): Omit<AttendanceToolboxConfig, 'configured'> => ({
+    maternity_leave_overrides: maternityLeaveOverrides.map(({ employee_no, name, start_date, end_date }) => ({
+      employee_no: employee_no.trim(),
+      name: name.trim(),
+      start_date,
+      end_date,
+    })),
+    leave_special_names: parseNameList(fixedDraftValues.leave_special_names),
+    chengdu_schedule_names: parseNameList(fixedDraftValues.chengdu_schedule_names),
+    sub_dept_keywords: parseNameList(fixedDraftValues.sub_dept_keywords),
+    sub_late22_names: parseNameList(fixedDraftValues.sub_late22_names),
+    part_special_names: parseNameList(fixedDraftValues.part_special_names),
+    overtime_rules_json: appliedRules.source === 'custom' ? (appliedRules.rulesJson || '') : '',
+  }), [appliedRules.rulesJson, appliedRules.source, fixedDraftValues, maternityLeaveOverrides])
+
+  const currentConfigSnapshot = useMemo(
+    () => JSON.stringify(buildFixedConfigPayload()),
+    [buildFixedConfigPayload],
+  )
+  const configDirty = Boolean(savedConfigSnapshot) && currentConfigSnapshot !== savedConfigSnapshot
+
+  const handleSaveFixedConfig = useCallback(async () => {
+    if (!canOperate) {
+      messageApi.warning('你没有考勤工具箱操作权限，无法保存固定配置')
+      return
+    }
+
+    const maternity = getMaternityLeaveOverridesForSubmit()
+    if (maternity === null) return
+    setConfigSaving(true)
+    try {
+      const payload = {
+        ...buildFixedConfigPayload(),
+        maternity_leave_overrides: maternity,
+      }
+      await attendanceToolboxAPI.saveConfig(payload)
+      setSavedMaternityLeaveOverrides(maternity.map((item, index) => ({ ...item, key: `maternity-${Date.now()}-${index}` })))
+      setTextValues((prev) => {
+        const next = { ...prev }
+        for (const key of FIXED_CONFIG_LIST_KEYS) next[key] = formatNameList(payload[key])
+        return next
+      })
+      setSavedConfigSnapshot(JSON.stringify(payload))
+      messageApi.success('固定配置已保存，组织内其他用户重新打开后即可使用')
+    } catch (error) {
+      messageApi.error(await resolveErrorMessage(error))
+    } finally {
+      setConfigSaving(false)
+    }
+  }, [buildFixedConfigPayload, canOperate, messageApi])
+
+  const handleCancelFixedConfig = useCallback(() => {
+    if (!savedConfigSnapshot) return
+    try {
+      const saved = JSON.parse(savedConfigSnapshot) as Omit<AttendanceToolboxConfig, 'configured'>
+      setTextValues((prev) => {
+        const next = { ...prev }
+        for (const key of FIXED_CONFIG_LIST_KEYS) next[key] = formatNameList(saved[key] || [])
+        return next
+      })
+      const restoredMaternity = (saved.maternity_leave_overrides || []).map((item, index) => ({
+        key: `maternity-${Date.now()}-${index}`,
+        employee_no: item.employee_no || '',
+        name: item.name || '',
+        start_date: item.start_date || '',
+        end_date: item.end_date || '',
+      }))
+      setFixedDraftValues(Object.fromEntries(FIXED_CONFIG_LIST_KEYS.map((key) => [key, formatNameList(saved[key] || [])])))
+      setMaternityLeaveOverrides(restoredMaternity)
+      setSavedMaternityLeaveOverrides(restoredMaternity)
+      if (saved.overtime_rules_json) {
+        setAppliedRules({ source: 'custom', rules: JSON.parse(saved.overtime_rules_json), rulesJson: saved.overtime_rules_json })
+      } else {
+        setAppliedRules({ source: 'default', rules: null, rulesJson: null })
+      }
+      messageApi.info('已放弃本次未保存修改')
+    } catch {
+      messageApi.warning('恢复已保存配置失败，请重新打开页面')
+    }
+  }, [messageApi, savedConfigSnapshot])
 
   useEffect(() => {
     let mounted = true
-    setDefaultsLoading(true)
-
-    attendanceToolboxAPI.getDefaults()
-      .then((response) => {
-        if (!mounted) return
-        const defaults = normalizeDefaults(response)
-        setTextValues((prev) => {
-          const next = { ...prev }
-          for (const [key, values] of Object.entries(defaults)) {
-            if (next[key] === undefined) {
-              next[key] = formatNameList(values)
-            }
-          }
-          return next
-        })
-      })
-      .catch(() => {
-        if (mounted) {
-          messageApi.warning('默认名单加载失败，计算时仍会使用内置规则')
+    setSavedConfigSnapshot('')
+    setFixedDraftValues({})
+    setMaternityLeaveOverrides([])
+    setSavedMaternityLeaveOverrides([])
+    setTextValues((prev) => {
+      const next = { ...prev }
+      FIXED_CONFIG_LIST_KEYS.forEach((key) => { next[key] = '' })
+      return next
+    })
+    setConfigLoading(true)
+    Promise.all([
+      attendanceToolboxAPI.getDefaults(),
+      typeof attendanceToolboxAPI.getConfig === 'function'
+        ? attendanceToolboxAPI.getConfig()
+        : Promise.resolve({ data: { configured: false } as AttendanceToolboxConfig }),
+    ]).then(([defaultsResponse, configResponse]) => {
+      if (!mounted) return
+      const defaults = normalizeDefaults(defaultsResponse)
+      const payload = (configResponse as unknown as { data?: AttendanceToolboxConfig })?.data
+      const fixedValues: Record<string, string> = {}
+      for (const key of FIXED_CONFIG_LIST_KEYS) {
+        const defaultValues = defaults[key] || []
+        const configuredValues = payload?.configured && Array.isArray(payload[key]) ? payload[key] : defaultValues
+        fixedValues[key] = formatNameList(configuredValues)
+      }
+      setTextValues((prev) => {
+        const next = { ...prev }
+        for (const [key, values] of Object.entries(defaults)) {
+          if (next[key] === undefined) next[key] = formatNameList(values)
         }
+        if (payload?.configured) {
+          for (const key of FIXED_CONFIG_LIST_KEYS) {
+            const values = payload[key]
+            if (Array.isArray(values)) next[key] = formatNameList(values)
+          }
+        }
+        return next
       })
-      .finally(() => {
-        if (mounted) setDefaultsLoading(false)
-      })
-
-    return () => {
-      mounted = false
-    }
-  }, [])
+      setFixedDraftValues(fixedValues)
+      if (payload?.configured) {
+        const loadedMaternity = (payload.maternity_leave_overrides || []).map((item, index) => ({
+          key: `maternity-${Date.now()}-${index}`,
+          employee_no: String(item.employee_no || ''),
+          name: String(item.name || ''),
+          start_date: String(item.start_date || ''),
+          end_date: String(item.end_date || ''),
+        }))
+        setMaternityLeaveOverrides(loadedMaternity)
+        setSavedMaternityLeaveOverrides(loadedMaternity)
+        if (payload.overtime_rules_json) {
+          try {
+            const rules = JSON.parse(payload.overtime_rules_json) as AppliedRulesState['rules']
+            setAppliedRules({ source: 'custom', rules, rulesJson: payload.overtime_rules_json })
+          } catch {
+            messageApi.warning('已保存的加班规则格式无法读取，将使用默认规则')
+          }
+        }
+      } else {
+        const legacyMaternity = loadLegacyMaternityLeaveOverrides()
+        if (legacyMaternity.length > 0) {
+          setMaternityLeaveOverrides(legacyMaternity)
+          setSavedMaternityLeaveOverrides(legacyMaternity)
+        }
+      }
+      setSavedConfigSnapshot(JSON.stringify({
+        maternity_leave_overrides: payload?.configured ? (payload.maternity_leave_overrides || []) : loadLegacyMaternityLeaveOverrides().map(({ employee_no, name, start_date, end_date }) => ({ employee_no, name, start_date, end_date })),
+        leave_special_names: payload?.configured ? (payload.leave_special_names || []) : (defaults.leave_special_names || []),
+        chengdu_schedule_names: payload?.configured ? (payload.chengdu_schedule_names || []) : (defaults.chengdu_schedule_names || []),
+        sub_dept_keywords: payload?.configured ? (payload.sub_dept_keywords || []) : (defaults.sub_dept_keywords || []),
+        sub_late22_names: payload?.configured ? (payload.sub_late22_names || []) : (defaults.sub_late22_names || []),
+        part_special_names: payload?.configured ? (payload.part_special_names || []) : (defaults.part_special_names || []),
+        overtime_rules_json: payload?.configured ? (payload.overtime_rules_json || '') : '',
+      }))
+    }).catch(() => {
+      if (mounted) messageApi.warning('固定配置加载失败，请稍后重试')
+    }).finally(() => {
+      if (mounted) {
+        setConfigLoading(false)
+      }
+    })
+    return () => { mounted = false }
+  }, [messageApi, orgId])
 
   const refreshTemplateMeta = useCallback(async () => {
     try {
@@ -651,6 +902,48 @@ const AttendanceToolbox: React.FC = () => {
   useEffect(() => {
     refreshTemplateMeta()
   }, [refreshTemplateMeta])
+
+  useEffect(() => {
+    if (!fixedConfigOpen || fixedOptionsLoaded) return
+    let mounted = true
+    setFixedOptionsLoading(true)
+    Promise.all([
+      loadAllToolboxEmployees(),
+      orgAPI.getDepartmentTree({ all: true }),
+    ]).then(([employeeResponse, departmentResponse]) => {
+      if (!mounted) return
+      const employees = employeeResponse
+        .filter((employee) => employee?.user_id && employee?.name && employee.user_id !== 'admin')
+        .map((employee) => ({
+          user_id: String(employee.user_id),
+          name: String(employee.name),
+          status: String(employee.status || 'active'),
+        }))
+        .sort((left, right) => (
+          left.name.localeCompare(right.name)
+          || (left.status === 'active' ? -1 : 1)
+          || left.user_id.localeCompare(right.user_id)
+        ))
+      const tree = (departmentResponse as unknown as { data?: { tree?: ToolboxDepartmentNode[] } })?.data?.tree || []
+      setEmployeeOptions(employees)
+      setDepartmentOptions(flattenToolboxDepartmentOptions(tree))
+      setFixedOptionsLoaded(true)
+    }).catch(() => {
+      if (mounted) messageApi.warning('员工和部门列表加载失败，仍可查看已保存配置')
+    }).finally(() => {
+      if (mounted) setFixedOptionsLoading(false)
+    })
+    return () => { mounted = false }
+  }, [fixedConfigOpen, fixedOptionsLoaded, messageApi, orgId])
+
+  useEffect(() => {
+    setFixedOptionsLoaded(false)
+    setEmployeeOptions([])
+    setDepartmentOptions([])
+    setLastRun(null)
+    setUploadAudits({})
+    setCompletedModules({})
+  }, [orgId])
 
   const setFieldFiles = useCallback((fieldName: string, list: UploadFile[]) => {
     const next = { ...fileListsRef.current, [fieldName]: list }
@@ -939,36 +1232,71 @@ const AttendanceToolbox: React.FC = () => {
     })
   }
 
-  const runAuditForFiles = useCallback(async (config: ModuleConfig) => {
+  const runAuditForFiles = useCallback(async (config: ModuleConfig, silent = false) => {
     const moduleKey = config.key
+    const scope = auditScope.current
+    const version = (auditVersions.current[moduleKey] || 0) + 1
+    auditVersions.current[moduleKey] = version
+    const isCurrent = () => auditVersions.current[moduleKey] === version && auditScope.current.orgId === scope.orgId
+      && config.fileFields.every((field) => auditScope.current.fileLists[field.name] === scope.fileLists[field.name])
+      && auditScope.current.textValues[`${moduleKey}_target_month`] === scope.textValues[`${moduleKey}_target_month`]
+      && auditScope.current.textValues.parttime_conflict_policy === scope.textValues.parttime_conflict_policy
     const items = config.fileFields.flatMap((field) => (fileLists[field.name] || []).map((file) => ({
       file,
       field,
     })))
     if (items.length === 0) {
       setAuditWarningsByModule((prev) => ({ ...prev, [moduleKey]: [] }))
-      return
+      return true
     }
     const formData = new FormData()
+    formData.append('audit_module', moduleKey)
+    formData.append('target_month', textValues[`${moduleKey}_target_month`] || '')
+    formData.append('conflict_policy', textValues.parttime_conflict_policy || 'block')
     items.forEach(({ file, field }) => {
       if (file.originFileObj) formData.append(field.name, file.originFileObj)
     })
+    setCheckingModules((prev) => ({ ...prev, [moduleKey]: true }))
     try {
       const response = await attendanceToolboxAPI.auditUploads(formData) as unknown as {
-        data?: { warnings?: string[] }
+        data?: { warnings?: string[]; meta?: { integrity_audit?: IntegrityAudit } }
       }
+      if (!isCurrent()) return false
+      const report = response?.data?.meta?.integrity_audit
+      if (!report) throw new Error('文件检查未返回完整结果，请更新服务后重试')
+      setUploadAudits((prev) => ({ ...prev, [moduleKey]: report }))
       const warnings = response?.data?.warnings || []
       setAuditWarningsByModule((prev) => ({ ...prev, [moduleKey]: warnings }))
-      if (warnings.length > 0) {
-        warnings.forEach((warning) => messageApi.warning(warning))
-      } else {
-        messageApi.success('文件检测通过')
+      if (report.status !== 'passed') {
+        if (!silent) messageApi.warning('文件检查未通过，请处理标红文件及数据问题')
+        return false
       }
+      if (!silent && warnings.length > 0) {
+        warnings.forEach((warning) => messageApi.warning(warning))
+      }
+      return true
     } catch (error) {
-      messageApi.warning(`文件检测失败：${error instanceof Error ? error.message : '未知错误'}`)
-      setAuditWarningsByModule((prev) => ({ ...prev, [moduleKey]: [] }))
+      if (!isCurrent()) return false
+      const detail = `文件检测失败：${error instanceof Error ? error.message : '未知错误'}`
+      setUploadAudits((prev) => ({ ...prev, [moduleKey]: { status: 'needs_review', files: [], issues: [{ kind: '文件检测', person: '', detail }] } }))
+      if (!silent) messageApi.warning(detail)
+      return false
+    } finally {
+      if (auditVersions.current[moduleKey] === version) setCheckingModules((prev) => ({ ...prev, [moduleKey]: false }))
     }
-  }, [fileLists, messageApi])
+  }, [fileLists, textValues, messageApi])
+
+  useEffect(() => {
+    setUploadAudits((prev) => ({ ...prev, [activeModule]: undefined }))
+    setCompletedModules((prev) => ({ ...prev, [activeModule]: false }))
+  }, [activeModule, runAuditForFiles, orgId])
+
+  useEffect(() => {
+    const config = moduleMap.get(activeModule)
+    if (!config || !canOperate || runningModule) return
+    const timer = window.setTimeout(() => { void runAuditForFiles(config, true) }, 400)
+    return () => { window.clearTimeout(timer) }
+  }, [activeModule, moduleMap, runAuditForFiles, canOperate, runningModule, orgId])
 
   const downloadTemplate = useCallback(async (templateId: string) => {
     setDownloadingTemplate(templateId)
@@ -1029,6 +1357,7 @@ const AttendanceToolbox: React.FC = () => {
   }, [])
 
   const uploadProps = (field: FileField): UploadProps => ({
+    disabled: !!runningModule,
     accept: acceptExcel,
     multiple: field.multiple,
     maxCount: field.multiple ? undefined : 1,
@@ -1103,6 +1432,12 @@ const AttendanceToolbox: React.FC = () => {
     if (data.module) {
       setRunLogByModule((prev) => ({ ...prev, [data.module as ToolboxModuleKey]: data.log || '' }))
     }
+    const integrityAudit = getIntegrityAudit(data)
+    const auditMeta = data.module === 'parttime' && data.meta?.parttime_audit && typeof data.meta.parttime_audit === 'object'
+      ? data.meta.parttime_audit as Record<string, unknown>
+      : null
+    const needsReview = integrityAudit?.status !== 'passed' || integrityAudit?.totals_verified !== true
+      || auditMeta?.status === 'needs_review' || Boolean(getSubsidyAuditMeta(data)?.missingAttendanceCount)
     // Prefer zip when multiple files; otherwise single file. Meta files are technical details, not user results.
     const downloadables = getAttendanceToolboxDownloadableFiles(data)
     if (downloadables.length === 0) {
@@ -1127,22 +1462,27 @@ const AttendanceToolbox: React.FC = () => {
       if (detail.includes('过期')) {
         messageApi.error(detail)
       } else {
-        messageApi.warning(`计算已完成，但自动下载失败：${detail}。可在下方结果区手动下载。`)
+        messageApi.warning(`${needsReview ? '计算未完成，检查报告' : '计算已完成，结果'}自动下载失败：${detail}。可在下方手动下载。`)
       }
     }
 
     if (data.module) {
-      setCompletedModules((prev) => ({ ...prev, [data.module as ToolboxModuleKey]: true }))
+      setCompletedModules((prev) => ({ ...prev, [data.module as ToolboxModuleKey]: !needsReview }))
     }
     // Best-effort 200-row preview for overtime only; never re-runs calculation.
     void loadOvertimePreview(data)
     const subsidyAudit = getSubsidyAuditMeta(data)
-    if (subsidyAudit?.missingAttendanceCount) {
+    const parttimeAudit = getParttimeAuditMeta(data)
+    if (needsReview) {
+      messageApi.warning(`计算未完成，${subsidyAudit?.missingAttendanceCount ? `${subsidyAudit.missingAttendanceCount} 人缺少考勤记录；` : ''}请处理检查报告中的问题后重新计算`)
+    } else if (subsidyAudit?.missingAttendanceCount) {
       const preview = subsidyAudit.missingAttendanceNames.slice(0, 5).join('、')
       const suffix = subsidyAudit.missingAttendanceCount > 5 ? '等' : ''
       messageApi.warning(
         `计算完成，但有 ${subsidyAudit.missingAttendanceCount} 人缺少考勤记录：${preview}${suffix}；详细名单已写入“异常审计”。`,
       )
+    } else if (parttimeAudit?.status === 'needs_review') {
+      messageApi.warning('兼职汇总已生成，但存在待核对数据；请打开结果中的“数据检查”工作表')
     } else if (downloadOk) {
       messageApi.success(successText)
     }
@@ -1212,7 +1552,7 @@ const AttendanceToolbox: React.FC = () => {
           type="info"
           showIcon
           message="这里只用于补录自动抓不到的长期产假"
-          description="普通产假仍会自动抓取；如果钉钉已有同一员工的重叠产假，系统会自动跳过手动记录，避免重复计算。配置会保存在当前浏览器。"
+          description="普通产假仍会自动抓取；如果钉钉已有同一员工的重叠产假，系统会自动跳过手动记录，避免重复计算。保存后组织内其他用户也能使用。"
         />
         {maternityLeaveOverrides.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂未添加长期产假人员" />
@@ -1269,7 +1609,7 @@ const AttendanceToolbox: React.FC = () => {
                           'start_date',
                           value ? value.format('YYYY-MM-DD') : '',
                         )}
-                      />
+                      locale={datePickerZhCN} />
                     </Space>
                   </Col>
                   <Col xs={24} md={6}>
@@ -1284,7 +1624,7 @@ const AttendanceToolbox: React.FC = () => {
                           'end_date',
                           value ? value.format('YYYY-MM-DD') : '',
                         )}
-                      />
+                      locale={datePickerZhCN} />
                     </Space>
                   </Col>
                 </Row>
@@ -1296,8 +1636,8 @@ const AttendanceToolbox: React.FC = () => {
     </Card>
   )
 
-  const getMaternityLeaveOverridesForSubmit = () => {
-    const configured = maternityLeaveOverrides.filter((item) => (
+  const getMaternityLeaveOverridesForSubmit = (source = maternityLeaveOverrides) => {
+    const configured = source.filter((item) => (
       item.employee_no.trim() || item.name.trim() || item.start_date || item.end_date
     ))
     const incomplete = configured.find((item) => !item.name.trim() || !item.start_date || !item.end_date)
@@ -1326,12 +1666,24 @@ const AttendanceToolbox: React.FC = () => {
       messageApi.warning('你缺少考勤工具箱操作权限，需要联系管理员添加')
       return
     }
+    if (moduleKey === 'parttime' && !canDingtalkSync) {
+      messageApi.warning('兼职计算需要拉取钉钉花名册，请开通钉钉同步权限')
+      return
+    }
 
     // 尽早占位，避免 audit 窗口双提交 / 跨 Tab 并发
     setRunningModule(moduleKey)
+    if (!(textValues[`${moduleKey}_target_month`] || '').trim()) {
+      messageApi.warning('请先选择处理月份')
+      setRunningModule(null)
+      return
+    }
     try {
       if (config.fileFields.length > 0) {
-        await runAuditForFiles(config)
+        if (!await runAuditForFiles(config)) {
+          setRunningModule(null)
+          return
+        }
       }
     } catch {
       setRunningModule(null)
@@ -1346,13 +1698,19 @@ const AttendanceToolbox: React.FC = () => {
         return
       }
     }
-    const maternityOverrides = moduleKey === 'leave' ? getMaternityLeaveOverridesForSubmit() : []
+    const maternityOverrides = moduleKey === 'leave' ? getMaternityLeaveOverridesForSubmit(savedMaternityLeaveOverrides) : []
     if (maternityOverrides === null) {
       setRunningModule(null)
       return
     }
 
     if (moduleKey === 'parttime') {
+      const selectedMonth = (textValues.parttime_target_month || '').trim()
+      if (!selectedMonth) {
+        messageApi.warning('请先选择处理月份')
+        setRunningModule(null)
+        return
+      }
       const parttimeSourceFields = ['parttime_attendance_detail', 'parttime_monthly', 'parttime_schedules']
       const hasSource = parttimeSourceFields.some((key) => (fileLists[key] || []).length > 0)
       if (!hasSource) {
@@ -1364,17 +1722,16 @@ const AttendanceToolbox: React.FC = () => {
     }
 
     const formData = new FormData()
+    formData.append(`${moduleKey}_target_month`, (textValues[`${moduleKey}_target_month`] || '').trim())
+    if (moduleKey === 'parttime') formData.append('parttime_conflict_policy', textValues.parttime_conflict_policy || 'block')
     for (const field of config.fileFields) {
       for (const file of fileLists[field.name] || []) {
         const rawFile = file.originFileObj
         if (rawFile) formData.append(field.name, rawFile)
       }
     }
-    for (const field of config.textFields || []) {
-      const value = (textValues[field.name] || '').trim()
-      if (Object.prototype.hasOwnProperty.call(textValues, field.name)) {
-        formData.append(field.name, value)
-      }
+    for (const field of MODULE_FIXED_CONFIG_KEYS[moduleKey]) {
+      formData.append(field, (textValues[field] || '').trim())
     }
     if (moduleKey === 'leave') {
       formData.append('maternity_leave_overrides', JSON.stringify(maternityOverrides))
@@ -1382,12 +1739,13 @@ const AttendanceToolbox: React.FC = () => {
     for (const [field, value] of Object.entries(
       buildAttendanceToolboxWorkflowOptionFields(moduleKey, textValues, appliedRules),
     )) {
-      formData.append(field, value)
+      formData.set(field, value)
     }
 
     try {
       try {
         const response = await attendanceToolboxAPI.runWorkflow(moduleKey, formData)
+        if (auditScope.current.orgId !== orgId) return
         await applyRunResponse(
           response,
           moduleKey === 'overtime' && appliedRules.source === 'custom'
@@ -1402,7 +1760,7 @@ const AttendanceToolbox: React.FC = () => {
         }
         const blob = await attendanceToolboxAPI.run(moduleKey, formData) as unknown as Blob
         downloadBlob(blob, getDownloadName(config, blob))
-        messageApi.success('计算完成，结果已下载')
+        messageApi.warning('文件已下载；旧接口未返回完整审计状态，请查看 Excel 检查页')
       }
     } catch (error) {
       messageApi.error(await resolveErrorMessage(error))
@@ -1499,7 +1857,12 @@ const AttendanceToolbox: React.FC = () => {
 
     return (
       <Space direction="vertical" size={6} style={{ width: '100%', marginTop: 12 }}>
-        {files.map((file) => (
+        {files.map((file) => {
+          const report = Object.values(uploadAudits).flatMap((audit) => audit?.files || [])
+            .find((item) => item.field === field.name && item.file_name === file.name)
+          const failed = report?.status === '失败'
+          const color = failed ? 'error' : report?.status === '正常' ? 'success' : 'warning'
+          return (
           <div
             key={file.uid}
             style={{
@@ -1508,24 +1871,28 @@ const AttendanceToolbox: React.FC = () => {
               gap: 8,
               minHeight: 32,
               padding: '4px 10px',
-              border: '1px solid var(--color-success)',
+              border: `1px solid var(--color-${color})`,
               borderRadius: 6,
-              background: 'var(--color-success-bg)',
+              background: `var(--color-${color}-bg)`,
             }}
           >
-            <CheckCircleOutlined style={{ color: 'var(--color-success)', flex: '0 0 auto' }} />
+            {color === 'success' ? <CheckCircleOutlined /> : <WarningOutlined />}
             <Text ellipsis={{ tooltip: file.name }} style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
               {file.name}
             </Text>
+            <Tooltip title={report?.detail || '选择处理月份后检查文件'}>
+              <Tag color={color}>{report?.status || '待检查'}</Tag>
+            </Tooltip>
             <Button
               type="text"
               size="small"
               icon={<CloseOutlined />}
               aria-label={`移除${file.name}`}
+              disabled={!!runningModule}
               onClick={() => removeFieldFile(field.name, file.uid)}
             />
           </div>
-        ))}
+        )})}
       </Space>
     )
   }
@@ -1580,6 +1947,98 @@ const AttendanceToolbox: React.FC = () => {
     )
   }
 
+  const renderParttimePunchControls = (field: FileField) => {
+    if (field.name !== 'parttime_attendance_detail') return null
+    const permissionHint = '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加'
+    return (
+      <Card
+        size="small"
+        type="inner"
+        style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}
+        styles={{ body: { padding: '10px 12px' } }}
+      >
+        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+          <Space wrap size={8} align="center">
+            <Text strong style={{ fontSize: 12 }}>按月份获取考勤明细</Text>
+            <DatePicker
+              picker="month"
+              value={parttimePunchMonth}
+              onChange={(value) => setParttimePunchMonth(value)}
+              format="YYYY-MM"
+              allowClear={false}
+              style={{ width: 120 }}
+              aria-label="兼职考勤月份"
+              placeholder="选择月份"
+              locale={datePickerZhCN}
+            />
+            <Tooltip title={!canDingtalkSync ? permissionHint : '仅按用户点击执行，不会自动抓取'}>
+              <span style={{ display: 'inline-block' }}>
+                <Button
+                  type="link"
+                  size="small"
+                  icon={parttimePunchSync.loading ? <SyncOutlined spin /> : <SyncOutlined />}
+                  loading={parttimePunchSync.loading}
+                  disabled={!canDingtalkSync}
+                  onClick={() => void syncParttimeMonthlyPunch()}
+                  style={{ padding: 0 }}
+                >
+                  {parttimePunchSync.error ? '重试抓取' : '从钉钉抓取'}
+                </Button>
+              </span>
+            </Tooltip>
+          </Space>
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            抓取后会自动回填到本卡片；也可以直接上传本地 Excel。再次抓取会替换本次“考勤明细”。
+          </Text>
+          {!canDingtalkSync && (
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              当前账号无钉钉同步权限，请上传本地月度打卡记录 Excel，或联系管理员开通权限
+            </Text>
+          )}
+          {parttimePunchSync.lastSyncAt && (
+            <Text type="success" style={{ fontSize: 11 }}>
+              上次抓取：{parttimePunchSync.lastSyncAt}
+            </Text>
+          )}
+          {parttimePunchSync.error && (
+            <Text type="danger" style={{ fontSize: 11 }}>
+              抓取失败：{parttimePunchSync.error}
+            </Text>
+          )}
+        </Space>
+      </Card>
+    )
+  }
+
+  const renderFileSourceStatus = (field: FileField) => {
+    const isRosterField = field.name === 'overtime_roster' || field.name === 'final_active'
+    const isTransferField = field.name === 'final_transfer'
+    if (!isRosterField && !isTransferField) return null
+    const sync = isRosterField ? rosterSync : transferSync
+    const allowed = isRosterField ? canOperate : canDingtalkSync
+    return (
+      <Space direction="vertical" size={2} style={{ width: '100%' }}>
+        {!allowed && (
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {isRosterField
+              ? '当前账号无操作权限，请上传本地花名册，或联系管理员开通权限'
+              : '当前账号无钉钉同步权限，请上传本地异动流程表，或联系管理员开通权限'}
+          </Text>
+        )}
+        {sync.lastSyncAt && (
+          <Text type="success" style={{ fontSize: 11 }}>
+            {isRosterField ? '上次生成' : '上次同步'}：{sync.lastSyncAt}
+          </Text>
+        )}
+        {sync.error && (
+          <Text type="danger" style={{ fontSize: 11 }}>
+            {isRosterField ? '生成失败' : '同步失败'}：{sync.error}
+          </Text>
+        )}
+      </Space>
+    )
+  }
+
   const renderFileUploadCard = (field: FileField) => {
     const files = fileLists[field.name] || []
     const hasFile = files.length > 0
@@ -1626,6 +2085,9 @@ const AttendanceToolbox: React.FC = () => {
             {renderFileSourceAction(field, hasFile)}
           </div>
 
+          {renderFileSourceStatus(field)}
+          {renderParttimePunchControls(field)}
+
           <Dragger
             {...uploadProps(field)}
             style={{
@@ -1663,13 +2125,11 @@ const AttendanceToolbox: React.FC = () => {
     const requiredFields = config.fileFields.filter((f) => f.required)
     const optionalFields = config.fileFields.filter((f) => !f.required)
     const requiredReadyCount = requiredFields.filter((f) => (fileLists[f.name] || []).length > 0).length
-    const monthField = config.key === 'overtime'
-      ? 'overtime_target_month'
-      : config.key === 'subsidy'
-        ? 'subsidy_target_month'
-        : null
+    const monthField = `${config.key}_target_month`
+    const integrityAudit = lastRun?.module === config.key ? getIntegrityAudit(lastRun) : null
     const lockedMonth = monthField ? (textValues[monthField] || '') : ''
     const subsidyAudit = config.key === 'subsidy' ? getSubsidyAuditMeta(lastRun) : null
+    const parttimeAudit = config.key === 'parttime' ? getParttimeAuditMeta(lastRun) : null
     const customHolidayCount = appliedRules.rules?.legal_holidays_override?.length || 0
 
     return (
@@ -1700,19 +2160,33 @@ const AttendanceToolbox: React.FC = () => {
                 picker="month"
                 format="YYYY-MM"
                 allowClear
+                disabled={!!runningModule}
                 value={lockedMonth ? dayjs(`${lockedMonth}-01`) : null}
-                placeholder="自动识别月份"
-                aria-label={config.key === 'overtime' ? '加班处理月份' : '补贴考勤月份'}
+                placeholder="请选择处理月份"
+                aria-label={`${config.title}处理月份`}
                 onChange={(value) => {
                   setTextValues((prev) => ({
                     ...prev,
                     [monthField]: value ? value.format('YYYY-MM') : '',
                   }))
                 }}
-              />
+              locale={datePickerZhCN} />
               <Text type="secondary" style={{ fontSize: 12 }}>
-                默认自动识别；文件跨月或标题不规范时可手动锁定。锁定月份与作息表不一致时会停止计算。
+                计算前必须确认月份。月度文件与作息表应一致；跨月审批只计入目标月部分。
               </Text>
+              {config.key === 'parttime' && <Space wrap>
+                <Text>来源冲突处理</Text>
+                <Select aria-label="来源冲突处理" style={{ minWidth: 220 }} disabled={!!runningModule}
+                  value={textValues.parttime_conflict_policy || 'block'}
+                  onChange={(value) => setTextValues((prev) => ({ ...prev, parttime_conflict_policy: value }))}
+                  options={[
+                    { value: 'block', label: '发现冲突时停止（默认）' },
+                    { value: 'attendance_first', label: '明细 → 月度汇总 → 排班' },
+                    { value: 'monthly_first', label: '月度汇总 → 明细 → 排班' },
+                    { value: 'schedule_first', label: '排班 → 月度汇总 → 明细' },
+                  ]} />
+                <Text type="secondary">同一优先级仍有冲突时需修正源文件；处理结果写入检查页。</Text>
+              </Space>}
               {config.key === 'subsidy' && (
                 <Alert
                   type="info"
@@ -1727,6 +2201,12 @@ const AttendanceToolbox: React.FC = () => {
           </Card>
         )}
 
+        {checkingModules[config.key] && <Alert type="info" showIcon message="正在检查文件格式、月份和人员身份…" />}
+        {uploadAudits[config.key]?.status === 'needs_review' && <Alert type="error" showIcon
+          message="文件检查未通过，请处理以下问题"
+          description={uploadAudits[config.key]?.issues.map((item, index) => (
+            <div key={index}>{item.file_name} {item.person}：{item.detail}</div>
+          ))} />}
         {(auditWarningsByModule[config.key] || []).length > 0 && (
           <Alert
             type="warning"
@@ -1759,7 +2239,7 @@ const AttendanceToolbox: React.FC = () => {
                     allowClear={false}
                     placeholder={['开始日期', '结束日期']}
                     aria-label="钉钉请假拉取日期范围"
-                  />
+                  locale={datePickerZhCN} />
                 </Space>
               </Col>
               <Col xs={24} md={12}>
@@ -1818,7 +2298,7 @@ const AttendanceToolbox: React.FC = () => {
                     allowClear={false}
                     placeholder={['开始日期', '结束日期']}
                     aria-label="钉钉加班拉取日期范围"
-                  />
+                  locale={datePickerZhCN} />
                 </Space>
               </Col>
               <Col xs={24} md={12}>
@@ -1908,58 +2388,20 @@ const AttendanceToolbox: React.FC = () => {
           </>
         )}
 
-        {(config.textFields || []).length > 0 && (
-          <Card size="small" style={{ borderRadius: 'var(--radius-lg)' }}>
-            <Row gutter={[16, 16]}>
-              {(config.textFields || []).map((field) => {
-                const hasValue = Boolean((textValues[field.name] || '').trim())
-                return (
-                  <Col xs={24} md={12} key={field.name}>
-                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                      <Space size={4}>
-                        <Text strong>{field.label}</Text>
-                        {hasValue
-                          ? <Tag color="success" style={{ fontSize: 11 }}>已自定义</Tag>
-                          : <Tag style={{ fontSize: 11 }}>使用默认值</Tag>}
-                      </Space>
-                      <Input.TextArea
-                        autoSize={{ minRows: 2, maxRows: 6 }}
-                        value={textValues[field.name] || ''}
-                        placeholder={defaultsLoading ? '正在加载默认名单...' : field.placeholder}
-                        onChange={(event) => setTextValues((prev) => ({ ...prev, [field.name]: event.target.value }))}
-                      />
-                    </Space>
-                  </Col>
-                )
-              })}
-            </Row>
-          </Card>
-        )}
-
-        {config.key === 'leave' && renderMaternityLeaveOverrides()}
-
         {config.key === 'overtime' && (
-          <Collapse
-            items={[{
-              key: 'rules',
-              label: (
-                <Space>
-                  <ToolOutlined />
-                  加班规则配置
-                  <Tag color={appliedRules.source === 'custom' ? 'success' : 'default'}>
-                    {appliedRules.source === 'custom' ? '自定义规则' : '默认规则'}
-                  </Tag>
-                </Space>
-              ),
-              children: (
-                <OvertimeRulesEditor
-                  value={appliedRules}
-                  onChange={setAppliedRules}
-                  canEdit={canEditRules}
-                  disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
-                />
-              ),
-            }]}
+          <Alert
+            type="info"
+            showIcon
+            message={(
+              <Space>
+                <span>当前使用{appliedRules.source === 'custom' ? '自定义' : '默认'}加班规则</span>
+                <Tag color={appliedRules.source === 'custom' ? 'success' : 'default'}>
+                  {appliedRules.source === 'custom' ? '已应用自定义规则' : '默认规则'}
+                </Tag>
+              </Space>
+            )}
+            description="加班规则统一在固定配置中编辑，点击保存配置后才会对后续计算生效。"
+            action={<Button type="link" onClick={() => setFixedConfigOpen(true)}>打开固定配置</Button>}
           />
         )}
 
@@ -2034,11 +2476,41 @@ const AttendanceToolbox: React.FC = () => {
           <Card size="small" title="最近结果" style={{ borderRadius: 'var(--radius-lg)' }}>
             <Space direction="vertical" style={{ width: '100%' }} size={8}>
               <Space wrap>
-                <Tag color="success" icon={<CheckCircleOutlined />}>计算成功</Tag>
+                {integrityAudit?.status !== 'passed' || integrityAudit?.totals_verified !== true || parttimeAudit?.status === 'needs_review' ? (
+                  <Tag color="warning" icon={<WarningOutlined />}>计算未完成，请处理检查问题</Tag>
+                ) : (
+                  <Tag color="success" icon={<CheckCircleOutlined />}>计算完成</Tag>
+                )}
                 {lastRun.expires_at && (
                   <Text type="secondary" style={{ fontSize: 12 }}>结果有效至 {lastRun.expires_at}</Text>
                 )}
               </Space>
+              {integrityAudit && (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Text>目标月份天数：{integrityAudit.days_in_month || '待确认'} 天</Text>
+                  {integrityAudit.expected_people !== undefined && (
+                    <Text>应处理人员：{integrityAudit.expected_people} 人；实际识别：{integrityAudit.recognized_people || 0} 人；缺少人员：{integrityAudit.missing_people || 0} 人</Text>
+                  )}
+                  {integrityAudit.status === 'passed' && integrityAudit.totals_verified ? (
+                    <Alert type="success" showIcon message="检查通过"
+                      description={`${integrityAudit.expected_people !== undefined ? `${integrityAudit.expected_people} 人全部匹配；` : ''}无月份冲突；无未处理来源冲突；合计已写入数字并回读验证${integrityAudit.resolved_conflict_count ? `；已按规则处理 ${integrityAudit.resolved_conflict_count} 条冲突` : ''}`} />
+                  ) : <Alert type="warning" showIcon message="计算未完成，请处理以下问题"
+                    description={<Space wrap>
+                      <Text>缺少人员：{integrityAudit.missing_people || 0} 人</Text>
+                      <Text>未识别或异常文件：{integrityAudit.unrecognized_files || 0} 个</Text>
+                      <Text>来源冲突：{integrityAudit.conflict_count || 0} 条</Text>
+                      <Text>自动补填：{integrityAudit.fallback_count || 0} 条</Text>
+                      <Text>同名待确认：{integrityAudit.same_name_groups || 0} 组</Text>
+                    </Space>} />}
+                  <Table size="small" rowKey={(row) => `${row.file_name}-${row.type}`} dataSource={integrityAudit.files} pagination={{ pageSize: 5 }} columns={[
+                    { title: '文件名', dataIndex: 'file_name' },
+                    { title: '类型', dataIndex: 'type' },
+                    { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={value === '正常' ? 'success' : 'error'}>{value}</Tag> },
+                    { title: '说明', dataIndex: 'detail' },
+                  ]} />
+                  {integrityAudit.issues?.length > 0 && <Alert type="error" showIcon message="计算未完成，请处理以下问题" description={integrityAudit.issues.map((item, index) => <div key={index}>{item.file_name} {item.person}：{item.detail}</div>)} />}
+                </Space>
+              )}
               {subsidyAudit?.missingAttendanceCount ? (
                 <Alert
                   type="warning"
@@ -2053,6 +2525,14 @@ const AttendanceToolbox: React.FC = () => {
                   showIcon
                   message={`法定节假日口径存在 ${subsidyAudit.holidayConflictCount} 个日期差异`}
                   description="本次已优先使用加班规则配置，差异日期已写入结果文件“异常审计”工作表。"
+                />
+              ) : null}
+              {parttimeAudit?.status === 'needs_review' ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="兼职汇总已生成，但存在待核对数据"
+                  description={`识别 ${parttimeAudit.rows} 人；系统补填 ${parttimeAudit.fallbackCount} 条；空白人员 ${parttimeAudit.blankCount} 人；来源冲突 ${parttimeAudit.conflictCount} 条。详情见“文件检查”和“数据检查”。`}
                 />
               ) : null}
               {formatRunStats(lastRun.stats as Record<string, unknown> | undefined).length > 0 && (
@@ -2187,25 +2667,7 @@ const AttendanceToolbox: React.FC = () => {
           </Space>
         </Col>
         <Col flex="0 0 auto">
-          <Space size={8} wrap>
-            {heroBadges.map((b) => (
-              <Tag
-                key={b.label}
-                icon={b.icon}
-                style={{
-                  borderRadius: 99,
-                  padding: '4px 12px',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  background: '#fff',
-                  border: '1px solid var(--color-border)',
-                  color: 'var(--color-text-secondary)',
-                }}
-              >
-                {b.label}
-              </Tag>
-            ))}
-          </Space>
+          <Text type="secondary" style={{ fontSize: 13 }}>上传对应 Excel → 规则校验 → 生成并下载结果</Text>
         </Col>
       </Row>
     </Card>
@@ -2213,7 +2675,8 @@ const AttendanceToolbox: React.FC = () => {
 
   const renderToolbar = () => (
     <Collapse
-      style={{ marginBottom: 16 }}
+      ghost
+      style={{ marginBottom: 0 }}
       items={[{
         key: 'templates',
         label: (
@@ -2246,224 +2709,154 @@ const AttendanceToolbox: React.FC = () => {
     />
   )
 
+  const renderFixedConfigListCard = (
+    key: typeof FIXED_CONFIG_LIST_KEYS[number],
+    title: string,
+    description: string,
+  ) => {
+    const names = parseNameList(fixedDraftValues[key])
+    const isDepartmentConfig = key === 'sub_dept_keywords'
+    const employeeByName = new Map<string, ToolboxEmployeeOption>()
+    const duplicateEmployeeNames = new Set<string>()
+    employeeOptions.forEach((employee) => {
+      const existing = employeeByName.get(employee.name)
+      if (existing) {
+        duplicateEmployeeNames.add(employee.name)
+        if (existing.status !== 'active' && employee.status === 'active') {
+          employeeByName.set(employee.name, employee)
+        }
+        return
+      }
+      employeeByName.set(employee.name, employee)
+    })
+    const options = isDepartmentConfig
+      ? departmentOptions
+      : Array.from(employeeByName.values()).map((employee) => ({
+        value: employee.name,
+        label: `${employee.name}（${employee.user_id}${employee.status === 'active' ? '，在职' : '，已停用'}）`,
+      }))
+    const selectedOptions = names
+      .filter((name) => !options.some((option) => option.value === name))
+      .map((name) => ({ value: name, label: `${name}（已保存）` }))
+    const missingSavedNames = names.filter((name) => !employeeByName.has(name) && !isDepartmentConfig)
+    return (
+      <div style={{ padding: '4px 0 16px' }}>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Space direction="vertical" size={2}>
+              <Text strong>{title}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>{description}</Text>
+            </Space>
+            <Tag color={names.length ? 'blue' : 'default'}>
+              {names.length ? `已选择 ${names.length} 项` : '未设置'}
+            </Tag>
+          </Space>
+          <Select
+            mode="multiple"
+            showSearch
+            allowClear
+            optionFilterProp="label"
+            optionLabelProp="label"
+            value={names}
+            options={[...selectedOptions, ...options]}
+            loading={fixedOptionsLoading}
+            disabled={!canOperate}
+            placeholder={isDepartmentConfig ? '搜索并选择部门' : '搜索并选择员工'}
+            notFoundContent={fixedOptionsLoading ? '正在加载列表…' : '暂无匹配项'}
+            popupMatchSelectWidth={false}
+            listHeight={480}
+            optionRender={(option) => (
+              <span
+                title={String(option.label || '')}
+                style={{ display: 'block', whiteSpace: 'normal', lineHeight: '20px', padding: '2px 0' }}
+              >
+                {option.label}
+              </span>
+            )}
+            styles={{ popup: { root: { minWidth: 420, maxWidth: 680 } } }}
+            style={{ width: '100%' }}
+            onChange={(values) => setFixedDraftValues((prev) => ({ ...prev, [key]: formatNameList(values) }))}
+          />
+          {!isDepartmentConfig && duplicateEmployeeNames.size > 0 && (
+            <Alert
+              type="info"
+              showIcon
+              message={`发现 ${duplicateEmployeeNames.size} 个同名员工`}
+              description="固定名单按姓名保存，同名员工会按同一姓名处理；如需区分，请先在组织数据中完善姓名或改用部门规则。"
+            />
+          )}
+          {missingSavedNames.length > 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              message={`有 ${missingSavedNames.length} 项已保存名单未在当前组织员工列表中找到`}
+              description={`${missingSavedNames.slice(0, 5).join('、')}${missingSavedNames.length > 5 ? '等' : ''}。可能已离职、停用或组织数据尚未同步，请确认后再保存。`}
+            />
+          )}
+          {names.length > 0 && (
+            <Space wrap size={[4, 4]} style={{ maxHeight: 132, overflowY: 'auto', width: '100%' }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>已选：</Text>
+              {names.map((name) => (
+                <Text key={name} type="secondary" style={{ fontSize: 12 }}>{name}</Text>
+              ))}
+            </Space>
+          )}
+        </Space>
+      </div>
+    )
+  }
+
   const renderFixedConfig = () => (
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          这些值已内置默认值，仅在人员/规则发生变化时修改
-        </Text>
-
-        <Row gutter={[16, 16]}>
-          <Col xs={24} md={8}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>特殊名单（实习生）</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>命中后写入"实习生请假明细"子表</Text>
-                <div style={{ marginTop: 4 }}>
-                  {(textValues.leave_special_names || '').split('、').filter(Boolean).map((name) => (
-                    <Tag key={name} color="blue" style={{ fontSize: 11, margin: '2px' }}>{name}</Tag>
-                  ))}
-                </div>
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={8}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>成都作息名单</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>部门名称不含"成都"但按成都作息计算的人员</Text>
-                <div style={{ marginTop: 4 }}>
-                  {(textValues.chengdu_schedule_names || '').split('、').filter(Boolean).map((name) => (
-                    <Tag key={name} color="green" style={{ fontSize: 11, margin: '2px' }}>{name}</Tag>
-                  ))}
-                </div>
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={8}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>产研部门关键字</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>用于识别产研休息日加班补贴</Text>
-                <div style={{ marginTop: 4 }}>
-                  {(textValues.sub_dept_keywords || '').split('、').filter(Boolean).map((name) => (
-                    <Tag key={name} color="orange" style={{ fontSize: 11, margin: '2px' }}>{name}</Tag>
-                  ))}
-                </div>
-              </Space>
-            </Card>
-          </Col>
-        </Row>
-
-        <Row gutter={[16, 16]}>
-          <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Space size={4}>
-                  <Text strong style={{ fontSize: 12 }}>花名册</Text>
-                  <Tag color="blue" style={{ fontSize: 11 }}>自动生成</Tag>
-                  {rosterSync.loading && <SyncOutlined spin />}
-                </Space>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {canOperate
-                    ? '页面加载时会使用最近一次组织同步数据自动生成，也可上传本地花名册'
-                    : '当前账号无操作权限，请上传本地花名册，或联系管理员开通权限'}
-                </Text>
-                {rosterSync.lastSyncAt && (
-                  <Text type="success" style={{ fontSize: 11 }}>
-                    上次生成：{rosterSync.lastSyncAt}
-                  </Text>
-                )}
-                {!rosterSync.loading && rosterSync.lastSyncAt && (
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    已自动回填到“加班明细 &gt; 花名册/员工信息表”和“最终汇总 &gt; 在职花名册”
-                  </Text>
-                )}
-                {rosterSync.error && (
-                  <Text type="danger" style={{ fontSize: 11 }}>
-                    生成失败：{rosterSync.error}
-                  </Text>
-                )}
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Space size={4}>
-                  <Text strong style={{ fontSize: 12 }}>异动流程</Text>
-                  <Tag color="blue" style={{ fontSize: 11 }}>自动同步</Tag>
-                  {transferSync.loading && <SyncOutlined spin />}
-                </Space>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {canDingtalkSync
-                    ? '页面加载时会自动尝试同步，也可上传本地异动流程表'
-                    : '当前账号无钉钉同步权限，请上传本地异动流程表，或联系管理员开通权限'}
-                </Text>
-                {transferSync.lastSyncAt && (
-                  <Text type="success" style={{ fontSize: 11 }}>
-                    上次同步：{transferSync.lastSyncAt}
-                  </Text>
-                )}
-                {!transferSync.loading && transferSync.lastSyncAt && (
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    已自动回填到“最终汇总 &gt; 异动流程表”
-                  </Text>
-                )}
-                {transferSync.error && (
-                  <Text type="danger" style={{ fontSize: 11 }}>
-                    同步失败：{transferSync.error}
-                  </Text>
-                )}
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={12}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Space size={4}>
-                  <Text strong style={{ fontSize: 12 }}>兼职月度打卡记录</Text>
-                  <Tag color="blue" style={{ fontSize: 11 }}>可同步</Tag>
-                  {parttimePunchSync.loading
-                    ? <SyncOutlined spin />
-                    : (
-                      <Tooltip title={!canDingtalkSync ? '你缺少考勤工具箱钉钉同步权限，需要联系管理员添加' : '仅按用户点击执行，不会自动抓取'}>
-                        <span style={{ display: 'inline-block' }}>
-                          <Button
-                            type="link"
-                            size="small"
-                            icon={<SyncOutlined />}
-                            disabled={!canDingtalkSync}
-                            onClick={() => void syncParttimeMonthlyPunch()}
-                            style={{ fontSize: 11, height: 22, padding: '0 4px' }}
-                          >
-                            {parttimePunchSync.error ? '重试抓取' : '从钉钉抓取'}
-                          </Button>
-                        </span>
-                      </Tooltip>
-                    )}
-                </Space>
-                <Space size={8} align="start" style={{ width: '100%' }}>
-                  <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>月份</Text>
-                  <DatePicker
-                    picker="month"
-                    value={parttimePunchMonth}
-                    onChange={(value) => setParttimePunchMonth(value)}
-                    format="YYYY-MM"
-                    allowClear={false}
-                    style={{ width: 120 }}
-                    placeholder="选择月份"
-                  />
-                </Space>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {canDingtalkSync
-                    ? '点击「从钉钉抓取」拉取该月打卡记录并匹配兼职花名册；失败后可手动上传本地 Excel，再次抓取会替换上一次结果'
-                    : '当前账号无钉钉同步权限，请上传本地月度打卡记录 Excel，或联系管理员开通权限'}
-                </Text>
-                {parttimePunchSync.lastSyncAt && (
-                  <Text type="success" style={{ fontSize: 11 }}>
-                    上次抓取：{parttimePunchSync.lastSyncAt}
-                  </Text>
-                )}
-                {!parttimePunchSync.loading && parttimePunchSync.lastSyncAt && (
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    已自动回填到「兼职汇总 &gt; 考勤明细」上传位
-                  </Text>
-                )}
-                {parttimePunchSync.error && (
-                  <Text type="danger" style={{ fontSize: 11 }}>
-                    抓取失败：{parttimePunchSync.error}
-                  </Text>
-                )}
-              </Space>
-            </Card>
-          </Col>
-        </Row>
-
-        <Row gutter={[16, 16]}>
-          <Col xs={24} md={8}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>晚走补贴人员</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>即使在排除部门中也允许按22点后打卡计算</Text>
-                <div style={{ marginTop: 4 }}>
-                  {(textValues.sub_late22_names || '').split('、').filter(Boolean).map((name) => (
-                    <Tag key={name} color="purple" style={{ fontSize: 11, margin: '2px' }}>{name}</Tag>
-                  ))}
-                </div>
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={8}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>兼职特殊人员</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>无请假按满勤处理</Text>
-                <div style={{ marginTop: 4 }}>
-                  {(textValues.part_special_names || '').split('、').filter(Boolean).map((name) => (
-                    <Tag key={name} color="cyan" style={{ fontSize: 11, margin: '2px' }}>{name}</Tag>
-                  ))}
-                </div>
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24} md={8}>
-            <Card size="small" style={{ background: 'var(--color-bg-layout)', borderRadius: 8 }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 12 }}>加班规则配置</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>倍数规则、部门匹配、排除名单</Text>
-                <div style={{ marginTop: 4 }}>
-                  <OvertimeRulesEditor
-                    value={appliedRules}
-                    onChange={setAppliedRules}
-                    canEdit={canEditRules}
-                    disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
-                  />
-                </div>
-              </Space>
-            </Card>
-          </Col>
-        </Row>
-      </Space>
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="这里是组织共享的固定配置"
+        description="保存后，同一组织的其他用户重新打开考勤工具箱即可看到；月份、花名册和异动流程仍在对应业务卡片中处理。"
+      />
+      <section style={{ border: '1px solid var(--color-border)', borderRadius: 10, background: 'var(--color-bg-card)', padding: '16px 20px 4px' }}>
+        <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 12 }}>
+          <Text strong style={{ fontSize: 16 }}>长期人员</Text>
+          <Space size={8}>
+            <Text type="secondary" style={{ fontSize: 12 }}>长期名单</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>适用于长期有效、不会随月份变化的人员。</Text>
+          </Space>
+        </Space>
+        {renderFixedConfigListCard('leave_special_names', '特殊人员名单', '请假明细中需要特殊处理的人员')}
+        {renderMaternityLeaveOverrides()}
+      </section>
+      <section style={{ border: '1px solid var(--color-border)', borderRadius: 10, background: 'var(--color-bg-card)', padding: '16px 20px 4px' }}>
+        <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 12 }}>
+          <Text strong style={{ fontSize: 16 }}>适用范围</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>按员工或部门指定考勤和补贴规则的适用对象。</Text>
+        </Space>
+        <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>按员工选择</Text>
+        {renderFixedConfigListCard('chengdu_schedule_names', '成都作息人员', '从当前组织员工中选择按成都作息规则计算的人员')}
+        {renderFixedConfigListCard('sub_late22_names', '晚走补贴人员', '从当前组织员工中选择允许按 22 点后打卡计算补贴的人员')}
+        {renderFixedConfigListCard('part_special_names', '兼职特殊人员', '从当前组织员工中选择兼职汇总中按特殊规则处理的人员')}
+        <Divider style={{ margin: '0 0 12px' }} />
+        <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>按部门选择</Text>
+        {renderFixedConfigListCard('sub_dept_keywords', '产研补贴部门', '从当前组织部门中选择适用产研补贴规则的部门')}
+      </section>
+      <section style={{ border: '1px solid var(--color-border)', borderRadius: 10, background: 'var(--color-bg-card)', padding: '16px 20px' }}>
+        <Space align="center" style={{ width: '100%', justifyContent: 'space-between', marginBottom: 12 }}>
+          <Space direction="vertical" size={4}>
+            <Text strong style={{ fontSize: 16 }}>加班规则</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>可直接预览和编辑，保存固定配置后对组织内用户生效。</Text>
+          </Space>
+          <Tag color={appliedRules.source === 'custom' ? 'success' : 'default'}>
+            {appliedRules.source === 'custom' ? '自定义规则' : '默认规则'}
+          </Tag>
+        </Space>
+        <OvertimeRulesEditor
+          value={appliedRules}
+          onChange={setAppliedRules}
+          canEdit={canEditRules && canOperate}
+          disabledReason="你缺少考勤工具箱规则编辑权限，需要联系管理员添加"
+        />
+      </section>
+      {!canOperate && <Alert type="warning" showIcon message="当前为只读模式" description="你可以查看配置，但需要考勤工具箱操作权限才能修改并保存。" />}
+    </Space>
   )
 
   const wizardCurrent = Math.max(
@@ -2480,81 +2873,171 @@ const AttendanceToolbox: React.FC = () => {
       {messageContextHolder}
       {renderHero()}
 
+      <Row gutter={[20, 20]} align="top">
+        <Col xs={24} xl={24}>
+          <section
+            style={{
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-lg)',
+              background: 'var(--color-bg-card)',
+              padding: '16px',
+            }}
+          >
+            <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 14 }}>
+              <Text strong style={{ fontSize: 16 }}>配置与准备</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>先确认长期配置和模板，再进入下面的月末处理任务。</Text>
+            </Space>
+            <Card
+              size="small"
+              data-testid="attendance-toolbox-wizard"
+              style={{
+                marginBottom: 16,
+                borderRadius: 'var(--radius-lg)',
+                border: '1px solid var(--color-border)',
+                display: 'none',
+              }}
+              styles={{ body: { padding: '14px 16px' } }}
+            >
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <Space wrap>
+                  <Text strong>月末结账向导</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    推荐顺序；点击步骤可切换模块，不强制锁步
+                  </Text>
+                </Space>
+                <Steps
+                  direction="vertical"
+                  size="small"
+                  current={wizardCurrent >= 0 ? wizardCurrent : 0}
+                  onChange={(index) => {
+                    const step = MONTH_END_WIZARD_STEPS[index]
+                    if (step) setActiveModule(step.key)
+                  }}
+                  items={MONTH_END_WIZARD_STEPS.map((step) => ({
+                    title: step.title,
+                    description: step.hint,
+                    status: completedModules[step.key]
+                      ? 'finish'
+                      : step.key === activeModule
+                        ? 'process'
+                        : 'wait',
+                    icon: completedModules[step.key] ? <CheckCircleOutlined /> : undefined,
+                  }))}
+                />
+              </Space>
+            </Card>
+
       <Card
         size="small"
-        data-testid="attendance-toolbox-wizard"
         style={{
-          marginBottom: 16,
+          marginBottom: 8,
           borderRadius: 'var(--radius-lg)',
           border: '1px solid var(--color-border)',
+          background: 'var(--color-bg-card)',
         }}
-        styles={{ body: { padding: '14px 16px' } }}
+        styles={{ body: { padding: '10px 14px' } }}
       >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Space wrap>
-            <Text strong>月末结账向导</Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              推荐顺序；点击步骤可切换模块，不强制锁步
-            </Text>
+        <Space
+          align="center"
+          style={{ width: '100%', justifyContent: 'space-between' }}
+          wrap
+        >
+          <Space size={10}>
+            <FileProtectOutlined style={{ color: 'var(--color-primary)', fontSize: 16 }} />
+            <Space direction="vertical" size={0}>
+              <Text strong>固定配置</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                长期名单和加班规则
+              </Text>
+            </Space>
           </Space>
-          <Steps
+          <Button
+            type="link"
             size="small"
-            current={wizardCurrent >= 0 ? wizardCurrent : 0}
-            onChange={(index) => {
-              const step = MONTH_END_WIZARD_STEPS[index]
-              if (step) setActiveModule(step.key)
-            }}
-            items={MONTH_END_WIZARD_STEPS.map((step) => ({
-              title: step.title,
-              description: step.hint,
-              status: completedModules[step.key]
-                ? 'finish'
-                : step.key === activeModule
-                  ? 'process'
-                  : 'wait',
-              icon: completedModules[step.key] ? <CheckCircleOutlined /> : undefined,
-            }))}
-          />
+            onClick={() => setFixedConfigOpen(true)}
+            aria-label="打开固定配置"
+          >
+            打开配置
+          </Button>
         </Space>
       </Card>
-
-      <Collapse
-        style={{ marginBottom: 16 }}
-        items={[{
-          key: 'fixed-config',
-          label: (
-            <Space>
-              <FileProtectOutlined style={{ color: 'var(--color-primary)' }} />
-              <Text strong>固定配置（名单 / 同步源）</Text>
-              <Text type="secondary">默认折叠，仅在人员或规则变化时展开</Text>
+      <Drawer
+        title={
+          <Space>
+            <FileProtectOutlined style={{ color: 'var(--color-primary)' }} />
+            <span>固定配置</span>
+          </Space>
+        }
+        placement="right"
+        width="min(720px, 100vw)"
+        open={fixedConfigOpen}
+        onClose={() => setFixedConfigOpen(false)}
+        destroyOnHidden={false}
+        loading={configLoading}
+        footer={(
+          <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+            <Button onClick={handleCancelFixedConfig} disabled={!configDirty || configSaving}>取消修改</Button>
+            <Button
+              type="primary"
+              onClick={() => void handleSaveFixedConfig()}
+              loading={configSaving}
+              disabled={!canOperate || !configDirty}
+            >
+              保存配置
+            </Button>
+          </Space>
+        )}
+        styles={{
+          body: {
+            padding: 20,
+            background: 'var(--color-bg-layout)',
+            overflowY: 'auto',
+          },
+        }}
+      >
+        {fixedConfigOpen ? renderFixedConfig() : null}
+      </Drawer>
+            {renderToolbar()}
+          </section>
+        </Col>
+        <Col xs={24} xl={24}>
+          <section
+            style={{
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-lg)',
+              background: 'var(--color-bg-card)',
+              padding: '0 16px 16px',
+            }}
+          >
+            <Space direction="vertical" size={4} style={{ width: '100%', paddingTop: 16 }}>
+              <Text strong style={{ fontSize: 16 }}>月末处理</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>选择一个任务，上传或同步数据后计算并下载结果。</Text>
             </Space>
-          ),
-          children: renderFixedConfig(),
-        }]}
-      />
-      {renderToolbar()}
-      <Tabs
-        size="large"
-        activeKey={activeModule}
-        onChange={(key) => setActiveModule(key as ToolboxModuleKey)}
-        items={modules.map((item) => ({
-          key: item.key,
-          label: (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              {completedModules[item.key] ? <CheckCircleOutlined style={{ color: 'var(--color-success)' }} /> : null}
-              {item.key === 'final'
-                ? <CloudDownloadOutlined />
-                : <FileExcelOutlined />}
-              {item.title}
-            </span>
-          ),
-          children: (
-            <div style={{ paddingTop: 8 }}>
-              {renderModule(item)}
-            </div>
-          ),
-        }))}
-      />
+            <Tabs
+              size="large"
+              activeKey={activeModule}
+              onChange={(key) => setActiveModule(key as ToolboxModuleKey)}
+              items={modules.map((item) => ({
+                key: item.key,
+                label: (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {item.key === 'final' ? <span style={{ borderLeft: '1px solid var(--color-border)', paddingLeft: 18 }} /> : null}
+                    {item.key === 'final'
+                      ? <CloudDownloadOutlined />
+                      : <FileExcelOutlined />}
+                    {item.title}
+                  </span>
+                ),
+                children: (
+                  <div style={{ paddingTop: 4 }}>
+                    {renderModule(item)}
+                  </div>
+                ),
+              }))}
+            />
+          </section>
+        </Col>
+      </Row>
     </PageContainer>
   )
 }

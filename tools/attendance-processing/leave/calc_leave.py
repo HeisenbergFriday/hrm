@@ -7,7 +7,8 @@ calc_leave.py
   步骤一（清洗，内存处理，不生成中间文件）：
     过滤审批状态/结果，拆分部门层级，规范化时长字段。
     过滤规则：
-      - 先按审批编号选择版本，再剔除撤销/拒绝；未知、审批中、已修改状态进入复核
+      - 自动同步按流程码+审批编号+发起人钉钉ID选择版本，再剔除撤销/拒绝
+      - 旧人工表缺少技术身份列时继续按审批编号选择版本
 
   步骤二（计算）：
     根据 作息表.xlsx 工作日补充三个字段：
@@ -17,6 +18,8 @@ calc_leave.py
 计算规则（由行政沟通确认）：
   - 普通同月请假：系统与作息时长一致自动通过，否则待确认
   - 普通跨月小时制：整段系统时长为总账，保存整段日分摊，仅输出目标月份额
+  - 产检假仅按审批完成且同意的申请单时长入账：小时按小时/8天，天数直接取申请天数；不读取作息和打卡
+  - 婚假按审批完成且同意的申请单时长入账：申请天数优先，小时按8小时/1天；跨月只保留目标月份份额
   - 无效时长、未知口径、审批不明确、重叠审批进入异常清单，不写可入账值
   - 产假按作息表应出勤日计算，不按自然日计算
   - 陪产假、丧假按自然日，小时列留空；其他未明确特殊假须人工确认口径
@@ -93,6 +96,10 @@ ROW_APPROVAL_STATUS = 12
 ROW_APPROVAL_RESULT = 13
 ROW_IS_INTERN = 14
 ROW_SOURCE_ROW = 15
+ROW_APPROVAL_INSTANCE_ID = 16
+ROW_APPROVAL_PROCESS_CODE = 17
+ROW_APPROVAL_ORIGINATOR_USER_ID = 18
+ROW_VERSION_HINT = 19
 
 MATERNITY_OVERRIDE_APPROVAL_PREFIX = "MANUAL-MATERNITY-"
 
@@ -102,7 +109,17 @@ REVIEW_COLUMNS = (
     "复核状态", "异常原因", "确认请假时长", "确认请假天数", "确认说明",
     "日分摊", "确认日分摊", "计算月份", "计量口径", "作息时长", "确认整段时长",
 )
+APPROVAL_IDENTITY_COLUMNS = (
+    "审批实例ID", "审批流程码", "发起人钉钉UserID",
+)
 ORDINARY_HOUR_LEAVE_TYPES = {"事假", "病假", "年假", "调休"}
+APPLICATION_DURATION_LEAVE_TYPES = {"产检假"}
+MARRIAGE_LEAVE_TYPE = "婚假"
+FULL_DAY_HOURS = 8.0
+
+
+def row_value(row, index, default=None):
+    return row[index] if len(row) > index else default
 
 
 def finite_nonnegative(value):
@@ -151,8 +168,8 @@ def review_leave_record(row, schedule_ctx, *, is_chengdu=False, is_all_month_sch
     """Return month-specific quantities, daily ledger and explicit review reasons."""
     start, end = normalized_leave_interval(row[ROW_START], row[ROW_END])
     reasons = []
-    if len(row) > 16 and row[16]:
-        reasons.append(str(row[16]))
+    if row_value(row, ROW_VERSION_HINT):
+        reasons.append(str(row_value(row, ROW_VERSION_HINT)))
     manual_maternity = str(row[ROW_APPROVAL_ID] or "").startswith(MATERNITY_OVERRIDE_APPROVAL_PREFIX)
     if not str(row[ROW_APPROVAL_ID] or "").strip():
         reasons.append("缺少审批编号")
@@ -171,6 +188,57 @@ def review_leave_record(row, schedule_ctx, *, is_chengdu=False, is_all_month_sch
     if start is None or end is None or start > end:
         return None, None, daily, unit, None, reasons + ["起止时间缺失、无法解析或倒置"]
     first, last = schedule_ctx["month_start"], schedule_ctx["month_end"]
+
+    # 产检假按申请单原始时长入账，不读取作息、打卡或实际出勤结果。
+    if kind in APPLICATION_DURATION_LEAVE_TYPES:
+        application_unit, application_amount = parse_application_duration(row[ROW_SYS_DURATION])
+        if application_amount is None:
+            reasons.append("产检假申请时长为空或单位无法识别")
+            return None, None, daily, "待明确", None, reasons
+        unit = application_unit
+        remaining = application_amount
+        cur = max(start.date(), first)
+        end_date = min(end.date(), last)
+        while cur <= end_date and remaining > 0.000001:
+            capacity = 8.0 if unit == "小时" else 1.0
+            quantity = _round2(min(capacity, remaining))
+            if quantity > 0:
+                if unit == "小时":
+                    daily[cur.isoformat()] = {
+                        "hours": quantity,
+                        "days": _round2(quantity / 8),
+                    }
+                else:
+                    daily[cur.isoformat()] = {"hours": None, "days": quantity}
+                remaining = _round2(remaining - quantity)
+            cur += timedelta(days=1)
+        if remaining > 0.000001:
+            reasons.append("产检假申请时长超过目标月交集可分摊范围")
+            return None, None, daily, unit, None, reasons
+        if unit == "小时":
+            return application_amount, _round2(application_amount / 8), daily, unit, application_amount, reasons
+        return None, application_amount, daily, unit, None, reasons
+
+    # 婚假按申请单时长计算：明确天数优先，只有没有天数时才使用小时数；
+    # 跨月只保留目标月份的日分摊，不读取作息或打卡结果。
+    if kind == MARRIAGE_LEAVE_TYPE:
+        application_unit, application_amount = parse_application_duration(row[ROW_SYS_DURATION])
+        if application_amount is None:
+            reasons.append("缺少申请时长依据")
+            return None, None, daily, "小时", None, reasons
+        full_daily, remaining = allocate_application_duration_daily(
+            start.date(), end.date(), application_unit, application_amount,
+        )
+        if remaining > 0.000001:
+            reasons.append("申请时长超过请假日期范围")
+            return None, None, daily, "小时", None, reasons
+        for day, item in full_daily.items():
+            if first <= day <= last:
+                daily[day.isoformat()] = item
+        final_hours = _round2(sum(item["hours"] for item in daily.values()))
+        final_days = _round2(final_hours / 8)
+        return final_hours, final_days, daily, "小时", final_hours, reasons
+
     calendar_key = "chengdu_working_days" if is_chengdu else "main_working_days"
     days = schedule_ctx[calendar_key]
     if maternity:
@@ -184,6 +252,15 @@ def review_leave_record(row, schedule_ctx, *, is_chengdu=False, is_all_month_sch
         if value:
             daily[cur.isoformat()] = {"days": value, "hours": None if natural else _round2(hours)}
         cur += timedelta(days=1)
+    if not natural and not maternity and daily:
+        eligible_days = [day for day, item in daily.items() if (item.get("hours") or 0) > 0]
+        full_day = kind in ORDINARY_HOUR_LEAVE_TYPES and is_full_day_duration(
+            row[ROW_SYS_DURATION], len(eligible_days)
+        )
+        for item in daily.values():
+            raw_hours = item.get("hours") or 0
+            item["hours"] = FULL_DAY_HOURS if full_day and raw_hours > 0 else _round_leave_hours(raw_hours)
+            item["days"] = _round2(item["hours"] / FULL_DAY_HOURS) if item["hours"] else 0
     schedule_hours = _round2(sum(item["hours"] or 0 for item in daily.values())) if not natural else None
     raw_system = row[ROW_SYS_DURATION]
     system_days = parse_day_text(raw_system)
@@ -208,8 +285,14 @@ def review_leave_record(row, schedule_ctx, *, is_chengdu=False, is_all_month_sch
     if kind not in ORDINARY_HOUR_LEAVE_TYPES:
         reasons.append("假别计算口径未明确")
     if system_days is not None:
-        reasons.append("普通请假系统单位为天，需确认小时口径")
-        system_hours = None
+        eligible_days = sum(1 for item in daily.values() if (item.get("hours") or 0) > 0)
+        if is_full_day_duration(raw_system, eligible_days):
+            system_hours = system_days * FULL_DAY_HOURS
+        else:
+            reasons.append("普通请假系统单位为天，需确认小时口径")
+            system_hours = None
+    elif system_hours is not None:
+        system_hours = _round_leave_hours(system_hours)
     same_month = (start.year, start.month) == (end.year, end.month)
     if system_hours is not None and same_month:
         if abs(system_hours - schedule_hours) > 0.000001:
@@ -371,12 +454,52 @@ def has_time_component(val):
 
 
 def parse_day_text(sys_val):
-    """从 '4天'、'0.5天' 等文本中提取天数，失败返回 None。"""
+    """从天数文本中提取天数；“整天/全天”按 1 天处理。"""
     if isinstance(sys_val, str):
-        m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*天', sys_val.strip())
+        text = sys_val.strip()
+        if text in {"整天", "全天"}:
+            return 1.0
+        m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*天', text)
         if m:
             return finite_nonnegative(m.group(1))
     return None
+
+
+def parse_application_duration(value):
+    """解析申请单时长，返回（计量单位、数量）。"""
+    if value is None or isinstance(value, bool) or str(value).strip() == "":
+        return None, None
+    if isinstance(value, (int, float)):
+        amount = finite_nonnegative(value)
+        return ("小时", _round2(amount)) if amount is not None else (None, None)
+
+    text = str(value).strip()
+    number = r"\d+(?:\.\d+)?"
+    if re.fullmatch(number, text):
+        return "小时", _round2(float(text))
+    match = re.fullmatch(rf"({number})\s*(?:小时|钟头|h|H)", text)
+    if match:
+        return "小时", _round2(float(match.group(1)))
+    match = re.fullmatch(rf"({number})\s*(?:天|日|d|D)", text)
+    if match:
+        return "自然日", _round2(float(match.group(1)))
+    return None, None
+
+
+def allocate_application_duration_daily(start_day, end_day, unit, amount):
+    """按申请日期逐日分摊申请时长，返回完整日账和未分摊余量。"""
+    daily = {}
+    remaining = float(amount)
+    current = start_day
+    while current <= end_day and remaining > 0.000001:
+        capacity = 8.0 if unit == "小时" else 1.0
+        quantity = _round2(min(capacity, remaining))
+        if quantity > 0:
+            hours = quantity if unit == "小时" else _round2(quantity * 8)
+            daily[current] = {"hours": hours, "days": _round2(hours / 8)}
+            remaining = _round2(remaining - quantity)
+        current += timedelta(days=1)
+    return daily, remaining
 
 
 def t2min(t):
@@ -742,6 +865,23 @@ def _round_to_half_hour(hours):
     return math.ceil(hours * 2) / 2
 
 
+def _round_leave_hours(hours):
+    """按请假口径向上取到半小时，并保持两位小数。"""
+    value = finite_nonnegative(hours)
+    return _round2(_round_to_half_hour(value)) if value else 0.0
+
+
+def is_full_day_duration(raw_system_duration, eligible_day_count):
+    """判断审批时长是否表达为覆盖所有请假日的整天。"""
+    if eligible_day_count <= 0:
+        return False
+    days = parse_day_text(raw_system_duration)
+    if days is not None:
+        return abs(days - eligible_day_count) < 0.000001
+    hours = finite_nonnegative(raw_system_duration)
+    return hours is not None and abs(hours - eligible_day_count * FULL_DAY_HOURS) < 0.000001
+
+
 def _dept_text(value):
     return str(value).strip() if value is not None else ""
 
@@ -925,6 +1065,21 @@ def calc_final_fields(row, schedule_ctx, is_chengdu=False, is_all_month_schedule
     d_start = dt_start.date()
     d_end   = dt_end.date()
 
+    if str(leave_type or "").strip() == MARRIAGE_LEAVE_TYPE:
+        application_unit, application_amount = parse_application_duration(sys_val)
+        if application_amount is None:
+            return None, None, "缺少申请时长依据"
+        full_daily, remaining = allocate_application_duration_daily(
+            d_start, d_end, application_unit, application_amount,
+        )
+        if remaining > 0.000001:
+            return None, None, "申请时长超过请假日期范围"
+        target_hours = _round2(sum(
+            item["hours"] for day, item in full_daily.items()
+            if month_start <= day <= month_end
+        ))
+        return target_hours, _round2(target_hours / 8), None
+
     # 陪产假、丧假按自然日计算
     if is_natural_day_leave(leave_type):
         # 计算目标月份内的自然日天数
@@ -1079,6 +1234,11 @@ def normalize_employee_id(emp_id):
     if re.fullmatch(r'\d+\.0+', text):
         return text.split('.', 1)[0]
     return text
+
+
+def normalize_approval_identity(value):
+    """Keep approval identifiers textual, including long numeric values."""
+    return normalize_employee_id(value)
 
 
 def parse_special_employee_names(text: str | None) -> tuple[str, ...]:
@@ -1725,13 +1885,16 @@ def clean_export(export_file: str) -> list[tuple]:
     读取请假系统导出文件，按状态过滤并整理为标准内存格式，返回行列表。
     第0行为表头元组，后续为数据行元组。
 
-    先按编号/版本时间选最新状态，再排除撤销和拒绝；其他状态保留供复核。
+    自动同步表按流程码+审批编号+发起人钉钉ID归组版本；审批实例ID
+    保证单条记录唯一。旧人工表没有技术身份列时继续按审批编号归组。
+    选出最新状态后再排除撤销和拒绝；其他状态保留供复核。
 
     返回列顺序：
       发起人工号 / 发起人姓名 / 一级部门 / 二级部门 / 三级部门
       / 请假类型 / 开始时间 / 结束时间 / 系统时长
       / 发起时间 / 完成时间 / 审批编号 / 审批状态 / 审批结果
-      / 是否实习生 / 源文件行号
+      / 是否实习生 / 源文件行号 / 审批实例ID / 审批流程码
+      / 发起人钉钉UserID / 审批版本提示
     """
     if not os.path.exists(export_file):
         raise FileNotFoundError(f"未找到请假系统导出文件：{export_file}")
@@ -1747,9 +1910,12 @@ def clean_export(export_file: str) -> list[tuple]:
     # 按表头动态定位列索引，兼容列顺序变动
     header = rows[0]
     col = compact_header_row(header)
+    duration_col = find_column_by_candidates(col, ("请假时长", "时长"))
     required_cols = {"审批状态", "审批结果", "发起人工号", "发起人姓名",
-                     "发起人部门", "请假类型", "开始时间", "结束时间", "时长", "审批编号"}
+                     "发起人部门", "请假类型", "开始时间", "结束时间", "审批编号"}
     missing = {name for name in required_cols if normalize_header_name(name) not in col}
+    if duration_col is None:
+        missing.add("请假时长/时长")
     if missing:
         raise ValueError(f"请假系统导出文件缺少必要字段：{missing}")
 
@@ -1758,13 +1924,16 @@ def clean_export(export_file: str) -> list[tuple]:
         ('发起人工号', '发起人姓名', '一级部门', '二级部门', '三级部门',
          '请假类型', '开始时间', '结束时间', '系统时长',
          '发起时间', '完成时间', '审批编号', '审批状态', '审批结果',
-         '是否实习生', '源文件行号', '审批版本提示')
+         '是否实习生', '源文件行号', '审批实例ID', '审批流程码',
+         '发起人钉钉UserID', '审批版本提示')
     ]
 
     kept = skipped = 0
     revoked = 0
     approval_deduped = 0
-    staged_by_approval: dict[str, tuple] = {}
+    staged_by_version: dict[tuple, tuple] = {}
+    staged_by_instance: dict[str, tuple] = {}
+    originators_by_business: dict[tuple[str, str], set[str]] = {}
     ambiguous_modified = set()
     for source_row_num, row in enumerate(rows[1:], start=2):
         if not any(row):       # 全空行跳过
@@ -1780,12 +1949,26 @@ def clean_export(export_file: str) -> list[tuple]:
         leave_type = row[col[normalize_header_name("请假类型")]]
         start_time = row[col[normalize_header_name("开始时间")]]
         end_time   = row[col[normalize_header_name("结束时间")]]
-        duration   = parse_export_duration(row[col[normalize_header_name("时长")]])
+        duration   = parse_export_duration(row[col[duration_col]])
         launch_key = normalize_header_name("发起时间")
         finish_key = normalize_header_name("完成时间")
         launch_time = row[col[launch_key]] if launch_key in col else None
         finish_time = row[col[finish_key]] if finish_key in col else None
-        approval_id = row[col[normalize_header_name("审批编号")]]
+        approval_id = normalize_approval_identity(
+            row[col[normalize_header_name("审批编号")]]
+        )
+        instance_col = normalize_header_name("审批实例ID")
+        process_col = normalize_header_name("审批流程码")
+        originator_col = normalize_header_name("发起人钉钉UserID")
+        approval_instance_id = normalize_approval_identity(
+            row[col[instance_col]] if instance_col in col else None
+        )
+        approval_process_code = normalize_approval_identity(
+            row[col[process_col]] if process_col in col else None
+        )
+        approval_originator_user_id = normalize_approval_identity(
+            row[col[originator_col]] if originator_col in col else None
+        )
         is_intern = False
         if intern_col_name:
             is_intern = is_intern_from_position(row[col[intern_col_name]])
@@ -1795,38 +1978,83 @@ def clean_export(export_file: str) -> list[tuple]:
             leave_type, start_time, end_time, duration,
             launch_time, finish_time, approval_id, status, result,
             is_intern, source_row_num,
+            approval_instance_id, approval_process_code, approval_originator_user_id,
         )
-        approval_key = str(approval_id or "").strip() or f"__missing_id_row_{source_row_num}"
+        if approval_instance_id:
+            instance_row = staged_by_instance.get(approval_instance_id)
+            if instance_row is not None and (
+                instance_row[ROW_EMP_ID] != cleaned_row[ROW_EMP_ID]
+                or instance_row[ROW_EMP_NAME] != cleaned_row[ROW_EMP_NAME]
+                or (
+                    instance_row[ROW_APPROVAL_ORIGINATOR_USER_ID]
+                    and cleaned_row[ROW_APPROVAL_ORIGINATOR_USER_ID]
+                    and instance_row[ROW_APPROVAL_ORIGINATOR_USER_ID]
+                    != cleaned_row[ROW_APPROVAL_ORIGINATOR_USER_ID]
+                )
+            ):
+                raise ValueError("同一审批实例ID对应不同员工，请核对钉钉审批源数据。")
+            if instance_row is None:
+                staged_by_instance[approval_instance_id] = cleaned_row
+
+        if approval_id and approval_originator_user_id:
+            version_key = (
+                "approval",
+                approval_process_code,
+                approval_id,
+                approval_originator_user_id,
+            )
+            business_key = (approval_process_code, approval_id)
+            originators_by_business.setdefault(business_key, set()).add(
+                approval_originator_user_id
+            )
+        elif approval_id:
+            # Legacy/manual files do not contain stable DingTalk identity fields.
+            # Preserve the historical fail-closed behavior instead of guessing.
+            version_key = ("legacy_approval", approval_id)
+        elif approval_instance_id:
+            version_key = ("instance", approval_process_code, approval_instance_id)
+        else:
+            version_key = ("__missing_id_row__", source_row_num)
         if str(status or "").strip() == "已修改" and to_datetime(finish_time) is None:
-            ambiguous_modified.add(approval_key)
-        existing_row = staged_by_approval.get(approval_key)
-        if existing_row is not None and (
+            ambiguous_modified.add(version_key)
+        existing_row = staged_by_version.get(version_key)
+        if version_key[0] == "legacy_approval" and existing_row is not None and (
             existing_row[ROW_EMP_ID] != cleaned_row[ROW_EMP_ID]
             or existing_row[ROW_EMP_NAME] != cleaned_row[ROW_EMP_NAME]
         ):
             raise ValueError("同一审批编号对应不同员工，请核对源表审批编号。")
         if existing_row is None:
-            staged_by_approval[approval_key] = cleaned_row
+            staged_by_version[version_key] = cleaned_row
         elif is_better_leave_row(existing_row, cleaned_row):
-            staged_by_approval[approval_key] = cleaned_row
+            staged_by_version[version_key] = cleaned_row
             approval_deduped += 1
         else:
             approval_deduped += 1
         kept += 1
 
-    deduped_rows = sorted(staged_by_approval.values(), key=lambda item: item[ROW_SOURCE_ROW])
-    for row in deduped_rows:
-        if is_revoked_approval(row[ROW_APPROVAL_STATUS], row[ROW_APPROVAL_RESULT]) or str(row[ROW_APPROVAL_RESULT] or "").strip() == "拒绝":
+    deduped_entries = sorted(
+        staged_by_version.items(), key=lambda item: item[1][ROW_SOURCE_ROW]
+    )
+    for version_key, row in deduped_entries:
+        is_maternity_checkup = str(row[ROW_LEAVE_TYPE] or "").strip() in APPLICATION_DURATION_LEAVE_TYPES
+        if is_revoked_approval(row[ROW_APPROVAL_STATUS], row[ROW_APPROVAL_RESULT]) or (
+            str(row[ROW_APPROVAL_RESULT] or "").strip() == "拒绝" and not is_maternity_checkup
+        ):
             skipped += 1
             revoked += 1
             continue
-        hint = "审批已修改但缺少完成时间，版本待确认" if str(row[ROW_APPROVAL_ID] or "").strip() in ambiguous_modified else ""
+        hint = "审批已修改但缺少完成时间，版本待确认" if version_key in ambiguous_modified else ""
         out_rows.append(row + (hint,))
     print(f'[清洗] 保留 {kept} 行，剔除 {skipped} 行（含不符合审批状态及"完成+拒绝"数据）')
     if revoked:
         print(f'[清洗] 其中已撤销记录 {revoked} 行')
     if approval_deduped:
-        print(f'[清洗] 已按审批编号保留更有效记录，去重 {approval_deduped} 行')
+        print(f'[清洗] 已按审批版本组保留更有效记录，去重 {approval_deduped} 行')
+    business_collisions = sum(
+        1 for originators in originators_by_business.values() if len(originators) > 1
+    )
+    if business_collisions:
+        print(f'[清洗] 检测到 {business_collisions} 个审批编号跨发起人复用，已按审批实例分别保留')
     if intern_col_name:
         print(f'[清洗] 实习生识别字段：{intern_col_name}')
     else:
@@ -1928,6 +2156,7 @@ def merge_maternity_leave_overrides(
             None, None, None,
             f"{MATERNITY_OVERRIDE_APPROVAL_PREFIX}{index}",
             "完成", "同意", False, next_source_row,
+            "", "", "",
         ))
         next_source_row += 1
         added += 1
@@ -2016,11 +2245,18 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
     offsite_matched = 0
     offsite_upload_duration = 0
     offsite_system_duration = 0
+    maternity_valid = []
+    maternity_pending = []
 
     for i, row in enumerate(src_rows):
         if i == 0:
             # 写表头，追加三列
-            new_header = list(row[:9]) + ['最终请假时长', '最终请假天数', '备注'] + list(REVIEW_COLUMNS)
+            new_header = (
+                list(row[:9])
+                + ['最终请假时长', '最终请假天数', '备注']
+                + list(REVIEW_COLUMNS)
+                + list(APPROVAL_IDENTITY_COLUMNS)
+            )
             ws_fulltime.append(new_header)
             ws_intern.append(new_header)
             ws_issues.append(new_header)
@@ -2041,11 +2277,12 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
         final_h, final_days, daily, unit, schedule_hours, reasons = review_leave_record(
             row, schedule_ctx, is_chengdu=is_cd, is_all_month_scheduled=is_all_month_scheduled,
         )
+        is_marriage = str(row[ROW_LEAVE_TYPE] or "").strip() == MARRIAGE_LEAVE_TYPE
         remark = None
         start, end = normalized_leave_interval(row[ROW_START], row[ROW_END])
-        if start and end and (start.year, start.month) != (end.year, end.month) and unit == "小时" and not reasons:
+        if start and end and (start.year, start.month) != (end.year, end.month) and unit == "小时" and not reasons and not is_marriage:
             remark = "跨月按系统时长分摊"
-        if offsite_rule:
+        if offsite_rule and str(row[ROW_LEAVE_TYPE] or "").strip() not in APPLICATION_DURATION_LEAVE_TYPES and str(row[ROW_LEAVE_TYPE] or "").strip() != MARRIAGE_LEAVE_TYPE:
             offsite_matched += 1
             if offsite_rule.get("hours") is not None:
                 offsite_upload_duration += 1
@@ -2063,21 +2300,41 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
                 remark = "长期产假人工兜底"
         if i - 1 in overlap_indexes:
             reasons.append("同一员工不同审批时段重叠")
-        state = "待确认" if reasons else "自动通过"
+        state = "待确认" if reasons else ("已确认" if is_marriage else "自动通过")
         reason_text = "；".join(dict.fromkeys(reasons))
         if reasons:
             final_h = final_days = None
             remark = "待确认：" + reason_text
+        if str(row[ROW_LEAVE_TYPE] or "").strip() in APPLICATION_DURATION_LEAVE_TYPES:
+            if reasons:
+                maternity_pending.append({
+                    "employee": normalize_employee_name(row[ROW_EMP_NAME]) or normalize_employee_id(row[ROW_EMP_ID]) or "未知员工",
+                    "approval_id": str(row[ROW_APPROVAL_ID] or "").strip(),
+                    "reason": reason_text or "待确认",
+                })
+            else:
+                maternity_valid.append((
+                    normalize_employee_name(row[ROW_EMP_NAME]) or normalize_employee_id(row[ROW_EMP_ID]) or "未知员工",
+                    final_h,
+                    final_days,
+                ))
         is_intern, intern_match_source = decide_intern_target(
             row, employee_type_map, special_employee_name_set
         )
         target_ws = ws_intern if is_intern else ws_fulltime
+        marriage_confirm_note = "婚假按申请单时长自动确认" if is_marriage and not reasons else None
         output_row = list(row[:9]) + [final_h, final_days, remark] + [
             row[ROW_APPROVAL_ID], row[ROW_APPROVAL_STATUS], row[ROW_APPROVAL_RESULT],
             row[ROW_LAUNCH_TIME], row[ROW_FINISH_TIME], state, reason_text,
-            None, None, None, json.dumps(daily, ensure_ascii=False, sort_keys=True), None,
+            final_h if is_marriage and not reasons else None,
+            final_days if is_marriage and not reasons else None,
+            marriage_confirm_note,
+            json.dumps(daily, ensure_ascii=False, sort_keys=True), None,
             f'{schedule_ctx["year"]:04d}-{schedule_ctx["month"]:02d}', unit, schedule_hours,
             None,
+            row_value(row, ROW_APPROVAL_INSTANCE_ID, ""),
+            row_value(row, ROW_APPROVAL_PROCESS_CODE, ""),
+            row_value(row, ROW_APPROVAL_ORIGINATOR_USER_ID, ""),
         ]
         target_ws.append(output_row)
         if reasons:
@@ -2108,6 +2365,12 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
         for label in ("备注", "异常原因", "确认说明", "日分摊", "确认日分摊"):
             column = new_header.index(label) + 1
             sheet.column_dimensions[openpyxl.utils.get_column_letter(column)].width = 45
+        for label in APPROVAL_IDENTITY_COLUMNS:
+            column = new_header.index(label) + 1
+            column_letter = openpyxl.utils.get_column_letter(column)
+            sheet.column_dimensions[column_letter].hidden = True
+            for row_index in range(2, sheet.max_row + 1):
+                sheet.cell(row_index, column).number_format = "@"
         if sheet is not ws_issues:
             validation = DataValidation(type="list", formula1='"自动通过,待确认,已确认"')
             validation.errorTitle = "请选择复核状态"
@@ -2137,6 +2400,16 @@ def process(src_rows: list[tuple], out_file: str, schedule_ctx: dict,
     if employee_type_map is not None:
         print(f'       员工类型表匹配 {employee_type_matched} 行，其中实习生 {employee_type_intern} 行')
         print(f'       未匹配员工类型表、沿用原始识别的实习生 {fallback_intern} 行')
+    if maternity_valid or maternity_pending:
+        print(
+            f'       [产检假汇总] 记录数 {len(maternity_valid)}，人数 {len({item[0] for item in maternity_valid})}，'
+            f'总小时数 {_round2(sum(item[1] or 0 for item in maternity_valid))}，'
+            f'总天数 {_round2(sum(item[2] or 0 for item in maternity_valid))}'
+        )
+        if maternity_pending:
+            print('       [产检假待确认]')
+            for item in maternity_pending:
+                print(f'         - {item["employee"]} / {item["approval_id"] or "无审批编号"}：{item["reason"]}')
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗

@@ -8,6 +8,7 @@ import AttendanceToolbox, {
   getAttendanceToolboxDownloadableFiles,
   getDingtalkSyncExportFile,
   getPreviousCalendarMonthRange,
+  getParttimeAuditMeta,
   getSubsidyAuditMeta,
   isRosterDepartmentPathError,
   resolveErrorMessage,
@@ -24,11 +25,14 @@ const mockRunDingtalkSyncStructured = vi.fn()
 const mockDownloadRunFile = vi.fn()
 const mockDownloadRunZip = vi.fn()
 const mockImportRulesPreview = vi.fn()
+const mockPreviewRules = vi.fn()
 const mockExportRules = vi.fn()
 const mockPreviewRun = vi.fn()
 const mockAuditUploads = vi.fn()
 const mockExportTemplates = vi.fn()
 const mockParttimeMonthlyPunch = vi.fn()
+const mockGetEmployees = vi.fn()
+const mockGetDepartmentTree = vi.fn()
 // 必须在 vi.mock('../services/api') 之前定义，因为 vi.mock 会被 hoisted 到文件顶部。
 const mockGenerateOrgRoster = vi.fn()
 
@@ -58,12 +62,17 @@ vi.mock('../services/api', () => ({
     downloadRunFile: (...args: unknown[]) => mockDownloadRunFile(...args),
     downloadRunZip: (...args: unknown[]) => mockDownloadRunZip(...args),
     importRulesPreview: (...args: unknown[]) => mockImportRulesPreview(...args),
+    previewRules: (...args: unknown[]) => mockPreviewRules(...args),
     exportRules: (...args: unknown[]) => mockExportRules(...args),
     previewRun: (...args: unknown[]) => mockPreviewRun(...args),
     auditUploads: (...args: unknown[]) => mockAuditUploads(...args),
     exportTemplates: (...args: unknown[]) => mockExportTemplates(...args),
     parttimeMonthlyPunch: (...args: unknown[]) => mockParttimeMonthlyPunch(...args),
     generateOrgRoster: (...args: unknown[]) => mockGenerateOrgRoster(...args),
+  },
+  orgAPI: {
+    getEmployees: (...args: unknown[]) => mockGetEmployees(...args),
+    getDepartmentTree: (...args: unknown[]) => mockGetDepartmentTree(...args),
   },
 }))
 
@@ -102,7 +111,7 @@ function makeRunResponse(module = 'leave') {
       module,
       log: 'ok-log',
       stats: { rows: 2 },
-      meta: {},
+      meta: { integrity_audit: { status: 'passed', files: [], issues: [], totals_verified: true, days_in_month: 31 } },
       files: [
         {
           file_key: '1_result.xlsx',
@@ -297,6 +306,32 @@ describe('attendance toolbox workflow options', () => {
       missingAttendanceNames: ['丁俊', '任澳辉'],
     })
   })
+
+  it('normalizes part-time audit metadata', () => {
+    const run = makeRunResponse('parttime').data
+    run.meta = {
+      parttime_audit: {
+        status: 'needs_review',
+        target_month: '2026-07',
+        rows: 61,
+        fallback_count: 2,
+        fallback_names: ['刘芳', '汤颖'],
+        blank_count: 1,
+        blank_names: ['李四'],
+        conflict_count: 3,
+      },
+    }
+    expect(getParttimeAuditMeta(run)).toEqual({
+      status: 'needs_review',
+      targetMonth: '2026-07',
+      rows: 61,
+      fallbackCount: 2,
+      fallbackNames: ['刘芳', '汤颖'],
+      blankCount: 1,
+      blankNames: ['李四'],
+      conflictCount: 3,
+    })
+  })
 })
 
 describe('AttendanceToolbox', () => {
@@ -317,11 +352,14 @@ describe('AttendanceToolbox', () => {
     mockDownloadRunFile.mockReset()
     mockDownloadRunZip.mockReset()
     mockImportRulesPreview.mockReset()
+    mockPreviewRules.mockReset()
     mockExportRules.mockReset()
     mockPreviewRun.mockReset()
     mockAuditUploads.mockReset()
     mockExportTemplates.mockReset()
     mockGenerateOrgRoster.mockReset()
+    mockGetEmployees.mockReset()
+    mockGetDepartmentTree.mockReset()
     mockConfirmOrgSync.mockReset()
 
     mockGetDefaults.mockResolvedValue({
@@ -334,6 +372,19 @@ describe('AttendanceToolbox', () => {
       },
     })
     mockListTemplates.mockResolvedValue({ data: { templates: [] } })
+    mockGetEmployees.mockResolvedValue({
+      data: {
+        items: [
+          { user_id: 'U001', name: '测试员工' },
+          { user_id: 'U002', name: '成都员工' },
+        ],
+      },
+    })
+    mockGetDepartmentTree.mockResolvedValue({
+      data: {
+        tree: [{ id: 'dept-1', name: '研发中心', children: [{ id: 'dept-2', name: '平台组' }] }],
+      },
+    })
     mockRunDingtalkSync.mockResolvedValue(new Blob(['excel'], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     }))
@@ -343,8 +394,20 @@ describe('AttendanceToolbox', () => {
     mockRunWorkflow.mockResolvedValue(makeRunResponse('leave'))
     mockDownloadRunFile.mockResolvedValue(new Blob(['xlsx']))
     mockDownloadRunZip.mockResolvedValue(new Blob(['zip'], { type: 'application/zip' }))
+    mockPreviewRules.mockResolvedValue({
+      data: {
+        premium_rules: [
+          { priority: 1, date_type: 'LEGAL_HOLIDAY', department_group: '全部', multiplier: 3, action: '加班工资' },
+        ],
+        department_rules: [],
+        params: { standard_hours_per_day: 8, no_punch_mark: '未加' },
+        legal_holidays_override: [],
+      },
+    })
     mockPreviewRun.mockResolvedValue({ data: { rows: [{ 姓名: '甲', 工号: 'E01' }] } })
-    mockAuditUploads.mockResolvedValue({ data: { warnings: [] } })
+    mockAuditUploads.mockResolvedValue({ data: { warnings: [], meta: {
+      integrity_audit: { status: 'passed', files: [], issues: [], days_in_month: 31 },
+    } } })
     mockExportTemplates.mockResolvedValue(new Blob(['tpl']))
     mockParttimeMonthlyPunch.mockResolvedValue(new Blob(['xlsx'], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -388,29 +451,45 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     expect(screen.getByText('考勤数据处理工具')).toBeInTheDocument()
     await waitForToolboxReady()
-    // Fixed config is collapsed by default; expand to verify default name lists.
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    // Fixed config is closed by default; open it to verify default name lists.
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
     expect(await screen.findByText('梁伯林')).toBeInTheDocument()
     expect(screen.getByText('陈秋宇')).toBeInTheDocument()
     expect(screen.getAllByText('费婷玉').length).toBeGreaterThan(0)
   })
 
-  it('keeps roster and transfer status in fixed config without duplicate action buttons', async () => {
+  it('keeps roster and transfer actions on their corresponding upload cards', async () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    const { rosterButton, transferButton } = await openRosterAndTransferControls(user)
+    expect(rosterButton).toBeInTheDocument()
+    expect(transferButton).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
+    const fixedConfigDrawer = document.querySelector('.ant-drawer-content') as HTMLElement
+    expect(within(fixedConfigDrawer).queryByText('花名册')).not.toBeInTheDocument()
+    expect(within(fixedConfigDrawer).queryByText('异动流程')).not.toBeInTheDocument()
+    expect(within(fixedConfigDrawer).getByText('长期名单')).toBeInTheDocument()
+  })
 
-    const fixedConfigItem = screen.getByText('固定配置（名单 / 同步源）').closest('.ant-collapse-item') as HTMLElement
-    expect(within(fixedConfigItem).queryByRole('button', { name: /组织数据生成|钉钉同步/ })).not.toBeInTheDocument()
-    expect(within(fixedConfigItem).getByText('自动生成')).toBeInTheDocument()
-    expect(within(fixedConfigItem).getByText('自动同步')).toBeInTheDocument()
+  it('shows default overtime rules in the fixed config without downloading Excel', async () => {
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
+    expect(await screen.findByText('默认倍数规则（只读）')).toBeInTheDocument()
+    await user.click(screen.getByText('默认倍数规则（只读）'))
+    expect(screen.getByText('法定节假日')).toBeInTheDocument()
+    expect(mockPreviewRules).toHaveBeenCalled()
+    expect(mockExportRules).not.toHaveBeenCalled()
   })
 
   it('blocks leave calculation when required files are missing', async () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     expect(messageApi.warning).toHaveBeenCalledWith('请上传请假系统导出表')
     expect(mockRunWorkflow).not.toHaveBeenCalled()
@@ -436,6 +515,8 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await user.click(screen.getByRole('tab', { name: /兼职汇总/ }))
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     expect(messageApi.warning).toHaveBeenCalledWith('请上传默认作息表')
   })
@@ -819,7 +900,7 @@ describe('AttendanceToolbox', () => {
       await Promise.resolve()
     })
 
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('tab', { name: /最终汇总/ }))
     expect(await screen.findByText(/生成失败：花名册生成服务未配置/)).toBeInTheDocument()
 
     // 生成失败完成后不得产生自动文件，也不得覆盖已经上传的本地文件。
@@ -871,7 +952,7 @@ describe('AttendanceToolbox', () => {
     })
 
     expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(2)
-    await userEvent.setup().click(screen.getByText('固定配置（名单 / 同步源）'))
+    await userEvent.setup().click(screen.getByRole('tab', { name: /最终汇总/ }))
     expect(await screen.findByText(/上次生成：/)).toBeInTheDocument()
   })
 
@@ -889,7 +970,7 @@ describe('AttendanceToolbox', () => {
     await waitForToolboxReady()
     await waitFor(() => expect(mockGenerateOrgRoster).toHaveBeenCalledTimes(1))
     expect(mockConfirmOrgSync).not.toHaveBeenCalled()
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('tab', { name: /最终汇总/ }))
     expect(await screen.findByText(/生成失败：1 名在职员工缺少有效主部门/)).toBeInTheDocument()
   })
 
@@ -1000,6 +1081,8 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await uploadLeaveRequiredFiles(user)
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     await waitFor(() => expect(mockRunWorkflow).toHaveBeenCalled())
     expect(mockRun).not.toHaveBeenCalled()
@@ -1015,9 +1098,58 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await uploadLeaveRequiredFiles(user)
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     await waitFor(() => expect(mockRunWorkflow).toHaveBeenCalled())
     await waitFor(() => expect(mockRun).toHaveBeenCalled())
+    expect(messageApi.success).not.toHaveBeenCalledWith(expect.stringContaining('计算完成'))
+    expect(messageApi.warning).toHaveBeenCalledWith(expect.stringContaining('旧接口未返回完整审计状态'))
+  })
+
+  it('blocks calculation when upload inspection fails and renders file reason', async () => {
+    mockAuditUploads.mockResolvedValue({ data: { meta: { integrity_audit: {
+      status: 'needs_review', files: [{ field: 'leave_src', file_name: 'leave.xlsx', type: '待识别', status: '失败', detail: '缺少姓名列' }],
+      issues: [{ kind: '未识别文件', file_name: 'leave.xlsx', person: '', detail: '缺少姓名列' }],
+    } } } })
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await uploadLeaveRequiredFiles(user)
+    await user.type(screen.getByLabelText('请假明细处理月份'), '2026-07{Enter}')
+    await user.click(screen.getByRole('button', { name: /开始计算/ }))
+    expect(await screen.findByText('文件检查未通过，请处理以下问题')).toBeInTheDocument()
+    expect(screen.getByText(/leave.xlsx.*缺少姓名列/)).toBeInTheDocument()
+    expect(mockRunWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('does not calculate after an inspection transport error', async () => {
+    mockAuditUploads.mockRejectedValue(new Error('检查服务超时'))
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await uploadLeaveRequiredFiles(user)
+    await user.type(screen.getByLabelText('请假明细处理月份'), '2026-07{Enter}')
+    await user.click(screen.getByRole('button', { name: /开始计算/ }))
+    expect(await screen.findByText(/文件检测失败：检查服务超时/)).toBeInTheDocument()
+    expect(mockRunWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('keeps pending status when downloading a blocked check report fails', async () => {
+    const response = makeRunResponse('leave')
+    response.data.meta.integrity_audit = { status: 'needs_review', files: [], issues: [], totals_verified: false, days_in_month: 31 }
+    mockRunWorkflow.mockResolvedValue(response)
+    mockDownloadRunFile.mockRejectedValue(new Error('下载失败'))
+    const user = userEvent.setup()
+    render(<AttendanceToolbox />)
+    await waitForToolboxReady()
+    await uploadLeaveRequiredFiles(user)
+    await user.type(screen.getByLabelText('请假明细处理月份'), '2026-07{Enter}')
+    await user.click(screen.getByRole('button', { name: /开始计算/ }))
+    expect(await screen.findByText('计算未完成，请处理检查问题')).toBeInTheDocument()
+    expect(screen.queryByText('计算完成')).not.toBeInTheDocument()
+    await waitFor(() => expect(messageApi.warning).toHaveBeenCalledWith(expect.stringContaining('检查报告自动下载失败')))
+    expect(messageApi.warning).not.toHaveBeenCalledWith(expect.stringContaining('计算已完成'))
   })
 
   it('structured success shows stats and download buttons', async () => {
@@ -1026,9 +1158,11 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await uploadLeaveRequiredFiles(user)
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     await waitFor(() => expect(mockDownloadRunFile).toHaveBeenCalled())
-    expect(await screen.findByText('计算成功')).toBeInTheDocument()
+    expect(await screen.findByText('计算完成')).toBeInTheDocument()
     expect(screen.getByText((content) => content.includes('rows') && content.includes('2'))).toBeInTheDocument()
     expect(screen.getByText('技术信息')).toBeInTheDocument()
   })
@@ -1049,8 +1183,10 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await uploadLeaveRequiredFiles(user)
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
-    await waitFor(() => expect(screen.getByText('计算成功')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('计算完成')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /结果\.xlsx/ }))
     await waitFor(() => {
       expect(messageApi.error).toHaveBeenCalled()
@@ -1064,6 +1200,7 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
 
+    await user.click(screen.getByRole('button', { name: '打开固定配置' }))
     expect(screen.getByText('长期产假人员（自动抓不到时兜底）')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /添加人员/ }))
     expect(await screen.findByText('长期产假人员 1')).toBeInTheDocument()
@@ -1082,6 +1219,8 @@ describe('AttendanceToolbox', () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await uploadLeaveRequiredFiles(user)
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
 
     await waitFor(() => expect(mockRunWorkflow).toHaveBeenCalled())
@@ -1102,14 +1241,14 @@ describe('AttendanceToolbox', () => {
     expect(screen.getByText('月末结账向导')).toBeInTheDocument()
   })
 
-  it('renders optional month locks for overtime and subsidy', async () => {
+  it('renders required month selectors for overtime and subsidy', async () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
     await user.click(screen.getByRole('tab', { name: /加班明细/ }))
-    expect(await screen.findByLabelText('加班处理月份')).toBeInTheDocument()
+    expect(await screen.findByLabelText('加班明细处理月份')).toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: /补贴扣款/ }))
-    expect(await screen.findByLabelText('补贴考勤月份')).toBeInTheDocument()
+    expect(await screen.findByLabelText('补贴扣款处理月份')).toBeInTheDocument()
   })
 
   it('shows missing attendance warning from subsidy audit metadata', async () => {
@@ -1131,6 +1270,8 @@ describe('AttendanceToolbox', () => {
     await uploadRequiredFileByLabel(user, '钉钉月度汇总表（补贴及扣款）', 'subsidy.xlsx')
     await uploadRequiredFileByLabel(user, '签到表', 'checkin.xlsx')
     await uploadRequiredFileByLabel(user, '作息表', 'schedule.xlsx')
+    const monthInput = document.querySelector('.ant-tabs-tabpane-active input[placeholder="请选择处理月份"]') as HTMLInputElement
+    await user.type(monthInput, '2026-07{Enter}')
     await user.click(screen.getByRole('button', { name: /开始计算/ }))
     expect(await screen.findByText('有 2 人缺少考勤记录')).toBeInTheDocument()
     expect(screen.getByText(/丁俊、任澳辉/)).toBeInTheDocument()
@@ -1142,7 +1283,7 @@ describe('AttendanceToolbox', () => {
   it('默认月份为上一个自然月（req 1）', async () => {
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    // 卡片在未展开时不渲染月份选择器；展开固定配置区域。
+    // 固定配置默认关闭；这里仅验证默认月份计算契约。
     // 这里只验证 getPreviousCalendarMonthRange 的契约（组件内部使用同样的函数）。
     const [start, end] = getPreviousCalendarMonthRange(dayjs('2026-08-02'))
     expect(start.format('YYYY-MM-DD')).toBe('2026-07-01')
@@ -1160,7 +1301,7 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('tab', { name: /兼职汇总/ }))
     const fetchBtn = await screen.findByRole('button', { name: /从钉钉抓取/ })
     expect(fetchBtn).toBeDisabled()
     // 卡片内的提示文案明确告知缺少权限（Tooltip 标题也在 DOM 中，故用 getAllByText）。
@@ -1171,7 +1312,7 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('tab', { name: /兼职汇总/ }))
     await user.click(await screen.findByRole('button', { name: /从钉钉抓取/ }))
     await waitFor(() => expect(mockParttimeMonthlyPunch).toHaveBeenCalledTimes(1))
     const expectedMonth = dayjs().subtract(1, 'month').format('YYYY-MM')
@@ -1186,7 +1327,7 @@ describe('AttendanceToolbox', () => {
     const user = userEvent.setup()
     render(<AttendanceToolbox />)
     await waitForToolboxReady()
-    await user.click(screen.getByText('固定配置（名单 / 同步源）'))
+    await user.click(screen.getByRole('tab', { name: /兼职汇总/ }))
     await user.click(await screen.findByRole('button', { name: /从钉钉抓取/ }))
     await waitFor(() => expect(messageApi.error).toHaveBeenCalledWith(expect.stringContaining('抓取失败')))
     // 失败后按钮文案变为「重试抓取」，仍可再次点击（req 6）。

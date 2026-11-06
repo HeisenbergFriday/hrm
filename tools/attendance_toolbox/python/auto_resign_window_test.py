@@ -113,13 +113,16 @@ class AutomaticResignationWindowTests(unittest.TestCase):
         self.assertEqual(employees[0]["hire_date"], date(2025, 4, 24))
         self.assertEqual(stats["duplicate_count"], 1)
 
-    def test_mt_business_number_is_preferred_over_wb_for_same_employee(self):
+    def test_different_business_numbers_with_same_name_stay_separate(self):
         employees = [{"emp_no": "WB0003", "name": "庄雨倩"}]
         enriched = fin.apply_attendance_identity(
             employees,
             [{"emp_no": "MT0684", "name": "庄雨倩"}],
         )
-        self.assertEqual(enriched[0]["emp_no"], "MT0684")
+        self.assertEqual(enriched[0]["emp_no"], "WB0003")
+        merged, stats = fin.merge_employee_sources(employees, [{"emp_no": "MT0684", "name": "庄雨倩"}])
+        self.assertEqual({person["emp_no"] for person in merged}, {"WB0003", "MT0684"})
+        self.assertEqual(stats["added_count"], 1)
 
 
 if __name__ == "__main__":

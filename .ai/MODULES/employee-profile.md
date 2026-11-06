@@ -1,6 +1,6 @@
 ---
 purpose: 员工档案与入转调离模块说明
-last_updated: 2026-08-18
+last_updated: 2026-10-27
 source_of_truth:
   - internal/api/router.go
   - internal/api/handlers.go
@@ -49,6 +49,7 @@ update_when:
 - 教育信息：`education`、`graduate_school`、`major`、`graduation_date`。
 - JSON 扩展：`work_experience`、`skills`、`extension`。
 - 其他信息：`bank_account`、`bank_name`、`tax_number`、`address`、`profile_status`。
+- 状态追踪：`status_changed_at` 记录员工状态最后变更时间；`dingtalk_resign_date` 与 `dingtalk_last_working_day` 保存钉钉 HRM 离职日期/最后工作日。
 
 字段约定：
 
@@ -225,6 +226,7 @@ Query 参数：
 - `EmployeeFlow.tsx` 当前只使用创建接口，不调用入职/转岗/离职更新接口。
 - `TalentAnalysis.tsx` 当前只使用列表、详情和创建接口，不调用更新接口。
 - 员工详情时间线仍复用组织模块聚合逻辑，操作日志作为详情补充能力保留。
+- 组织同步会读取钉钉 HRM 离职接口；时间轴优先展示已同步的正式离职日期，没有离职记录时展示状态变更时间。
 
 ---
 

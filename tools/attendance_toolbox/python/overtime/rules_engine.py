@@ -16,7 +16,7 @@ rules_engine.py
   classify_date(...)            — classify_overtime_date 的兼容包装
   determine_action(...)         — 按优先级匹配倍数规则
   calculate_hours(...)          — 计算最终加班时长
-  should_mark_no_punch(...)     — 判断是否标记"未加"
+  should_mark_no_punch(...)     — 判断是否标记"未知"
 ──────────────────────────────────────────────────────────────────────────────
 """
 from __future__ import annotations
@@ -360,7 +360,7 @@ class OvertimeConfig:
     premium_rules: list[PremiumRule]
     department_rules: list[DepartmentRule]
     standard_hours_per_day: float = 8.0
-    no_punch_mark: str = "未加"
+    no_punch_mark: str = "未知"
     schedule_augment_holidays: bool = True
     schedule_augment_rest_dept_group: str = "运营支撑部"
     chengdu_use_separate_calendar: bool = True
@@ -525,7 +525,7 @@ def load_config(config_path: str) -> OvertimeConfig:
         premium_rules=premium_rules,
         department_rules=department_rules,
         standard_hours_per_day=_norm_float(params.get("标准每日工时"), 8.0),
-        no_punch_mark=params.get("未打卡标记", "未加"),
+        no_punch_mark=params.get("未打卡标记", "未知"),
         schedule_augment_holidays=params.get("排班补录-法定节假日", "是") == "是",
         schedule_augment_rest_dept_group=params.get("排班补录-休息日部门组", "运营支撑部"),
         chengdu_use_separate_calendar=params.get("成都使用独立日历", "是") == "是",
@@ -607,7 +607,11 @@ def classify_employee(
         "三级部门": str(dept_d3 or ""),
         "考勤组":   str(attendance_group or ""),
     }
-    matched: set[str] = set()
+    # 运营支撑部假日工资是内置业务口径，不能因旧配置漏掉部门组而退回调休。
+    matched: set[str] = {
+        department for department in SPECIAL_DEPARTMENTS
+        if any(department in dept_values[level] for level in ("一级部门", "二级部门", "三级部门"))
+    }
     for group_name, rules in config._dept_group_index.items():
         for rule in rules:
             field_val = dept_values.get(rule.match_field, "")
@@ -642,7 +646,12 @@ def determine_action(
     date_type: str,
     employee_groups: set[str],
 ) -> tuple[str, float]:
-    """按优先级匹配倍数规则，返回 (加班类型, 倍数)。"""
+    """先应用运营支撑部内置假日工资口径，再匹配可配置规则。"""
+    if employee_groups & SPECIAL_DEPARTMENTS:
+        if date_type == LEGAL_HOLIDAY:
+            return "加班工资", 3.0
+        if date_type == HOLIDAY_ADJUST_REST:
+            return "加班工资", 2.0
     for rule in config.premium_rules:
         if rule.date_type != date_type:
             continue
@@ -677,7 +686,7 @@ def should_mark_no_punch(
     overtime_date: date | None,
     action: str,
 ) -> bool:
-    """仅调休记录检查是否标记'未加'。"""
-    if action != "加班工资" and employee_code and overtime_date is not None:
+    """仅调休记录检查是否标记未打卡状态。"""
+    if action == "调休" and employee_code and overtime_date is not None:
         return overtime_date in attendance_missing_checkout_map.get(employee_code, set())
     return False

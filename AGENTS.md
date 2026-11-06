@@ -267,7 +267,15 @@ AI 文档更新：
 | `.ai/PROJECT_MAP.md` | 不知道模块位置，或项目结构发生变化 |
 | `.ai/ARCHITECTURE.md` | 架构、数据流、跨模块、多租户边界 |
 | `.ai/CONVENTIONS.md` | 编码、命名、错误处理、测试习惯 |
-| `.ai/COMMANDS.md` | 开发、测试、构建、部署命令 |
+| `.ai/COMMANDS.md` | 开发、测试、构建、Git 双远程提交与同步、部署命令 |
 | `.ai/MODULES/*.md` | 修改对应业务模块时 |
 
 涉及文件大小或 token 消耗时参考 `.wolf/anatomy.md`；需要了解历史修改偏好时参考 `.wolf/cerebrum.md`。
+
+## Git 提交与同步文档路由
+
+涉及提交代码、推送或同步仓库时，先读取 [.ai/COMMANDS.md 的 Git 双远程同步](.ai/COMMANDS.md#git-双远程同步)。GitHub 与 Coding 使用两个独立地址，用户已确认默认发布到两边的 `master`；具体地址、当次分支覆盖、认证与完成校验以该节为准，已确认的地址和默认发布分支无需重复询问。
+
+## 部署文档路由
+
+涉及构建发布、测试服部署、远程重启或线上验收时，除读取 `.ai/COMMANDS.md` 外，必须先读取 `deploy/DEPLOYMENT_RUNBOOK.md`；该手册是部署目标、凭据使用方式、回滚和冒烟检查的固定入口。

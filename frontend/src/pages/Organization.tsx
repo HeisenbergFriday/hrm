@@ -2,7 +2,6 @@ import React from 'react'
 import {
   Alert,
   Button,
-  Card,
   Col,
   Row,
   Spin,
@@ -13,7 +12,7 @@ import {
 } from 'antd'
 import {
   ApartmentOutlined,
-  ProfileOutlined,
+  ReloadOutlined,
   SwapOutlined,
   TeamOutlined,
   UserOutlined,
@@ -23,6 +22,7 @@ import { useNavigate } from 'react-router-dom'
 import { orgAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
+import './organization.css'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -46,13 +46,6 @@ interface OrgOverviewData {
 
 const connectedEntries = [
   {
-    key: 'employee-profile',
-    title: '员工档案',
-    description: '查询、新建和维护员工档案信息。',
-    path: '/employee-profile',
-    icon: <ProfileOutlined />,
-  },
-  {
     key: 'employee-flow',
     title: '入转调离',
     description: '查询和新建员工入职、调岗、离职记录。',
@@ -61,8 +54,8 @@ const connectedEntries = [
   },
   {
     key: 'employees',
-    title: '组织花名册',
-    description: '查看组织同步后的员工信息。',
+    title: '员工中心',
+    description: '查看员工、查看档案、维护人事信息。',
     path: '/employees',
     icon: <UserOutlined />,
   },
@@ -104,13 +97,15 @@ const Organization: React.FC = () => {
       icon={<TeamOutlined />}
       subtitle={formatScopeLabel(overview?.scope)}
       extra={
-        <Button onClick={() => void overviewQuery.refetch()} loading={overviewQuery.isFetching}>
+          <Button icon={<ReloadOutlined />} onClick={() => void overviewQuery.refetch()} loading={overviewQuery.isFetching}>
           刷新
         </Button>
       }
     >
       <Tabs
+        className="organization-dashboard-tabs"
         defaultActiveKey="dashboard"
+        renderTabBar={() => null}
         items={[
           {
             key: 'dashboard',
@@ -131,41 +126,50 @@ const Organization: React.FC = () => {
                 }
               />
             ) : (
-              <>
+              <div className="organization-dashboard">
+                <PageCard className="organization-overview-card">
+                  <div className="organization-overview-heading">
+                    <div>
+                      <Title level={4}>组织概览</Title>
+                      <Paragraph type="secondary">先看组织规模和需要关注的人员，再进入具体管理页面。</Paragraph>
+                    </div>
+                    <Text type="secondary">数据范围随当前账号权限变化</Text>
+                  </div>
                 <Row gutter={[16, 16]}>
                   <Col xs={24} sm={12} xl={4}>
-                    <PageCard>
+                    <PageCard className="organization-metric-card">
                       <Tooltip title="当前组织内有效在职+停用员工的唯一人数（已排除软删除和管理员）">
                         <Statistic title="员工总数" value={overview?.summary.total_employees ?? 0} prefix={<UserOutlined />} suffix={<span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)' }}>含停用</span>} />
                       </Tooltip>
                     </PageCard>
                   </Col>
                   <Col xs={24} sm={12} xl={4}>
-                    <PageCard>
+                    <PageCard className="organization-metric-card">
                       <Statistic title="在职人数" value={overview?.summary.active_employees ?? 0} prefix={<TeamOutlined />} />
                     </PageCard>
                   </Col>
                   <Col xs={24} sm={12} xl={4}>
-                    <PageCard>
+                    <PageCard className="organization-metric-card">
                       <Statistic title="部门数" value={overview?.summary.department_count ?? 0} prefix={<ApartmentOutlined />} />
                     </PageCard>
                   </Col>
                   <Col xs={24} sm={12} xl={6}>
-                    <PageCard>
+                    <PageCard className="organization-metric-card">
                       <Statistic title="试用期人数" value={overview?.summary.probation_employee_count ?? 0} />
                     </PageCard>
                   </Col>
                   <Col xs={24} sm={12} xl={6}>
-                    <PageCard>
+                    <PageCard className="organization-metric-card">
                       <Statistic title="转正预警" value={overview?.summary.planned_regularization_count ?? 0} />
                     </PageCard>
                   </Col>
                 </Row>
+                </PageCard>
 
                 <Row gutter={[16, 16]} style={{ marginTop: 'var(--space-2)' }}>
                   {connectedEntries.map((entry) => (
                     <Col xs={24} md={12} key={entry.key}>
-                      <PageCard>
+                      <PageCard className="organization-quick-card">
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-4)', alignItems: 'flex-start' }}>
                           <div>
                             <Title level={5} style={{ marginTop: 0, marginBottom: 'var(--space-2)' }}>
@@ -183,7 +187,7 @@ const Organization: React.FC = () => {
                     </Col>
                   ))}
                 </Row>
-              </>
+              </div>
             ),
           },
         ]}

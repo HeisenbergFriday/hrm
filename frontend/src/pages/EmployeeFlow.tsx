@@ -18,6 +18,7 @@ import {
   Typography,
   message,
 } from 'antd'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { PlusOutlined, ReloadOutlined, SwapOutlined, UserAddOutlined, UserDeleteOutlined } from '@ant-design/icons'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -776,7 +777,7 @@ const EmployeeFlow: React.FC = () => {
               </Col>
               <Col xs={24} md={12}>
                 <Form.Item name="transfer_date" label="调岗日期" rules={[{ required: true, message: '请选择调岗日期' }]}>
-                  <DatePicker style={{ width: '100%' }} />
+                  <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
                 </Form.Item>
               </Col>
               <Col span={24}>
@@ -811,7 +812,7 @@ const EmployeeFlow: React.FC = () => {
               </Col>
               <Col xs={24} md={12}>
                 <Form.Item name="resign_date" label="离职日期" rules={[{ required: true, message: '请选择离职日期' }]}>
-                  <DatePicker style={{ width: '100%' }} />
+                  <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>
@@ -820,7 +821,7 @@ const EmployeeFlow: React.FC = () => {
                   label="最后工作日"
                   rules={[{ required: true, message: '请选择最后工作日' }]}
                 >
-                  <DatePicker style={{ width: '100%' }} />
+                  <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
                 </Form.Item>
               </Col>
               <Col span={24}>
@@ -856,7 +857,7 @@ const EmployeeFlow: React.FC = () => {
               </Col>
               <Col xs={24} md={12}>
                 <Form.Item name="birth_date" label="出生日期">
-                  <DatePicker style={{ width: '100%' }} />
+                  <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>
@@ -886,7 +887,7 @@ const EmployeeFlow: React.FC = () => {
               </Col>
               <Col xs={24} md={12}>
                 <Form.Item name="entry_date" label="入职日期" rules={[{ required: true, message: '请选择入职日期' }]}>
-                  <DatePicker style={{ width: '100%' }} />
+                  <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>
@@ -900,7 +901,7 @@ const EmployeeFlow: React.FC = () => {
               </Col>
               <Col xs={24} md={12}>
                 <Form.Item name="probation_end_date" label="试用期结束日期">
-                  <DatePicker style={{ width: '100%' }} />
+                  <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>

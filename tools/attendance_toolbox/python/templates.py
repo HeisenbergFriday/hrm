@@ -11,14 +11,14 @@ from datetime import date
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
-from leave.calc_leave import REVIEW_COLUMNS
+from leave.calc_leave import REVIEW_COLUMNS, WORKING_DAY_COLOR, STATUTORY_HOLIDAY_COLOR, COMPANY_WELFARE_COLOR
 
 # Shared styling for all built templates.
 _HEADER_FILL = PatternFill("solid", fgColor="FFE2E8F0")
 _SAMPLE_FILL = PatternFill("solid", fgColor="FFF8FAFC")
-_WORKDAY_FILL = PatternFill("solid", fgColor="FFCCFFCC")
-_HOLIDAY_FILL = PatternFill("solid", fgColor="FFFFC7CE")
-_WELFARE_FILL = PatternFill("solid", fgColor="FFD6EAF8")
+_WORKDAY_FILL = PatternFill("solid", fgColor=WORKING_DAY_COLOR)
+_HOLIDAY_FILL = PatternFill("solid", fgColor=STATUTORY_HOLIDAY_COLOR)
+_WELFARE_FILL = PatternFill("solid", fgColor=COMPANY_WELFARE_COLOR)
 
 
 # ── Column tuples reused by several final-table templates ─────────────────────
@@ -70,6 +70,12 @@ def _autosize_worksheet(ws) -> None:
 
 
 def _workbook_to_bytes(wb: Workbook) -> bytes:
+    # Example identities are explicit data, never inferred from a real name.
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value in ("张三", "李四", "王五"):
+                    cell.value = "【示例】" + cell.value
     buf = __import__("io").BytesIO()
     wb.save(buf)
     wb.close()
@@ -267,7 +273,7 @@ def build_overtime_attendance_template() -> bytes:
         wb,
         [
             "第 1 行需要包含\"姓名\"和\"工号\"；第 2 行填写日期序号，员工数据从第 3 行开始。",
-            "考勤组为可选字段，用于辅助识别特殊部门；日期单元格中出现 (-) 或单边卡时，调休记录会标记为未加。",
+            "考勤组为可选字段，用于辅助识别特殊部门；日期单元格中出现 (-) 或单边卡时，调休记录会标记为未知。",
         ],
     )
     return _workbook_to_bytes(wb)
@@ -406,7 +412,7 @@ def build_final_leave_detail_template() -> bytes:
             "最终表模块通常上传\"请假明细计算\"生成的请假明细表.xlsx。",
             "待确认记录须在原明细行填写确认请假时长（小时制）或确认请假天数（日制）、确认说明，并将复核状态改为已确认。",
             "确认值仅为计算月份的份额，可填0排除重复申请；跨多日改动日分配时须填写确认日分摊，如2026-06-03=4;2026-06-04=8。",
-            "跨月小时制确认日分摊须覆盖整段日期，合计等于系统总时长；系统时长错误时另填确认整段时长并说明依据。特殊假口径待明确时先确认计量口径。",
+            "跨月小时制确认日分摊须覆盖整段日期，合计等于系统总时长；系统时长错误时另填确认整段时长并说明依据。产假、陪产假、丧假按自然日，其他特殊假口径待明确时先确认计量口径。",
             "还有待确认记录时不会生成最终表。旧表缺少复核字段须重新生成；保留审批信息、日分摊、计量口径和计算月份。",
             "支持多 sheet，系统会自动读取包含发起人工号/工号、姓名、请假类型等字段的明细表。",
         ],

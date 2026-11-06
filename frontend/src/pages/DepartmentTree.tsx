@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Avatar, Button, Col, Empty, List, Row, Space, Spin, Statistic, Tabs, Tree, Tooltip, Typography, message } from 'antd'
-import { ApartmentOutlined, ReloadOutlined, SyncOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
+import { Alert, Avatar, Button, Col, Empty, Input, List, Row, Space, Spin, Statistic, Tabs, Tree, Tooltip, Typography, message } from 'antd'
+import { ApartmentOutlined, DownOutlined, ReloadOutlined, SyncOutlined, TeamOutlined, UpOutlined, UserOutlined } from '@ant-design/icons'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
@@ -13,6 +13,7 @@ import {
   confirmOrgSync,
   missingOrgSyncPermissionTip,
 } from '../utils/orgSyncAction'
+import './organization.css'
 
 const { Title, Text } = Typography
 
@@ -86,6 +87,36 @@ const findTreeNodeByID = (nodes: DepartmentTreeNode[], targetID: string): Depart
   return null
 }
 
+const countTreeNodes = (nodes: DepartmentTreeNode[]): number => (
+  nodes.reduce((total, node) => total + 1 + countTreeNodes(node.children || []), 0)
+)
+
+const getExpandableTreeKeys = (nodes: DepartmentTreeNode[]): string[] => {
+  const keys: string[] = []
+  nodes.forEach((node) => {
+    if (node.children?.length) {
+      keys.push(node.id)
+      keys.push(...getExpandableTreeKeys(node.children))
+    }
+  })
+  return keys
+}
+
+const findTreePath = (nodes: DepartmentTreeNode[], targetID: string, parents: DepartmentTreeNode[] = []): DepartmentTreeNode[] => {
+  for (const node of nodes) {
+    if (node.id === targetID) {
+      return [...parents, node]
+    }
+    if (node.children?.length) {
+      const path = findTreePath(node.children, targetID, [...parents, node])
+      if (path.length) {
+        return path
+      }
+    }
+  }
+  return []
+}
+
 const DepartmentTree: React.FC = () => {
   const navigate = useNavigate()
   const [tree, setTree] = useState<DepartmentTreeNode[]>([])
@@ -101,6 +132,8 @@ const DepartmentTree: React.FC = () => {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [departmentOverview, setDepartmentOverview] = useState<DepartmentOverview | null>(null)
   const [overviewLoading, setOverviewLoading] = useState(false)
+  const [treeSearch, setTreeSearch] = useState('')
+  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([])
 
   const loadTree = async (showLoading = true) => {
     if (showLoading) {
@@ -111,6 +144,7 @@ const DepartmentTree: React.FC = () => {
       const nextTree = response.data.tree || []
       setTree(nextTree)
       setScope(response.data.scope || null)
+      setExpandedKeys((current) => current.length ? current : getExpandableTreeKeys(nextTree))
       const nextSelectedID = selectedNode?.id || nextTree[0]?.id
       if (nextSelectedID) {
         setSelectedNode(findTreeNodeByID(nextTree, nextSelectedID) || nextTree[0] || null)
@@ -230,26 +264,27 @@ const DepartmentTree: React.FC = () => {
   }, [scope])
 
   const treeData = useMemo<DataNode[]>(() => {
+    const keyword = treeSearch.trim().toLowerCase()
+    const filterNodes = (nodes: DepartmentTreeNode[]): DepartmentTreeNode[] => nodes.flatMap((node) => {
+      const children = filterNodes(node.children || [])
+      if (!keyword || node.name.toLowerCase().includes(keyword) || children.length > 0) {
+        return [{ ...node, children }]
+      }
+      return []
+    })
     const mapNodes = (nodes: DepartmentTreeNode[]): DataNode[] =>
       nodes.map((node) => ({
         key: node.id,
         selectable: node.virtual_kind !== 'unassigned',
         title: (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, width: '100%', padding: '4px 0' }}>
-            <span style={{ fontWeight: node.children?.length ? 500 : 400 }}>{node.name}</span>
+          <div className="organization-tree-node-title">
+            <span className={`organization-tree-node-name${node.children?.length ? ' is-parent' : ''}`}>{node.name}</span>
             <Tooltip title={
               node.direct_active_count !== node.active_count
                 ? `含下级部门去重：${node.active_count} 人 | 直属本部门：${node.direct_active_count} 人`
                 : `直属本部门：${node.active_count} 人`
             }>
-              <span style={{
-                color: 'var(--color-text-tertiary)',
-                fontSize: 'var(--font-size-xs)',
-                background: 'var(--color-bg-light)',
-                padding: '2px 8px',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'default'
-              }}>
+              <span className="organization-tree-node-count">
                 {node.active_count} 人{node.direct_active_count !== node.active_count ? ` (直属 ${node.direct_active_count})` : ''}
               </span>
             </Tooltip>
@@ -257,8 +292,41 @@ const DepartmentTree: React.FC = () => {
         ),
         children: mapNodes(node.children || []),
       }))
-    return mapNodes(tree)
-  }, [tree])
+    return mapNodes(filterNodes(tree))
+  }, [tree, treeSearch])
+
+  const treeNodeCount = useMemo(() => countTreeNodes(tree), [tree])
+
+  const selectedPath = useMemo(
+    () => (selectedNode ? findTreePath(tree, selectedNode.id) : []),
+    [tree, selectedNode],
+  )
+
+  const searchExpandedKeys = useMemo(() => {
+    const keyword = treeSearch.trim().toLowerCase()
+    if (!keyword) return expandedKeys
+    const result: string[] = []
+    const collect = (nodes: DepartmentTreeNode[]): boolean => {
+      let matched = false
+      nodes.forEach((node) => {
+        const selfMatches = node.name.toLowerCase().includes(keyword)
+        const childMatches = collect(node.children || [])
+        if (childMatches) {
+          result.push(node.id)
+        }
+        matched = selfMatches || childMatches || matched
+      })
+      return matched
+    }
+    collect(tree)
+    return result
+  }, [tree, treeSearch, expandedKeys])
+
+  const expandAll = () => {
+    setExpandedKeys(getExpandableTreeKeys(tree))
+  }
+
+  const collapseAll = () => setExpandedKeys([])
 
   const nodeMap = useMemo(() => {
     const result = new Map<string, DepartmentTreeNode>()
@@ -324,11 +392,12 @@ const DepartmentTree: React.FC = () => {
   }
 
   return (
-    <PageContainer
+      <PageContainer
+        className="organization-tree-page"
       title="组织架构"
       subtitle={scopeLabel}
       extra={
-        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+        <div className="organization-tree-page-actions">
           <Button icon={<ReloadOutlined />} onClick={() => void loadTree()} loading={loading}>
             刷新
           </Button>
@@ -346,44 +415,71 @@ const DepartmentTree: React.FC = () => {
           <Spin size="large" />
         </div>
       ) : tree.length === 0 ? (
-        <Empty description="暂无组织架构数据" />
+        <div className="organization-tree-empty-state">
+          <Empty description="暂无组织架构数据">
+            <Space wrap>
+              <Button icon={<ReloadOutlined />} onClick={() => void loadTree()} loading={loading}>重新加载</Button>
+              {canSync ? <Button type="primary" icon={<SyncOutlined />} onClick={handleSync} loading={syncing}>同步组织数据</Button> : null}
+            </Space>
+          </Empty>
+        </div>
       ) : (
-        <Row gutter={[16, 16]}>
+        <Row gutter={[16, 16]} className="organization-tree-layout">
           <Col xs={24} lg={14}>
-            <PageCard title="组织树">
+            <PageCard title={<div className="organization-tree-card-title"><span>组织树</span><Text type="secondary">{treeNodeCount} 个节点</Text></div>}>
+              <div className="organization-tree-toolbar">
+                <Input.Search
+                  allowClear
+                  value={treeSearch}
+                  onChange={(event) => setTreeSearch(event.target.value)}
+                  placeholder="搜索部门名称，支持定位下级部门"
+                  aria-label="搜索部门名称"
+                  className="organization-tree-search"
+                />
+                <Space size={4} className="organization-tree-toolbar-actions">
+                  <Button size="small" icon={<DownOutlined />} onClick={expandAll}>展开全部</Button>
+                  <Button size="small" icon={<UpOutlined />} onClick={collapseAll}>收起全部</Button>
+                </Space>
+              </div>
               <Alert
+                className="organization-tree-help"
                 style={{ marginBottom: 16 }}
                 type="info"
                 showIcon
                 message="人数口径说明"
                 description="树中显示的数字为「含下级部门去重」的在职人数；括号内「直属」为本部门直接归属在职人数。多部门员工在各部门各计一次，父部门汇总时按员工 ID 去重。鼠标悬停人数标签可查看详细口径。"
               />
-              <div style={{ maxHeight: 'calc(100vh - 380px)', overflow: 'auto' }}>
-              <Tree
-                defaultExpandAll
+              <div className="organization-tree-scroll">
+              {treeData.length > 0 ? <Tree
+                blockNode
+                expandedKeys={searchExpandedKeys}
+                onExpand={(keys) => setExpandedKeys(keys)}
                 selectedKeys={selectedNode ? [selectedNode.id] : []}
                 treeData={treeData}
+                showLine={{ showLeafIcon: false }}
                 onSelect={(keys) => {
                   const nextKey = String(keys[0] || '')
-                  if (!nextKey) {
-                    return
-                  }
+                  if (!nextKey) return
                   setDepartmentEmployeePage(1)
                   setSelectedNode(nodeMap.get(nextKey) || null)
                 }}
-              />
+              /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的部门" />}
               </div>
             </PageCard>
           </Col>
           <Col xs={24} lg={10}>
-            <PageCard title={selectedNode?.virtual_kind === 'organization' ? '组织基础统计' : '部门基础统计'}>
+            <PageCard title={<div className="organization-detail-card-title"><span>{selectedNode?.virtual_kind === 'organization' ? '组织概览' : '部门概览'}</span>{selectedNode ? <Button type="link" size="small" icon={<TeamOutlined />} onClick={() => navigate(selectedNode.virtual_kind === 'organization' ? '/employees' : `/employees?department_id=${encodeURIComponent(selectedNode.id)}`)}>查看员工</Button> : null}</div>}>
               {selectedNode ? (
                 <>
-                  <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid var(--color-border-light)' }}>
-                    <Title level={4} style={{ marginTop: 0, marginBottom: 8, color: 'var(--color-text)' }}>
+                  <div className="organization-selected-department">
+                    <Title level={4} className="organization-selected-title">
                       {selectedNode.name}
                     </Title>
-                    <Space size={16}>
+                    <Text type="secondary" className="organization-selected-path">
+                      {selectedPath.map((item) => item.name).join(' / ')}
+                    </Text>
+                    <Text type="secondary" className="organization-selected-hint">已加载该部门的统计、员工和变更记录</Text>
+                    <Space size={[12, 8]} wrap className="organization-selected-meta">
                       <Tooltip title={selectedNode.virtual_kind === 'organization' || !selectedNode.parent_id || selectedNode.parent_id === '0' || selectedNode.parent_id === '1'
                         ? '根部门人数 = 全组织去重员工总数（含在职+停用，已排除软删除和管理员）'
                         : '含下级部门去重汇总人数（在职+停用）'
@@ -410,14 +506,14 @@ const DepartmentTree: React.FC = () => {
                     </div>
                   ) : (
                     <>
-                      <div style={{ marginTop: 12, marginBottom: 8 }}>
+                      <div className="organization-stat-caption">
                         <Tooltip title="主数字为含下级部门去重的在职人数；括号内为直属本部门人数。多部门员工在父部门汇总时按员工 ID 去重。">
                           <Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>统计口径：含下级部门汇总数据</Text>
                         </Tooltip>
                       </div>
-                      <Row gutter={[12, 12]}>
+                      <Row gutter={[12, 12]} className="organization-stat-grid">
                         <Col span={8}>
-                          <div style={statBoxStyle}>
+                          <div className="organization-stat-box" style={statBoxStyle}>
                             <Statistic
                               title={<Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>在职人数</Text>}
                               value={departmentOverview?.summary.active_employees ?? selectedNode.active_count}
@@ -429,7 +525,7 @@ const DepartmentTree: React.FC = () => {
                           </div>
                         </Col>
                         <Col span={8}>
-                          <div style={statBoxStyle}>
+                          <div className="organization-stat-box" style={statBoxStyle}>
                             <Statistic
                               title={<Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>试用期</Text>}
                               value={departmentOverview?.summary.probation_employee_count ?? 0}
@@ -438,7 +534,7 @@ const DepartmentTree: React.FC = () => {
                           </div>
                         </Col>
                         <Col span={8}>
-                          <div style={statBoxStyle}>
+                          <div className="organization-stat-box" style={statBoxStyle}>
                             <Statistic
                               title={<Text type="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>转正预警</Text>}
                               value={departmentOverview?.summary.planned_regularization_count ?? 0}
@@ -450,14 +546,14 @@ const DepartmentTree: React.FC = () => {
                     </>
                   )}
                   <Tabs
-                    style={{ marginTop: 20 }}
+                    className="organization-detail-tabs"
                     items={[
                       {
                         key: 'members',
                         label: '员工列表',
                         children: (
                           <>
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                            <div className="organization-members-meta">
                               <Text type="secondary">含下级部门 {departmentEmployeeTotal} 人</Text>
                             </div>
                             <List
@@ -525,7 +621,7 @@ const DepartmentTree: React.FC = () => {
                             dataSource={departmentHistory}
                             renderItem={(item) => (
                               <List.Item>
-                                <div style={{ width: '100%' }}>
+                                <div className="organization-history-item">
                                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
                                     <Space size={4} wrap>
                                       {changeTypeTag(item.change_type)}
@@ -533,12 +629,12 @@ const DepartmentTree: React.FC = () => {
                                     </Space>
                                     <Text type="secondary">{formatDateTime(item.changed_at || item.created_at)}</Text>
                                   </div>
-                                  <div style={{ marginTop: 6 }}>
+                                  <div className="organization-history-change">
                                     <Text type="secondary">{item.old_value || '-'}</Text>
                                     <Text type="secondary"> {'->'} </Text>
                                     <Text>{item.new_value || '-'}</Text>
                                   </div>
-                                  <div style={{ marginTop: 4, color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>
+                                  <div className="organization-history-source">
                                     来源：{item.source || 'system'}
                                   </div>
                                 </div>

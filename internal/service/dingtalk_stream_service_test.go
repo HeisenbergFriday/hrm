@@ -100,6 +100,22 @@ type fakeApprovalStore struct {
 	upsertN   int
 }
 
+type fakeApprovalReconciler struct {
+	mu     sync.Mutex
+	calls  int
+	last   *database.Approval
+	result ApprovalBusinessReconcileResult
+	err    error
+}
+
+func (f *fakeApprovalReconciler) Reconcile(_ context.Context, approval *database.Approval) (ApprovalBusinessReconcileResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.last = approval
+	return f.result, f.err
+}
+
 func newFakeApprovalStore() *fakeApprovalStore {
 	return &fakeApprovalStore{byKey: make(map[string]*database.Approval)}
 }
@@ -402,13 +418,21 @@ func TestProcessEvent_SameProcessIDDifferentOrgIsolated(t *testing.T) {
 	}
 }
 
-func TestProcessEvent_TaskChangeSafeReceive(t *testing.T) {
+func TestProcessEvent_TaskChangeRefreshesApproval(t *testing.T) {
 	events := newFakeEventStore()
 	approvals := newFakeApprovalStore()
 	fetchN := 0
 	svc := newTestStreamService("org-a", events, approvals, func(orgID, processInstanceID string) (*dingtalk.ApprovalInstance, error) {
 		fetchN++
-		return nil, errors.New("should not fetch for task change")
+		return &dingtalk.ApprovalInstance{
+			ProcessInstanceID: processInstanceID,
+			Title:             "请假审批",
+			Status:            "COMPLETED",
+			Result:            "agree",
+			CreateTime:        "2026-07-14 10:00:00",
+			FinishTime:        "2026-07-14 11:00:00",
+			OriginatorUserID:  "u1",
+		}, nil
 	})
 	result, err := svc.ProcessEvent(context.Background(), &event.EventHeader{
 		EventId:   "evt-task-1",
@@ -420,14 +444,51 @@ func TestProcessEvent_TaskChangeSafeReceive(t *testing.T) {
 	if result != StreamEventResultSuccess {
 		t.Fatalf("result=%s", result)
 	}
-	if fetchN != 0 {
-		t.Fatalf("detail fetch should be skipped for task change")
+	if fetchN != 1 {
+		t.Fatalf("detail fetch count=%d want 1", fetchN)
 	}
-	if approvals.upsertN != 0 {
-		t.Fatalf("approval must not change on task event")
+	if approvals.upsertN != 1 {
+		t.Fatalf("approval upsert count=%d want 1", approvals.upsertN)
+	}
+	if got := approvals.byKey["org-a|pi-task"]; got == nil || got.Status != "COMPLETED" {
+		t.Fatalf("approval not refreshed: %#v", got)
 	}
 	if events.records["org-a|evt-task-1"].Status != repository.DingTalkEventStatusSuccess {
 		t.Fatalf("task event not marked success")
+	}
+}
+
+func TestProcessEvent_InstanceChangeRunsBusinessReconciliation(t *testing.T) {
+	events := newFakeEventStore()
+	approvals := newFakeApprovalStore()
+	reconciler := &fakeApprovalReconciler{result: ApprovalBusinessReconcileResult{
+		Status: ApprovalReconcileStatusApplied, Business: ApprovalReconcileBusinessAnnualLeave,
+	}}
+	svc := newTestStreamService("org-a", events, approvals, func(orgID, processInstanceID string) (*dingtalk.ApprovalInstance, error) {
+		return &dingtalk.ApprovalInstance{
+			ProcessInstanceID: processInstanceID,
+			Title:             "年假审批",
+			Status:            "COMPLETED",
+			Result:            "agree",
+			CreateTime:        "2026-07-14 10:00:00",
+			FinishTime:        "2026-07-14 11:00:00",
+			OriginatorUserID:  "u1",
+		}, nil
+	})
+	svc.reconciler = reconciler
+
+	result, err := svc.ProcessEvent(context.Background(), &event.EventHeader{
+		EventId: "evt-reconcile", EventType: dingTalkEventTypeInstanceChange,
+	}, `{"data":{"processInstanceId":"pi-reconcile","processCode":"PROC-LEAVE","type":"finish"}}`)
+	if err != nil || result != StreamEventResultSuccess {
+		t.Fatalf("result=%s err=%v", result, err)
+	}
+	if reconciler.calls != 1 || reconciler.last == nil || reconciler.last.ProcessID != "pi-reconcile" {
+		t.Fatalf("reconciliation calls=%d approval=%#v", reconciler.calls, reconciler.last)
+	}
+	got := approvals.byKey["org-a|pi-reconcile"]
+	if got == nil || got.Extension["process_code"] != "PROC-LEAVE" {
+		t.Fatalf("nested payload was not parsed: %#v", got)
 	}
 }
 

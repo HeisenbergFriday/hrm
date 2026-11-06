@@ -236,7 +236,6 @@ D:\ai项目
 | `/approval-templates` | ApprovalTemplate.tsx | 审批模板 |
 | `/approval-instances` | ApprovalInstance.tsx | 审批实例 |
 | `/approval-detail/:id` | ApprovalDetail.tsx | 审批实例详情 |
-| `/approval-stats` | ApprovalStats.tsx | 审批统计 |
 | `/oa-approval-data` | OAApprovalData.tsx | 沐腾组织外部 OA 审批明细 |
 | `/employee-profile` | EmployeeProfile.tsx | 员工档案 |
 | `/employee-flow` | EmployeeFlow.tsx | 入转调离流程与台账入口 |

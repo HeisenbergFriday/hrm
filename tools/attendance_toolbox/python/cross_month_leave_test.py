@@ -39,7 +39,7 @@ def schedule_context(year: int, month: int, working_days: set[date]) -> dict:
 
 
 class CrossMonthLeaveAllocationTests(unittest.TestCase):
-    def test_user_case_allocates_16_hours_to_july_and_4_to_august(self):
+    def test_user_case_uses_each_uploaded_month_schedule(self):
         row = (
             "MT0040",
             "测试员工",
@@ -56,17 +56,17 @@ class CrossMonthLeaveAllocationTests(unittest.TestCase):
             7,
             {date(2026, 7, 30), date(2026, 7, 31)},
         )
-        # 8 月 1 日即使未被普通作息标成工作日，也应由系统总时长补足半天。
+        # 8 月作息表没有工作日，因此 8 月不计请假时长。
         august = schedule_context(2026, 8, set())
 
         july_result = calc_leave.calc_final_fields(row, july)
         august_result = calc_leave.calc_final_fields(row, august)
 
         self.assertEqual(july_result[:2], (16.0, 2.0))
-        self.assertEqual(august_result[:2], (4.0, 0.5))
-        self.assertEqual(july_result[0] + august_result[0], 20.0)
-        self.assertEqual(july_result[2], "跨月按系统时长分摊")
-        self.assertEqual(august_result[2], "跨月按系统时长分摊")
+        self.assertEqual(august_result[:2], (0, 0))
+        self.assertEqual(july_result[0] + august_result[0], 16.0)
+        self.assertEqual(july_result[2], "跨月按目标月作息计算")
+        self.assertEqual(august_result[2], "跨月按目标月作息计算")
 
     def test_same_month_numeric_leave_keeps_existing_schedule_logic(self):
         row = (
@@ -88,7 +88,7 @@ class CrossMonthLeaveAllocationTests(unittest.TestCase):
 
         self.assertEqual(calc_leave.calc_final_fields(row, august), (24.0, 3.0, None))
 
-    def test_year_boundary_keeps_system_total(self):
+    def test_year_boundary_uses_each_month_schedule(self):
         row = (
             "MT0005",
             "测试员工",
@@ -107,8 +107,8 @@ class CrossMonthLeaveAllocationTests(unittest.TestCase):
         january_result = calc_leave.calc_final_fields(row, january)
 
         self.assertEqual(december_result[:2], (8.0, 1.0))
-        self.assertEqual(january_result[:2], (4.0, 0.5))
-        self.assertEqual(december_result[0] + january_result[0], 12.0)
+        self.assertEqual(january_result[:2], (0, 0))
+        self.assertEqual(december_result[0] + january_result[0], 8.0)
 
     def test_natural_day_leave_keeps_calendar_day_semantics(self):
         row = (
@@ -150,7 +150,7 @@ class CrossMonthLeaveAllocationTests(unittest.TestCase):
         self.assertEqual(result[:2], (16, 2))
         self.assertIsNone(result[2])
 
-    def test_large_mismatch_falls_back_and_marks_manual_review(self):
+    def test_large_system_mismatch_still_uses_target_month_schedule(self):
         row = (
             "MT0004",
             "测试员工",
@@ -166,7 +166,7 @@ class CrossMonthLeaveAllocationTests(unittest.TestCase):
 
         result = calc_leave.calc_final_fields(row, july)
         self.assertEqual(result[:2], (8.0, 1.0))
-        self.assertIn("需人工确认", result[2])
+        self.assertEqual(result[2], "跨月按目标月作息计算")
 
     def test_final_summary_day_details_reuse_cross_month_allocation(self):
         august = schedule_context(2026, 8, set())
@@ -184,8 +184,8 @@ class CrossMonthLeaveAllocationTests(unittest.TestCase):
             worksheet.append([
                 "MT0040", "测试员工", "智慧零售", "网点拓展部", "区域",
                 "事假", datetime(2026, 7, 30, 8, 0), datetime(2026, 8, 1, 12, 7),
-                20, 4, 0.5, "跨月按系统时长分摊", "已确认", 4, "核对结束月半天",
-                "2026-08", "小时", '{"2026-07-30":{"hours":8,"days":1},"2026-07-31":{"hours":8,"days":1},"2026-08-01":{"hours":4,"days":0.5}}',
+                20, 4, 0.5, "跨月按目标月作息计算", "已确认", 4, "核对结束月半天",
+                "2026-08", "小时", '{"2026-08-01":{"hours":4,"days":0.5}}',
             ])
             workbook.save(path)
             workbook.close()
@@ -265,7 +265,7 @@ class TargetMonthLeaveOutputTests(unittest.TestCase):
         self.assertEqual(by_id["MT-CROSS"][7], datetime(2026, 9, 3, 18, 30))
         self.assertEqual(by_id["MT-CROSS"][9:11], (24, 3))
         self.assertEqual(by_id["MT-OFF-CROSS"][9:11], (8, 1))
-        self.assertEqual(by_id["MT-OFF-CROSS"][11], "异地不打卡-跨月按系统时长分摊")
+        self.assertEqual(by_id["MT-OFF-CROSS"][11], "异地不打卡-跨月按目标月作息计算")
         self.assertEqual(by_id["MT-OFF-NATURAL"][9:11], (None, 2))
         self.assertEqual(by_id["MT-OFF-UPLOAD"][9:11], (None, None))
         self.assertIn("需人工确认", by_id["MT-OFF-UPLOAD"][11])
@@ -288,7 +288,7 @@ class TargetMonthLeaveOutputTests(unittest.TestCase):
         self.assertEqual(len(output_rows), 1)
         self.assertEqual(output_rows[0][6], datetime(2026, 7, 31, 9))
         self.assertEqual(output_rows[0][7], datetime(2026, 8, 1, 18, 30))
-        self.assertEqual(output_rows[0][9:11], (8, 1))
+        self.assertEqual(output_rows[0][9:11], (0, 0))
 
 
 if __name__ == "__main__":

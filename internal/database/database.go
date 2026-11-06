@@ -181,6 +181,7 @@ func Init() error {
 	migratePermissions()
 	migratePerformanceIndicatorRolePresets()
 	migrateMenuPermissions()
+	migrateRemovedMenuPermissions()
 	migratePerformanceReportMenuPermissions()
 	migratePerformanceFollowupMenuPermissions()
 	migrateAttendanceToolboxMenuPermissions()
@@ -985,6 +986,7 @@ func organizationScopedModelTables() []string {
 		&LeaveRuleConfig{},
 		&AnnualLeaveEligibility{},
 		&AnnualLeaveGrant{},
+		&LeaveBalanceSnapshot{},
 		&OvertimeRuleConfig{},
 		&OvertimeMatchResult{},
 		&OvertimeSyncHistory{},
@@ -1072,6 +1074,7 @@ var organizationScopedTableNameSet = map[string]struct{}{
 	"leave_rule_configs":                   {},
 	"annual_leave_eligibilities":           {},
 	"annual_leave_grants":                  {},
+	"leave_balance_snapshots":              {},
 	"overtime_rule_configs":                {},
 	"overtime_match_results":               {},
 	"overtime_sync_histories":              {},
@@ -1272,6 +1275,7 @@ func migrate() error {
 		&LeaveRuleConfig{},
 		&AnnualLeaveEligibility{},
 		&AnnualLeaveGrant{},
+		&LeaveBalanceSnapshot{},
 		&OvertimeRuleConfig{},
 		&OvertimeMatchResult{},
 		&OvertimeSyncHistory{},
@@ -2925,6 +2929,10 @@ func ensureRoleDataPermissionInOrg(orgID string, roleID uint, scope string, depa
 }
 
 func normalizeMenuPermissionKeys(keys []string) []string {
+	removed := map[string]struct{}{
+		"menu:approval-stats":   {},
+		"menu:attendance-stats": {},
+	}
 	keySet := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
 		normalized := strings.TrimSpace(key)
@@ -2933,6 +2941,9 @@ func normalizeMenuPermissionKeys(keys []string) []string {
 		}
 		if !strings.HasPrefix(normalized, "menu:") {
 			normalized = "menu:" + normalized
+		}
+		if _, isRemoved := removed[normalized]; isRemoved {
+			continue
 		}
 		keySet[normalized] = struct{}{}
 	}
@@ -2948,7 +2959,7 @@ var legacyMenuKeysByPermission = map[string][]string{
 	"org:read":                             {"menu:organization-dashboard", "menu:department-tree", "menu:employees", "menu:people-data-center"},
 	"user_manage":                          {"menu:employee-profile", "menu:employee-flow", "menu:talent-analysis", "menu:sync-log"},
 	"attendance_manage":                    {"menu:attendance", "menu:attendance-export", "menu:attendance-toolbox", "menu:week-schedule", "menu:employee-shift-config", "menu:sync-jobs", "menu:leave-overtime"},
-	"approval_manage":                      {"menu:approval-templates", "menu:approval-instances", "menu:approval-stats", "menu:oa-approval-data"},
+	"approval_manage":                      {"menu:approval-templates", "menu:approval-instances", "menu:oa-approval-data"},
 	"permission_manage":                    {"menu:permission", "menu:setting"},
 	"audit_log:read":                       {"menu:audit-logs"},
 	"performance:activity:manage":          {"menu:performance-overview", "menu:performance-reports", "menu:performance-interviews", "menu:performance-appeals"},
@@ -2995,6 +3006,49 @@ func migrateMenuPermissions() {
 		}
 		if err := DB.Create(&MenuPermission{OrgID: NormalizeOrganizationID(role.OrgID), RoleID: role.ID, MenuKeys: string(payload)}).Error; err != nil {
 			log.Printf("迁移菜单权限：写入角色 %d 菜单失败: %v", role.ID, err)
+		}
+	}
+}
+
+// migrateRemovedMenuPermissions removes menu keys whose pages and routes have
+// been retired. The migration is idempotent and only updates changed records.
+func migrateRemovedMenuPermissions() {
+	var records []MenuPermission
+	if err := DB.Where("deleted_at IS NULL").Find(&records).Error; err != nil {
+		log.Printf("迁移已删除菜单权限：读取菜单权限失败: %v", err)
+		return
+	}
+	for _, record := range records {
+		var keys []string
+		if err := json.Unmarshal([]byte(strings.TrimSpace(record.MenuKeys)), &keys); err != nil {
+			log.Printf("迁移已删除菜单权限：解析角色 %d 菜单失败: %v", record.RoleID, err)
+			continue
+		}
+		hasRemovedKey := false
+		for _, key := range keys {
+			normalized := strings.TrimSpace(key)
+			if !strings.HasPrefix(normalized, "menu:") {
+				normalized = "menu:" + normalized
+			}
+			if normalized == "menu:approval-stats" || normalized == "menu:attendance-stats" {
+				hasRemovedKey = true
+				break
+			}
+		}
+		if !hasRemovedKey {
+			continue
+		}
+		filtered := normalizeMenuPermissionKeys(keys)
+		payload, err := json.Marshal(filtered)
+		if err != nil {
+			log.Printf("迁移已删除菜单权限：序列化角色 %d 菜单失败: %v", record.RoleID, err)
+			continue
+		}
+		if string(payload) == strings.TrimSpace(record.MenuKeys) {
+			continue
+		}
+		if err := DB.Model(&MenuPermission{}).Where("id = ?", record.ID).Update("menu_keys", string(payload)).Error; err != nil {
+			log.Printf("迁移已删除菜单权限：更新角色 %d 菜单失败: %v", record.RoleID, err)
 		}
 	}
 }

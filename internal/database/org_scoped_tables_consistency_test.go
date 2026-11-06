@@ -52,6 +52,7 @@ func TestOrganizationScopedTablesIncludeAllOrgIDModels(t *testing.T) {
 		&LeaveRuleConfig{},
 		&AnnualLeaveEligibility{},
 		&AnnualLeaveGrant{},
+		&LeaveBalanceSnapshot{},
 		&OvertimeRuleConfig{},
 		&OvertimeMatchResult{},
 		&OvertimeSyncHistory{},

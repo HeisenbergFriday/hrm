@@ -21,7 +21,8 @@ import {
   Typography,
   message,
 } from 'antd'
-import { ArrowLeftOutlined, EditOutlined, SwapRightOutlined, SyncOutlined, UserOutlined } from '@ant-design/icons'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
+import { ArrowLeftOutlined, CheckOutlined, CopyOutlined, EditOutlined, SwapRightOutlined, SyncOutlined, UserOutlined } from '@ant-design/icons'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import StatusTag from '../components/StatusTag'
@@ -34,6 +35,7 @@ import {
   confirmOrgSync,
   missingOrgSyncPermissionTip,
 } from '../utils/orgSyncAction'
+import './organization.css'
 
 const { Title, Text } = Typography
 
@@ -162,10 +164,26 @@ const EmployeeDetail: React.FC = () => {
   const [managerEditOpen, setManagerEditOpen] = useState(false)
   const [managerSaving, setManagerSaving] = useState(false)
   const [managerUsers, setManagerUsers] = useState<Employee[]>([])
+  const [copiedField, setCopiedField] = useState<string | null>(null)
   const [form] = Form.useForm()
   const [managerForm] = Form.useForm()
   const canMaintainManager = hasPermission('user_manage')
   const canSync = canSyncOrgData()
+
+  const profileCompleteness = useMemo(() => {
+    if (!detail) return 0
+    const profile = detail.profile
+    const checks = [
+      detail.employee.name,
+      detail.employee.mobile || detail.employee.email,
+      detail.department.name,
+      profile?.employee_id || detail.employee.user_id,
+      profile?.employment_type,
+      profile?.entry_date,
+      profile?.job_level,
+    ]
+    return Math.round((checks.filter(Boolean).length / checks.length) * 100)
+  }, [detail])
 
   const scopeLabel = useMemo(() => {
     if (!detail?.scope) {
@@ -287,6 +305,18 @@ const EmployeeDetail: React.FC = () => {
     })
   }
 
+  const copyIdentity = async (field: string, value: string) => {
+    if (!value) return
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopiedField(field)
+      message.success('已复制到剪贴板')
+      window.setTimeout(() => setCopiedField((current) => current === field ? null : current), 1800)
+    } catch {
+      message.error('复制失败，请手动选择文本')
+    }
+  }
+
   const loadManagerUsers = async () => {
     const response = await userAPI.getUsers({ page: 1, page_size: 2000 })
     const data = response.data?.items || response.data?.data?.items || []
@@ -387,6 +417,7 @@ const EmployeeDetail: React.FC = () => {
 
   return (
     <PageContainer
+      className="organization-employee-detail"
       title={detail?.employee?.name || '员工详情'}
       subtitle={scopeLabel}
       icon={<UserOutlined />}
@@ -397,7 +428,7 @@ const EmployeeDetail: React.FC = () => {
           </Button>
           <Tooltip title={canMaintainManager ? undefined : '你缺少 user_manage 权限，需要联系管理员添加'}>
             <Button icon={<EditOutlined />} onClick={openEdit} disabled={!canMaintainManager}>
-              编辑档案
+              编辑人事档案
             </Button>
           </Tooltip>
           <Tooltip title={canSync ? undefined : missingOrgSyncPermissionTip}>
@@ -414,29 +445,37 @@ const EmployeeDetail: React.FC = () => {
         </div>
       ) : detail ? (
         <>
-          <PageCard style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+          <PageCard className="organization-employee-hero">
+            <div className="organization-profile-summary">
               <Avatar size={80} src={detail.employee.avatar} icon={<UserOutlined />} />
-              <div style={{ flex: 1 }}>
-                <div style={{ marginBottom: 8 }}>
+              <div className="organization-profile-summary-main">
+                <div className="organization-employee-hero-heading">
+                  <div>
+                    <Title level={3} className="organization-employee-hero-name">{detail.employee.name}</Title>
+                    <Text type="secondary">{detail.employee.position || '岗位待同步'} · {detail.department.name || detail.employee.department_id}</Text>
+                  </div>
+                  {statusTag(detail.employee.status)}
+                </div>
+                <div className="organization-employee-hero-meta">
+                  <span className="organization-identity-chip"><Text type="secondary">工号</Text><Text>{detail.profile?.employee_id || detail.employee.user_id}</Text><Button type="text" size="small" aria-label="复制员工工号" icon={copiedField === 'employee-id' ? <CheckOutlined /> : <CopyOutlined />} onClick={() => void copyIdentity('employee-id', detail.profile?.employee_id || detail.employee.user_id)} /></span>
+                  <span className="organization-identity-chip"><Text type="secondary">钉钉账号</Text><Text>{detail.employee.user_id}</Text><Button type="text" size="small" aria-label="复制钉钉账号" icon={copiedField === 'user-id' ? <CheckOutlined /> : <CopyOutlined />} onClick={() => void copyIdentity('user-id', detail.employee.user_id)} /></span>
+                </div>
+                <div className="organization-employee-hero-tags">
                   {detail.employee.position ? (
-                    <Text>{detail.employee.position}</Text>
+                    <Tag color="blue">{detail.employee.position}</Tag>
                   ) : (
                     <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{getPositionDiagnosticText(detail.employee)}</span>}>
                       <Tag color="orange">未同步岗位</Tag>
                     </Tooltip>
                   )}
-                  <Text type="secondary"> / {detail.department.name || detail.employee.department_id}</Text>
+                  <Tag>{detail.profile?.employment_type || '雇佣类型待补充'}</Tag>
+                  <Tag>{profileCompleteness}% 档案完整度</Tag>
                 </div>
-                <Space wrap>
-                  {statusTag(detail.employee.status)}
-                  <StatusTag>{detail.employee.user_id}</StatusTag>
-                </Space>
               </div>
             </div>
           </PageCard>
 
-          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          <Row gutter={[16, 16]} className="organization-detail-stat-row">
             <Col xs={24} sm={12} lg={6}>
               <PageCard>
                 <Statistic title="当前预警" value={detail.warnings.length} />
@@ -496,7 +535,7 @@ const EmployeeDetail: React.FC = () => {
                   <Timeline
                     items={detail.timeline.map((item) => ({
                       color:
-                        item.type === 'resignation'
+                        item.type === 'resignation' || item.type === 'status_change'
                           ? 'red'
                           : item.type === 'transfer'
                             ? 'gold'
@@ -650,7 +689,7 @@ const EmployeeDetail: React.FC = () => {
             </Col>
             <Col span={12}>
               <Form.Item name="birth_date" label="出生日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -673,22 +712,22 @@ const EmployeeDetail: React.FC = () => {
             </Col>
             <Col span={12}>
               <Form.Item name="entry_date" label="入职日期">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="probation_end_date" label="试用期结束">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="planned_regular_date" label="计划转正">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="actual_regular_date" label="实际转正">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -706,12 +745,12 @@ const EmployeeDetail: React.FC = () => {
             </Col>
             <Col span={12}>
               <Form.Item name="contract_start_date" label="合同开始">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="contract_end_date" label="合同结束">
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} locale={datePickerZhCN} />
               </Form.Item>
             </Col>
             <Col span={12}>

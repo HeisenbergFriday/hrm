@@ -53,12 +53,19 @@ export const menuConfig: MenuItem[] = [
       // title 保持完整（顶栏/权限树/tooltip）；label 侧栏可缩短防截断。menu key 禁止改动
       { key: menuPermissionKey('organization-dashboard'), title: '人才管理驾驶舱', label: <Link to="/organization">人才驾驶舱</Link>, icon: <TeamOutlined /> },
       { key: menuPermissionKey('department-tree'), title: '组织架构', label: <Link to="/department-tree">组织架构</Link>, icon: <TeamOutlined /> },
-      { key: menuPermissionKey('employees'), title: '组织花名册', label: <Link to="/employees">组织花名册</Link>, icon: <UserOutlined /> },
-      { key: menuPermissionKey('employee-profile'), title: '员工档案', label: <Link to="/employee-profile">员工档案</Link>, icon: <UserOutlined /> },
+      { key: menuPermissionKey('employees'), title: '员工中心', label: <Link to="/employees">员工中心</Link>, icon: <UserOutlined /> },
       { key: menuPermissionKey('employee-flow'), title: '入转调离', label: <Link to="/employee-flow">入转调离</Link>, icon: <SwapOutlined /> },
       { key: menuPermissionKey('talent-analysis'), title: '人才分析', label: <Link to="/talent-analysis">人才分析</Link>, icon: <BarChartOutlined /> },
-      { key: menuPermissionKey('people-data-center'), title: '人事数据中心', label: <Link to="/people-data-center">人事数据中心</Link>, icon: <DatabaseOutlined />, orgIds: ['muteng'] },
       { key: menuPermissionKey('sync-log'), title: '同步日志', label: <Link to="/sync-log">同步日志</Link>, icon: <HistoryOutlined /> },
+    ],
+  },
+  {
+    key: menuPermissionKey('data-center-group'),
+    title: '数据中心',
+    label: '数据中心',
+    icon: <DatabaseOutlined />,
+    children: [
+      { key: menuPermissionKey('people-data-center'), title: '人事数据中心', label: <Link to="/people-data-center">人事数据中心</Link>, icon: <DatabaseOutlined />, orgIds: ['muteng'] },
     ],
   },
   {
@@ -69,7 +76,6 @@ export const menuConfig: MenuItem[] = [
     children: [
       { key: menuPermissionKey('attendance'), title: '考勤查询', label: <Link to="/attendance">考勤查询</Link>, icon: <ClockCircleOutlined /> },
       { key: menuPermissionKey('attendance-export'), title: '导出记录', label: <Link to="/attendance-export">导出记录</Link>, icon: <FileExcelOutlined /> },
-      { key: menuPermissionKey('attendance-processing'), title: '数据处理', label: <Link to="/attendance-processing">数据处理</Link>, icon: <ToolOutlined /> },
       { key: menuPermissionKey('attendance-external-sync'), title: '外部考勤同步', label: <Link to="/attendance/external-sync">外部同步</Link>, icon: <CloudSyncOutlined /> },
       { key: menuPermissionKey('leave-overtime'), title: '年假与调休', label: <Link to="/leave-overtime">年假与调休</Link>, icon: <ScheduleOutlined /> },
       { key: menuPermissionKey('attendance-toolbox'), title: '考勤工具箱', label: <Link to="/attendance-toolbox">考勤工具箱</Link>, icon: <ToolOutlined /> },
@@ -85,7 +91,6 @@ export const menuConfig: MenuItem[] = [
     children: [
       { key: menuPermissionKey('approval-templates'), title: '审批模板', label: <Link to="/approval-templates">审批模板</Link>, icon: <FileTextOutlined /> },
       { key: menuPermissionKey('approval-instances'), title: '审批实例', label: <Link to="/approval-instances">审批实例</Link>, icon: <FileOutlined /> },
-      { key: menuPermissionKey('approval-stats'), title: '审批统计', label: <Link to="/approval-stats">审批统计</Link>, icon: <BarChartOutlined /> },
       { key: menuPermissionKey('oa-approval-data'), title: 'OA审批数据', label: <Link to="/oa-approval-data">OA审批数据</Link>, icon: <FileSearchOutlined />, orgIds: ['muteng'] },
     ],
   },
@@ -145,6 +150,9 @@ export function filterMenuByKeys(items: MenuItem[], allowedKeys: string[], orgID
   if (!allowedKeys || allowedKeys.length === 0) return []
 
   const keySet = new Set(allowedKeys.map(menuPermissionKey))
+  if (keySet.has(menuPermissionKey('attendance-processing'))) {
+    keySet.add(menuPermissionKey('attendance-toolbox'))
+  }
 
   return items
     .map((item) => {

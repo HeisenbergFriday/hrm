@@ -60,12 +60,12 @@ class OffsitePersonalLeavePriorityTests(unittest.TestCase):
 
 
 class FixedScheduleAttendanceTests(unittest.TestCase):
-    def test_default_fixed_names_excludes_chang_yufan(self) -> None:
+    def test_default_fixed_names_preserve_previous_and_add_new(self) -> None:
         self.assertEqual(
             parttime.DEFAULT_SPECIAL_DEFAULT_NAMES,
-            ("王心英", "刘芮", "汤颖", "周代林", "陈富庆"),
+            ("王心英", "刘芮", "周代林", "汤颖", "陈富庆", "汤树宏"),
         )
-        self.assertEqual(parttime.DEFAULT_SPECIAL_CHENGDU_NAMES, set())
+        self.assertEqual(parttime.DEFAULT_SPECIAL_CHENGDU_NAMES, {"王心英"})
 
     def test_formula_schedule_uses_cached_dates_for_full_month(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -78,7 +78,12 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
         self.assertEqual(parttime._entry_value(day_maps["main"].get(15)), 1.0)
         self.assertEqual(parttime._entry_value(day_maps["main"].get(29)), 1.0)
 
-    def test_fixed_person_keeps_schedule_value_and_only_reminds_anomalies(self) -> None:
+    def test_unassigned_attendance_group_is_detected(self) -> None:
+        self.assertTrue(parttime._is_unassigned_attendance_group("未加入考勤组"))
+        self.assertTrue(parttime._is_unassigned_attendance_group("未加入考勤组（默认）"))
+        self.assertFalse(parttime._is_unassigned_attendance_group("正常考勤组"))
+
+    def test_fixed_person_fills_schedule_dates_without_punch_records(self) -> None:
         monthly_summary = {
             "刘芮": {
                 15: parttime._parse_daily_text_value("标准:上班迟到12分钟\n(09:12,18:30)"),
@@ -88,6 +93,7 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
         schedule_days = {
             15: parttime._make_daily_entry(1.0),
             29: parttime._make_daily_entry(1.0),
+            30: parttime._make_daily_entry(1.0),
         }
 
         resolved, source, warnings = parttime._resolve_row_days(
@@ -103,13 +109,12 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertEqual(parttime._entry_value(resolved[15]), 1.0)
         self.assertEqual(parttime._entry_value(resolved[29]), 1.0)
-        self.assertEqual(sum(parttime._entry_value(entry) or 0 for entry in resolved.values()), 2.0)
+        self.assertEqual(parttime._entry_value(resolved[30]), 1.0)
+        self.assertEqual(sum(parttime._entry_value(entry) or 0 for entry in resolved.values()), 3.0)
         self.assertIn("迟到12分钟", parttime._entry_note(resolved[15]))
         self.assertIn("旷工", parttime._entry_note(resolved[29]))
-        self.assertNotIn("扣减", parttime._entry_note(resolved[15]))
-        self.assertNotIn("未计出勤", parttime._entry_note(resolved[29]))
+        self.assertIn("固定人员按作息表计 1 天出勤", parttime._entry_comment(resolved[15]))
         self.assertTrue(parttime._is_alert_entry(resolved[15]))
-        self.assertFalse(parttime._is_deducted_entry(resolved[15]))
         self.assertFalse(parttime._is_deducted_entry(resolved[29]))
 
     @staticmethod
@@ -165,6 +170,72 @@ class FixedScheduleAttendanceTests(unittest.TestCase):
                     data = xml.encode("utf-8")
                 target_zip.writestr(info, data)
         patched_path.replace(path)
+
+
+class BinaryAttendanceValueTests(unittest.TestCase):
+    def test_late_and_early_are_one_with_detail_in_comment(self) -> None:
+        for text, detail in (
+            ("标准:上班迟到15分钟\n(09:15,18:00)", "迟到15分钟"),
+            ("标准:下班早退89分钟\n(09:00,16:31)", "早退89分钟"),
+        ):
+            with self.subTest(text=text):
+                entry = parttime._parse_daily_text_value(text)
+                self.assertEqual(parttime._entry_value(entry), 1.0)
+                self.assertIn(detail, parttime._entry_comment(entry))
+                self.assertNotIn("0.", parttime._entry_comment(entry))
+
+    def test_rest_punch_is_one_and_absence_is_zero(self) -> None:
+        rest = parttime._parse_daily_text_value("休息并打卡\n(09:00,18:30)")
+        absent = parttime._parse_daily_text_value("标准:旷工\n(-)")
+        self.assertEqual(parttime._entry_value(rest), 1.0)
+        self.assertIn("休息并打卡", parttime._entry_comment(rest))
+        self.assertEqual(parttime._entry_value(absent), 0.0)
+
+    def test_empty_and_unknown_source_stay_blank_with_comments(self) -> None:
+        empty = parttime._parse_daily_text_value(None)
+        unknown = parttime._parse_daily_text_value("系统新状态")
+        self.assertIsNone(parttime._entry_value(empty))
+        self.assertIn("原始记录为空", parttime._entry_comment(empty))
+        self.assertIsNone(parttime._entry_value(unknown))
+        self.assertIn("状态文本无法识别", parttime._entry_comment(unknown))
+
+
+class ParttimeAuditTests(unittest.TestCase):
+    def test_mixed_months_are_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            parttime._validate_detected_months([
+                {"file": "九月.xlsx", "year": 2026, "month": 9, "source": "filename"},
+                {"file": "十月.xlsx", "year": 2026, "month": 10, "source": "filename"},
+            ])
+
+    def test_source_conflicts_are_reported(self) -> None:
+        conflicts = parttime._collect_source_conflicts(
+            {"张三": {12: parttime._make_daily_entry(0.0)}},
+            {"张三": {12: parttime._make_daily_entry(1.0)}},
+            {},
+        )
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["name"], "张三")
+        self.assertEqual(conflicts[0]["day"], 12)
+
+    def test_total_is_written_as_numeric_value(self) -> None:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        parttime._write_title_and_headers(ws, month=7, days_in_month=2)
+        warnings, rows = parttime._write_data_rows(
+            ws,
+            output_rows=[{"姓名": "张三", "所属公司": ""}],
+            days_in_month=2,
+            attendance_detail={"张三": {1: parttime._make_daily_entry(1.0), 2: parttime._make_daily_entry(1.0)}},
+            monthly_summary={},
+            schedules={},
+            default_day_maps={"main": {}, "chengdu": {}},
+            special_default_name_set=set(),
+        )
+        self.assertEqual((warnings, rows), ([], 1))
+        total_col = len(parttime.STATIC_HEADERS) + 2 + 1
+        self.assertEqual(ws.cell(3, total_col).value, 2.0)
+        wb.close()
 
 
 if __name__ == "__main__":

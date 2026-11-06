@@ -475,6 +475,7 @@ class DingTalkExporter:
             "审批状态", "审批结果", "发起人工号", "发起人姓名", "发起人部门",
             "请假类型", "开始时间", "结束时间", "时长", "审批编号",
             "发起时间", "完成时间", "岗位名称",
+            "审批实例ID", "审批流程码", "发起人钉钉UserID",
         ]
         rows: list[list[Any]] = []
         write_counts: dict[str, int] = {}
@@ -502,10 +503,16 @@ class DingTalkExporter:
                 parsed[0],
                 parsed[1],
                 _duration_text(parsed[2], parsed[3] if len(parsed) > 3 else ""),
-                instance.get("business_id"),
+                _identifier_text(instance.get("business_id")),
                 instance.get("create_time"),
                 instance.get("finish_time"),
                 user.get("title") or "",
+                _identifier_text(
+                    instance.get("_sync_process_instance_id")
+                    or instance.get("process_instance_id")
+                ),
+                _identifier_text(instance.get("_sync_process_code")),
+                _identifier_text(instance.get("originator_userid")),
             ])
             write_counts[key] += 1
         mapping_rows = [
@@ -522,6 +529,9 @@ class DingTalkExporter:
             ["发起时间", "create_time", "钉钉审批实例字段"],
             ["完成时间", "finish_time", "钉钉审批实例字段"],
             ["岗位名称", "员工详情 title", "按 originator_userid 查询员工详情"],
+            ["审批实例ID", "process_instance_id", "钉钉审批实例唯一标识"],
+            ["审批流程码", "process_code", "用于隔离不同审批流程的业务编号"],
+            ["发起人钉钉UserID", "originator_userid", "用于同一发起人的审批版本归组"],
         ]
         return _build_export(
             file_name,
@@ -781,6 +791,15 @@ def _populate_worksheet(ws: Any, headers: list[str], rows: list[list[Any]]) -> N
         cell.fill = _HEADER_FILL
         cell.alignment = Alignment(horizontal="center")
 
+    text_identifier_headers = {
+        "审批编号", "审批实例ID", "审批流程码", "发起人钉钉UserID",
+    }
+    for column_index, header in enumerate(headers, start=1):
+        if header not in text_identifier_headers:
+            continue
+        for row_index in range(2, ws.max_row + 1):
+            ws.cell(row_index, column_index).number_format = "@"
+
     for column_cells in ws.columns:
         column = get_column_letter(column_cells[0].column)
         width = 10
@@ -792,6 +811,8 @@ def _populate_worksheet(ws: Any, headers: list[str], rows: list[list[Any]]) -> N
 
 
 def _excel_cell_value(value: Any) -> Any:
+    if isinstance(value, _ExcelText):
+        return str(value)
     value = _loads_maybe_json(value)
     if value in (None, ""):
         return ""
@@ -804,6 +825,16 @@ def _excel_cell_value(value: Any) -> Any:
     if isinstance(value, dict):
         return _excel_cell_text(value)
     return str(value)
+
+
+class _ExcelText(str):
+    """A string that must not be interpreted as JSON or an Excel number."""
+
+
+def _identifier_text(value: Any) -> str:
+    if value in (None, ""):
+        return _ExcelText("")
+    return _ExcelText(str(value).strip())
 
 
 def _excel_cell_text(value: Any) -> str:

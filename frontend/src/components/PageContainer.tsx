@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useId } from 'react'
 import { Grid, Typography } from 'antd'
 import { resolveMobileLayout, useMobileRuntime } from '../utils/responsive'
 
@@ -24,6 +24,7 @@ const PageContainer: React.FC<PageContainerProps> = ({
   noPadding = false,
   ...props
 }) => {
+  const titleId = useId()
   const screens = Grid.useBreakpoint()
   const mobileRuntime = useMobileRuntime()
   const isMobile = resolveMobileLayout(screens.md, mobileRuntime)
@@ -35,63 +36,54 @@ const PageContainer: React.FC<PageContainerProps> = ({
     background: 'var(--color-bg-page)',
     ...style,
   }
-  const showHeader = isMobile ? Boolean(extra) : Boolean(title || extra)
+  // 页面标题在移动端同样保留，避免用户进入深层页面后失去上下文。
+  const showHeader = Boolean(title || subtitle || extra)
 
   if (isMobile && !noPadding) {
     containerStyle.padding = 'var(--space-3)'
   }
 
   return (
-    <div
+    <main
       {...props}
       className={containerClassName}
       style={containerStyle}
+      aria-labelledby={title ? titleId : undefined}
     >
       {showHeader && (
         <div
+          className="page-container-header"
           style={{
-            display: 'flex',
             flexDirection: isMobile ? 'column' : 'row',
             alignItems: isMobile ? 'stretch' : 'flex-start',
-            justifyContent: 'space-between',
-            gap: isMobile ? 12 : 16,
-            marginBottom: isMobile ? 12 : 16,
           }}
         >
-          <div style={{ minWidth: 0 }}>
-            {!isMobile && title && (
-              <h2
-                style={{
-                  margin: '0 0 4px',
-                  fontSize: isMobile ? 'var(--font-size-lg)' : 'var(--font-size-xl)',
-                  fontWeight: 'var(--font-weight-bold)',
-                  color: 'var(--color-text-title)',
-                  lineHeight: isMobile ? '26px' : '32px',
-                }}
-              >
+          <div className="page-container-heading">
+            {title && (
+              <h1 id={titleId} className="page-container-title">
                 {icon && (
-                  <span style={{ color: 'var(--color-primary)', marginRight: 8 }}>
+                  <span className="page-container-title-icon" aria-hidden="true">
                     {icon}
                   </span>
                 )}
                 {title}
-              </h2>
+              </h1>
             )}
             {subtitle && (
-              <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)' }}>
+              <Text className="page-container-subtitle">
                 {subtitle}
               </Text>
             )}
           </div>
           {extra && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <div className="page-container-actions">
               {extra}
             </div>
           )}
         </div>
       )}
       {children}
-    </div>
+    </main>
   )
 }
 

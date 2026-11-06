@@ -44,6 +44,41 @@ func GetAttendanceToolboxDefaults(c *gin.Context) {
 	})
 }
 
+func GetAttendanceToolboxConfig(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	config, err := service.NewAttendanceToolboxConfigService(middleware.RequestDB(c), orgID).Get(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: http.StatusInternalServerError, Message: "获取考勤工具箱配置失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: config})
+}
+
+func SaveAttendanceToolboxConfig(c *gin.Context) {
+	orgID, ok := currentOrgIDOrAbort(c)
+	if !ok {
+		return
+	}
+	var input service.AttendanceToolboxConfig
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "配置格式无效"})
+		return
+	}
+	config, err := service.NewAttendanceToolboxConfigService(middleware.RequestDB(c), orgID).Save(c.Request.Context(), input)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "organization not found") || strings.Contains(err.Error(), "requires organization") {
+			status = http.StatusInternalServerError
+		}
+		c.JSON(status, Response{Code: status, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "配置已保存", Data: config})
+}
+
 func RunAttendanceToolbox(c *gin.Context) {
 	module := strings.TrimSpace(c.Param("module"))
 	if !service.IsAttendanceToolboxStandardModule(module) {
@@ -151,6 +186,10 @@ func RunDingtalkSync(c *gin.Context) {
 // quick and dingtalk_sync have dedicated handlers with dedicated permissions.
 func RunAttendanceToolboxWorkflow(c *gin.Context) {
 	module := strings.TrimSpace(c.Param("module"))
+	if module == "parttime" && !toolboxHasPermission(c, "attendance_toolbox_dingtalk_sync") {
+		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "兼职计算需要拉取钉钉花名册，请开通钉钉同步权限"})
+		return
+	}
 	if !service.IsAttendanceToolboxStandardModule(module) {
 		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "不支持的考勤工具箱模块；quick/dingtalk_sync 请使用专用路由"})
 		return
@@ -674,6 +713,31 @@ func ImportOvertimeRulesPreview(c *gin.Context) {
 		Message: "success",
 		Data:    preview,
 	})
+}
+
+// PreviewOvertimeRules returns effective default or supplied JSON rules
+// without requiring an Excel download/import round trip.
+func PreviewOvertimeRules(c *gin.Context) {
+	var body struct {
+		RulesJSON string `json:"rules_json"`
+	}
+	if c.Request.Body != nil {
+		if err := c.ShouldBindJSON(&body); err != nil && err != io.EOF {
+			c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: "规则预览请求格式无效"})
+			return
+		}
+	}
+	rulesJSON := strings.TrimSpace(body.RulesJSON)
+	if rulesJSON != "" && !toolboxHasPermission(c, "attendance_toolbox_rules_edit") {
+		c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: "你缺少考勤工具箱规则编辑权限，需要联系管理员添加"})
+		return
+	}
+	preview, err := service.NewAttendanceToolboxService().PreviewRules(c.Request.Context(), rulesJSON)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: http.StatusOK, Message: "success", Data: preview})
 }
 
 func ExportAttendanceToolboxTemplates(c *gin.Context) {

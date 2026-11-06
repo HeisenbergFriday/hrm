@@ -139,7 +139,32 @@ describe('ApprovalInstance 标题搜索', () => {
 
     renderPage()
 
-    expect(await screen.findByText('请假审批')).toBeInTheDocument()
+    expect(await screen.findByText('模板：请假审批')).toBeInTheDocument()
+  })
+
+  it('审批标题、模板和实例编号完整展示，不用省略号截断', async () => {
+    mockGetInstances.mockResolvedValue({
+      data: {
+        items: [{
+          id: 'approval-long-1',
+          process_id: 'process-long-1',
+          template_name: '长期出差审批模板',
+          title: '这是一个需要完整展示的超长审批标题，不应被表格省略',
+          applicant_name: '张三',
+          status: 'RUNNING',
+          create_time: '2026-08-17T09:00:00+08:00',
+          finish_time: null,
+          extension: {},
+        }],
+        total: 1,
+      },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('这是一个需要完整展示的超长审批标题，不应被表格省略')).toBeInTheDocument()
+    expect(screen.getByText('模板：长期出差审批模板')).toBeInTheDocument()
+    expect(screen.getByText('实例编号：process-long-1')).toBeInTheDocument()
   })
 
   it('从带查询参数的列表地址进入时恢复筛选、分页和排序', async () => {
@@ -165,6 +190,27 @@ describe('ApprovalInstance 标题搜索', () => {
     expect(screen.getByDisplayValue('请假')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('业务开始日期')).toHaveValue('2026-08-01')
     expect(screen.getByPlaceholderText('业务结束日期')).toHaveValue('2026-08-31')
+  })
+
+  it('重置筛选后恢复默认查询条件', async () => {
+    const user = userEvent.setup()
+    mockLocation.search = '?status=completed&title=%E8%AF%B7%E5%81%87'
+
+    renderPage()
+    await waitFor(() => {
+      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
+      expect(lastCall.status).toBe('completed')
+      expect(lastCall.title).toBe('请假')
+    })
+
+    await user.click(screen.getByRole('button', { name: /重置/ }))
+
+    await waitFor(() => {
+      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
+      expect(lastCall.status).toBeUndefined()
+      expect(lastCall.title).toBeUndefined()
+    })
+    expect(screen.getByPlaceholderText('搜索标题')).toHaveValue('')
   })
 
   it('点击下一页后请求下一页数据并保留页码', async () => {
@@ -224,26 +270,28 @@ describe('ApprovalInstance 标题搜索', () => {
     renderPage()
     await screen.findByText('请假申请')
 
-    expect(screen.getByRole('columnheader', { name: '审批完成时间' })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: '业务开始时间' })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: '业务结束时间' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '审批时间' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '业务时间' })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: '审批完成时间' })).not.toBeInTheDocument()
 
-    const finishTimeHeader = screen.getByRole('columnheader', { name: /审批完成时间/ })
-    await user.click(finishTimeHeader)
-    await waitFor(() => {
-      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
-      expect(lastCall.sort_field).toBe('finish_time')
-      expect(lastCall.sort_order).toBe('asc')
-    })
-
-    await user.click(screen.getByRole('columnheader', { name: /审批完成时间/ }))
+    const sortFieldSelect = screen.getByRole('combobox', { name: '排序字段' })
+    await user.click(sortFieldSelect)
+    await user.click(await screen.findByText('完成时间'))
     await waitFor(() => {
       const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
       expect(lastCall.sort_field).toBe('finish_time')
       expect(lastCall.sort_order).toBe('desc')
     })
 
-    await user.click(screen.getByRole('columnheader', { name: '业务开始时间' }))
+    await user.click(screen.getByRole('button', { name: '降序' }))
+    await waitFor(() => {
+      const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
+      expect(lastCall.sort_field).toBe('finish_time')
+      expect(lastCall.sort_order).toBe('asc')
+    })
+
+    await user.click(screen.getByRole('combobox', { name: '排序字段' }))
+    await user.click(await screen.findByText('业务开始时间'))
     await waitFor(() => {
       const lastCall = mockGetInstances.mock.calls.at(-1)![0] as Record<string, unknown>
       expect(lastCall.sort_field).toBe('business_start_time')
@@ -275,10 +323,10 @@ describe('ApprovalInstance 审批同步', () => {
     const user = userEvent.setup()
     mockSync.mockResolvedValue(syncResponse('success'))
     renderPage()
-    await screen.findByRole('button', { name: /同步全部/ })
+    await screen.findByRole('button', { name: /手动补拉/ })
     const callsBeforeSync = mockGetInstances.mock.calls.length
 
-    await user.click(screen.getByRole('button', { name: /同步全部/ }))
+    await user.click(screen.getByRole('button', { name: /手动补拉/ }))
 
     await waitFor(() => expect(mockSync).toHaveBeenCalledWith(expect.objectContaining({ process_code: undefined })))
     expect(await screen.findByText('审批同步全部成功')).toBeInTheDocument()
@@ -295,7 +343,7 @@ describe('ApprovalInstance 审批同步', () => {
     await user.click(selector as HTMLElement)
     await user.click(await screen.findByText('加班审批'))
 
-    await user.click(screen.getByRole('button', { name: /同步当前模板/ }))
+    await user.click(screen.getByRole('button', { name: /补拉当前模板/ }))
 
     await waitFor(() => expect(mockSync).toHaveBeenCalledWith(expect.objectContaining({ process_code: 'PROC-1' })))
     expect(await screen.findByText('审批同步部分成功')).toBeInTheDocument()
@@ -305,10 +353,10 @@ describe('ApprovalInstance 审批同步', () => {
     const user = userEvent.setup()
     mockSync.mockResolvedValue(syncResponse('failed'))
     renderPage()
-    await screen.findByRole('button', { name: /同步全部/ })
+    await screen.findByRole('button', { name: /手动补拉/ })
     const callsBeforeSync = mockGetInstances.mock.calls.length
 
-    await user.click(screen.getByRole('button', { name: /同步全部/ }))
+    await user.click(screen.getByRole('button', { name: /手动补拉/ }))
 
     expect(await screen.findByText('审批同步全部失败')).toBeInTheDocument()
     expect(mockGetInstances.mock.calls.length).toBe(callsBeforeSync)
@@ -318,7 +366,7 @@ describe('ApprovalInstance 审批同步', () => {
     const user = userEvent.setup()
     mockSync.mockReturnValue(new Promise(() => undefined))
     renderPage()
-    const button = await screen.findByRole('button', { name: /同步全部/ })
+    const button = await screen.findByRole('button', { name: /手动补拉/ })
 
     await user.dblClick(button)
 
@@ -330,7 +378,7 @@ describe('ApprovalInstance 审批同步', () => {
     mockHasPermission.mockReturnValue(false)
     renderPage()
 
-    expect(await screen.findByRole('button', { name: /同步全部/ })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: /手动补拉/ })).toBeDisabled()
   })
 
   it('配置缺失与状态未知分别展示明确提示', async () => {
@@ -339,11 +387,11 @@ describe('ApprovalInstance 审批同步', () => {
       response: { data: { message: '当前企业未配置可同步的审批流程代码', data: { error_code: 'APPROVAL_PROCESS_CODES_MISSING' } } },
     })
     renderPage()
-    await user.click(await screen.findByRole('button', { name: /同步全部/ }))
+    await user.click(await screen.findByRole('button', { name: /手动补拉/ }))
     expect(await screen.findByText('审批流程配置缺失')).toBeInTheDocument()
 
     mockSync.mockRejectedValueOnce(new Error('审批同步状态查询失败，后台任务可能仍在执行（请求编号：request-2）'))
-    await user.click(screen.getByRole('button', { name: /同步全部/ }))
+    await user.click(screen.getByRole('button', { name: /手动补拉/ }))
     expect(await screen.findByText('同步状态暂时无法确认')).toBeInTheDocument()
   })
 
@@ -368,7 +416,7 @@ describe('ApprovalInstance 审批同步', () => {
     mockResumeSync.mockResolvedValue(syncResponse('success'))
     renderPage()
 
-    await user.click(await screen.findByRole('button', { name: /同步全部/ }))
+    await user.click(await screen.findByRole('button', { name: /手动补拉/ }))
 
     // Should store the real request_id and poll it
     await waitFor(() => expect(mockSync).toHaveBeenCalledTimes(1))
@@ -384,7 +432,7 @@ describe('ApprovalInstance 审批同步', () => {
     })
     renderPage()
 
-    await user.click(await screen.findByRole('button', { name: /同步全部/ }))
+    await user.click(await screen.findByRole('button', { name: /手动补拉/ }))
 
     // Should eventually show success
     expect(await screen.findByText('审批同步全部成功')).toBeInTheDocument()

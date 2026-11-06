@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { Typography, Table, Spin, Empty, Alert, Button, Modal, Form, Input, Select, DatePicker, message, Tabs, Descriptions, Statistic, Row, Col, Progress } from 'antd'
+import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { UserOutlined, StarOutlined, AlertOutlined, ReloadOutlined, PlusOutlined, LineChartOutlined } from '@ant-design/icons'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
@@ -487,7 +488,7 @@ const TalentAnalysis: React.FC = () => {
             label="分析日期"
             rules={[{ required: true, message: '请选择分析日期' }]}
           >
-            <DatePicker style={{ width: '100%' }} placeholder="选择日期" />
+            <DatePicker style={{ width: '100%' }} placeholder="选择日期" locale={datePickerZhCN} />
           </Form.Item>
         </Form>
       </Modal>

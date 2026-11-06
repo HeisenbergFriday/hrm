@@ -1,6 +1,6 @@
 ---
 purpose: 开发问题复盘日志——沉淀已定位根因且有复用价值的缺陷与防复发约束，供开发前查阅、开发后更新
-last_updated: 2026-10-14
+last_updated: 2026-11-06
 source_of_truth:
   - 本文件（防复发索引、写入规则与归档导航）
   - docs/development-issues/2026.md（2026 年完整问题条目）
@@ -54,22 +54,25 @@ update_when:
 | `attendance-toolbox` `run-store` | 结果绑定 `user_id+org_id`；磁盘仅 `rootDir/<runID>`；禁止返回服务器绝对路径 | `.ai/MODULES/attendance.md` |
 | `attendance-toolbox` `permission` | 计算/审计/模板需 `attendance_toolbox_operate`；钉钉同步需 `attendance_toolbox_dingtalk_sync`；一键联动 AND | `.ai/MODULES/attendance.md` 权限矩阵 |
 | `attendance-toolbox` `dingtalk-sync` `frontend-refresh` | 工具箱不展示独立“钉钉同步”页签；花名册生成与异动流程同步只保留对应文件卡片入口，固定配置仅展示状态；兼职月度打卡仍在固定配置按月份抓取；导航配置与回归测试必须一致 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
+| `attendance-toolbox` `overtime` `OPS_GROUP` `no-punch` | 运营支撑部法定3倍／假期休息日2倍内置生效，个人例外保留；花名册连续末级路径不得丢上级；跨天全部日明细共用整单上限；上传入口须覆盖多月份/年份，先过滤非目标月再校验年份。仅调休缺卡标记“未知” | [2026-08-01 花名册选错文件与运维组规则（2026-11-02 上传链路更正）](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
 | `attendance-toolbox` `parttime` `leave-priority` | 兼职汇总同一日同时含外出/出差与事假时，必须先按事假处理并停止出勤计算；组合状态判断必须早于外出计出勤的提前返回 | [2026-08-01 外出/出差与事假并存误计出勤](development-issues/2026.md#2026-08-01-p1-外出出差与事假并存误计出勤) |
 | `attendance-toolbox` `parttime` `status-mapping` `roster` | 钉钉月度打卡明确返回的 `NotSigned`、`Absenteeism/Absent`、`SeriousLate`（含下划线/大小写变体）必须转换为可见状态；标准化花名册不得丢失实习生职位和部门；完全没有源记录的日期仍保持空白，禁止默认补出勤 | [2026-08-18 兼职月度打卡异常状态被静默丢弃](development-issues/2026.md#2026-08-18-p1-兼职月度打卡异常状态被静默丢弃) |
 | `attendance-toolbox` `parttime` `schedule-formula` `fixed-staff` | 公式续算日期的作息表必须读取 Excel 已计算值；固定人员出勤由作息表决定，打卡异常只提醒不扣减；简易“姓名+1～31日”矩阵可在无工号时识别 | [2026-09-01 兼职作息公式与固定人员规则导致出勤漏算](development-issues/2026.md#2026-09-01-p1-兼职作息公式与固定人员规则导致出勤漏算) |
 | `attendance-toolbox` `parttime` `day-column` `weekend-header` | 钉钉“每月打卡记录”的周末列可显示“六/日”而非日期数字；必须在连续数字日期锚点内推导周末日期，遇到统计字段立即停止，禁止静默丢弃整月周末 | [2026-09-28 兼职周末表头未识别导致出勤漏计](development-issues/2026.md#2026-09-28-p1-兼职周末表头未识别导致出勤漏计) |
 | `attendance-toolbox` `final` `roster` `identity-merge` | 最终汇总以花名册为人事主数据；钉钉月度考勤仅用非空值补充/纠正工号、姓名、考勤组、部门和岗位，禁止清空合同主体、人员类型及入/离职/转正日期 | [2026-09-02 最终表考勤身份覆盖清空花名册人事字段](development-issues/2026.md#2026-09-02-p1-最终表考勤身份覆盖清空花名册人事字段) |
 | `attendance-toolbox` `final` `roster` `person-union` `completeness` `identity-merge` | 最终汇总人员取在职/离职花名册与目标月月度考勤、请假、加班人员并集；人工考勤汇总表是结果异常时的可选兜底。活动记录必须同时带入姓名；同一正式工号只能输出一人；正式业务工号不得被钉钉 UserID 覆盖，当前主编号优先 MT | [2026-09-22 最终汇总按花名册取人导致人工考勤人员漏出](development-issues/2026.md#2026-09-22-p1-最终汇总按花名册取人导致人工考勤人员漏出) |
+| `attendance-toolbox` `integrity` `identity` `month` `audit` | 上传检查与计算共用门禁，错误不得吞掉；兼职人数和冲突在生成前核对；冲突记录原文件名及采用值；审计页与页面状态统一；模板颜色复用计算器常量，日期表头不得读取首行数据 | [2026-11-04 考勤工具箱先计算后审计导致问题被标记成功（2026-11-05 补齐）](development-issues/2026.md#2026-11-04-p1-考勤工具箱先计算后审计导致问题被标记成功) |
 | `attendance-toolbox` `roster` `dingtalk` `hrm` `regularization-date` | 钉钉 HRM 转正日期必须兼容标准/中文字段标识及 snake_case/camelCase 返回结构；同步成功但仅有转正日期时也不得标记为无字段 | [2026-09-22 钉钉 HRM 转正日期未进入同步花名册](development-issues/2026.md#2026-09-22-p1-钉钉-hrm-转正日期未进入同步花名册) |
 | `attendance-toolbox` `dingtalk` `approval` `time-window` | `processinstance/listids` 禁止直接提交超长或未来时间范围；客户端必须按最多 120 天连续分片、结束时间预留时钟偏差，并跨片去重、全局执行条数上限 | [2026-08-01 钉钉审批查询时间范围非法](development-issues/2026.md#2026-08-01-p1-钉钉审批查询时间范围非法导致工具箱同步失败) |
 | `attendance-toolbox` `structured-result` `auto-fill` | 自动回填必须从 structured run 按 `kind=export + flow_key` 下载业务表；审计/元数据不得上传，也不得因多文件而改走 ZIP 或重跑同步 | [2026-08-01 自动回填误判多文件](development-issues/2026.md#2026-08-01-p1-自动回填将审计文件计入结果导致同步成功后仍报错) |
 | `attendance-toolbox` `timeout` `async-boundary` | 请假/加班/异动拉取必须先落持久化任务、写出 202，再执行后台拉取；按组织+流程集合防重，避免自动异动阻塞请假；已受理后的查询 404/超时禁止回退重拉 | [2026-07-27 长任务超时（2026-10-14 工具箱复发）](development-issues/2026.md#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
 | `attendance-toolbox` `roster` `data-contract` `multi-tenant` | 组织花名册只输出当前 org 中具有权威 `EmployeeProfile.EmployeeID`、真实姓名与有效部门路径的 active 员工；缺工号员工跳过且必须在前端提示人数，禁止 UserID/DingTalkUserID 兜底；待输出员工缺姓名/路径仍整体 400；当前 org 的 `<org>:0` 是兼容历史数据的根哨兵，外组织同形值仍属悬空；自动响应不得覆盖请求期间的用户选择/删除/替换 | [2026-08-01 花名册选错文件与运维组规则](development-issues/2026.md#2026-08-01-p1-花名册选错文件--运维组未强制标记未加) |
+| `attendance-toolbox` `frontend` `fixed-config` `employee-picker` `pagination` `multi-tenant` | 固定配置人员选择器必须按当前组织分页读取全部可见员工，不能用单页 1000 条上限；停用/历史名单要标注状态，组织切换必须清理并重载配置和选项；姓名型名单遇到同名或当前组织查不到时必须提示 | [2026-10-29 考勤工具箱固定名单人员缺失与组织切换残留](development-issues/2026.md#2026-10-29-p2-考勤工具箱固定名单人员缺失与组织切换残留) |
 | `attendance-toolbox` `roster` `org-sync` `auto-repair` | 部门路径错误可在 `attendance_manage` 权限和统一确认框后复用异步组织同步，成功/部分成功后按原文件快照重试一次；其他错误、缺权限或重试失败禁止自动循环 | 同上 |
 | `attendance-toolbox` `playwright` `locator` | 页面存在重复 placeholder/文案时，E2E 必须先用 tabpanel、form 或可访问名称缩小作用域；禁止使用全页面模糊定位 | [2026-07-30 考勤工具箱 E2E 重复日期占位符](development-issues/2026.md#2026-07-30-p2-考勤工具箱-e2e-重复日期占位符导致-strict-mode-失败) |
 | `attendance-toolbox` `date-boundary` `probation` | 日期区间条件必须使用闭区间语义，覆盖月初、月末、节假日和闰年边界；禁止对工作日使用严格大于/小于导致边界漏算 | [2026-08-02 当月转正天数少算一天](development-issues/2026.md#2026-08-02-p1-当月转正天数少算一天日期区间左边界漏算) |
 | `attendance-toolbox` `leave` `cross-month` `duration-allocation` | 目标月以作息表月份为准；结果表只保留与目标月有交集的请假，跨月记录保留原始起止时间但只计算目标月份额；普通员工、异地不打卡及长期/自然日假期必须共用月份边界。数字小时制以系统时长为总账，日/月分摊守恒；最终汇总复用同一日分摊 | [2026-08-20 跨月请假结束月时长漏算](development-issues/2026.md#2026-08-20-p1-跨月请假结束月时长漏算或少算) |
-| `attendance-toolbox` `leave` `review` `approval-version` `fail-closed` | 异常请假挂起，未确认不得生成最终表；确认值和日分摊守恒，确认0不得回填；先按审批编号选版本再过滤撤销/拒绝，不同编号重叠不能按时间合并；自然日假不得换算为8小时一天 | [2026-10-14 请假复核未阻断最终汇总](development-issues/2026.md#2026-10-14-p1-请假复核未阻断最终汇总及审批版本信息丢失) |
+| `attendance-toolbox` `leave` `review` `approval-version` `approval-identity` `fail-closed` | 异常请假挂起，未确认不得生成最终表；确认值和日分摊守恒，确认0不得回填；自动同步以实例ID唯一标识记录，以流程码+业务审批号+发起人识别版本，同业务号跨发起人不得误合并；旧表回退审批编号严格校验；自然日假不得换算为8小时一天，日账也不得依赖作息表工作日集合 | [2026-10-14 请假复核未阻断最终汇总](development-issues/2026.md#2026-10-14-p1-请假复核未阻断最终汇总及审批版本信息丢失) |
 | `attendance-toolbox` `subsidy` `data-source` `column-alias` | 补贴扣款真实数据来源是"考勤统计→报表管理→月度汇总表（补贴及扣款）"人工导出 Excel，不是钉钉审批流程；列名必须精确匹配，禁止使用"迟到""早退"等宽泛别名；A1 日期强校验仅作用于 `_is_all_people_monthly_summary` 已识别的钉钉原始报表，且统计范围必须精确覆盖处理月份的完整自然月，系统模板和历史兼容格式不要求 A1 日期 | [2026-08-03 补贴扣款数据来源纠正](development-issues/2026.md#2026-08-03-p2-补贴扣款数据来源纠正) |
 
 | `org-sync` `dingtalk` `employee-profile` `employee-id` | 钉钉同步必须读取员工资料中的正式业务工号（如 `job_number=MT0129`）写入 `EmployeeProfile.EmployeeID`；`userid` 只能作为钉钉身份，空工号不得覆盖已有业务工号，新建档案不得用 `userid` 冒充工号 | [2026-09-23 钉钉正式工号未同步导致最终表出现数字 UserID](development-issues/2026.md#2026-09-23-p1-钉钉正式工号未同步导致最终表出现数字-userid) |
@@ -81,6 +84,7 @@ update_when:
 | `employee-profile` `search` `api-contract` `test` | 员工档案搜索必须走 `/employee/profiles` 的 handler → EmployeeService → EmployeeRepository 真实链路；禁止用 `/org/employees` 花名册测试代替；关键词、分页和 URL 状态需做前后端契约回归 | [2026-07-31 员工档案搜索错测花名册链路](development-issues/2026.md#2026-07-31-p1-员工档案搜索错测花名册链路导致页面无法搜索) |
 | `org-sync` `frontend` `timeout` `api-contract` `multi-tenant` `security` | 用户/部门/全量组织同步共享同组织门闩；JWT `org_id` 唯一可信；超过网关时限的全量同步必须短请求启动+轮询；执行上下文脱离客户端取消，终态用独立短上下文持久化；HTTP 207 必须刷新已成功数据；响应/状态不得回显原始错误 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](development-issues/2026.md#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
 | `approval-sync` `whitelist` `async-boundary` `timeout` `partial` `multi-tenant` `idempotency` | 审批同步范围只取当前 JWT 企业 `ConfigForOrgID(orgID).ProcessCodes`；`Prepare` 禁止外部调用；任务与 running 状态先落库、HTTP 202 先写出，再调度后台外部调用；逐流程失败隔离，审批及下游入账均须幂等 | [2026-07-27 组织全量同步被前端 10 秒超时误判失败](development-issues/2026.md#2026-07-27-p1-组织全量同步被前端-10-秒超时误判失败) |
+| `approval-sync` `dingtalk-stream` `automatic-sync` `reconciliation` `compensation` | 审批自动同步采用 Stream 实时事件 + 近期窗口定时补偿；实例/任务事件共用详情拉取、幂等 upsert 和业务对账；自动与手动任务共用 `ApprovalSyncTask(type=approvals)` 门闩，冲突时自动任务跳过本轮 | [2026-10-26 审批 Stream 在线但仍依赖手动同步](development-issues/2026.md#2026-10-26-p1-审批-stream-在线但仍依赖手动同步) |
 | `approval-sync` `overtime` `nullable-time` `mysql` `error-propagation` | 未完成审批和待补卡记录的可空时间必须保持数据库 `NULL`，禁止将 Go 零时间写成 MySQL 零日期；补卡申请创建错误必须向上返回，禁止吞错后仍仅标记可重试 | [2026-09-28 审批同步空时间写成零日期](development-issues/2026.md#2026-09-28-p1-审批同步空时间写成零日期且补卡创建错误被吞掉) |
 | `approval-sync` `approval-detail` `dingtalk` `flow-history` `api-contract` | 审批详情同步必须解析钉钉 `operation_records` 与当前待办 `tasks`，标准化后持久化到 `extension.flow_history`；详情仓储负责恢复顶层 `flow_history`，不能让前端依赖第三方原始结构 | [2026-09-28 审批流程详情始终为空](development-issues/2026.md#2026-09-28-p2-审批同步未保存流程记录导致详情始终为空) |
 | `approval-template` `approval-sync` `process-code` `multi-tenant` | 模板列表必须以当前组织配置的 `ProcessCodes` 补齐目录；数据库模板优先保留表单/节点详情；实例与模板关联统一使用 `extension.process_code`，禁止只查询未被写入的 `approval_templates` 表 | [2026-08-17 审批实例存在但模板目录为空](development-issues/2026.md#2026-08-17-p1-审批实例存在但模板目录为空) |
@@ -105,6 +109,13 @@ update_when:
 |---|---|---|
 | `attendance` `approval` `timezone` `test` | 考勤与审批时间必须显式按业务时区 UTC+8 构造和格式化；测试数据也禁止使用 `time.Local` 或依赖浏览器、Node、Go/CI 宿主机时区 | [2026-07-24 考勤时间展示依赖宿主时区](development-issues/2026.md#2026-07-24-p2-考勤时间展示依赖宿主时区导致-ci-失败) |
 | `week-schedule` `notification-copy` `date-aware` | 作息表通知必须定位最近周六并读取实际日历状态；周五写“明天”、周六写“今天”、周一至周四写“本周六”、周日写“下周六”；是否上班置于首行，大/小周仅作补充 | [2026-07-29 作息表推送只判断明天导致周六提醒不灵活](development-issues/2026.md#2026-07-29-p2-作息表推送只判断明天导致周六上班提醒不灵活) |
+| `frontend` `date-picker` `locale` `i18n` | 所有 Ant Design 日期选择器必须显式传入 `antd/es/date-picker/locale/zh_CN`；页面格式和 Day.js 语言设置不能替代组件 locale | [2026-10-14 日期选择器 locale 未统一导致部分页面显示英文](development-issues/2026.md#2026-10-14-p2-日期选择器-locale-未统一导致部分页面显示英文) |
+
+### 前端 / 组织架构
+
+| 标签 | 约束摘要 | 条目 / 文档 |
+|---|---|---|
+| `frontend` `org` `department-tree` `ui` `layout` | 组织树工作区必须明确卡片高度与滚动边界，节点人数同时展示含下级去重与直属口径；禁止通过无限高度或页面整体滚动撑开树卡片 | [2026-10-28 组织架构树高度与滚动边界异常](development-issues/2026.md#2026-10-28-p2-组织架构树高度与滚动边界异常) |
 
 ### 测试 / 验证
 
@@ -121,6 +132,7 @@ update_when:
 | `dingtalk-stream` `multi-tenant` `credentials` `app-home-url` `fail-closed` | Stream 显式组织必须读取同一组织的 AppKey/Secret；Compose 禁止默认覆盖为 `default`；非 default 组织群图片推送必须配置组织级公网 HTTPS AppHomeURL/RedirectURI；上线核对 org、healthy、重启次数并执行真实绑定/推送 | [2026-07-29 Stream 连接错误组织导致群机器人无响应](development-issues/2026.md#2026-07-29-p1-dingtalk-stream-默认绑定错误组织导致群机器人无响应) |
 | `deploy` `upload-and-restart` | 上传失败续传用独立脚本，禁止改 `build-and-deploy.ps1` 行为 | cerebrum Decision Log |
 | `git` `merge` `release` | 跨分支冲突必须按语义单元核对生产代码、配套测试和 `go.mod/go.sum`；禁止按文件整侧选取后直接推送，至少执行编译、全量测试与双远端祖先检查 | [2026-07-23 双远端 master 合并遗漏依赖与安全配套代码](development-issues/2026.md#2026-07-23-p1-双远端-master-合并遗漏依赖与安全配套代码) |
+| `git` `dual-remote` `coding` `documentation` | 提交/同步前按 `.ai/COMMANDS.md` 使用已确认的 GitHub、Coding 独立地址；默认双端 `master` 发布，先抓取并确认可快进，再分别校验目标分支哈希；Coding 令牌需代码仓库读写权限；提交、推送、部署分别报告 | [2026-11-06 双远程同步约定缺失导致重复确认与漏推](development-issues/2026.md#2026-11-06-p2-双远程同步约定缺失导致重复确认与漏推) |
 | `go` `security` `govulncheck` `docker` | Go 标准库出现可达漏洞时，最低工具链版本和发布构建镜像必须同步升级到修复版本；CI、`go.mod`、Dockerfile 禁止版本漂移 | [2026-08-18 Go 1.26.5 标准库漏洞阻塞发布](development-issues/2026.md#2026-08-18-p1-go-1265-标准库漏洞阻塞发布) |
 
 ### AI 协作 / 上下文

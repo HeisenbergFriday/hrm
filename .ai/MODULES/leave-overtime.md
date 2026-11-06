@@ -1,6 +1,6 @@
 ---
 purpose: 年假与调休模块业务规则说明
-last_updated: 2026-08-10
+last_updated: 2026-10-27
 source_of_truth:
   - internal/api/router.go（接口注册）
   - internal/api/leave_handlers.go（年假调休相关 handler）
@@ -261,6 +261,16 @@ type CompensatoryLeaveLedger struct {
 }
 ```
 
+#### LeaveBalanceSnapshot
+钉钉年假/调休额度的本地快照。业务查询、年假消费校验和调休余额展示优先读取本地快照；钉钉只由定时任务或显式同步接口调用。
+
+- 唯一键：`org_id + user_id + year + leave_type`
+- `leave_type`：`annual` / `compensatory`
+- 金额统一保存为分钟：`total_minutes`、`used_minutes`、`remaining_minutes`
+- `sync_status=success` 才可作为外部实际余额参与校验
+
+审批对账规则：有效的调休审批按 `approval_ref` 幂等写入 `CompensatoryLeaveLedger.debit`；审批撤销或失效时追加 `rollback` credit，禁止删除历史台账。
+
 ---
 
 ## API 接口
@@ -327,6 +337,12 @@ Body：
     "confirm": true
 }
 ```
+
+#### POST /api/v1/leave/balances/sync-dingtalk
+同步当前员工或当前组织全部在职员工的钉钉年假、调休实际余额到本地快照。
+
+#### GET /api/v1/leave/balances
+查询本地钉钉余额快照（`user_id`、`year`）。
 
 #### GET /api/v1/leave/vacation-types
 查询钉钉假期类型列表
@@ -549,7 +565,11 @@ Body：
    - 读取 `OvertimeMatchResult`
    - 写入 `CompensatoryLeaveLedger`（credit）
 
-4. **同步到钉钉**（`ResyncOvertimeToDingTalk`）
+4. **调休请假消费**
+   - 有效调休审批同步后按审批引用扣减本地调休台账（debit）
+   - 审批撤销/失效时追加 rollback credit，重复同步和重复冲正均幂等
+
+5. **同步到钉钉**（`ResyncOvertimeToDingTalk`）
    - 调用钉钉假期余额接口
    - 写入 `OvertimeSyncHistory`（防重复同步）
    - 审批撤销时先执行本地来源净额 rollback；需要校准钉钉时先落 `rollback_pending`，外部失败/超时落 `rollback_failed` 和脱敏错误，只有年度绝对余额确认成功才落 `rollback_success/rolled_back`
@@ -574,6 +594,7 @@ Body：
 - `OvertimeMatchResult.match_ref` 用于当前匹配幂等
 - 历史数据仍兼容 `user_id + work_date` 口径
 - 调休 credit/rollback 按来源净额在锁定匹配记录的事务内判断；重复撤销不重复扣减，撤销后恢复可重新 credit 一次
+- 调休请假 debit/rollback 使用审批引用作为幂等键，审批对账失败可安全重试
 - 本地 rollback、外部绝对余额调用、状态更新分阶段执行；外部调用不得放进长数据库事务，失败后依靠状态机安全重试
 
 ---
@@ -595,6 +616,7 @@ Body：
 
 - **季度发放任务**：每季度初自动发放年假
 - **加班匹配任务**：每天凌晨自动匹配前一天的加班记录
+- **钉钉余额快照任务**：每天 03:00 按组织同步在职员工年假和调休余额，可通过 `DINGTALK_LEAVE_BALANCE_SYNC_ENABLED=false` 关闭
 
 ---
 

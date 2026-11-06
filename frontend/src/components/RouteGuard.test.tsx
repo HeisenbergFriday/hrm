@@ -64,6 +64,19 @@ describe('RouteGuard', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/attendance', { replace: true })
   })
 
+  it('菜单兼容期传入多个 key 时，命中任意一个即可进入', () => {
+    useAuthStore.setState({
+      menuKeys: ['menu:attendance-processing'],
+      permissions: [],
+    })
+    render(
+      <RouteGuard menuKey={['menu:attendance-toolbox', 'menu:attendance-processing']}>
+        <div data-testid="attendance-toolbox-ok">toolbox</div>
+      </RouteGuard>,
+    )
+    expect(screen.getByTestId('attendance-toolbox-ok')).toBeInTheDocument()
+  })
+
   it('menuOptional + 功能权限：无 overview 菜单也能进任务页', () => {
     useAuthStore.setState({
       menuKeys: ['menu:home'],

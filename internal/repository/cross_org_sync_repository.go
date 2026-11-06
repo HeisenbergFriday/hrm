@@ -448,14 +448,15 @@ func (r *CrossOrganizationSyncRepository) ListLocalEmployeeCenterRows(ctx contex
 	}
 	rows := make([]EmployeeCenterRow, 0, len(snapshots))
 	for _, item := range snapshots {
-		row := EmployeeCenterRow{ID: item.User.ID, SourceOrgID: orgID, SourceUserID: item.User.UserID, Name: item.User.Name, Email: item.User.Email, Mobile: item.User.Mobile, Position: item.User.Position, Status: item.User.Status, IsMirror: false}
+		sourceUpdated := item.User.UpdatedAt
+		if item.Profile != nil && item.Profile.UpdatedAt.After(sourceUpdated) {
+			sourceUpdated = item.Profile.UpdatedAt
+		}
+		row := EmployeeCenterRow{ID: item.User.ID, SourceOrgID: orgID, SourceUserID: item.User.UserID, Name: item.User.Name, Email: item.User.Email, Mobile: item.User.Mobile, Position: item.User.Position, Status: item.User.Status, SourceUpdated: &sourceUpdated, IsMirror: false}
 		row.DepartmentName = item.DepartmentName
-		row.LastSyncedAt = item.User.UpdatedAt
+		row.LastSyncedAt = sourceUpdated
 		if item.Profile != nil {
 			row.EmployeeID = item.Profile.EmployeeID
-			if item.Profile.UpdatedAt.After(row.LastSyncedAt) {
-				row.LastSyncedAt = item.Profile.UpdatedAt
-			}
 		}
 		rows = append(rows, row)
 	}

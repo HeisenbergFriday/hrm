@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import {
   Alert,
   Button,
+  Card,
   Col,
   DatePicker,
   Empty,
@@ -253,6 +254,20 @@ const GrantTab: React.FC = () => {
     enabled: !!queryKey,
   })
 
+  const { data: snapshotData, isFetching: isSnapshotFetching } = useQuery({
+    queryKey: ['leave-balance-snapshots', queryKey],
+    queryFn: () => leaveAPI.getBalanceSnapshots(queryKey!),
+    enabled: !!queryKey,
+  })
+
+  const snapshots = ((snapshotData as any)?.data || []) as Array<{
+    leave_type: string
+    remaining_minutes: number
+    synced_at?: string
+  }>
+  const annualSnapshot = snapshots.find((item) => item.leave_type === 'annual')
+  const compensatorySnapshot = snapshots.find((item) => item.leave_type === 'compensatory')
+
   const runQuarterMutation = useMutation({
     mutationFn: (values: { year: number; quarter: number }) => leaveAPI.runQuarterGrant(values),
     onSuccess: (res: any) => {
@@ -282,6 +297,31 @@ const GrantTab: React.FC = () => {
       if (queryKey) refetch()
     },
     onError: (err: any) => message.error(err?.response?.data?.error || '同步失败'),
+  })
+
+  const syncBalanceMutation = useMutation({
+    mutationFn: () => leaveAPI.syncBalancesFromDingTalk({ user_id: userID, year }),
+    onSuccess: (res: any) => {
+      const result = res?.data || {}
+      const failed = Number(result.failed || 0)
+      const succeeded = Number(result.succeeded || 0)
+      const detail = Array.isArray(result.errors) && result.errors.length > 0
+        ? `：${result.errors[0]}`
+        : ''
+      if (failed > 0) {
+        message.warning(`钉钉余额同步完成，但 ${failed} 项失败${detail}`)
+      } else if (succeeded === 0) {
+        message.warning('钉钉余额同步完成，但未返回任何余额记录')
+      } else {
+        message.success(`钉钉实际余额同步完成（成功 ${succeeded} 项）`)
+      }
+      const nextQueryKey = { user_id: userID, year }
+      setQueryKey(nextQueryKey)
+      if (queryKey?.user_id === userID && queryKey.year === year) {
+        void refetch()
+      }
+    },
+    onError: (err: any) => message.error(err?.response?.data?.error || '钉钉实际余额同步失败'),
   })
 
   const handleRegrant = () => {
@@ -319,6 +359,7 @@ const GrantTab: React.FC = () => {
     { title: '本次发放', dataIndex: 'granted_days', key: 'granted_days', render: (value?: number) => formatDays(value) },
     { title: '已用', dataIndex: 'used_days', key: 'used_days', render: (value?: number) => formatDays(value) },
     { title: '剩余', dataIndex: 'remaining_days', key: 'remaining_days', render: (value?: number) => formatDays(value) },
+    { title: '钉钉实际剩余', dataIndex: 'dingtalk_remaining_days', key: 'dingtalk_remaining_days', render: (value?: number) => Number.isFinite(value) && value > 0 ? formatDays(value) : '-' },
     { title: '备注', dataIndex: 'remark', key: 'remark' },
     {
       title: '钉钉同步', dataIndex: 'dingtalk_sync_status', key: 'dingtalk_sync_status',
@@ -358,6 +399,18 @@ const GrantTab: React.FC = () => {
         <Tooltip title={canManageAttendance ? undefined : manageAttendanceTooltip}>
           <span>
             <Button
+              icon={<ReloadOutlined />}
+              onClick={() => syncBalanceMutation.mutate()}
+              loading={syncBalanceMutation.isPending}
+              disabled={!canManageAttendance || !userID}
+            >
+              刷新钉钉实际余额
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title={canManageAttendance ? undefined : manageAttendanceTooltip}>
+          <span>
+            <Button
               icon={<SyncOutlined />}
               onClick={handleSyncToDingTalk}
               loading={syncMutation.isPending}
@@ -368,6 +421,43 @@ const GrantTab: React.FC = () => {
           </span>
         </Tooltip>
       </Space>
+      <Card
+        size="small"
+        title="钉钉实际余额"
+        loading={isSnapshotFetching}
+        style={{ marginBottom: 16 }}
+      >
+        {!queryKey ? (
+          <Text type="secondary">请先选择员工并查询，或直接点击“刷新钉钉实际余额”。</Text>
+        ) : snapshots.length === 0 ? (
+          <Text type="secondary">暂无钉钉余额快照，请点击“刷新钉钉实际余额”获取。</Text>
+        ) : (
+          <Row gutter={32}>
+            <Col xs={24} sm={12}>
+              <Statistic
+                title="年假实际剩余"
+                value={annualSnapshot ? Number(annualSnapshot.remaining_minutes || 0) / 480 : 0}
+                precision={2}
+                suffix="天"
+              />
+              <Text type="secondary">
+                同步时间：{annualSnapshot?.synced_at ? formatDateTime(annualSnapshot.synced_at) : '-'}
+              </Text>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Statistic
+                title="调休实际剩余"
+                value={compensatorySnapshot ? Number(compensatorySnapshot.remaining_minutes || 0) / 60 : 0}
+                precision={2}
+                suffix="小时"
+              />
+              <Text type="secondary">
+                同步时间：{compensatorySnapshot?.synced_at ? formatDateTime(compensatorySnapshot.synced_at) : '-'}
+              </Text>
+            </Col>
+          </Row>
+        )}
+      </Card>
       {isError && queryKey ? (
         <Alert
           type="error"
@@ -920,10 +1010,10 @@ const OvertimeTab: React.FC = () => {
         )}
         <Form form={suppForm} layout="vertical">
           <Form.Item name="clock_in" label="补卡上班时间" rules={[{ required: true, message: '请选择补卡上班时间' }]}>
-            <DatePicker showTime format="YYYY年M月D日 HH:mm:ss" style={{ width: '100%' }} placeholder="选择上班打卡时间" />
+            <DatePicker showTime format="YYYY年M月D日 HH:mm:ss" style={{ width: '100%' }} placeholder="选择上班打卡时间" locale={datePickerZhCN} />
           </Form.Item>
           <Form.Item name="clock_out" label="补卡下班时间" rules={[{ required: true, message: '请选择补卡下班时间' }]}>
-            <DatePicker showTime format="YYYY年M月D日 HH:mm:ss" style={{ width: '100%' }} placeholder="选择下班打卡时间" />
+            <DatePicker showTime format="YYYY年M月D日 HH:mm:ss" style={{ width: '100%' }} placeholder="选择下班打卡时间" locale={datePickerZhCN} />
           </Form.Item>
           <Form.Item name="reason" label="补卡原因">
             <Input.TextArea rows={3} placeholder="请输入补卡原因（选填）" />

@@ -21,9 +21,11 @@ fill_overtime_fields.py
       最终加班时长按现有规则回填具体时长
   - 非当月数据：
       最终加班时长（小时）列仅标明月份，不显示具体时长
+  - 正式审批记录：
+      有每日审批时长时保留审批时长，打卡仅用于核对；没有每日审批时长时才使用每日人工核算、打卡或系统推算。
   - 调休时：
-      最终加班时长 = min(系统时长, 8 * 天数)
-      若考勤明细匹配到当日打卡时间为”(-)”（未打卡），系统操作 = 未加
+      最终加班时长 = min(认定时长, 8 * 天数)
+      若考勤明细匹配到当日完全缺卡或单边卡，系统操作 = 未知
       其余情况系统操作留空
   - 加班工资时：
       最终加班时长按 2倍/3倍加班小时回填；天数由小时 / 标准每日工时派生；
@@ -83,7 +85,9 @@ DEFAULT_OUTPUT = os.path.join(_HERE, "加班明细_回填.xlsx")
 DEFAULT_CHENGDU_WORK_LOCATION_NAMES = calc_leave.DEFAULT_CHENGDU_WORK_LOCATION_NAMES
 
 # ── 清洗：允许通过的审批状态 ────────────────────────────────────────────────
-KEEP_STATUSES = {"完成", "审批中", "已修改"}
+KEEP_STATUSES = {"完成", "已完成", "审批中", "已修改", "修改中", "已通过", "审批通过", "已审批", "通过"}
+APPROVED_RESULTS = {"同意", "已同意", "通过", "已通过", "审批通过", "已审批"}
+REJECT_RESULTS = {"拒绝", "已拒绝", "驳回", "已驳回", "撤回", "已撤回", "撤销", "已撤销", "作废", "已作废", "取消", "已取消"}
 
 # ── 清洗后输出的目标列（与加班明细.xlsx 前13列对齐）──────────────────────────
 CLEAN_OUTPUT_COLS = (
@@ -91,6 +95,9 @@ CLEAN_OUTPUT_COLS = (
     "开始时间", "结束时间", "明细", "加班时间", "加班时长", "时长",
     "是否包含法定节假日期", "2026法定节假日如下：",
 )
+
+MANUAL_OVERRIDE_COLUMNS = ("人工覆盖时长（小时）", "人工覆盖说明")
+MANUAL_RESULT_COLUMNS = ("人工核算时长（小时）", "人工核算小时", "人工核算结果", "人工核算")
 
 TARGET_COLUMNS = [
     "最终加班时长（小时）",
@@ -101,6 +108,7 @@ TARGET_COLUMNS = [
     "3倍加班天数",
     "备注",
     "系统操作",
+    *MANUAL_OVERRIDE_COLUMNS,
 ]
 
 STANDARD_HOURS_PER_DAY = 8.0
@@ -113,8 +121,13 @@ REST_PREMIUM_EXCLUDED_CODES = {"MT0019"}
 NO_ATTENDANCE_REMARK = "当天无打卡记录需核实"
 NO_DOUBLE_ATTENDANCE_REMARK = "无双边打卡，按系统时长兜底，需核实"
 NO_SYSTEM_HOURS_REMARK = "无双边打卡且系统时长为空，暂按0小时，需人工核实"
+NO_OVERTIME_EVIDENCE_REMARK = "无每日审批、打卡或人工核算结果，暂不自动计入"
+APPROVAL_CLOCK_MISMATCH_REMARK = "审批时长与打卡时长不一致，需核对"
+SCHEDULE_ONLY_REMARK = "排班有记录但无有效审批，疑似漏报；未自动计工资/调休"
 SYSTEM_REMAINDER_EXHAUSTED_REMARK = "系统剩余时长不足，无双边打卡日期暂按0小时，需人工核实"
 APPROVAL_TOTAL_CAP_EXHAUSTED_REMARK = "审批总时长上限已用完，本日暂按0小时，需核实"
+MANUAL_OVERRIDE_REQUIRED_REMARK = "人工覆盖需同时填写时长和说明，未采用覆盖值"
+MANUAL_OVERRIDE_REMARK = "已采用有记录的人工覆盖"
 
 
 def parse_args() -> argparse.Namespace:
@@ -170,7 +183,22 @@ def parse_args() -> argparse.Namespace:
 
 
 def normalize_name(value) -> str:
-    return str(value or "").strip()
+    return str(value or "").replace("\u200b", "").replace("\ufeff", "").strip()
+
+
+def _is_effective_approval_status(status, result) -> bool:
+    """保留完成且同意、审批中和有效修改记录。"""
+    normalized_status = normalize_name(status)
+    normalized_result = normalize_name(result)
+    if any(keyword in normalized_status or keyword in normalized_result for keyword in REJECT_RESULTS):
+        return False
+    if normalized_status in {"审批中", "修改中"} or "审批中" in normalized_status:
+        return True
+    if normalized_status in {"完成", "已完成"}:
+        return normalized_result in APPROVED_RESULTS
+    if normalized_status in {"已修改", "修改中"} or "修改" in normalized_status:
+        return True
+    return normalized_status in KEEP_STATUSES and normalized_result in APPROVED_RESULTS
 
 
 def parse_special_chengdu_names(text: str | None = None) -> tuple[str, ...]:
@@ -449,7 +477,7 @@ def should_count_in_target_month(
 
 
 def has_no_punch_record(cell_text: str) -> bool:
-    """判断考勤单元格是否属于"未正常打卡"，即系统操作需标记为"未加"。
+    """判断考勤单元格是否属于"未正常打卡"，即调休记录的系统操作需标记为"未知"。
 
     触发条件（满足任一）：
       1. 打卡时间为 (-) —— 完全无打卡记录
@@ -956,9 +984,22 @@ def _resolve_employee_department_fields(
 
     roster_info = _lookup_employee_department(employee_department_map, employee_code, emp_name)
     if roster_info:
-        dept_d1 = roster_info.get("dept1") or dept_d1
-        dept_d2 = roster_info.get("dept2") or dept_d2
-        dept_d3 = roster_info.get("dept3") or dept_d3
+        def path_parts(values):
+            return [part.strip() for value in values
+                    for part in re.split(r"[-/／>＞]+", normalize_name(value)) if part.strip()]
+
+        source_parts = path_parts((dept_d1, dept_d2, dept_d3))
+        roster_parts = path_parts(roster_info.get(key) for key in ("dept1", "dept2", "dept3"))
+        # A suffix-only roster describes the same department; retain its known
+        # parents. A genuinely different roster path still corrects the source.
+        is_truncated_suffix = (
+            bool(roster_parts) and len(roster_parts) < len(source_parts)
+            and source_parts[-len(roster_parts):] == roster_parts
+        )
+        if not is_truncated_suffix:
+            dept_d1 = roster_info.get("dept1") or dept_d1
+            dept_d2 = roster_info.get("dept2") or dept_d2
+            dept_d3 = roster_info.get("dept3") or dept_d3
         att_group = roster_info.get("attendance_group") or att_group
 
     return dept_d1, dept_d2, dept_d3, att_group
@@ -969,9 +1010,7 @@ def clean_export_overtime(export_file: str) -> list[tuple]:
     读取加班系统导出文件（多 sheet），合并、过滤并整理为标准列格式，返回行列表。
     第 0 行为表头元组，后续为数据行元组。
 
-    保留条件：
-      审批状态 in {'完成', '审批中', '已修改'}
-      且 NOT (审批状态 == '完成' AND 审批结果 == '拒绝')
+    保留条件：完成且同意、审批中或有效修改记录；拒绝、撤回、作废等状态始终排除。
 
     返回列顺序（CLEAN_OUTPUT_COLS）：
       发起人工号 / 发起人姓名 / 一级部门 / 二级部门 / 三级部门
@@ -1003,6 +1042,14 @@ def clean_export_overtime(export_file: str) -> list[tuple]:
         if required_keys - col.keys():
             continue   # 缺必要字段的 sheet 跳过
 
+        manual_columns = tuple(
+            column_name
+            for column_name in (*MANUAL_OVERRIDE_COLUMNS, *MANUAL_RESULT_COLUMNS)
+            if normalize_header_name(column_name) in col
+        )
+        if manual_columns and len(out_rows) == 1:
+            out_rows[0] = CLEAN_OUTPUT_COLS + manual_columns
+
         approved_ids: set[str] = set()
         for row in sheet_rows[1:]:
             if not any(row):
@@ -1010,10 +1057,7 @@ def clean_export_overtime(export_file: str) -> list[tuple]:
             status = row[col[normalize_header_name("审批状态")]]
             result = row[col[normalize_header_name("审批结果")]]
 
-            if status not in KEEP_STATUSES:
-                skipped += 1
-                continue
-            if status == "完成" and result == "拒绝":
+            if not _is_effective_approval_status(status, result):
                 skipped += 1
                 continue
 
@@ -1034,6 +1078,12 @@ def clean_export_overtime(export_file: str) -> list[tuple]:
             raw_start = row[col[normalize_header_name("开始时间")]]
             raw_end = row[col[normalize_header_name("结束时间")]]
             raw_duration = row[col[normalize_header_name("时长")]]
+            manual_values = tuple(
+                row[col[normalize_header_name(column_name)]]
+                if normalize_header_name(column_name) in col
+                else None
+                for column_name in manual_columns
+            )
 
             # 跨天记录拆分为每天一行（匹配手动核算格式）
             dt_start = parse_datetime(raw_start)
@@ -1065,11 +1115,11 @@ def clean_export_overtime(export_file: str) -> list[tuple]:
                         raw_end,
                         d,
                         row[col["加班时间"]] if "加班时间" in col else None,
-                        row[col["加班时长"]] if "加班时长" in col else None,
+                        None,
                         raw_duration,
                         row[col["是否包含法定节假日期"]] if "是否包含法定节假日期" in col else None,
                         row[col["2026法定节假日如下："]] if "2026法定节假日如下：" in col else None,
-                    ))
+                    ) + manual_values)
             else:
                 # 系统时长是钉钉审批申请时长，逐日明细也保留原值，不做跨天均分。
                 out_rows.append((
@@ -1084,7 +1134,7 @@ def clean_export_overtime(export_file: str) -> list[tuple]:
                     raw_duration,
                     row[col["是否包含法定节假日期"]] if "是否包含法定节假日期" in col else None,
                     row[col["2026法定节假日如下："]] if "2026法定节假日如下：" in col else None,
-                ))
+                ) + manual_values)
             kept += 1
 
     wb_src.close()
@@ -1098,6 +1148,7 @@ _LEGAL_HOLIDAYS: set[date] = set()
 _HOLIDAY_REST_DAYS: set[date] = set()
 _ALL_SCHEDULE_PREMIUM_DATES: set[date] = set()
 _SCHEDULE_ONLY_REST_PREMIUM_ROWS: set[tuple[str, date]] = set()
+_SCHEDULE_ONLY_ROW_KEYS: set[tuple[str, date, str, str]] = set()
 
 # ── 作息表（工作日历）──────────────────────────────────────────────
 _WORK_CALENDAR_MAIN: set[date] = set()
@@ -1117,9 +1168,30 @@ _WORK_CAL_COMPANY_WELFARE_COLOR = getattr(calc_leave, "COMPANY_WELFARE_COLOR", "
 
 
 def _reset_schedule_runtime_state() -> None:
-    global _ALL_SCHEDULE_PREMIUM_DATES, _SCHEDULE_ONLY_REST_PREMIUM_ROWS
+    global _ALL_SCHEDULE_PREMIUM_DATES, _SCHEDULE_ONLY_REST_PREMIUM_ROWS, _SCHEDULE_ONLY_ROW_KEYS
     _ALL_SCHEDULE_PREMIUM_DATES = set()
     _SCHEDULE_ONLY_REST_PREMIUM_ROWS = set()
+    _SCHEDULE_ONLY_ROW_KEYS = set()
+
+
+def _is_schedule_only_row(
+    ws,
+    row_idx: int,
+    header_map: dict[str, int],
+    overtime_date: date | None,
+) -> bool:
+    if overtime_date is None:
+        return False
+    name = normalize_name(ws.cell(row_idx, header_map["发起人姓名"]).value)
+    start_dt = parse_datetime(ws.cell(row_idx, header_map["开始时间"]).value)
+    end_dt = parse_datetime(ws.cell(row_idx, header_map["结束时间"]).value)
+    key = (
+        name,
+        overtime_date,
+        start_dt.isoformat() if start_dt else "",
+        end_dt.isoformat() if end_dt else "",
+    )
+    return key in _SCHEDULE_ONLY_ROW_KEYS
 
 
 def _reset_work_calendar_runtime_state() -> None:
@@ -1856,9 +1928,11 @@ def _is_rest_premium_employee_group(
     employee_groups: set[str],
     rules_config,
 ) -> bool:
-    """判断员工是否属于假期安排日可按 2 倍补录的部门组。"""
+    """内置运营支撑部口径与配置的额外部门组共用2倍工资计算路径。"""
+    from rules_engine import SPECIAL_DEPARTMENTS
+
     allowed_groups = _parse_group_names(rules_config.schedule_augment_rest_dept_group)
-    return bool(employee_groups & allowed_groups)
+    return bool(employee_groups & (allowed_groups | SPECIAL_DEPARTMENTS))
 
 
 def _is_rest_premium_excluded_employee(emp_name: str | None, employee_code: str | None = None) -> bool:
@@ -1923,25 +1997,22 @@ def _calc_premium_hour_value(
     """Derive 2x/3x premium hours for one overtime day.
 
     Priority:
-      1. Effective bilateral attendance clock span (capped at standard day).
-      2. Parsed approval duration (capped at standard day).
+      1. Parsed approval duration (capped at standard day).
+      2. Bilateral attendance clock span (capped at standard day).
       3. Unknown duration → 0 (do NOT default to a full day). Full-day fallback
          only applies on the explicit ``no_attendance`` branch in fill_row.
     """
     standard_hours = _normalize_standard_hours(standard_hours_per_day)
-    if _has_effective_clock_hours(clock_hours):
-        return round(
-            min(float(clock_hours), standard_hours),
-            PREMIUM_HOUR_VALUE_PRECISION,
-        ) or 0.0
     if raw_hours is None:
+        if _has_effective_clock_hours(clock_hours):
+            return round(
+                min(float(clock_hours), standard_hours),
+                PREMIUM_HOUR_VALUE_PRECISION,
+            ) or 0.0
         # Missing/unparsed duration must not silently become 1 full day
         # (e.g. "3.5小时" previously failed parse_float → None → 8h → 1 day).
         return 0.0
-    return round(
-        min(raw_hours, standard_hours),
-        PREMIUM_HOUR_VALUE_PRECISION,
-    ) or 0.0
+    return round(min(raw_hours, standard_hours), PREMIUM_HOUR_VALUE_PRECISION) or 0.0
 
 
 def _calc_premium_days_from_hours(
@@ -2038,6 +2109,7 @@ def augment_with_schedule_only(
                     None, None, 8,
                     "含法定日期", None,
                 ))
+                _SCHEDULE_ONLY_ROW_KEYS.add((name, d, start_dt.isoformat(), end_dt.isoformat()))
             elif date_type == HOLIDAY_ADJUST_REST:
                 # 节假日调休休息日 → 用规则引擎判断部门组
                 groups = classify_employee(rules_config, dept_d1, dept_d2, dept_d3, att_group)
@@ -2058,6 +2130,7 @@ def augment_with_schedule_only(
                         None, None, 8,
                         None, None,
                     ))
+                    _SCHEDULE_ONLY_ROW_KEYS.add((name, d, start_dt.isoformat(), end_dt.isoformat()))
                 else:
                     skipped_rest_rows += 1
                     skipped_rest_people.add(name)
@@ -2137,8 +2210,8 @@ def _is_special_overtime_rule_row(
 
 
 def _general_context_group_key(item: dict) -> tuple:
-    if item["detail_hours"] is not None:
-        return ("row", item["row_idx"])
+    # 同一跨天审批的显式日明细和系统总时长也必须放进同一组，
+    # 这样整单才能统一受审批总时长约束，而不会每天各算一遍。
     if len(item["span_dates"]) > 1 and item["raw_hours"] is not None:
         start_dt = item["start_dt"]
         end_dt = item["end_dt"]
@@ -2151,51 +2224,6 @@ def _general_context_group_key(item: dict) -> tuple:
             _format_hours_for_remark(item["raw_hours"]),
         )
     return ("row", item["row_idx"])
-
-
-# ── 运营支撑部运维组强制「未加」规则 ──────────────────────────────────────
-# 命中条件（先清洗首尾空格/不可见字符）：
-#   1. 二级部门精确等于「运营支撑部」
-#   2. 三级/叶子部门精确命中 OPS_GROUP_DEPT_NAMES
-# 命中后：系统操作=未加、备注写明业务规则、清空所有加班计算列。
-# 该规则优先级高于普通打卡时长/系统总时长/通用加班分支。
-# 新增允许名单前必须与业务方确认真实部门层级，不得自行扩大。
-
-OPS_GROUP_DEPT_REMARK = "运营支撑部运维组按业务规则不计加班，即使存在打卡记录也判定为未加。"
-
-OPS_GROUP_DEPT_NAMES = {
-    "运维组",
-    "智慧寄存运维组",
-}
-
-
-def _is_ops_group_by_depts(dept1: str | None, dept2: str | None, dept3: str | None) -> bool:
-    """判定员工是否属于运营支撑部运维组。
-
-    仅当二级部门精确等于「运营支撑部」且三级部门精确命中 OPS_GROUP_DEPT_NAMES 时才命中；
-    不做全局「包含运维组」匹配。二级不是运营支撑部或三级不在名单内均不命中。
-    """
-    d2 = normalize_name(dept2)
-    d3 = normalize_name(dept3)
-    if d2 != "运营支撑部":
-        return False
-    return d3 in OPS_GROUP_DEPT_NAMES
-
-
-def _apply_ops_group_unadded_override(ws, row_idx: int, header_map: dict[str, int]) -> str | None:
-    """对运营支撑部运维组员工强制标记为「未加」，清空加班计算列、写入规则备注。"""
-    if "备注" in header_map:
-        ws.cell(row_idx, header_map["备注"]).value = OPS_GROUP_DEPT_REMARK
-    system_col = header_map.get(normalize_header_name("系统操作"))
-    if system_col is None:
-        system_col = header_map.get("系统操作")
-    if system_col is not None:
-        ws.cell(row_idx, system_col).value = "未加"
-    for col_name in ("最终加班时长（小时）", "加班类型", "2倍加班小时", "3倍加班小时", "2倍加班天数", "3倍加班天数"):
-        col_key = normalize_header_name(col_name)
-        if col_key in header_map:
-            ws.cell(row_idx, header_map[col_key]).value = None
-    return "未加"
 
 
 def _build_general_overtime_contexts(
@@ -2237,7 +2265,32 @@ def _build_general_overtime_contexts(
         span_dates = _row_span_dates(start_dt, end_dt, overtime_date)
         raw_hours = parse_float(ws.cell(row_idx, header_map["时长"]).value) if "时长" in header_map else None
         detail_hours = parse_float(ws.cell(row_idx, header_map["加班时长"]).value) if "加班时长" in header_map else None
-        is_span_total_row = len(span_dates) > 1 and raw_hours is not None and detail_hours is None
+        approval_hours = detail_hours if detail_hours is not None else (
+            raw_hours if len(span_dates) <= 1 else None
+        )
+        manual_calc_hours = None
+        for column_name in ("人工核算时长（小时）", "人工核算小时", "人工核算结果", "人工核算"):
+            column_key = normalize_header_name(column_name)
+            if column_key in header_map:
+                manual_calc_hours = parse_float(ws.cell(row_idx, header_map[column_key]).value)
+                if manual_calc_hours is not None:
+                    break
+        manual_hours_key = normalize_header_name("人工覆盖时长（小时）")
+        manual_note_key = normalize_header_name("人工覆盖说明")
+        manual_override_hours = (
+            parse_float(ws.cell(row_idx, header_map[manual_hours_key]).value)
+            if manual_hours_key in header_map else None
+        )
+        manual_override_note = (
+            normalize_name(ws.cell(row_idx, header_map[manual_note_key]).value)
+            if manual_note_key in header_map else ""
+        )
+        manual_override_valid = (
+            manual_override_hours is not None
+            and manual_override_hours >= 0
+            and bool(manual_override_note)
+        )
+        is_span_total_row = len(span_dates) > 1 and raw_hours is not None
         if (
             _is_special_overtime_rule_row(employee_groups, emp_name, employee_code, span_dates, rules_config)
             and not is_span_total_row
@@ -2255,24 +2308,45 @@ def _build_general_overtime_contexts(
             "span_dates": span_dates,
             "raw_hours": raw_hours,
             "detail_hours": detail_hours,
+            "approval_hours": approval_hours,
             "system_hours": detail_hours if detail_hours is not None else raw_hours,
+            "manual_calc_hours": manual_calc_hours,
             "clock_hours": clock_hours,
             "employee_groups": set(employee_groups),
             "no_attendance": _has_empty_attendance_punch(employee_code, emp_name, overtime_date),
             "rest_premium_excluded": _is_rest_premium_excluded_employee(emp_name, employee_code),
+            "manual_override_hours": manual_override_hours,
+            "manual_override_note": manual_override_note,
+            "manual_override_valid": manual_override_valid,
         }
         groups.setdefault(_general_context_group_key(item), []).append(item)
 
     contexts: dict[int, dict] = {}
 
     def _item_priority(item: dict) -> tuple[int, date, int]:
+        # 有每日审批明细的行优先分配，避免总审批时长被其他来源抢占。
+        has_daily_approval = item.get("approval_hours") is not None
+        has_manual_result = item.get("manual_calc_hours") is not None
         has_effective_clock = _has_effective_clock_hours(item.get("clock_hours"))
-        no_attendance = bool(item.get("no_attendance"))
-        attendance_rank = 0 if has_effective_clock else (2 if no_attendance else 1)
-        return attendance_rank, item["overtime_date"], item["row_idx"]
+        source_rank = 0 if has_daily_approval else (1 if has_manual_result else (2 if has_effective_clock else 3))
+        return source_rank, item["overtime_date"], item["row_idx"]
 
     def _item_candidate_hours(item: dict) -> tuple[float, str, list[str]]:
         remarks: list[str] = []
+        if item.get("manual_override_valid"):
+            manual_hours = min(float(item["manual_override_hours"]), standard_hours)
+            remarks.append(MANUAL_OVERRIDE_REMARK)
+            if float(item["manual_override_hours"]) > standard_hours + 0.01:
+                remarks.append("人工覆盖超过每日8小时，已按每日上限截断")
+            return round(manual_hours, PREMIUM_HOUR_VALUE_PRECISION) or 0.0, "manual", remarks
+        if item.get("manual_override_hours") is not None or item.get("manual_override_note"):
+            remarks.append(MANUAL_OVERRIDE_REQUIRED_REMARK)
+        if item.get("approval_hours") is not None:
+            approval_hours = min(float(item["approval_hours"]), standard_hours)
+            return round(approval_hours, PREMIUM_HOUR_VALUE_PRECISION), "approval", remarks
+        if item.get("manual_calc_hours") is not None:
+            manual_hours = min(max(float(item["manual_calc_hours"]), 0.0), standard_hours)
+            return round(manual_hours, PREMIUM_HOUR_VALUE_PRECISION), "manual_calc", remarks
         clock_hours = item["clock_hours"]
         if _has_effective_clock_hours(clock_hours):
             return (
@@ -2282,8 +2356,8 @@ def _build_general_overtime_contexts(
             )
         system_hours = item["system_hours"]
         if system_hours is None:
-            remarks.append(NO_SYSTEM_HOURS_REMARK)
-            return 0.0, "system", remarks
+            remarks.append(NO_OVERTIME_EVIDENCE_REMARK)
+            return None, "system", remarks
         remarks.append(NO_DOUBLE_ATTENDANCE_REMARK)
         return (
             round(min(float(system_hours), standard_hours), PREMIUM_HOUR_VALUE_PRECISION) or 0.0,
@@ -2308,7 +2382,10 @@ def _build_general_overtime_contexts(
 
                 if remaining_hours is None:
                     final_hours = candidate_hours
-                elif remaining_hours > 0.01 and candidate_hours > 0.01:
+                elif basis == "manual":
+                    final_hours = candidate_hours
+                    remaining_hours = max(0.0, remaining_hours - final_hours)
+                elif candidate_hours is not None and remaining_hours > 0.01 and candidate_hours > 0.01:
                     final_hours = round(
                         min(candidate_hours, remaining_hours),
                         PREMIUM_HOUR_VALUE_PRECISION,
@@ -2318,18 +2395,21 @@ def _build_general_overtime_contexts(
                         remarks.append(
                             f"受审批总时长上限影响，本日按{_format_hours_for_remark(final_hours)}小时回填，需核实"
                         )
+                elif candidate_hours is None:
+                    final_hours = None
+                    remarks.append(NO_OVERTIME_EVIDENCE_REMARK)
                 else:
                     final_hours = 0.0
                     remarks.append(APPROVAL_TOTAL_CAP_EXHAUSTED_REMARK)
 
                 assignments[item["row_idx"]] = (final_hours, basis, remarks)
-                final_total += final_hours
+                final_total += final_hours or 0.0
 
             group_remark = _system_total_mismatch_remark(total_system_hours, final_total)
             for item in ordered_items:
                 final_hours, basis, remarks = assignments[item["row_idx"]]
                 contexts[item["row_idx"]] = {
-                    "final_hours": round2(final_hours) or 0.0,
+                    "final_hours": round2(final_hours),
                     "basis": basis,
                     "overtime_date": item["overtime_date"],
                     "remarks": _join_remarks(*(remarks + [group_remark])),
@@ -2342,22 +2422,51 @@ def _build_general_overtime_contexts(
             system_hours = item["system_hours"]
             clock_hours = item["clock_hours"]
             remarks: list[str] = []
-            if _has_effective_clock_hours(clock_hours):
+            if item.get("manual_override_valid"):
+                final_hours = round(
+                    min(float(item["manual_override_hours"]), standard_hours),
+                    PREMIUM_HOUR_VALUE_PRECISION,
+                ) or 0.0
+                basis = "manual"
+                remarks.append(MANUAL_OVERRIDE_REMARK)
+                if float(item["manual_override_hours"]) > standard_hours + 0.01:
+                    remarks.append("人工覆盖超过每日8小时，已按每日上限截断")
+            elif item.get("approval_hours") is not None:
+                final_hours = round(
+                    min(float(item["approval_hours"]), standard_hours),
+                    PREMIUM_HOUR_VALUE_PRECISION,
+                )
+                basis = "approval"
+                if _has_effective_clock_hours(clock_hours) and abs(final_hours - float(clock_hours)) > 0.01:
+                    remarks.append(APPROVAL_CLOCK_MISMATCH_REMARK)
+            elif item.get("manual_calc_hours") is not None:
+                final_hours = round(
+                    min(max(float(item["manual_calc_hours"]), 0.0), standard_hours),
+                    PREMIUM_HOUR_VALUE_PRECISION,
+                )
+                basis = "manual_calc"
+                if _has_effective_clock_hours(clock_hours) and abs(final_hours - float(clock_hours)) > 0.01:
+                    remarks.append("人工核算结果与打卡时长不一致，需核对")
+            elif _has_effective_clock_hours(clock_hours):
                 final_hours = round(min(clock_hours, standard_hours), PREMIUM_HOUR_VALUE_PRECISION) or 0.0
                 basis = "clock"
                 remarks.append(_recognized_hours_mismatch_remark(system_hours, final_hours, basis))
             elif system_hours is None:
-                final_hours = 0.0
+                final_hours = None
                 basis = "system"
-                remarks.append(NO_SYSTEM_HOURS_REMARK)
+                remarks.append(NO_OVERTIME_EVIDENCE_REMARK)
             else:
                 final_hours = round(min(system_hours, standard_hours), PREMIUM_HOUR_VALUE_PRECISION) or 0.0
                 basis = "system"
                 remarks.append(NO_DOUBLE_ATTENDANCE_REMARK)
                 remarks.append(_recognized_hours_mismatch_remark(system_hours, final_hours, basis))
+            if not item.get("manual_override_valid") and (
+                item.get("manual_override_hours") is not None or item.get("manual_override_note")
+            ):
+                remarks.append(MANUAL_OVERRIDE_REQUIRED_REMARK)
 
             contexts[item["row_idx"]] = {
-                "final_hours": round2(final_hours) or 0.0,
+                "final_hours": round2(final_hours),
                 "basis": basis,
                 "overtime_date": item["overtime_date"],
                 "remarks": _join_remarks(*remarks),
@@ -2381,7 +2490,17 @@ def _fill_general_overtime_row(
     from rules_engine import HOLIDAY_ADJUST_REST, classify_date, determine_action, should_mark_no_punch
 
     overtime_date = context["overtime_date"]
-    final_hours = float(context.get("final_hours") or 0.0)
+    final_hours = context.get("final_hours")
+    if final_hours is None:
+        for col_name in (
+            "最终加班时长（小时）", "加班类型", "2倍加班小时", "3倍加班小时",
+            "2倍加班天数", "3倍加班天数",
+        ):
+            ws.cell(row_idx, header_map[col_name]).value = None
+        ws.cell(row_idx, header_map["备注"]).value = context.get("remarks")
+        ws.cell(row_idx, header_map["系统操作"]).value = None
+        return None
+    final_hours = float(final_hours)
     employee_groups = set(context.get("employee_groups") or set())
     count_in_target_month = should_count_in_target_month(overtime_date, current_month_anchor)
     date_type = classify_date(rules_config, overtime_date, set(), None, False)
@@ -2464,6 +2583,7 @@ def fill_row(
     special_chengdu_names: set[str] | tuple[str, ...] | None = None,
     general_overtime_contexts: dict[int, dict] | None = None,
     employee_department_map: dict[str, dict[str, str]] | None = None,
+    schedule_only_row_indices: set[int] | None = None,
 ) -> str | None:
     # 延迟导入避免循环依赖
     if rules_config is None:
@@ -2485,6 +2605,16 @@ def fill_row(
     overtime_date = resolve_overtime_date(ws, row_idx, header_map, start_dt, end_dt)
     count_in_target_month = should_count_in_target_month(overtime_date, current_month_anchor)
     raw_hours = parse_float(ws.cell(row_idx, header_map["时长"]).value) if "时长" in header_map else None
+
+    if schedule_only_row_indices and row_idx in schedule_only_row_indices:
+        for col_name in (
+            "最终加班时长（小时）", "加班类型", "2倍加班小时", "3倍加班小时",
+            "2倍加班天数", "3倍加班天数",
+        ):
+            ws.cell(row_idx, header_map[col_name]).value = None
+        ws.cell(row_idx, header_map["备注"]).value = SCHEDULE_ONLY_REMARK
+        ws.cell(row_idx, header_map["系统操作"]).value = "疑似漏报"
+        return "疑似漏报"
 
     # 跨天记录已拆分为每天一行时，用明细日期而非起止范围计算
     if overtime_date and start_dt and end_dt:
@@ -2509,10 +2639,6 @@ def fill_row(
         employee_department_map,
     )
     employee_groups = classify_employee(rules_config, dept_d1, dept_d2, dept_d3, att_group)
-
-    # 运营支撑部运维组强制判定为「未加」，优先级高于普通加班判定与通用加班分支。
-    if _is_ops_group_by_depts(dept_d1, dept_d2, dept_d3):
-        return _apply_ops_group_unadded_override(ws, row_idx, header_map)
 
     general_context = (general_overtime_contexts or {}).get(row_idx)
     if general_context is not None:
@@ -2539,25 +2665,16 @@ def fill_row(
         if e_date < s_date:
             s_date, e_date = e_date, s_date
         all_dates = daterange_inclusive(s_date, e_date)
-        use_attendance_for_premium = _is_rest_premium_employee_group(employee_groups, rules_config)
-
         for d in all_dates:
             date_type = classify_date(rules_config, d, set(), None, False)
-            clock_hours = (
-                _lookup_attendance_clock_hours(employee_code, emp_name, d)
-                if use_attendance_for_premium
-                else None
-            )
+            # 有双边打卡时所有加班类型都优先按打卡；缺双边打卡再回退系统时长。
+            clock_hours = _lookup_attendance_clock_hours(employee_code, emp_name, d)
             no_attendance = _has_empty_attendance_punch(employee_code, emp_name, d)
-            # 已审批的加班工资日如果完全无打卡，按整天封顶计薪，备注仍提示核实。
-            premium_hours = (
-                _normalize_standard_hours(rules_config.standard_hours_per_day)
-                if no_attendance
-                else _calc_premium_hour_value(
-                    raw_hours,
-                    clock_hours,
-                    rules_config.standard_hours_per_day,
-                )
+            # 缺双边打卡时按系统时长兜底；系统时长为空则为 0，不能静默补满 8 小时。
+            premium_hours = _calc_premium_hour_value(
+                raw_hours,
+                clock_hours,
+                rules_config.standard_hours_per_day,
             )
 
             # ── 逐日独立判定倍数 ────────────────────────────────
@@ -2709,6 +2826,11 @@ def process_overtime(
         src_rows,
         target_month_anchor,
     )
+    # Historical sheets may include years outside the holiday provider's
+    # coverage. Only validate years that will actually enter this month's run.
+    src_rows, skipped_cross_month_rows = filter_rows_by_target_month(
+        src_rows, current_month_anchor,
+    )
     special_chengdu_name_set = {
         normalize_name(name) for name in (special_chengdu_names or ()) if normalize_name(name)
     }
@@ -2740,11 +2862,6 @@ def process_overtime(
         employee_department_map,
         current_month_anchor,
     )
-    src_rows, skipped_cross_month_rows = filter_rows_by_target_month(
-        src_rows,
-        current_month_anchor,
-    )
-
     wb_out = openpyxl.Workbook()
     ws = wb_out.active
     ws.title = "加班明细"
@@ -2765,12 +2882,19 @@ def process_overtime(
     if not _WORK_CALENDAR_LOADED:
         print("[作息表] 未加载作息表，处理月份将按加班数据自动推断")
 
-    marked_unadded_count = 0
+    marked_no_punch_count = 0
     data_row_indices = [
         row_idx
         for row_idx in range(header_row + 1, ws.max_row + 1)
         if not all(is_blank(ws.cell(row_idx, c).value) for c in range(1, ws.max_column + 1))
     ]
+    schedule_only_row_indices: set[int] = set()
+    for row_idx in data_row_indices:
+        row_start = parse_datetime(ws.cell(row_idx, 6).value)
+        row_end = parse_datetime(ws.cell(row_idx, 7).value)
+        row_date = resolve_overtime_date(ws, row_idx, header_map, row_start, row_end)
+        if _is_schedule_only_row(ws, row_idx, header_map, row_date):
+            schedule_only_row_indices.add(row_idx)
     general_overtime_contexts = _build_general_overtime_contexts(
         ws,
         header_map,
@@ -2792,16 +2916,22 @@ def process_overtime(
             special_chengdu_name_set,
             general_overtime_contexts,
             employee_department_map,
+            schedule_only_row_indices,
         )
-        if system_operation == "未加":
-            marked_unadded_count += 1
+        if system_operation == rules_config.no_punch_mark:
+            marked_no_punch_count += 1
 
     output_dir = os.path.dirname(os.path.abspath(out_file))
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
     wb_out.save(out_file)
-    print(f"[回填] 系统操作列标记“未加” {marked_unadded_count} 行")
+    print(
+        f"[回填] 调休缺卡/单边卡标记“{rules_config.no_punch_mark}” "
+        f"{marked_no_punch_count} 行"
+    )
+    if schedule_only_row_indices:
+        print(f"[回填] 排班无审批记录标记“疑似漏报” {len(schedule_only_row_indices)} 行")
     if special_chengdu_names is not None:
         print(f"[成都作息名单] 设置 {len(special_chengdu_name_set)} 个姓名（不参与 2 倍加班判断）")
     if skipped_cross_month_rows:

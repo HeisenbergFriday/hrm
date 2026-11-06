@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import importlib.util
@@ -136,7 +136,7 @@ class SubsidyAllPeopleMonthlySummaryTests(unittest.TestCase):
             path = Path(tmp) / "subsidy_template.xlsx"
             path.write_bytes(build_subsidy_source_template())
             source = self.module.parse_source_table(str(path), year=2026, month=7)
-            self.assertEqual([row["name"] for row in source], ["张三"])
+            self.assertEqual([row["name"] for row in source], ["【示例】张三"])
             self.assertEqual(source[0]["emp_no"], "MT0001")
 
     def test_old_format_table_without_a1_date_accepts_year_and_month(self) -> None:

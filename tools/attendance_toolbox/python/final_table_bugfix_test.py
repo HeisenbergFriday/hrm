@@ -35,6 +35,16 @@ import calc_subsidy_deduction as sub  # noqa: E402
 
 
 class ParseFloatDurationTests(unittest.TestCase):
+    def test_leave_overflow_is_scaled_to_attendance_days(self):
+        capped, changed = fin._cap_leave_days_to_attendance(
+            {"产假": 30, "事假": 10},
+            20,
+        )
+        self.assertTrue(changed)
+        self.assertAlmostEqual(sum(capped.values()), 20.0, places=2)
+        self.assertAlmostEqual(capped["产假"], 15.0, places=2)
+        self.assertAlmostEqual(capped["事假"], 5.0, places=2)
+
     def test_plain_number(self):
         self.assertEqual(ot.parse_float(3.5), 3.5)
         self.assertEqual(ot.parse_float("3.5"), 3.5)
@@ -267,8 +277,8 @@ class ScheduleFormulaParsingTests(unittest.TestCase):
 
 
 class MaternityLeaveTypeTests(unittest.TestCase):
-    def test_maternity_is_expected_attendance_day_leave(self):
-        self.assertTrue(calc_leave.is_expected_attendance_day_leave("产假"))
+    def test_maternity_is_natural_day_leave(self):
+        self.assertFalse(calc_leave.is_expected_attendance_day_leave("产假"))
         self.assertFalse(calc_leave.is_expected_attendance_day_leave("事假"))
 
 
@@ -333,13 +343,13 @@ class MaternityLeaveOverrideTests(unittest.TestCase):
         )
         self.assertEqual(merged, [self.header, existing])
 
-    def test_full_first_and_last_month_use_expected_attendance_dates(self):
+    def test_full_first_and_last_month_use_natural_dates(self):
         full = ("", "员工", "", "", "", "产假", "2026-05-01", "2026-07-31", None)
         first = ("", "员工", "", "", "", "产假", "2026-06-15", "2026-07-31", None)
         last = ("", "员工", "", "", "", "产假", "2026-05-01", "2026-06-10", None)
-        self.assertEqual(calc_leave.calc_final_fields(full, self.schedule_ctx)[1], 7)
-        self.assertEqual(calc_leave.calc_final_fields(first, self.schedule_ctx)[1], 3)
-        self.assertEqual(calc_leave.calc_final_fields(last, self.schedule_ctx)[1], 4)
+        self.assertEqual(calc_leave.calc_final_fields(full, self.schedule_ctx)[1], 30)
+        self.assertEqual(calc_leave.calc_final_fields(first, self.schedule_ctx)[1], 16)
+        self.assertEqual(calc_leave.calc_final_fields(last, self.schedule_ctx)[1], 10)
 
     def test_name_only_manual_leave_is_written(self):
         merged = calc_leave.merge_maternity_leave_overrides(
@@ -756,9 +766,9 @@ class AttendanceIdentityContractTests(unittest.TestCase):
         enriched = fin.apply_attendance_identity(employees, records)
 
         self.assertEqual(enriched[0]["emp_no"], "OLD001")
-        self.assertEqual(enriched[0]["attendance_group"], "标准考勤组")
-        self.assertEqual(enriched[0]["dept1"], "总部")
-        self.assertEqual(enriched[0]["position"], "工程师")
+        self.assertIsNone(enriched[0]["attendance_group"])
+        self.assertIsNone(enriched[0]["dept1"])
+        self.assertIsNone(enriched[0]["position"])
 
     def test_exact_emp_no_wins_when_another_identity_has_same_name(self):
         employees = [{"emp_no": "E001", "name": "张三"}]
@@ -772,18 +782,18 @@ class AttendanceIdentityContractTests(unittest.TestCase):
         self.assertEqual(enriched[0]["emp_no"], "E001")
         self.assertEqual(enriched[0]["dept1"], "精确工号部门")
 
-    def test_unmatched_emp_no_falls_back_to_unique_name_without_replacing_roster_identity(self):
+    def test_different_employee_number_does_not_match_by_name(self):
         employees = [{"emp_no": "LEGACY001", "name": "张 三"}]
         records = [{"emp_no": "CURRENT001", "name": "张三", "dept1": "总部"}]
 
         enriched = fin.apply_attendance_identity(employees, records)
 
         self.assertEqual(enriched[0]["emp_no"], "LEGACY001")
-        self.assertEqual(enriched[0]["name"], "张三")
-        self.assertEqual(enriched[0]["dept1"], "总部")
+        self.assertEqual(enriched[0]["name"], "张 三")
+        self.assertIsNone(enriched[0]["dept1"])
 
     def test_unmatched_emp_no_rejects_ambiguous_name_identities(self):
-        employees = [{"emp_no": "LEGACY001", "name": "张三"}]
+        employees = [{"emp_no": "", "name": "张三"}]
         records = [
             {"emp_no": "CURRENT001", "name": "张三"},
             {"emp_no": "CURRENT002", "name": "张三"},
@@ -1138,12 +1148,10 @@ class GenerateRosterActionTests(unittest.TestCase):
                 }
             finally:
                 result_workbook.close()
-            self.assertEqual(values["系统操作"], "未加")
-            self.assertIn("运维组", values["备注"])
-            for field in (
-                "加班类型", "最终加班时长（小时）", "2倍加班小时", "3倍加班小时",
-                "2倍加班天数", "3倍加班天数",
-            ):
+            self.assertIsNone(values["系统操作"])
+            self.assertEqual(values["加班类型"], "调休")
+            self.assertEqual(values["最终加班时长（小时）"], 8)
+            for field in ("2倍加班小时", "3倍加班小时", "2倍加班天数", "3倍加班天数"):
                 self.assertIsNone(values[field], field)
         finally:
             import shutil

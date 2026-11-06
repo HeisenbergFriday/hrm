@@ -1,6 +1,8 @@
 import React from 'react'
-import { Row, Col, Typography, Alert, Button, Result, Skeleton } from 'antd'
+import { Typography, Alert, Button, Result, Skeleton, Empty } from 'antd'
 import {
+  AppstoreOutlined,
+  ArrowRightOutlined,
   UserOutlined,
   TeamOutlined,
   ClockCircleOutlined,
@@ -15,6 +17,7 @@ import { attendanceAPI, approvalAPI, orgAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import { useAuthStore } from '../store/authStore'
 import { hasMenuPermission } from '../utils/permission'
+import './home.css'
 
 const { Text } = Typography
 
@@ -35,6 +38,7 @@ const statCards = [
     icon: <UserOutlined />,
     gradient: 'linear-gradient(135deg, #2563eb 0%, #0891b2 100%)',
     shadow: 'rgba(37,99,235,0.22)',
+    description: '查看员工花名册和在职状态',
     path: '/employees',
     menuKey: 'menu:employees',
   },
@@ -44,6 +48,7 @@ const statCards = [
     icon: <TeamOutlined />,
     gradient: 'linear-gradient(135deg, #10b981 0%, #22c55e 100%)',
     shadow: 'rgba(16,185,129,0.2)',
+    description: '浏览组织层级和部门人数',
     path: '/department-tree',
     menuKey: 'menu:department-tree',
   },
@@ -53,6 +58,7 @@ const statCards = [
     icon: <ClockCircleOutlined />,
     gradient: 'linear-gradient(135deg, #f59e0b 0%, #fb7185 100%)',
     shadow: 'rgba(245,158,11,0.2)',
+    description: '近 30 天同步考勤结果',
     path: '/attendance',
     menuKey: 'menu:attendance',
   },
@@ -62,6 +68,7 @@ const statCards = [
     icon: <FileOutlined />,
     gradient: 'linear-gradient(135deg, #8b5cf6 0%, #06b6d4 100%)',
     shadow: 'rgba(139,92,246,0.2)',
+    description: '当前组织可见的审批实例',
     path: '/approval-instances',
     menuKey: 'menu:approval-instances',
   },
@@ -112,25 +119,15 @@ const Home: React.FC = () => {
 
   if (menuKeys.length === 0) {
     return (
-      <PageContainer>
-        <div style={{
-          background: 'linear-gradient(135deg, #2563eb 0%, #0891b2 55%, #10b981 100%)',
-          borderRadius: 'var(--radius-2xl)',
-          padding: '20px 24px',
-          marginBottom: 'var(--space-6)',
-          color: '#fff',
-          boxShadow: '0 16px 36px rgba(37,99,235,0.16)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-            <DashboardOutlined style={{ fontSize: 22 }} />
-            <span style={{ margin: 0, color: '#fff', fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-lg)' }}>
-              系统概览
-            </span>
+      <PageContainer title="工作台" subtitle="人事管理系统" className="home-page">
+        <section className="home-hero home-hero-empty" aria-labelledby="home-empty-title">
+          <div className="home-hero-icon" aria-hidden="true"><DashboardOutlined /></div>
+          <div>
+            <div className="home-hero-eyebrow">欢迎使用</div>
+            <h1 id="home-empty-title">系统概览</h1>
+            <Text>配置角色权限后，即可查看组织、考勤和审批工作台。</Text>
           </div>
-          <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 'var(--font-size-base)' }}>
-            欢迎使用人事管理系统
-          </Text>
-        </div>
+        </section>
         <Result
           icon={<LockOutlined style={{ color: 'var(--color-primary)' }} />}
           title="暂无数据权限"
@@ -206,10 +203,10 @@ const Home: React.FC = () => {
 
   // 仅展示当前账号已有菜单权限的入口，避免点进 RouteGuard 403
   const shortcuts = [
-    { label: '组织架构', icon: <TeamOutlined />, color: '#2563eb', bg: '#eaf2ff', path: '/department-tree', menuKey: 'menu:department-tree' },
-    { label: '考勤管理', icon: <ClockCircleOutlined />, color: '#0369a1', bg: '#e0f2fe', path: '/attendance', menuKey: 'menu:attendance' },
-    { label: '审批管理', icon: <FileOutlined />, color: '#b45309', bg: '#fef3c7', path: '/approval-instances', menuKey: 'menu:approval-instances' },
-    { label: '绩效管理', icon: <DashboardOutlined />, color: '#15803d', bg: '#dcfce7', path: '/performance-overview', menuKey: 'menu:performance-overview' },
+    { label: '组织架构', description: '查看部门层级和人员分布', icon: <TeamOutlined />, color: '#2563eb', bg: '#eaf2ff', path: '/department-tree', menuKey: 'menu:department-tree' },
+    { label: '考勤管理', description: '查询打卡结果和异常记录', icon: <ClockCircleOutlined />, color: '#0369a1', bg: '#e0f2fe', path: '/attendance', menuKey: 'menu:attendance' },
+    { label: '审批管理', description: '跟进审批实例和处理进度', icon: <FileOutlined />, color: '#b45309', bg: '#fef3c7', path: '/approval-instances', menuKey: 'menu:approval-instances' },
+    { label: '绩效管理', description: '进入绩效活动和结果管理', icon: <DashboardOutlined />, color: '#15803d', bg: '#dcfce7', path: '/performance-overview', menuKey: 'menu:performance-overview' },
   ].filter((item) => hasMenuPermission(item.menuKey))
 
   const displayName = (user?.name || '').trim() || '同事'
@@ -221,14 +218,14 @@ const Home: React.FC = () => {
   }
 
   return (
-    <PageContainer>
+    <PageContainer title="工作台" subtitle="聚合组织、人事、考勤与审批工作的日常入口" className="home-page">
       {hasPermissionLimitedError ? (
         <Alert
           message="部分首页数据未展示"
           description="当前账号无权查看部分统计数据，如有需要请联系管理员开通权限。"
           type="warning"
           showIcon
-          style={{ marginBottom: 16 }}
+          className="home-alert"
         />
       ) : null}
       {isError && hasBlockingError ? (
@@ -237,7 +234,7 @@ const Home: React.FC = () => {
           description="请检查网络后重试相关统计，不影响下方快捷入口使用。"
           type="error"
           showIcon
-          style={{ marginBottom: 16 }}
+          className="home-alert"
           action={
             <Button size="small" onClick={handleRetryStats}>
               重试
@@ -246,219 +243,111 @@ const Home: React.FC = () => {
         />
       ) : null}
 
-      {/* 欢迎区：单行信息 + CTA 风格，避免厚重展示块 */}
-      <div style={{
-        background: 'linear-gradient(135deg, #2563eb 0%, #0891b2 55%, #10b981 100%)',
-        borderRadius: 'var(--radius-2xl)',
-        padding: '18px 24px',
-        marginBottom: 'var(--space-6)',
-        color: '#fff',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 16,
-        flexWrap: 'wrap',
-        boxShadow: '0 16px 36px rgba(37,99,235,0.16)',
-      }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-            <DashboardOutlined style={{ fontSize: 22 }} />
-            <span style={{
-              margin: 0,
-              color: '#fff',
-              fontWeight: 'var(--font-weight-bold)',
-              fontSize: 'var(--font-size-lg)',
-            }}>
-              你好，{displayName}
-            </span>
+      <section className="home-hero" aria-labelledby="home-welcome-title">
+        <div className="home-hero-content">
+          <div className="home-hero-icon" aria-hidden="true"><DashboardOutlined /></div>
+          <div>
+            <div className="home-hero-eyebrow">人事管理工作台</div>
+            <h1 id="home-welcome-title">你好，{displayName}</h1>
+            <Text>从核心指标和常用入口开始今天的工作</Text>
           </div>
-          <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 'var(--font-size-sm)' }}>
-            人事管理系统 · 从下方统计与快捷入口进入工作
-          </Text>
         </div>
         {shortcuts[0] ? (
           <Button
-            type="default"
+            type="primary"
             onClick={() => navigate(shortcuts[0].path)}
-            style={{
-              fontWeight: 600,
-              border: 'none',
-              color: 'var(--color-primary-active)',
-              background: 'rgba(255,255,255,0.95)',
-            }}
+            icon={<ArrowRightOutlined />}
+            iconPosition="end"
+            className="home-hero-action"
           >
             进入{shortcuts[0].label}
           </Button>
         ) : null}
-      </div>
+      </section>
 
-      <Row gutter={[20, 20]}>
+      <section className="home-section" aria-labelledby="home-metrics-title">
+        <div className="home-section-heading">
+          <div>
+            <h2 id="home-metrics-title">核心指标</h2>
+            <Text>快速了解当前组织的关键数据</Text>
+          </div>
+          <span className="home-section-kicker">实时概览</span>
+        </div>
+        <div className="home-metrics-grid">
         {statCards.map((card) => {
           const canOpen = hasMenuPermission(card.menuKey)
           return (
-            <Col xs={24} sm={12} lg={6} key={card.key}>
-              <div
-                role={canOpen ? 'button' : undefined}
-                tabIndex={canOpen ? 0 : undefined}
-                aria-label={canOpen ? `查看${card.title}` : card.title}
-                style={{
-                  background: 'var(--color-bg-card)',
-                  borderRadius: 'var(--radius-xl)',
-                  padding: '22px 24px',
-                  boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-                  border: '1px solid var(--color-border)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 16,
-                  transition: 'var(--transition-normal)',
-                  cursor: canOpen ? 'pointer' : 'default',
-                }}
+              <button
+                type="button"
+                className={`home-metric-card${canOpen ? '' : ' home-metric-card-disabled'}`}
+                aria-label={canOpen ? `查看${card.title}` : `${card.title}无权限`}
+                disabled={!canOpen}
                 onClick={() => {
                   if (canOpen) navigate(card.path)
                 }}
-                onKeyDown={(e) => {
-                  if (!canOpen) return
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    navigate(card.path)
-                  }
-                }}
-                onMouseEnter={(e) => {
-                  if (!canOpen) return
-                  e.currentTarget.style.boxShadow = `0 4px 20px ${card.shadow}`
-                  e.currentTarget.style.transform = 'translateY(-2px)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.boxShadow = '0 2px 12px rgba(0,0,0,0.06)'
-                  e.currentTarget.style.transform = 'translateY(0)'
-                }}
               >
-                <div
-                  style={{
-                    width: 52,
-                    height: 52,
-                    borderRadius: 'var(--radius-xl)',
-                    background: card.gradient,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 24,
-                    color: '#fff',
-                    flexShrink: 0,
-                    boxShadow: `0 4px 12px ${card.shadow}`,
-                  }}
-                >
+                <span className="home-metric-icon" style={{ background: card.gradient, boxShadow: `0 4px 12px ${card.shadow}` }} aria-hidden="true">
                   {card.icon}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Text
-                    style={{
-                      color: 'var(--color-text-secondary)',
-                      fontSize: 'var(--font-size-sm)',
-                      fontWeight: 'var(--font-weight-medium)',
-                    }}
-                  >
-                    {card.title}
-                  </Text>
-                  <div
-                    style={{
-                      fontSize: 28,
-                      fontWeight: 'var(--font-weight-bold)',
-                      color: 'var(--color-text-title)',
-                      lineHeight: 1.2,
-                      marginTop: 4,
-                      minHeight: 34,
-                    }}
-                  >
+                </span>
+                <span className="home-metric-content">
+                  <span className="home-metric-title">{card.title}</span>
+                  <span className="home-metric-value">
                     {cardLoading[card.key] ? (
-                      <Skeleton.Input active size="small" style={{ width: 72, height: 28 }} />
+                      <Skeleton.Input active size="small" />
                     ) : (
                       formatStatValue(card.key, values[card.key])
                     )}
-                  </div>
-                </div>
-              </div>
-            </Col>
+                  </span>
+                  <span className="home-metric-description">{card.description}</span>
+                </span>
+                {canOpen ? <ArrowRightOutlined className="home-metric-arrow" aria-hidden="true" /> : null}
+              </button>
           )
         })}
-      </Row>
-
-      {shortcuts.length > 0 ? (
-        <div style={{ marginTop: 'var(--space-6)' }}>
-          <span
-            style={{
-              color: 'var(--color-text-heading)',
-              fontWeight: 'var(--font-weight-bold)',
-              marginBottom: 'var(--space-4)',
-              display: 'block',
-              fontSize: 'var(--font-size-md)',
-            }}
-          >
-            快捷入口
-          </span>
-          <Row gutter={[16, 16]}>
-            {shortcuts.map((item) => (
-              <Col xs={12} sm={6} key={item.label}>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  style={{
-                    background: 'var(--color-bg-card)',
-                    borderRadius: 'var(--radius-lg)',
-                    padding: '20px 16px',
-                    textAlign: 'center',
-                    boxShadow: 'var(--shadow-sm)',
-                    border: '1px solid var(--color-border-light)',
-                    cursor: 'pointer',
-                    transition: 'var(--transition-normal)',
-                  }}
-                  onClick={() => navigate(item.path)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      navigate(item.path)
-                    }
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.boxShadow = `0 4px 16px ${item.color}22`
-                    e.currentTarget.style.transform = 'translateY(-2px)'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.boxShadow = 'var(--shadow-sm)'
-                    e.currentTarget.style.transform = 'translateY(0)'
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: 'var(--radius-lg)',
-                      background: item.bg,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: 'var(--font-size-xl)',
-                      color: item.color,
-                      marginBottom: 10,
-                    }}
-                  >
-                    {item.icon}
-                  </div>
-                  <div
-                    style={{
-                      fontWeight: 'var(--font-weight-semibold)',
-                      fontSize: 'var(--font-size-base)',
-                      color: 'var(--color-text-primary)',
-                    }}
-                  >
-                    {item.label}
-                  </div>
-                </div>
-              </Col>
-            ))}
-          </Row>
         </div>
-      ) : null}
+      </section>
+
+      <div className="home-lower-grid">
+        <section className="home-panel home-section" aria-labelledby="home-shortcuts-title">
+          <div className="home-section-heading">
+            <div>
+              <h2 id="home-shortcuts-title">常用入口</h2>
+              <Text>按当前账号权限展示可用工作区</Text>
+            </div>
+            <AppstoreOutlined className="home-section-icon" aria-hidden="true" />
+          </div>
+          {shortcuts.length > 0 ? (
+            <div className="home-shortcuts-list">
+              {shortcuts.map((item) => (
+                <button type="button" className="home-shortcut" key={item.label} onClick={() => navigate(item.path)}>
+                  <span className="home-shortcut-icon" style={{ color: item.color, background: item.bg }} aria-hidden="true">{item.icon}</span>
+                  <span className="home-shortcut-copy">
+                    <span className="home-shortcut-label">{item.label}</span>
+                    <span className="home-shortcut-description">{item.description}</span>
+                  </span>
+                  <ArrowRightOutlined className="home-shortcut-arrow" aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可用入口" />
+          )}
+        </section>
+
+        <section className="home-panel home-section home-data-note" aria-labelledby="home-data-note-title">
+          <div className="home-section-heading">
+            <div>
+              <h2 id="home-data-note-title">数据说明</h2>
+              <Text>指标口径保持透明，便于快速判断数据范围</Text>
+            </div>
+          </div>
+          <ul className="home-note-list">
+            <li><strong>员工总数、部门总数</strong><span>来自当前组织概览数据。</span></li>
+            <li><strong>考勤率</strong><span>按近 30 天同步考勤结果计算。</span></li>
+            <li><strong>审批数量</strong><span>统计当前组织可见的审批实例。</span></li>
+          </ul>
+        </section>
+      </div>
     </PageContainer>
   )
 }

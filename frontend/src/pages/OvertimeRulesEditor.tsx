@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Button,
@@ -103,11 +103,54 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
 }) => {
   const [messageApi, messageContextHolder] = message.useMessage()
   const [preview, setPreview] = useState<RulesPreview | null>(value?.rules || null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [defaultPreview, setDefaultPreview] = useState(!value?.rules)
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [uploadFile, setUploadFile] = useState<UploadFile | null>(null)
 
   const activeSource: RulesSource = value?.source || 'default'
+
+  useEffect(() => {
+    if (value?.rules) {
+      setPreview(value.rules)
+      setDefaultPreview(false)
+      setPreviewError(null)
+      return
+    }
+
+    if (activeSource !== 'default') return
+    let mounted = true
+    setPreviewLoading(true)
+    setPreviewError(null)
+    attendanceToolboxAPI.previewRules()
+      .then((response) => {
+        if (!mounted) return
+        const data = (response as { data?: RulesPreview })?.data
+          || (response as unknown as RulesPreview)
+        if (!data || !Array.isArray(data.premium_rules)) {
+          throw new Error('规则预览数据为空')
+        }
+        setPreview({
+          ...data,
+          department_rules: normalizeDepartmentRules(data.department_rules),
+        })
+        setDefaultPreview(true)
+      })
+      .catch(() => {
+        if (mounted) {
+          setPreview(null)
+          setPreviewError('默认规则预览加载失败，可先导出规则文件查看')
+        }
+      })
+      .finally(() => {
+        if (mounted) setPreviewLoading(false)
+      })
+    return () => {
+      mounted = false
+    }
+  }, [activeSource, value?.rules])
 
   const emit = (next: AppliedRulesState) => {
     onChange?.(next)
@@ -160,6 +203,8 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
           department_rules: normalizeDepartmentRules(data.department_rules),
         }
         setPreview(normalized)
+        setDefaultPreview(false)
+        setPreviewError(null)
         messageApi.success('规则已解析，预览如下。点击“应用规则”后才会参与计算。')
       }
     } catch {
@@ -172,6 +217,10 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
   const handleApply = () => {
     if (!preview) {
       messageApi.warning('请先导入或编辑规则')
+      return
+    }
+    if (defaultPreview) {
+      messageApi.info('默认规则仅供查看；如需修改，请先导入规则文件')
       return
     }
     if (!canEdit) {
@@ -189,7 +238,7 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
       department_rules: normalizeDepartmentRules(preview.department_rules),
       params: {
         standard_hours_per_day: preview.params?.standard_hours_per_day ?? 8,
-        no_punch_mark: preview.params?.no_punch_mark ?? '未加',
+        no_punch_mark: preview.params?.no_punch_mark ?? '未知',
         schedule_augment_holidays: preview.params?.schedule_augment_holidays ?? true,
         schedule_augment_rest_dept_group: preview.params?.schedule_augment_rest_dept_group ?? '运营支撑部',
         chengdu_use_separate_calendar: preview.params?.chengdu_use_separate_calendar ?? true,
@@ -206,6 +255,8 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
 
   const handleResetDefault = () => {
     setPreview(null)
+    setDefaultPreview(true)
+    setPreviewError(null)
     setUploadFile(null)
     emit({ source: 'default', rules: null, rulesJson: null })
     messageApi.success('已恢复默认规则')
@@ -264,7 +315,7 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
         render: (v: string, _: DepartmentRule, index: number) => (
           <Input
             value={v}
-            disabled={!canEdit}
+            disabled={!canEdit || defaultPreview}
             onChange={(e) => updateDeptRule(index, { group_name: e.target.value })}
           />
         ),
@@ -276,7 +327,7 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
         render: (v: string, _: DepartmentRule, index: number) => (
           <Input
             value={v}
-            disabled={!canEdit}
+            disabled={!canEdit || defaultPreview}
             onChange={(e) => updateDeptRule(index, { match_field: e.target.value })}
           />
         ),
@@ -288,7 +339,7 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
         render: (v: string, _: DepartmentRule, index: number) => (
           <Input
             value={v}
-            disabled={!canEdit}
+            disabled={!canEdit || defaultPreview}
             onChange={(e) => updateDeptRule(index, { match_method: e.target.value })}
           />
         ),
@@ -300,13 +351,13 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
         render: (v: string, _: DepartmentRule, index: number) => (
           <Input
             value={v}
-            disabled={!canEdit}
+            disabled={!canEdit || defaultPreview}
             onChange={(e) => updateDeptRule(index, { match_value: e.target.value })}
           />
         ),
       },
     ],
-    [canEdit, preview],
+    [canEdit, defaultPreview, preview],
   )
 
   return (
@@ -323,14 +374,14 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
         description={
           !canEdit
             ? disabledReason || '你缺少考勤工具箱规则编辑权限，需要联系管理员添加'
-            : '固定倍数规则只读；部门组与参数可编辑。导入预览后必须点击“应用规则”才会进入加班计算。'
+            : '默认规则可直接查看；导入自定义规则后可编辑部门组和参数，点击“应用规则”后才会进入加班计算。'
         }
       />
 
       <Card size="small" title="加班规则配置">
         <Space wrap>
           <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>
-            导出默认规则
+            {activeSource === 'custom' ? '导出当前规则' : '导出默认规则'}
           </Button>
           <Upload
             accept=".xlsx,.xls"
@@ -358,7 +409,7 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
             type="primary"
             icon={<CheckOutlined />}
             onClick={handleApply}
-            disabled={!preview || !canEdit}
+            disabled={!preview || !canEdit || defaultPreview}
           >
             应用规则
           </Button>
@@ -368,13 +419,18 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
         </Space>
       </Card>
 
-      {preview && (
+      {previewLoading && (
+        <Card size="small" loading title="正在加载默认规则预览" />
+      )}
+      {previewError && <Alert type="warning" showIcon message={previewError} />}
+
+      {preview && !previewLoading && (
         <Collapse
-          defaultActiveKey={['premium', 'department', 'params']}
+          defaultActiveKey={defaultPreview ? [] : ['premium', 'department', 'params']}
           items={[
             {
               key: 'premium',
-              label: '倍数规则（只读）',
+              label: defaultPreview ? '默认倍数规则（只读）' : '倍数规则（只读）',
               children: (
                 <Table
                   dataSource={preview.premium_rules}
@@ -387,7 +443,7 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
             },
             {
               key: 'department',
-              label: '部门匹配规则（可编辑）',
+              label: defaultPreview ? '默认部门匹配规则（只读）' : '部门匹配规则（可编辑）',
               children: (
                 <Table
                   dataSource={normalizeDepartmentRules(preview.department_rules)}
@@ -409,7 +465,7 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
                       min={1}
                       max={24}
                       step={0.5}
-                      disabled={!canEdit}
+                      disabled={!canEdit || defaultPreview}
                       value={preview.params?.standard_hours_per_day ?? 8}
                       onChange={(v) => updateParam('standard_hours_per_day', Number(v || 8))}
                     />
@@ -418,8 +474,8 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
                     <Text strong>未打卡标记：</Text>
                     <Input
                       style={{ maxWidth: 200 }}
-                      disabled={!canEdit}
-                      value={preview.params?.no_punch_mark ?? '未加'}
+                      disabled={!canEdit || defaultPreview}
+                      value={preview.params?.no_punch_mark ?? '未知'}
                       onChange={(e) => updateParam('no_punch_mark', e.target.value)}
                     />
                   </div>
@@ -427,7 +483,7 @@ const OvertimeRulesEditor: React.FC<OvertimeRulesEditorProps> = ({
                     <Text strong>排班补录-休息日部门组：</Text>
                     <Input
                       style={{ maxWidth: 240 }}
-                      disabled={!canEdit}
+                      disabled={!canEdit || defaultPreview}
                       value={preview.params?.schedule_augment_rest_dept_group ?? '运营支撑部'}
                       onChange={(e) => updateParam('schedule_augment_rest_dept_group', e.target.value)}
                     />

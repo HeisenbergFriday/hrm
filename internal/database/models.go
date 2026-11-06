@@ -55,24 +55,25 @@ type Organization struct {
 
 // User 用户模型
 type User struct {
-	ID             uint                   `gorm:"primaryKey" json:"id"`
-	OrgID          string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_org_user_id,priority:1;uniqueIndex:idx_org_email,priority:1;uniqueIndex:idx_users_org_mobile,priority:1;uniqueIndex:idx_users_org_dingtalk_user,priority:1" json:"org_id"` // 组织ID（多租户隔离）
-	UserID         string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_org_user_id,priority:2" json:"user_id"`                                                                                                                                                      // 钉钉用户ID
-	DingTalkUserID string                 `gorm:"column:ding_talk_user_id;type:varchar(64);index;uniqueIndex:idx_users_org_dingtalk_user,priority:2" json:"dingtalk_user_id"`                                                                                                           // 钉钉 UserID（合并自综合分支，业务冗余字段）
-	Name           string                 `gorm:"type:varchar(128);not null" json:"name"`
-	Email          string                 `gorm:"type:varchar(128);uniqueIndex:idx_org_email,priority:2" json:"email"`
-	Mobile         string                 `gorm:"type:varchar(32);uniqueIndex:idx_users_org_mobile,priority:2" json:"mobile"`
-	Password       string                 `gorm:"type:varchar(256)" json:"-"` // 密码哈希，JSON 不输出
-	DepartmentID   string                 `gorm:"type:varchar(64);not null" json:"department_id"`
-	Position       string                 `gorm:"type:varchar(128)" json:"position"`
-	Avatar         string                 `gorm:"type:varchar(256)" json:"avatar"`
-	Status         string                 `gorm:"type:varchar(32);not null" json:"status"`
-	ManagerUserID  string                 `gorm:"type:varchar(64);index" json:"manager_user_id"` // 直属主管钉钉 UserID
-	ManagerName    string                 `gorm:"type:varchar(128)" json:"manager_name"`         // 直属主管姓名快照
-	Extension      map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
-	CreatedAt      time.Time              `json:"created_at"`
-	UpdatedAt      time.Time              `json:"updated_at"`
-	DeletedAt      gorm.DeletedAt         `gorm:"index" json:"-"`
+	ID              uint                   `gorm:"primaryKey" json:"id"`
+	OrgID           string                 `gorm:"type:varchar(64);not null;default:'default';uniqueIndex:idx_org_user_id,priority:1;uniqueIndex:idx_org_email,priority:1;uniqueIndex:idx_users_org_mobile,priority:1;uniqueIndex:idx_users_org_dingtalk_user,priority:1" json:"org_id"` // 组织ID（多租户隔离）
+	UserID          string                 `gorm:"type:varchar(64);not null;uniqueIndex:idx_org_user_id,priority:2" json:"user_id"`                                                                                                                                                      // 钉钉用户ID
+	DingTalkUserID  string                 `gorm:"column:ding_talk_user_id;type:varchar(64);index;uniqueIndex:idx_users_org_dingtalk_user,priority:2" json:"dingtalk_user_id"`                                                                                                           // 钉钉 UserID（合并自综合分支，业务冗余字段）
+	Name            string                 `gorm:"type:varchar(128);not null" json:"name"`
+	Email           string                 `gorm:"type:varchar(128);uniqueIndex:idx_org_email,priority:2" json:"email"`
+	Mobile          string                 `gorm:"type:varchar(32);uniqueIndex:idx_users_org_mobile,priority:2" json:"mobile"`
+	Password        string                 `gorm:"type:varchar(256)" json:"-"` // 密码哈希，JSON 不输出
+	DepartmentID    string                 `gorm:"type:varchar(64);not null" json:"department_id"`
+	Position        string                 `gorm:"type:varchar(128)" json:"position"`
+	Avatar          string                 `gorm:"type:varchar(256)" json:"avatar"`
+	Status          string                 `gorm:"type:varchar(32);not null" json:"status"`
+	StatusChangedAt *time.Time             `json:"status_changed_at,omitempty"`
+	ManagerUserID   string                 `gorm:"type:varchar(64);index" json:"manager_user_id"` // 直属主管钉钉 UserID
+	ManagerName     string                 `gorm:"type:varchar(128)" json:"manager_name"`         // 直属主管姓名快照
+	Extension       map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
 // UserDepartmentMembership 保存员工在钉钉中的完整部门归属。
@@ -442,7 +443,10 @@ type EmployeeProfile struct {
 	TaxNumber   string `gorm:"type:varchar(64)" json:"tax_number"`    // 税号
 	Address     string `gorm:"type:varchar(256)" json:"address"`      // 地址
 	// 状态信息
-	ProfileStatus string `gorm:"type:varchar(32);not null;default:active" json:"profile_status"` // 档案状态：active, inactive
+	ProfileStatus          string     `gorm:"type:varchar(32);not null;default:active" json:"profile_status"` // 档案状态：active, inactive
+	StatusChangedAt        *time.Time `json:"status_changed_at,omitempty"`
+	DingTalkResignDate     string     `gorm:"type:varchar(32)" json:"dingtalk_resign_date"`
+	DingTalkLastWorkingDay string     `gorm:"type:varchar(32)" json:"dingtalk_last_working_day"`
 	// 扩展字段
 	Extension map[string]interface{} `gorm:"type:json;serializer:json" json:"extension"` // 扩展字段
 	CreatedAt time.Time              `json:"created_at"`
@@ -745,6 +749,25 @@ type AnnualLeaveGrant struct {
 	DingTalkSyncedAt    *time.Time `gorm:"column:dingtalk_synced_at" json:"dingtalk_synced_at"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+// LeaveBalanceSnapshot stores the last successful leave quota read from DingTalk.
+type LeaveBalanceSnapshot struct {
+	ID               uint       `gorm:"primaryKey" json:"id"`
+	OrgID            string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_leave_balance_snapshot_org_user_year_type,priority:1;index" json:"org_id"`
+	UserID           string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_leave_balance_snapshot_org_user_year_type,priority:2;index" json:"user_id"`
+	Year             int        `gorm:"not null;uniqueIndex:idx_leave_balance_snapshot_org_user_year_type,priority:3" json:"year"`
+	LeaveType        string     `gorm:"type:varchar(32);not null;uniqueIndex:idx_leave_balance_snapshot_org_user_year_type,priority:4" json:"leave_type"`
+	LeaveCode        string     `gorm:"type:varchar(128)" json:"leave_code"`
+	TotalMinutes     int        `gorm:"default:0" json:"total_minutes"`
+	UsedMinutes      int        `gorm:"default:0" json:"used_minutes"`
+	RemainingMinutes int        `gorm:"default:0" json:"remaining_minutes"`
+	SyncStatus       string     `gorm:"type:varchar(32);not null;default:success" json:"sync_status"`
+	SyncError        string     `gorm:"type:text" json:"sync_error"`
+	SourceUpdatedAt  *time.Time `json:"source_updated_at"`
+	SyncedAt         time.Time  `json:"synced_at"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // OvertimeRuleConfig 加班规则配置

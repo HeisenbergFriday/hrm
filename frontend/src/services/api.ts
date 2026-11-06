@@ -98,8 +98,10 @@ export type PeopleDataCenterEmployee = {
   department_name: string
   position: string
   status: string
-  last_synced_at: string
+  /** 源系统员工资料（包括人员状态）最后变更时间。 */
   source_updated_at?: string
+  /** 数据中心最近一次同步该员工记录的时间。 */
+  last_synced_at: string
   is_mirror: boolean
 }
 
@@ -277,17 +279,57 @@ export type OrgSyncTaskAPIResponse = {
   data: OrgSyncTaskResponse
 }
 
+export type OrgSyncUserStartAPIResponse = {
+  code: 202
+  message: 'running'
+  data: {
+    status: 'running'
+    request_id: string
+  }
+}
+
+export type OrgSyncUserRunningAPIResponse = {
+  code: 202
+  message: 'running'
+  data: {
+    status: 'running'
+    request_id: string
+    duration_ms?: number
+  }
+}
+
 export const syncAPI = {
   syncDepartments: () => api.post<OrgSyncTaskAPIResponse, OrgSyncTaskAPIResponse>(
     '/sync/departments',
     {},
     ORG_SYNC_REQUEST_CONFIG,
   ),
-  syncUsers: () => api.post<OrgSyncTaskAPIResponse, OrgSyncTaskAPIResponse>(
-    '/sync/users',
-    {},
-    ORG_SYNC_REQUEST_CONFIG,
-  ),
+  syncUsers: async (): Promise<OrgSyncTaskAPIResponse> => {
+    const startedAt = Date.now()
+    const startResponse = await api.post<OrgSyncUserStartAPIResponse, OrgSyncUserStartAPIResponse>(
+      '/sync/users/start',
+      {},
+      ORG_SYNC_SHORT_REQUEST_CONFIG,
+    )
+    const requestID = startResponse.data?.request_id
+    if (startResponse.code !== 202 || startResponse.data?.status !== 'running' || !requestID) {
+      throw new Error('用户同步启动响应异常，请稍后重试')
+    }
+    while (Date.now() - startedAt < ORG_SYNC_TIMEOUT_MS) {
+      const remainingWaitMS = ORG_SYNC_TIMEOUT_MS - (Date.now() - startedAt)
+      await new Promise((resolve) => setTimeout(resolve, Math.min(ORG_SYNC_POLL_INTERVAL_MS, remainingWaitMS)))
+      if (Date.now() - startedAt >= ORG_SYNC_TIMEOUT_MS) break
+      const response = await api.get<OrgSyncTaskAPIResponse | OrgSyncUserRunningAPIResponse, OrgSyncTaskAPIResponse | OrgSyncUserRunningAPIResponse>(
+        `/sync/users/${encodeURIComponent(requestID)}`,
+        ORG_SYNC_SHORT_REQUEST_CONFIG,
+      )
+      if (response.code === 202) {
+        continue
+      }
+      return response as OrgSyncTaskAPIResponse
+    }
+    throw new Error('用户同步任务等待超时，后台任务可能仍在执行，请前往同步日志确认结果，暂勿重复点击')
+  },
   getSyncStatus: () => api.get<OrgSyncStatusAPIResponse, OrgSyncStatusAPIResponse>('/sync/status'),
 }
 
@@ -437,6 +479,24 @@ export type GeneratedOrgRoster = {
   skippedEmployeeCount: number
 }
 
+export type AttendanceToolboxMaternityLeaveOverride = {
+  employee_no: string
+  name: string
+  start_date: string
+  end_date: string
+}
+
+export type AttendanceToolboxConfig = {
+  configured?: boolean
+  maternity_leave_overrides: AttendanceToolboxMaternityLeaveOverride[]
+  leave_special_names: string[]
+  chengdu_schedule_names: string[]
+  sub_dept_keywords: string[]
+  sub_late22_names: string[]
+  part_special_names: string[]
+  overtime_rules_json?: string
+}
+
 const runToolboxDingtalkSyncJob = createToolboxDingtalkSyncClient({
   start: (request) => api.post<{ code: number; data: ToolboxDingtalkSyncJob }, { data: ToolboxDingtalkSyncJob }>('/attendance/toolbox/dingtalk-sync/start', request),
   getJob: (requestId) => api.get<{ code: number; data: ToolboxDingtalkSyncJob }, { data: ToolboxDingtalkSyncJob }>(`/attendance/toolbox/dingtalk-sync/jobs/${encodeURIComponent(requestId)}`),
@@ -449,6 +509,8 @@ const runToolboxDingtalkSyncJob = createToolboxDingtalkSyncClient({
 
 export const attendanceToolboxAPI = {
   getDefaults: () => api.get('/attendance/toolbox/defaults'),
+  getConfig: () => api.get<{ data: AttendanceToolboxConfig }>('/attendance/toolbox/config'),
+  saveConfig: (data: Omit<AttendanceToolboxConfig, 'configured'>) => api.put<{ data: AttendanceToolboxConfig }>('/attendance/toolbox/config', data),
   run: (module: string, data: FormData) => api.post(`/attendance/toolbox/${module}/run`, data, {
     responseType: 'blob',
     timeout: ATTENDANCE_TOOLBOX_REQUEST_TIMEOUT_MS,
@@ -524,6 +586,10 @@ export const attendanceToolboxAPI = {
       timeout: 60 * 1000,
     })
   },
+  /** Preview effective default or custom overtime rules without downloading Excel. */
+  previewRules: (rulesJson?: string) => api.post('/attendance/toolbox/rules/preview', rulesJson ? { rules_json: rulesJson } : {}, {
+    timeout: 60 * 1000,
+  }),
   /** Preview first 200 rows of a stored run result (does not re-run calculation). */
   previewRun: (runId: string, fileKey?: string) => api.get(`/attendance/toolbox/runs/${runId}/preview`, {
     params: fileKey ? { file_key: fileKey } : undefined,
@@ -629,33 +695,6 @@ export type ApprovalSyncAPIResponse = {
   data: ApprovalSyncResult
 }
 
-export type ApprovalStatsAPIResponse = {
-  code: 200
-  message: 'success'
-  data: {
-    summary: {
-      total: number
-      completed: number
-      refused: number
-      running: number
-      terminated: number
-      canceled: number
-      approval_rate: string
-    }
-    template_stats: Array<{
-      template_id: string
-      template_name: string
-      total: number
-      completed: number
-      refused: number
-      running: number
-      terminated: number
-      canceled: number
-      approval_rate: string
-    }>
-  }
-}
-
 function approvalSyncStorage(): Storage | undefined {
   return typeof window === 'undefined' ? undefined : window.sessionStorage
 }
@@ -721,8 +760,6 @@ export const approvalAPI = {
     sort_order?: 'asc' | 'desc'
   }) => api.get('/approvals/instances', { params }),
   getApproval: (id: string) => api.get(`/approvals/${id}`),
-  getStats: (params: { template_id?: string; start_date?: string; end_date?: string }) =>
-    api.get<ApprovalStatsAPIResponse, ApprovalStatsAPIResponse>('/approvals/stats', { params }),
   resumeSync: async (): Promise<ApprovalSyncAPIResponse> => {
     const requestID = getPendingApprovalSyncRequestID()
     if (!requestID) throw new Error('没有可恢复的审批同步任务')
@@ -913,6 +950,10 @@ export const leaveAPI = {
   regrant: (data: { user_id: string; year: number }) =>
     api.post('/leave/grants/regrant', data),
   syncToDingTalk: () => api.post('/leave/grants/sync-to-dingtalk', { confirm: true }),
+  syncBalancesFromDingTalk: (data: { user_id?: string; year: number }) =>
+    api.post('/leave/balances/sync-dingtalk', data),
+  getBalanceSnapshots: (params: { user_id: string; year: number }) =>
+    api.get('/leave/balances', { params }),
   consume: (data: { user_id: string; days: number; approval_ref?: string; remark?: string }) =>
     api.post('/leave/consume', data),
   getConsumeLog: (params: { user_id: string }) =>

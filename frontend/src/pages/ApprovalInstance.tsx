@@ -1,29 +1,24 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input, Tooltip } from 'antd'
+import { Typography, Table, Spin, Empty, Alert, Button, Select, DatePicker, Space, Input } from 'antd'
 import type { TableProps } from 'antd'
-import { FileTextOutlined, SyncOutlined, SearchOutlined } from '@ant-design/icons'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { FileTextOutlined, SearchOutlined, ReloadOutlined, UndoOutlined, EyeOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons'
+import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { approvalAPI, getPendingApprovalSyncRequestID, type ApprovalSyncAPIResponse } from '../services/api'
-import { hasPermission } from '../utils/permission'
+import { approvalAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
 import PageCard from '../components/PageCard'
 import ApprovalStatusTag from '../components/ApprovalStatusTag'
+import ApprovalSyncStatus from '../components/ApprovalSyncStatus'
+import { useApprovalSync } from '../hooks/useApprovalSync'
 import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
 import datePickerZhCN from 'antd/es/date-picker/locale/zh_CN'
 import { formatDateTime } from '../utils/format'
-import {
-  approvalSyncErrorNotice,
-  approvalSyncResultNotice,
-  approvalSyncRunningNotice,
-  missingApprovalSyncPermissionTip,
-  type ApprovalSyncNotice,
-} from '../utils/approvalSync'
+import './approval.css'
 
 dayjs.locale('zh-cn')
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { Option } = Select
 const { RangePicker } = DatePicker
 const APPROVAL_SORT_DIRECTIONS: Array<'ascend' | 'descend'> = ['ascend', 'descend', 'ascend']
@@ -133,8 +128,6 @@ const ApprovalInstance: React.FC = () => {
   const [pageSize, setPageSize] = useState(initialListState.pageSize)
   const [sortField, setSortField] = useState<ApprovalInstanceSortField>(initialListState.sortField)
   const [sortOrder, setSortOrder] = useState<ApprovalInstanceSortOrder>(initialListState.sortOrder)
-  const [syncNotice, setSyncNotice] = useState<ApprovalSyncNotice | null>(null)
-  const syncInFlightRef = useRef(false)
 
   const CATEGORY_OPTIONS: { value: string; label: string }[] = [
     { value: 'leave', label: '请假' },
@@ -232,35 +225,12 @@ const ApprovalInstance: React.FC = () => {
     (templatesData?.data?.items || []).map((template: { template_id: string; name: string }) => [template.template_id, template.name]),
   ), [templatesData?.data?.items])
 
-  const syncMutation = useMutation<ApprovalSyncAPIResponse, Error, boolean>({
-    mutationFn: (resume) => resume
-      ? approvalAPI.resumeSync()
-      : approvalAPI.sync({
-        process_code: templateID || undefined,
-        start_date: dateRange[0]?.format('YYYY-MM-DD'),
-        end_date: dateRange[1]?.format('YYYY-MM-DD'),
-      }),
-    onSuccess: (response) => {
-      setSyncNotice(approvalSyncResultNotice(response.data))
-      if (response.data.status === 'success' || response.data.status === 'partial') {
-        refetch()
-      }
-    },
-    onError: (error) => {
-      setSyncNotice(approvalSyncErrorNotice(error))
-    },
-    onSettled: () => {
-      syncInFlightRef.current = false
-    },
+  const { canSync, isSyncing, notice: syncNotice, startManualSync } = useApprovalSync({
+    processCode: templateID || undefined,
+    startDate: startDate || undefined,
+    endDate: endDate || undefined,
+    onCompleted: () => { void refetch() },
   })
-
-  const resumeSync = syncMutation.mutate
-  useEffect(() => {
-    if (!hasPermission('approval:sync') || !getPendingApprovalSyncRequestID() || syncInFlightRef.current) return
-    syncInFlightRef.current = true
-    setSyncNotice(approvalSyncRunningNotice())
-    resumeSync(true)
-  }, [resumeSync])
 
   const handleViewDetail = (id: string) => {
     const returnTo = `${location.pathname}${buildListSearch({
@@ -292,19 +262,24 @@ const ApprovalInstance: React.FC = () => {
     if (extra.action !== 'sort') return
     const nextSorter = Array.isArray(sorter) ? sorter[0] : sorter
     const nextSorterField = nextSorter?.field ?? nextSorter?.columnKey
-    if (nextSorterField === 'create_time' || nextSorterField === 'finish_time' || nextSorterField === 'business_start_time' || nextSorterField === 'business_end_time') {
-      const nextSortField = nextSorterField as ApprovalInstanceSortField
+    const nextSortField = nextSorterField === 'approval_time'
+      ? 'create_time'
+      : nextSorterField === 'business_time'
+        ? 'business_start_time'
+        : nextSorterField
+    if (nextSortField === 'create_time' || nextSortField === 'finish_time' || nextSortField === 'business_start_time' || nextSortField === 'business_end_time') {
+      const normalizedSortField = nextSortField as ApprovalInstanceSortField
       const requestedOrder = nextSorter.order === 'ascend' || nextSorter.order === 'descend'
         ? nextSorter.order
         : undefined
-      const nextSortOrder = nextSortField === sortField
+      const nextSortOrder = normalizedSortField === sortField
         ? (requestedOrder && requestedOrder !== sortOrder
           ? requestedOrder
           : (sortOrder === 'ascend' ? 'descend' : 'ascend'))
         : requestedOrder
       if (nextSortOrder) {
-        if (nextSortField !== sortField || nextSortOrder !== sortOrder) {
-          setSortField(nextSortField)
+        if (normalizedSortField !== sortField || nextSortOrder !== sortOrder) {
+          setSortField(normalizedSortField)
           setSortOrder(nextSortOrder)
           setPage(1)
         }
@@ -312,13 +287,50 @@ const ApprovalInstance: React.FC = () => {
     }
   }
 
-  const handleSync = () => {
-    if (syncInFlightRef.current) {
-      return
-    }
-    syncInFlightRef.current = true
-    setSyncNotice(approvalSyncRunningNotice(templateID))
-    syncMutation.mutate(false)
+  const resetFilters = () => {
+    setStatus('')
+    setTemplateID('')
+    setCategory('')
+    setDateRange([null, null])
+    setSearchText('')
+    setPage(1)
+    setSortField('create_time')
+    setSortOrder('descend')
+  }
+
+  const approvalItems = (instancesData?.data?.items || []) as ApprovalInstance[]
+  const sortOptions = [
+    { value: 'create_time', label: '发起时间' },
+    { value: 'finish_time', label: '完成时间' },
+    { value: 'business_start_time', label: '业务开始时间' },
+    { value: 'business_end_time', label: '业务结束时间' },
+  ]
+
+  const statusLabels: Record<string, string> = {
+    completed: '已完成（含通过/拒绝）',
+    running: '审批中',
+    terminated: '已终止',
+    canceled: '已取消',
+  }
+  const selectedTemplateName = templateID
+    ? templateNameByID.get(templateID) || templateID
+    : ''
+  const filterSummary = [
+    status ? `状态：${statusLabels[status] || status}` : '',
+    selectedTemplateName ? `模板：${selectedTemplateName}` : '',
+    category ? `类型：${CATEGORY_OPTIONS.find((item) => item.value === category)?.label || category}` : '',
+    startDate || endDate ? `业务日期：${startDate || '不限'} 至 ${endDate || '不限'}` : '',
+    debouncedSearch ? `标题：${debouncedSearch}` : '',
+  ].filter(Boolean)
+
+  const handleSortFieldChange = (nextField: ApprovalInstanceSortField) => {
+    setSortField(nextField)
+    setPage(1)
+  }
+
+  const toggleSortOrder = () => {
+    setSortOrder((current) => current === 'ascend' ? 'descend' : 'ascend')
+    setPage(1)
   }
 
   const columns = [
@@ -326,74 +338,80 @@ const ApprovalInstance: React.FC = () => {
       title: '审批标题',
       dataIndex: 'title',
       key: 'title',
+      width: 260,
       render: (text: string, record: ApprovalInstance) => (
-        <Text strong onClick={() => handleViewDetail(record.id)} style={{ cursor: 'pointer', color: 'var(--color-primary)' }}>
-          {text}
-        </Text>
+        <div className="approval-title-link">
+          <Button
+            className="approval-title-link-button"
+            type="link"
+            onClick={() => handleViewDetail(record.id)}
+          >
+            {text || '未命名审批'}
+          </Button>
+          <Text type="secondary">
+            模板：{templateNameByID.get(record.template_id || record.extension?.process_code || record.extension?.template_id)
+              || record.template_name
+              || record.template_id
+              || record.extension?.process_code
+              || '未关联模板'}
+          </Text>
+          <Text type="secondary">实例编号：{record.process_id || record.id}</Text>
+        </div>
       ),
-    },
-    {
-      title: '审批模板',
-      dataIndex: 'template_name',
-      key: 'template_name',
-      render: (templateName: string, record: ApprovalInstance) => {
-        const resolvedTemplateID = record.template_id || record.extension?.process_code || record.extension?.template_id
-        return templateName || templateNameByID.get(resolvedTemplateID) || resolvedTemplateID || '—'
-      },
     },
     {
       title: '发起人',
       dataIndex: 'applicant_name',
       key: 'applicant_name',
+      width: 110,
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string) => <ApprovalStatusTag status={status} />,
+      width: 100,
+      render: (status: string, record: ApprovalInstance) => (
+        <ApprovalStatusTag status={status} result={record.extension?.result} />
+      ),
     },
     {
-      title: '发起时间',
-      dataIndex: 'create_time',
-      key: 'create_time',
+      title: '审批时间',
+      key: 'approval_time',
+      width: 190,
       sorter: true,
       sortDirections: APPROVAL_SORT_DIRECTIONS,
       sortOrder: sortField === 'create_time' ? sortOrder : undefined,
-      render: (v: string) => formatDateTime(v),
+      render: (_: unknown, record: ApprovalInstance) => (
+        <div className="approval-time-cell">
+          <Text>{formatDateTime(record.create_time)}</Text>
+          <Text type="secondary">完成：{record.finish_time ? formatDateTime(record.finish_time) : '进行中'}</Text>
+        </div>
+      ),
     },
     {
-      title: '审批完成时间',
-      dataIndex: 'finish_time',
-      key: 'finish_time',
-      sorter: true,
-      sortDirections: APPROVAL_SORT_DIRECTIONS,
-      sortOrder: sortField === 'finish_time' ? sortOrder : undefined,
-      render: (finishTime: string | null) => finishTime ? formatDateTime(finishTime) : '-',
-    },
-    {
-      title: '业务开始时间',
-      dataIndex: 'business_start_time',
-      key: 'business_start_time',
+      title: '业务时间',
+      key: 'business_time',
+      width: 180,
       sorter: true,
       sortDirections: APPROVAL_SORT_DIRECTIONS,
       sortOrder: sortField === 'business_start_time' ? sortOrder : undefined,
-      render: (value: string | null | undefined) => formatBusinessTime(value),
-    },
-    {
-      title: '业务结束时间',
-      dataIndex: 'business_end_time',
-      key: 'business_end_time',
-      sorter: true,
-      sortDirections: APPROVAL_SORT_DIRECTIONS,
-      sortOrder: sortField === 'business_end_time' ? sortOrder : undefined,
-      render: (value: string | null | undefined) => formatBusinessTime(value),
+      render: (_: unknown, record: ApprovalInstance) => (
+        <div className="approval-time-cell">
+          <Text>{formatBusinessTime(record.business_start_time)}</Text>
+          <Text type="secondary">至 {formatBusinessTime(record.business_end_time)}</Text>
+        </div>
+      ),
     },
     {
       title: '操作',
       key: 'action',
+      fixed: 'right' as const,
+      width: 100,
       render: (_: any, record: ApprovalInstance) => (
         <Button
           type="link"
+          icon={<EyeOutlined />}
+          aria-label="查看详情"
           onClick={() => handleViewDetail(record.id)}
         >
           查看详情
@@ -405,10 +423,25 @@ const ApprovalInstance: React.FC = () => {
   return (
     <PageContainer
       title="审批实例"
+      subtitle="有新审批会自动更新，系统每 15 分钟自动查漏补缺"
       icon={<FileTextOutlined />}
+      extra={(
+        <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isLoading}>
+          刷新
+        </Button>
+      )}
     >
-      <PageCard>
-        <div style={{ marginBottom: 'var(--space-4)', display: 'flex', gap: 'var(--space-4)', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="approval-page-stack">
+        <ApprovalSyncStatus
+          notice={syncNotice}
+          isSyncing={isSyncing}
+          canSync={canSync}
+          processCode={templateID || undefined}
+          onManualSync={startManualSync}
+        />
+
+        <PageCard className="approval-filter-card">
+          <div className="approval-filter-grid">
           <Select
             placeholder="状态"
             style={{ width: 120 }}
@@ -416,10 +449,10 @@ const ApprovalInstance: React.FC = () => {
             value={status || undefined}
             onChange={(v) => { setStatus(v || ''); setPage(1) }}
           >
-            <Option value="completed">已完成</Option>
-            <Option value="in_progress">处理中</Option>
-            <Option value="rejected">已拒绝</Option>
-            <Option value="pending">待处理</Option>
+            <Option value="completed">已完成（含通过/拒绝）</Option>
+            <Option value="running">审批中</Option>
+            <Option value="terminated">已终止</Option>
+            <Option value="canceled">已取消</Option>
           </Select>
           <Select
             placeholder="流程分类"
@@ -462,36 +495,19 @@ const ApprovalInstance: React.FC = () => {
             onChange={(e) => { setSearchText(e.target.value); setPage(1) }}
           />
           <Space>
-            <Button type="primary" onClick={() => refetch()}>
-              查询
+            <Button type="primary" icon={<SearchOutlined />} onClick={() => refetch()}>
+              查询结果
             </Button>
-            <Tooltip title={hasPermission('approval:sync') ? undefined : missingApprovalSyncPermissionTip}>
-              <span>
-                <Button
-                  icon={<SyncOutlined />}
-                  onClick={handleSync}
-                  loading={syncMutation.isPending}
-                  disabled={!hasPermission('approval:sync') || syncMutation.isPending}
-                >
-                  {syncMutation.isPending ? '同步中' : (templateID ? '同步当前模板' : '同步全部')}
-                </Button>
-              </span>
-            </Tooltip>
+            <Button icon={<UndoOutlined />} onClick={resetFilters}>
+              重置
+            </Button>
           </Space>
-        </div>
+          </div>
+        </PageCard>
 
-        {syncNotice && (
-          <Alert
-            style={{ marginBottom: 'var(--space-4)' }}
-            type={syncNotice.type}
-            message={syncNotice.message}
-            description={syncNotice.description}
-            showIcon
-          />
-        )}
-
+        <PageCard className="approval-table-card">
         {isLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+          <div className="approval-loading">
             <Spin size="large" />
           </div>
         ) : isError ? (
@@ -513,6 +529,36 @@ const ApprovalInstance: React.FC = () => {
             columns={columns}
             dataSource={instancesData.data.items as ApprovalInstance[]}
             rowKey="id"
+            size="middle"
+            scroll={{ x: 980 }}
+            title={() => (
+              <div className="approval-table-title">
+                <Space size={8} wrap>
+                  <Text strong>审批记录</Text>
+                  <Text type="secondary">共 {instancesData.data.total} 条</Text>
+                </Space>
+                <Text type="secondary" className="approval-filter-summary">
+                  {filterSummary.length > 0 ? `当前筛选：${filterSummary.join(' · ')}` : '当前显示全部审批记录'}
+                </Text>
+                <Space size={8}>
+                  <Text type="secondary">排序</Text>
+                  <Select
+                    size="small"
+                    value={sortField}
+                    options={sortOptions}
+                    onChange={handleSortFieldChange}
+                    aria-label="排序字段"
+                  />
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={sortOrder === 'ascend' ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
+                    aria-label={sortOrder === 'ascend' ? '升序' : '降序'}
+                    onClick={toggleSortOrder}
+                  />
+                </Space>
+              </div>
+            )}
             pagination={{
               current: page,
               pageSize: pageSize,
@@ -527,7 +573,8 @@ const ApprovalInstance: React.FC = () => {
         ) : (
           <Empty description="暂无审批实例" />
         )}
-      </PageCard>
+        </PageCard>
+      </div>
     </PageContainer>
   )
 }

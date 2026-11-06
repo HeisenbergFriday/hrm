@@ -9,6 +9,7 @@ func TestMapLegacyProcessingForm_LeaveAndOvertime(t *testing.T) {
 	form := &multipart.Form{
 		Value: map[string][]string{},
 		File: map[string][]*multipart.FileHeader{
+			"reviewed": {{Filename: "reviewed.xlsx", Size: 10}},
 			"input":    {{Filename: "请假系统导出.xlsx", Size: 10}},
 			"schedule": {{Filename: "作息表.xlsx", Size: 10}},
 		},
@@ -16,6 +17,9 @@ func TestMapLegacyProcessingForm_LeaveAndOvertime(t *testing.T) {
 	mapped := mapLegacyProcessingForm("leave", form)
 	if len(mapped.File["leave_src"]) != 1 {
 		t.Fatalf("leave_src missing: %+v", mapped.File)
+	}
+	if len(mapped.File["leave_reviewed"]) != 1 {
+		t.Fatalf("leave_reviewed missing")
 	}
 	if len(mapped.File["leave_schedule"]) != 1 {
 		t.Fatalf("leave_schedule missing")
@@ -36,6 +40,16 @@ func TestMapLegacyProcessingForm_LeaveAndOvertime(t *testing.T) {
 	}
 	if len(mappedOT.File["overtime_schedules"]) != 2 {
 		t.Fatalf("overtime_schedules want 2 got %d", len(mappedOT.File["overtime_schedules"]))
+	}
+}
+
+func TestAttendanceToolboxSpecs_LeaveKeepsReviewedWorkbook(t *testing.T) {
+	spec, ok := attendanceToolboxSpecs()["leave"]
+	if !ok {
+		t.Fatal("leave toolbox spec missing")
+	}
+	if got := spec.SingleFiles["leave_reviewed"]; got != "leave_reviewed" {
+		t.Fatalf("leave_reviewed mapping = %q, want leave_reviewed", got)
 	}
 }
 
@@ -76,7 +90,7 @@ func TestMapLegacyProcessingForm_FinalSubsidyParttime(t *testing.T) {
 	pt := mapLegacyProcessingForm("parttime", &multipart.Form{
 		File: map[string][]*multipart.FileHeader{
 			"default_schedule":  {{Filename: "d.xlsx", Size: 1}},
-			"attendance_detail": {{Filename: "ad.xlsx", Size: 1}},
+			"attendance_detail": {{Filename: "ad-1.xlsx", Size: 1}, {Filename: "ad-2.xlsx", Size: 1}},
 			"monthly_summary":   {{Filename: "m1.xlsx", Size: 1}, {Filename: "m2.xlsx", Size: 1}},
 			"schedule":          {{Filename: "s1.xlsx", Size: 1}},
 		},
@@ -84,8 +98,24 @@ func TestMapLegacyProcessingForm_FinalSubsidyParttime(t *testing.T) {
 	if len(pt.File["parttime_monthly"]) != 2 {
 		t.Fatalf("parttime_monthly want 2")
 	}
+	if len(pt.File["parttime_attendance_detail"]) != 2 {
+		t.Fatalf("parttime_attendance_detail want 2")
+	}
 	if len(pt.File["parttime_schedules"]) != 1 {
 		t.Fatalf("parttime_schedules want 1")
+	}
+}
+
+func TestAttendanceToolboxSpecs_ParttimeAttendanceDetailIsMultiFile(t *testing.T) {
+	spec, ok := attendanceToolboxSpecs()["parttime"]
+	if !ok {
+		t.Fatal("parttime toolbox spec missing")
+	}
+	if _, ok := spec.SingleFiles["parttime_attendance_detail"]; ok {
+		t.Fatal("parttime attendance detail must not be single file")
+	}
+	if got := spec.MultiFiles["parttime_attendance_detail"]; got != "parttime_attendance_detail" {
+		t.Fatalf("parttime attendance detail mapping = %q", got)
 	}
 }
 

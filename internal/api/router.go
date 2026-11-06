@@ -42,6 +42,8 @@ func registerAttendanceToolboxRoutes(attendance *gin.RouterGroup) {
 	// 工具箱写操作与前端细权限对齐：attendance_manage 或 attendance_toolbox_operate；
 	// 禁止仅凭 menu:attendance-toolbox 绕过 feature 权限。只读 defaults 仍允许菜单或管理权限。
 	attendance.GET("/toolbox/defaults", middleware.RequirePermissionOrMenu([]string{"attendance_manage", "attendance_toolbox_operate"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxDefaults)
+	attendance.GET("/toolbox/config", middleware.RequirePermissionOrMenu([]string{"attendance_manage", "attendance_toolbox_operate"}, []string{"menu:attendance-toolbox"}), GetAttendanceToolboxConfig)
+	attendance.PUT("/toolbox/config", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), SaveAttendanceToolboxConfig)
 	attendance.POST("/toolbox/:module/run", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), RunAttendanceToolbox)
 	attendance.POST("/toolbox/dingtalk-sync", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunDingtalkSync)
 	attendance.POST("/toolbox/dingtalk-sync/start", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), StartToolboxDingtalkSync)
@@ -53,6 +55,7 @@ func registerAttendanceToolboxRoutes(attendance *gin.RouterGroup) {
 	// 权限与钉钉同步一致（attendance_toolbox_dingtalk_sync 或 attendance_manage）。
 	attendance.POST("/toolbox/parttime-monthly-punch", middleware.RequirePermission("attendance_manage", "attendance_toolbox_dingtalk_sync"), RunParttimeMonthlyPunch)
 	attendance.POST("/toolbox/rules/export", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ExportOvertimeRules)
+	attendance.POST("/toolbox/rules/preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), PreviewOvertimeRules)
 	attendance.POST("/toolbox/rules/import-preview", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate", "attendance_toolbox_rules_edit"), ImportOvertimeRulesPreview)
 	attendance.POST("/toolbox/:module/validate", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ValidateAttendanceToolbox)
 	attendance.POST("/toolbox/templates", middleware.RequirePermission("attendance_manage", "attendance_toolbox_operate"), ExportAttendanceToolboxTemplates)
@@ -164,6 +167,8 @@ func SetupRouter() *gin.Engine {
 			{
 				sync.POST("/departments", middleware.RequirePermission("attendance_manage"), SyncDepartments)
 				sync.POST("/users", middleware.RequirePermission("attendance_manage"), SyncUsers)
+				sync.POST("/users/start", middleware.RequirePermission("attendance_manage"), StartUserSyncData)
+				sync.GET("/users/:request_id", middleware.RequirePermission("attendance_manage"), GetUserSyncResult)
 				sync.GET("/status", middleware.RequirePermissionOrMenu(
 					[]string{"attendance_manage"},
 					[]string{"menu:sync-log", "menu:sync-jobs", "menu:setting"},
@@ -245,8 +250,7 @@ func SetupRouter() *gin.Engine {
 					[]string{"approval_manage"},
 					[]string{"menu:oa-approval-data"},
 				), ExternalApprovalDetails)
-				approvals.GET("/templates", middleware.RequireMenuPermission("menu:approval-templates", "menu:approval-stats"), GetApprovalTemplates)
-				approvals.GET("/stats", middleware.RequireMenuPermission("menu:approval-stats"), GetApprovalStats)
+				approvals.GET("/templates", middleware.RequireMenuPermission("menu:approval-templates"), GetApprovalTemplates)
 				approvals.GET("/instances", middleware.RequireMenuPermission("menu:approval-instances"), GetApprovalInstances)
 				approvals.GET("/:id", middleware.RequireMenuPermission("menu:approval-instances"), GetApproval)
 			}
@@ -368,6 +372,8 @@ func SetupRouter() *gin.Engine {
 				leave.GET("/eligibility", leaveOvertimeRead, GetLeaveEligibility)
 				leave.POST("/eligibility/recalculate", middleware.RequirePermission("attendance_manage"), RecalculateLeaveEligibility)
 				leave.GET("/grants", leaveOvertimeRead, GetLeaveGrants)
+				leave.GET("/balances", leaveOvertimeRead, GetLeaveBalanceSnapshots)
+				leave.POST("/balances/sync-dingtalk", middleware.RequirePermission("attendance_manage"), SyncLeaveBalancesFromDingTalk)
 				leave.POST("/grants/run-quarter", middleware.RequirePermission("attendance_manage"), RunQuarterGrant)
 				leave.POST("/grants/regrant", middleware.RequirePermission("attendance_manage"), RegrantLeave)
 				leave.POST("/grants/sync-to-dingtalk", middleware.RequirePermission("attendance_manage"), SyncGrantsToDingTalk)

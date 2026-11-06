@@ -17,6 +17,8 @@ let syncInProgress = false
 const safeClientErrorMessages = new Set([
   '组织同步启动响应异常，请稍后重试',
   '组织同步页面等待超时，后台任务可能仍在执行，请前往同步日志确认结果，暂勿重复点击',
+  '用户同步启动响应异常，请稍后重试',
+  '用户同步任务等待超时，后台任务可能仍在执行，请前往同步日志确认结果，暂勿重复点击',
 ])
 
 export function getRequestID(data: unknown): string | undefined {
@@ -49,7 +51,7 @@ function safeSyncReason(errorCode: unknown, _serverMessage: unknown, fallback: s
 
 function withRequestID(messageText: string, requestID?: string): string {
   const safeRequestID = getRequestID({ request_id: requestID })
-  return safeRequestID ? `${messageText}（请求编号：${safeRequestID}）` : messageText
+  return safeRequestID ? `请求编号：${safeRequestID}；${messageText}` : messageText
 }
 
 function formatHRMFieldSummary(employees: OrgSyncResponse['employees']): string | undefined {

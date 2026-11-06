@@ -31,6 +31,7 @@ import dingtalk_sync
 from excel_compat import audit_upload
 from rules_adapter import config_to_preview_dict, resolve_overtime_config
 import templates
+import integrity
 
 
 NAME_SEPARATOR_RE = re.compile(r"[,，、;；\r\n]+")
@@ -43,7 +44,10 @@ def path_or_empty(config: dict, key: str) -> str:
 
 def paths(config: dict, key: str) -> list[str]:
     result = []
-    for value in config.get(key) or []:
+    raw = config.get(key) or []
+    if isinstance(raw, str):
+        raw = [raw]
+    for value in raw:
         value = str(value or "").strip()
         if value and os.path.exists(value):
             result.append(value)
@@ -195,6 +199,7 @@ def run_leave(config: dict, output_dir: Path) -> list[dict]:
     out_path = output_dir / "请假明细表.xlsx"
     src_rows, _ = capture(calc_leave.clean_export, export_path)
     schedule_ctx, _ = capture(calc_leave.load_schedule_context, schedule_path)
+    validate_target_month_match(config.get("leave_target_month"), (schedule_ctx["year"], schedule_ctx["month"]), label="处理月份")
     src_rows, _ = capture(
         calc_leave.merge_maternity_leave_overrides,
         src_rows,
@@ -205,6 +210,7 @@ def run_leave(config: dict, output_dir: Path) -> list[dict]:
     offsite_path = path_or_empty(config, "leave_offsite_duration")
     if offsite_path:
         offsite_overrides, _ = capture(calc_leave.load_offsite_duration_overrides, offsite_path)
+    reviewed_path = path_or_empty(config, "leave_reviewed")
     _, _ = capture(
         calc_leave.process,
         src_rows,
@@ -214,6 +220,8 @@ def run_leave(config: dict, output_dir: Path) -> list[dict]:
         offsite_overrides,
         tuple(names_or_default(config, "leave_special_names", calc_leave.DEFAULT_SPECIAL_EMPLOYEE_NAMES)),
         tuple(names_or_default(config, "chengdu_schedule_names", calc_leave.DEFAULT_CHENGDU_WORK_LOCATION_NAMES)),
+        None,
+        reviewed_path,
     )
     return [{"path": str(out_path), "file_name": out_path.name}]
 
@@ -454,6 +462,7 @@ def run_final(config: dict, output_dir: Path) -> list[dict]:
 
     employees = fin.parse_roster(active_path, resign_path)
     schedule_ctx = fin.parse_schedule(schedule_path)
+    validate_target_month_match(config.get("final_target_month"), (schedule_ctx["year"], schedule_ctx["month"]), label="处理月份")
     if not resign_path and auto_resign_path:
         auto_resigned = fin.parse_auto_resign_json(auto_resign_path, schedule_ctx)
         employees, auto_stats = fin.merge_employee_sources(
@@ -545,6 +554,10 @@ def run_final(config: dict, output_dir: Path) -> list[dict]:
         schedule_ctx["year"],
         schedule_ctx["month"],
     )
+    expected = [person for person in employees
+                if (person.get("source_attendance_roster") or person.get("source_target_month_activity")
+                    or fin._in_resign_keep_window(person.get("resign_date"), schedule_ctx["year"], schedule_ctx["month"], person.get("hire_date")))
+                and not fin._is_final_table_excluded_employee(person)]
     fin.generate(
         employees,
         transfer_map,
@@ -558,7 +571,27 @@ def run_final(config: dict, output_dir: Path) -> list[dict]:
         chengdu_names,
         absent_day_details,
     )
-    return [{"path": str(out_path), "file_name": out_path.name}]
+    import openpyxl
+    wb = openpyxl.load_workbook(out_path, data_only=True, read_only=True)
+    ws = wb.worksheets[0]
+    headers = [re.sub(r"\s+", "", str(header or "")) for header in fin.OUTPUT_HEADERS]
+    code_col, name_col = headers.index("工号") + 1, headers.index("姓名") + 1
+    actual = {(str(ws.cell(row, code_col).value or ""), str(ws.cell(row, name_col).value or ""))
+              for row in range(3, ws.max_row + 1) if ws.cell(row, name_col).value}
+    missing = [person for person in expected if (str(person.get("emp_no") or ""), str(person.get("name") or "")) not in actual]
+    for label in ("实际出勤天数", "计薪出勤天数"):
+        col = headers.index(label) + 1
+        for row in range(3, 3 + len(actual)):
+            if not isinstance(ws.cell(row, col).value, (int, float)):
+                wb.close()
+                raise ValueError(f"最终表第 {row} 行{label}未写入数字")
+    wb.close()
+    if missing:
+        raise ValueError(f"最终表缺少 {len(missing)} 人：" + "、".join(person["name"] for person in missing))
+    meta_path = output_dir / "final_audit.json"
+    meta_path.write_text(json.dumps({"status": "passed", "expected_people": len(expected),
+                                    "recognized_people": len(actual), "missing_people": 0}, ensure_ascii=False), encoding="utf-8")
+    return [{"path": str(out_path), "file_name": out_path.name}, {"path": str(meta_path), "file_name": meta_path.name, "kind": "meta"}]
 
 
 def run_parttime(config: dict, output_dir: Path) -> list[dict]:
@@ -566,15 +599,28 @@ def run_parttime(config: dict, output_dir: Path) -> list[dict]:
     default_schedule_path = path_or_empty(config, "parttime_default_schedule")
     if not default_schedule_path:
         raise ValueError("请上传默认作息表。")
-    part.generate_parttime_summary(
+    result = part.generate_parttime_summary(
         output_path=str(out_path),
-        attendance_detail_path=path_or_empty(config, "parttime_attendance_detail") or None,
+        attendance_detail_paths=paths(config, "parttime_attendance_detail"),
         monthly_summary_paths=paths(config, "parttime_monthly"),
         schedule_paths=paths(config, "parttime_schedules"),
         default_schedule_path=default_schedule_path,
         special_default_names=names_or_default(config, "part_special_names", part.DEFAULT_SPECIAL_DEFAULT_NAMES),
+        target_month=str(config.get("parttime_target_month") or "").strip() or None,
+        expected_roster_path=path_or_empty(config, "parttime_roster") or None,
+        resignation_path=path_or_empty(config, "final_auto_resign_json") or None,
+        conflict_policy=config.get("parttime_conflict_policy", "block"),
+        prepared_data=config.get("_parttime_prepared"),
     )
-    return [{"path": str(out_path), "file_name": out_path.name}]
+    audit_path = output_dir / "parttime_audit.json"
+    audit_path.write_text(
+        json.dumps(result.get("audit") or {}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return [
+        {"path": str(out_path), "file_name": out_path.name, "kind": "export", "row_count": result.get("rows", 0)},
+        {"path": str(audit_path), "file_name": audit_path.name, "kind": "meta"},
+    ]
 
 
 def run_dingtalk_sync(config: dict, output_dir: Path) -> list[dict]:
@@ -834,6 +880,12 @@ def _check_parttime_detail_headers(file_path: str) -> dict:
 
 def action_validate(config: dict, output_dir: Path) -> list[dict]:
     module = config.get("validate_module", "")
+    if config.get(f"{module}_target_month"):
+        report = integrity.preflight(module, config)
+        report["ok"] = report["status"] == "passed"
+        path = output_dir / "validation_result.json"
+        path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        return [{"path": str(path), "file_name": path.name}]
     results = {}
 
     if module == "leave":
@@ -864,9 +916,15 @@ def action_validate(config: dict, output_dir: Path) -> list[dict]:
         if schedule_path:
             results["final_schedule"] = _check_headers(schedule_path, EXPECTED_HEADERS["final"]["schedule"])
     elif module == "parttime":
-        detail_path = path_or_empty(config, "parttime_attendance_detail")
-        if detail_path:
-            results["parttime_detail"] = _check_parttime_detail_headers(detail_path)
+        detail_paths = paths(config, "parttime_attendance_detail")
+        if detail_paths:
+            detail_results = [
+                _check_parttime_detail_headers(detail_path) for detail_path in detail_paths
+            ]
+            results["parttime_detail"] = {
+                "ok": all(item.get("ok", False) for item in detail_results),
+                "files": detail_results,
+            }
 
     all_ok = all(r.get("ok", False) for r in results.values()) if results else True
     preview_path = output_dir / "validation_result.json"
@@ -899,7 +957,7 @@ def action_preview(config: dict, output_dir: Path) -> list[dict]:
         raise ValueError(f"未知模块：{module}")
 
     # 运行实际计算，生成输出文件
-    outputs = RUNNERS[module](config, output_dir)
+    outputs = integrity.run(module, config, output_dir, RUNNERS[module])
 
     # 读取第一个输出文件的前 200 行
     preview_data = []
@@ -1065,6 +1123,17 @@ def action_audit(config: dict, output_dir: Path) -> list[dict]:
             "scan_content": scan_content,
         },
     }
+    module = config.get("audit_module")
+    if module in {"leave", "overtime", "subsidy", "final", "parttime"}:
+        check_config = {f"{module}_target_month": config.get("target_month", ""),
+                        "parttime_conflict_policy": config.get("conflict_policy", "block"), "_original_names": {}}
+        for raw in files_meta:
+            field, path = raw.get("field", ""), raw.get("path", "")
+            if field.startswith(module + "_") and path:
+                check_config.setdefault(field, []).append(path)
+                check_config["_original_names"][path] = raw.get("name")
+        report = integrity.preflight(module, check_config)
+        out.update(ok=report["status"] == "passed", files=report["files"], meta={"integrity_audit": report})
     audit_path = output_dir / "audit_result.json"
     audit_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     return [{"path": str(audit_path), "file_name": audit_path.name}]
@@ -1279,7 +1348,10 @@ def main() -> int:
         config = json.loads(args.config_json)
         log_buffer = io.StringIO()
         with contextlib.redirect_stdout(log_buffer):
-            outputs = RUNNERS[args.module](config, output_dir)
+            if args.module in {"leave", "overtime", "subsidy", "final", "parttime"}:
+                outputs = integrity.run(args.module, config, output_dir, RUNNERS[args.module])
+            else:
+                outputs = RUNNERS[args.module](config, output_dir)
         print_json({
             "ok": True,
             "outputs": outputs,

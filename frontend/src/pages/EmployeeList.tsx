@@ -1,14 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
+  Avatar,
   Button,
+  Card,
   Col,
+  Collapse,
   Empty,
   Input,
   Row,
   Select,
   Skeleton,
   Space,
+  Segmented,
   Spin,
   Tag,
   Table,
@@ -16,7 +20,7 @@ import {
   Typography,
   message,
 } from 'antd'
-import { CloseCircleOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons'
+import { CloseCircleOutlined, EyeOutlined, FilterOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { departmentAPI, orgAPI } from '../services/api'
 import PageContainer from '../components/PageContainer'
@@ -25,6 +29,7 @@ import StatusTag from '../components/StatusTag'
 import { hasPermission } from '../utils/permission'
 import { maskEmail, maskMobile } from '../utils/maskPii'
 import { confirmOrgSync } from '../utils/orgSyncAction'
+import './organization.css'
 
 const { Text } = Typography
 const { Search } = Input
@@ -43,6 +48,7 @@ interface EmployeeItem {
   mobile: string
   department_id: string
   position: string
+  avatar?: string
   status: string
   extension?: Record<string, any>
   created_at?: string
@@ -135,6 +141,8 @@ const EmployeeList: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(true)
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table')
   const [total, setTotal] = useState(0)
   const page = Math.max(1, Number(searchParams.get('page')) || 1)
   const pageSize = Math.max(1, Number(searchParams.get('page_size')) || 10)
@@ -251,7 +259,9 @@ const EmployeeList: React.FC = () => {
     {
       title: '员工', dataIndex: 'name', key: 'name',
       render: (_: string, record: EmployeeItem) => (
-        <div>
+        <Space size={10}>
+          <Avatar size={34} src={record.avatar} icon={<UserOutlined />} />
+          <div>
           <a
             href={`/employees/${record.id}`}
             onClick={(e) => {
@@ -262,8 +272,9 @@ const EmployeeList: React.FC = () => {
           >
             {record.name}
           </a>
-          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>{record.user_id}</div>
-        </div>
+            <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)', marginTop: 2 }}>{record.user_id}</div>
+          </div>
+        </Space>
       ),
     },
     {
@@ -299,16 +310,52 @@ const EmployeeList: React.FC = () => {
         </StatusTag>
       ),
     },
+    {
+      title: '操作', key: 'actions', fixed: 'right' as const, width: 112,
+      render: (_: unknown, record: EmployeeItem) => (
+        <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/employees/${record.id}`)}>
+          查看档案
+        </Button>
+      ),
+    },
   ]
+
+  const renderEmployeeCard = (record: EmployeeItem) => (
+    <Card className="organization-employee-card" key={record.id} size="small">
+      <div className="organization-employee-card-heading">
+        <Space size={10}>
+          <Avatar size={40} src={record.avatar} icon={<UserOutlined />} />
+          <div>
+            <Button type="link" className="organization-employee-card-name" onClick={() => navigate(`/employees/${record.id}`)}>
+              {record.name}
+            </Button>
+            <Text className="organization-employee-card-id">{record.user_id}</Text>
+          </div>
+        </Space>
+        <StatusTag color={record.status === 'active' ? 'success' : 'default'}>
+          {record.status === 'active' ? '在职' : record.status === 'inactive' ? '离职' : record.status}
+        </StatusTag>
+      </div>
+      <div className="organization-employee-card-details">
+        <div><Text type="secondary">部门</Text><span>{departmentNameMap[record.department_id] || record.department_id || '未分配部门'}</span></div>
+        <div><Text type="secondary">岗位</Text><span>{record.position || '未同步岗位'}</span></div>
+        <div><Text type="secondary">联系方式</Text><span>{maskMobile(record.mobile) || maskEmail(record.email) || '未填写'}</span></div>
+      </div>
+      <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/employees/${record.id}`)}>
+        查看人事档案
+      </Button>
+    </Card>
+  )
 
   return (
     <PageContainer
-      title="组织花名册"
+      className="organization-roster-page"
+      title="员工中心"
       icon={<TeamOutlined />}
       subtitle={
         loading && !overview?.scope
           ? <span style={{ color: 'var(--color-text-secondary)' }}>数据范围加载中…</span>
-          : <>数据范围：<span style={{ color: 'var(--color-primary)', fontWeight: 'var(--font-weight-semibold)' }}>{scopeLabel}</span></>
+          : <>组织范围：<span style={{ color: 'var(--color-primary)', fontWeight: 'var(--font-weight-semibold)' }}>{scopeLabel}</span>；点击员工可查看人事档案</>
       }
       extra={
         <Space>
@@ -329,8 +376,15 @@ const EmployeeList: React.FC = () => {
         </Space>
       }
     >
-      {/* 统计卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 'var(--space-5)' }}>
+      <section className="organization-roster-section" aria-labelledby="employee-overview-title">
+        <div className="organization-section-heading">
+          <div>
+            <h2 id="employee-overview-title">员工概览</h2>
+            <Text>快速查看当前组织的人员状态</Text>
+          </div>
+          <span className="organization-section-kicker">实时数据</span>
+        </div>
+      <Row gutter={[16, 16]} className="organization-metric-grid">
         {statConfig.map((item, idx) => {
           const isActive = item.filterType ? filterType === item.filterType : !filterType
           const isClickable = !!item.filterType
@@ -346,77 +400,89 @@ const EmployeeList: React.FC = () => {
           }
           return (
             <Col xs={24} md={8} key={item.key}>
-              <div
-                role={isClickable ? 'button' : undefined}
-                tabIndex={isClickable ? 0 : undefined}
+              <button
+                type="button"
+                className={`organization-metric-card${isActive ? ' organization-metric-card-active' : ''}`}
                 aria-label={isClickable ? `筛选${item.title}` : undefined}
                 aria-pressed={isClickable ? isActive : undefined}
+                disabled={!isClickable}
                 onClick={handleCardClick}
                 onKeyDown={handleCardKeyDown}
                 style={{
-                  background: 'var(--color-bg-card)',
-                  borderRadius: 'var(--radius-xl)',
-                  padding: '20px 22px',
-                  boxShadow: 'var(--shadow-card)',
-                  border: isClickable && isActive ? `2px solid ${item.color}` : '1px solid var(--color-border)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  cursor: isClickable ? 'pointer' : 'default',
-                  transition: 'border-color 0.2s, box-shadow 0.2s',
-                  ...(isClickable && isActive ? { boxShadow: `0 0 0 1px ${item.color}` } : {}),
-                }}
+                  '--metric-accent': item.color,
+                  '--metric-background': item.bg,
+                } as React.CSSProperties}
               >
-                <div style={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: 'var(--radius-lg)',
-                  background: item.bg,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 'var(--font-size-xl)',
-                  color: item.color,
-                  flexShrink: 0,
-                }}>
+                <span className="organization-metric-icon" aria-hidden="true">
                   {item.icon}
-                </div>
-                <div>
-                  <Text style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.title}</Text>
-                  <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text-title)', lineHeight: 1.2, marginTop: 2, minHeight: 34 }}>
+                </span>
+                <span className="organization-metric-copy">
+                  <span className="organization-metric-title">{item.title}</span>
+                  <span className="organization-metric-value">
                     {overviewLoading ? (
-                      <Skeleton.Input active size="small" style={{ width: 56, height: 28 }} />
+                      <Skeleton.Input active size="small" />
                     ) : (
                       summaryValues[idx]
                     )}
-                  </div>
-                </div>
-              </div>
+                  </span>
+                </span>
+              </button>
             </Col>
           )
         })}
       </Row>
+      </section>
 
-      {/* 分布卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 'var(--space-5)' }}>
+      <section className="organization-roster-section" aria-labelledby="employee-distribution-title">
+        <div className="organization-section-heading">
+          <div>
+            <h2 id="employee-distribution-title">人员分布</h2>
+            <Text>从员工类型、职级和岗位序列了解人员结构</Text>
+          </div>
+        </div>
+      <Row gutter={[16, 16]} className="organization-distribution-grid">
         {[
           { title: '员工类型分布', data: overview?.employee_type_distribution || [] },
           { title: '职级分布', data: overview?.job_level_distribution || [] },
           { title: '岗位序列分布', data: overview?.job_family_distribution || [] },
         ].map((section) => (
           <Col xs={24} lg={8} key={section.title}>
-            <PageCard
-              title={<span style={{ fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-size-base)', color: 'var(--color-text-heading)' }}>{section.title}</span>}
-            >
+            <PageCard title={section.title} className="organization-distribution-card">
               {renderDistributionItems(section.data, overviewLoading)}
             </PageCard>
           </Col>
         ))}
       </Row>
+      </section>
 
-      {/* 花名册表格 */}
-      <PageCard title={<span style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-md)', color: 'var(--color-text-title)' }}>花名册</span>}>
-        <Space wrap style={{ marginBottom: 18 }}>
+      <section className="organization-roster-section" aria-labelledby="employee-roster-title">
+        <div className="organization-section-heading">
+          <div>
+            <h2 id="employee-roster-title">花名册</h2>
+            <Text>搜索、筛选并进入员工人事档案</Text>
+          </div>
+          <Text type="secondary">{loading ? '正在加载…' : `共 ${total} 人`}</Text>
+        </div>
+      <PageCard className="organization-roster-card" title="员工列表">
+        <div className="organization-roster-toolbar">
+          <div>
+            <Text strong>人员名册</Text>
+            <Text type="secondary">按条件筛选后，可切换表格或卡片视图</Text>
+          </div>
+          <Space wrap>
+            <Button icon={<FilterOutlined />} onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen}>
+              {filtersOpen ? '收起筛选' : '展开筛选'}
+            </Button>
+            <Segmented
+              value={viewMode}
+              onChange={(value) => setViewMode(value as 'table' | 'cards')}
+              options={[{ label: '表格', value: 'table' }, { label: '卡片', value: 'cards' }]}
+            />
+          </Space>
+        </div>
+
+        {filtersOpen ? <div className="organization-filter-bar" aria-label="员工筛选条件">
+        <Space wrap className="organization-filter-controls">
           <Search
             allowClear
             enterButton={<SearchOutlined />}
@@ -428,12 +494,14 @@ const EmployeeList: React.FC = () => {
               if (value === '' && search !== '') updateSearchParams({ search: undefined }, true)
             }}
             onSearch={(value) => updateSearchParams({ search: value.trim() }, true)}
-            style={{ width: 320 }}
+            className="organization-search-input"
           />
           <Select
             allowClear
+            showSearch
+            optionFilterProp="label"
             placeholder="按部门筛选"
-            style={{ width: 220 }}
+            className="organization-department-select"
             value={departmentID}
             onChange={(value) => updateSearchParams({ department_id: value }, true)}
             options={departments.map((d) => ({ label: d.name, value: d.department_id }))}
@@ -441,7 +509,7 @@ const EmployeeList: React.FC = () => {
           <Select
             allowClear
             placeholder="按状态筛选"
-            style={{ width: 160 }}
+            className="organization-status-select"
             value={status}
             onChange={(value) => updateSearchParams({ status: value }, true)}
             options={[
@@ -453,9 +521,18 @@ const EmployeeList: React.FC = () => {
             <Button type="link" aria-label="清除筛选" onClick={clearFilters} icon={<CloseCircleOutlined />}>清除筛选</Button>
           ) : null}
         </Space>
+        <div className="organization-filter-meta">
+          <Text type="secondary">{loading ? '正在加载员工数据…' : `当前结果 ${total} 人`}</Text>
+          {hasActiveFilters ? <Text type="secondary">已应用筛选</Text> : <Text type="secondary">支持按姓名、工号、联系方式和岗位搜索</Text>}
+        </div>
+        </div> : (
+          <div className="organization-filter-collapsed">
+            {hasActiveFilters ? <Text type="secondary">已应用筛选条件，点击“展开筛选”可调整</Text> : <Text type="secondary">未设置筛选条件，当前显示全部可见员工</Text>}
+          </div>
+        )}
 
         {filterType && FILTER_TYPE_LABELS[filterType] ? (
-          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="organization-roster-summary" style={{ marginTop: 16 }}>
             <Tag
               color={filterType === 'probation' ? 'blue' : 'orange'}
               closable
@@ -485,16 +562,28 @@ const EmployeeList: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
             <Spin size="large" />
           </div>
+        ) : viewMode === 'cards' ? (
+          employees.length > 0 ? (
+            <div className="organization-employee-card-grid">
+              {employees.map(renderEmployeeCard)}
+            </div>
+          ) : (
+            <Empty description={hasActiveFilters ? '当前筛选条件下无员工' : '暂无员工数据'}>
+              {hasActiveFilters ? <Button type="link" onClick={clearFilters}>清除筛选</Button> : null}
+            </Empty>
+          )
         ) : (
           <Table
             rowKey="id"
             columns={columns}
             dataSource={employees}
+            scroll={{ x: 760 }}
             pagination={{
               current: page,
               pageSize,
               total,
-              showSizeChanger: false,
+              showSizeChanger: true,
+              pageSizeOptions: ['10', '20', '50'],
               showTotal: (value) => <span style={{ color: 'var(--color-text-secondary)' }}>共 {value} 人</span>,
               onChange: (nextPage, nextPageSize) => updateSearchParams({ page: nextPage, page_size: nextPageSize }),
             }}
@@ -518,6 +607,7 @@ const EmployeeList: React.FC = () => {
           />
         )}
       </PageCard>
+      </section>
     </PageContainer>
   )
 }

@@ -164,6 +164,98 @@ code {
   box-shadow: var(--shadow-card-hover);
 }
 
+/* 页面级卡片只在可交互场景提供悬浮反馈，避免统计卡片在鼠标移动时产生跳动。 */
+.page-card {
+  margin-bottom: var(--section-gap);
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.page-card-interactive:hover,
+.page-card-interactive:focus-within {
+  border-color: #d5e3f4;
+  box-shadow: var(--shadow-card-hover);
+}
+
+.page-card > .ant-card-head {
+  color: var(--color-text-title);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.page-card > .ant-card-body > .ant-table-wrapper:first-child {
+  margin-top: calc(var(--space-2) * -1);
+}
+
+.page-filter-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-1) 0 var(--space-4);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.page-filter-toolbar > .ant-select,
+.page-filter-toolbar > .ant-picker,
+.page-filter-toolbar > .ant-input,
+.page-filter-toolbar > .ant-input-affix-wrapper {
+  min-width: 180px;
+}
+
+.attendance-export-info {
+  margin-bottom: var(--space-5);
+}
+
+.attendance-export-table-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.attendance-export-table-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attendance-export-modal-form {
+  padding: var(--space-3) 0 0;
+}
+
+.attendance-export-modal-form .ant-form-item:last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 767px) {
+  .page-filter-toolbar {
+    align-items: stretch;
+  }
+
+  .page-filter-toolbar > .ant-select,
+  .page-filter-toolbar > .ant-picker,
+  .page-filter-toolbar > .ant-input,
+  .page-filter-toolbar > .ant-input-affix-wrapper,
+  .page-filter-toolbar > .ant-btn {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .page-container-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .attendance-export-table-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .ant-table {
   margin-top: var(--space-4);
 }
@@ -206,6 +298,56 @@ code {
   min-height: calc(100vh - 64px);
 }
 
+.page-container-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  padding: var(--space-1) 0 var(--space-4);
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.page-container-header + .ant-card,
+.page-container-header + .page-card {
+  margin-top: 0;
+}
+
+.page-container-heading {
+  min-width: 0;
+}
+
+.page-container-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-1);
+  color: var(--color-text-title);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  line-height: 32px;
+}
+
+.page-container-title-icon {
+  display: inline-flex;
+  color: var(--color-primary);
+  font-size: 20px;
+}
+
+.page-container-subtitle {
+  display: block;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 20px;
+}
+
+.page-container-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 .page-container > .ant-card:last-child {
   margin-bottom: 0;
 }
@@ -242,6 +384,17 @@ code {
   font-weight: var(--font-weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.app-header-title::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 16px;
+  margin-right: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  vertical-align: -2px;
 }
 
 .app-header-spacer {
@@ -972,6 +1125,30 @@ code {
     min-width: 0;
     padding: var(--space-3);
     overflow-x: hidden;
+  }
+
+  .page-container-header {
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+    padding-bottom: var(--space-3);
+  }
+
+  .page-container-title {
+    font-size: var(--font-size-lg);
+    line-height: 26px;
+  }
+
+  .page-container-title-icon {
+    font-size: 18px;
+  }
+
+  .page-container-actions {
+    justify-content: flex-start;
+  }
+
+  .page-container-actions > .ant-btn,
+  .page-container-actions > .ant-space {
+    max-width: 100%;
   }
 
   .page-container > .ant-card,

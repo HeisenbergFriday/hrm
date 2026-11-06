@@ -52,7 +52,6 @@
 | `/approval-templates` | `ApprovalTemplate.tsx` | 审批模板 |
 | `/approval-instances` | `ApprovalInstance.tsx` | 审批实例 |
 | `/approval-detail/:id` | `ApprovalDetail.tsx` | 审批详情 |
-| `/approval-stats` | `ApprovalStats.tsx` | 审批统计 |
 | `/role-management` | `RoleManagement.tsx` | 角色管理 |
 | `/menu-permission` | `MenuPermission.tsx` | 菜单权限 |
 | `/data-permission` | `DataPermission.tsx` | 数据权限 |

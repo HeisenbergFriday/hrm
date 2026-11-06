@@ -80,15 +80,15 @@ class ParttimeMonthlyPunchRenderTests(unittest.TestCase):
     def test_parser_consumes_grid_with_key_headers(self) -> None:
         parsed = write_and_parse(self.cfg)
         # 关键表头对应的数据行应被解析（姓名/工号列存在）。
-        self.assertIn("张三", parsed)
+        self.assertIn(parttime._make_person_key("张三", employee_code="MT001"), parsed)
         self.assertIn("李四", parsed)
 
     def test_target_month_data_populated(self) -> None:
         parsed = write_and_parse(self.cfg)
-        self.assertEqual(parttime._entry_value(parsed["张三"].get(1)), 1.0)
-        self.assertEqual(parttime._entry_value(parsed["张三"].get(2)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("张三", employee_code="MT001")].get(1)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("张三", employee_code="MT001")].get(2)), 1.0)
         # 旷工日记为 0 出勤。
-        self.assertEqual(parttime._entry_value(parsed["张三"].get(15)), 0.0)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("张三", employee_code="MT001")].get(15)), 0.0)
 
     def test_parser_accepts_safe_aliases_and_locates_day_columns(self) -> None:
         with temporary_workdir() as workdir:
@@ -115,11 +115,11 @@ class ParttimeMonthlyPunchRenderTests(unittest.TestCase):
             parsed = parttime.parse_attendance_detail(str(path))
             validation = runner._check_parttime_detail_headers(str(path))
 
-        self.assertIn("实习生甲", parsed)
-        self.assertEqual(parttime._entry_value(parsed["实习生甲"].get(1)), 1.0)
-        self.assertEqual(parttime._entry_value(parsed["实习生甲"].get(2)), 0.0)
-        self.assertEqual(parttime._entry_value(parsed["实习生甲"].get(15)), 1.0)
-        self.assertEqual(parttime._entry_value(parsed["实习生甲"].get(29)), 1.0)
+        self.assertIn(parttime._make_person_key("实习生甲", employee_code="JZ001"), parsed)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("实习生甲", employee_code="JZ001")].get(1)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("实习生甲", employee_code="JZ001")].get(2)), 0.0)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("实习生甲", employee_code="JZ001")].get(15)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("实习生甲", employee_code="JZ001")].get(29)), 1.0)
         self.assertTrue(validation["ok"], validation)
 
     def test_parser_infers_weekend_days_from_dingtalk_weekday_labels(self) -> None:
@@ -187,10 +187,10 @@ class ParttimeMonthlyPunchRenderTests(unittest.TestCase):
             parsed = parttime.parse_attendance_detail(str(path))
             validation = runner._check_parttime_detail_headers(str(path))
 
-        self.assertEqual(parttime._entry_value(parsed["实习生乙"].get(4)), 1.0)
-        self.assertEqual(parttime._entry_value(parsed["实习生乙"].get(12)), 1.0)
-        self.assertEqual(parttime._entry_value(parsed["实习生乙"].get(20)), 1.0)
-        self.assertEqual(parttime._entry_value(parsed["实习生乙"].get(27)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("实习生乙", employee_code="SX001")].get(4)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("实习生乙", employee_code="SX001")].get(12)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("实习生乙", employee_code="SX001")].get(20)), 1.0)
+        self.assertEqual(parttime._entry_value(parsed[parttime._make_person_key("实习生乙", employee_code="SX001")].get(27)), 1.0)
         self.assertTrue(validation["ok"], validation)
 
     def test_parser_accepts_simple_name_day_matrix_without_employee_code(self) -> None:

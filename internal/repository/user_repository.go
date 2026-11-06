@@ -2,6 +2,7 @@ package repository
 
 import (
 	"strings"
+	"time"
 
 	"peopleops/internal/database"
 
@@ -485,12 +486,12 @@ func (r *UserRepository) DeactivateUsersMissingFromDingTalk(sourceDingTalkUserID
 	err = r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&database.User{}).
 			Where("org_id = ? AND user_id IN ? AND deleted_at IS NULL", orgID, deactivatedUserIDs).
-			Update("status", "inactive").Error; err != nil {
+			Updates(map[string]interface{}{"status": "inactive", "status_changed_at": time.Now()}).Error; err != nil {
 			return err
 		}
 		return tx.Model(&database.EmployeeProfile{}).
 			Where("org_id = ? AND user_id IN ? AND deleted_at IS NULL", orgID, deactivatedUserIDs).
-			Update("profile_status", "inactive").Error
+			Updates(map[string]interface{}{"profile_status": "inactive", "status_changed_at": time.Now()}).Error
 	})
 	return deactivatedUserIDs, err
 }

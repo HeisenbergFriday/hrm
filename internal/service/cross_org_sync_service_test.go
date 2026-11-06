@@ -93,6 +93,9 @@ func TestCrossOrganizationSyncMirrorsEmployeesAndBusinessRowsIdempotently(t *tes
 	if err != nil || localTotal != 1 || len(localEmployees) != 1 || localEmployees[0].IsMirror {
 		t.Fatalf("local center employees: total=%d rows=%#v err=%v", localTotal, localEmployees, err)
 	}
+	if localEmployees[0].SourceUpdated == nil || !localEmployees[0].SourceUpdated.Equal(now) {
+		t.Fatalf("local employee source updated time: %#v", localEmployees[0].SourceUpdated)
+	}
 	mirrorEmployees, mirrorTotal, err := svc.ListPeopleDataCenterEmployees(context.Background(), "muteng", "", "", "mirror", 1, 20)
 	if err != nil || mirrorTotal != 1 || len(mirrorEmployees) != 1 || !mirrorEmployees[0].IsMirror {
 		t.Fatalf("mirror center employees: total=%d rows=%#v err=%v", mirrorTotal, mirrorEmployees, err)

@@ -105,6 +105,7 @@ describe('AttendanceExternalSync', () => {
     await user.hover(runButton)
     expect(await screen.findByText('同步任务 #853 正在运行，请等待任务完成')).toBeInTheDocument()
     expect(mockRun).not.toHaveBeenCalled()
+    expect(screen.getByRole('status')).toHaveTextContent('同步任务 #853 正在运行')
   })
 
   it('stops polling after a terminal result and refreshes the page state', async () => {

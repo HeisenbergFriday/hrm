@@ -1,11 +1,14 @@
 ---
-purpose: 开发、测试、构建、lint 命令
-last_updated: 2026-08-15
+purpose: 开发、测试、构建、lint、Git 双远程同步命令
+last_updated: 2026-11-06
 source_of_truth:
+  - 用户确认的双远程仓库与同步约定（2026-11-06）
+  - git remote -v（实际远程配置，执行前与约定核对）
   - frontend/package.json（前端命令）
   - README.md（项目说明）
   - tools/（运维脚本）
 update_when:
+  - Git 仓库地址、同步约定或认证流程变更时
   - 新增开发命令时
   - 修改测试命令时
   - 新增构建命令时
@@ -122,6 +125,67 @@ npm update
 
 ---
 
+## Git 双远程同步
+
+### 固定仓库与默认行为
+
+本项目同时维护两个独立远程仓库，地址已由用户确认：
+
+| 平台 | Remote 名称 | Git 地址 |
+|---|---|---|
+| GitHub | `origin` | `https://github.com/HeisenbergFriday/hrm.git` |
+| Coding | `coding` | `https://e.coding.net/serverless-100013832940/ai/hr-system.git` |
+
+- 用户已确认以后默认发布分支为 `master`。要求“提交代码”“推送”或“同步仓库”时，默认将本次确认的提交分别同步到 GitHub `origin/master` 和 Coding `coding/master`；用户明确限定本地提交、单个远端或其他分支时，按当次指令执行。
+- 执行前用 `git remote -v` 核对地址，已与本表一致时直接继续，无需再次询问 GitHub/Coding 地址或是否需要双端同步。Remote 缺失时按表中地址补充；现有地址与约定冲突时先说明差异，再明确目标。
+- 分支优先采用用户当次指定分支，否则固定以 `master` 为目标，不能根据当前开发分支或托管平台的默认浏览分支改变发布目标。`codex/redeploy-20261015` 是历史开发分支；Coding 网页默认分支曾为 `main`，均不改变发布到 `master` 的约定。
+- 只提交本次任务范围内的文件，保留无关改动和未跟踪文件。单纯补同步时直接使用已有提交。
+- 推送前重新抓取两端目标分支，确认两端当前头都是待发布提交的祖先；开发分支具备全部主分支历史时使用快进更新。两端必须分别推送、分别读取 `refs/heads/master`（或用户明确指定的目标分支）的哈希，并与本次提交完整哈希一致后才报告同步完成。一端失败时记录已成功的一端，修复后补同步失败端；禁止强推或覆盖远端历史。发生分叉时先检查提交关系，涉及合并时遵循问题日志中的双远端合并约束。
+
+### Windows PowerShell 同步已有提交
+
+先核对仓库地址、提交范围与当前分支；以下命令用于将已有提交同步到默认发布分支 `master`，前提是 Git 已能完成两端认证：
+
+```powershell
+git status --short --branch
+git remote -v
+git log -1 --oneline
+$releaseBranch = 'master'
+$commit = git rev-parse --verify HEAD
+if ($LASTEXITCODE -ne 0) { throw '无法确定待同步提交' }
+
+foreach ($remote in @('origin', 'coding')) {
+    git -c http.sslBackend=openssl fetch --no-tags $remote "refs/heads/${releaseBranch}:refs/remotes/${remote}/${releaseBranch}"
+    if ($LASTEXITCODE -ne 0) { throw "读取 $remote 的发布分支失败" }
+    git merge-base --is-ancestor "refs/remotes/${remote}/${releaseBranch}" $commit
+    if ($LASTEXITCODE -ne 0) { throw "$remote 的发布分支无法快进，需先检查分叉" }
+}
+
+foreach ($remote in @('origin', 'coding')) {
+    git -c http.sslBackend=openssl push $remote "${commit}:refs/heads/$releaseBranch"
+    if ($LASTEXITCODE -ne 0) { throw "推送 $remote 失败，处理错误后补同步该远端" }
+    $remoteRef = git -c http.sslBackend=openssl ls-remote --exit-code --heads $remote "refs/heads/$releaseBranch"
+    if ($LASTEXITCODE -ne 0 -or -not $remoteRef -or (($remoteRef -split '\s+')[0] -ne $commit)) {
+        throw "$remote 的分支提交校验失败"
+    }
+}
+```
+
+### Coding 认证与故障处理
+
+- Coding 的网页/微信扫码登录与 Git HTTPS 认证分别处理；优先使用现有有效 Git 凭据。需要新凭据时，让用户在 Git 凭据窗口输入，不要求重新登录已登录的网页。
+- 个人访问令牌入口：个人头像 → 个人账户设置 → 访问令牌。推送需代码仓库读写权限 `project:depot:rw`；仅有项目信息读写 `project:profile:rw` 时会被拒绝。增加权限后优先重试现有令牌。
+- 项目管理员也可在项目设置 → 开发者选项 → 项目令牌中创建代码仓库读写令牌，并使用页面提供的令牌用户名与 token 完成 Git 认证。仓库自身的“设置”页与“项目设置”是不同入口。
+- Windows 出现 `schannel: AcquireCredentialsHandle failed / SEC_E_NO_CREDENTIALS` 时，可仅对当前命令使用 `-c http.sslBackend=openssl`，保持证书校验。Git 报目录所有者不匹配时优先使用仓库所属用户执行，保留所有权检查。
+- 文档、仓库 URL、脚本和日志中均不得保存真实密码、访问令牌或认证请求头；凭据通过 Git 凭据管理器或临时认证通道使用。
+- 官方参考：[个人访问令牌](https://coding.net/help/docs/member/tokens.html)、[项目令牌](https://coding.net/help/docs/project-settings/deploy-tokens.html)。
+
+### 提交、同步与部署状态
+
+最终分别报告本地提交号、GitHub `master` 推送结果、Coding `master` 推送结果和部署状态；如用户指定其他分支，列出该实际目标分支。仓库“最近更新”时间只用于浏览，验收必须核对目标分支哈希。部署按已授权范围执行，流程见 [发布必读手册](../deploy/DEPLOYMENT_RUNBOOK.md)；报告已部署时须核对服务器实际镜像/版本及健康结果。仅执行 Git 同步时如实记录该操作；如核验到此前已部署，则列出运行版本与部署时间。
+
+---
+
 ## Git Hooks
 
 ### 安装 hooks
@@ -204,10 +268,11 @@ go build -o .\dingtalk_stream.exe .\cmd\dingtalk_stream
 启动后看到“钉钉 Stream 已连接”或 SDK 的 `connect success` 日志，再到钉钉开发者后台点击“已完成接入，验证连接通道”。
 
 说明：
-- Stream 客户端默认订阅并确认所有已在开发者后台选择的事件，但暂不将事件写入数据库。
+- Stream 客户端接收开发者后台已发布的 `bpms_instance_change` / `bpms_task_change` 后，会读取最新审批详情、幂等写入数据库并触发下游业务对账。
 - 默认不输出事件原始内容；仅联调时可配置 `DINGTALK_STREAM_LOG_PAYLOAD=true`，日志可能包含审批业务信息。
 - 如需代理，可配置 `DINGTALK_STREAM_PROXY`。
 - 生产环境建议将该客户端作为独立常驻进程或服务运行。
+- 主服务默认每 15 分钟补拉最近 48 小时；可通过 `APPROVAL_AUTO_SYNC_ENABLED`、`APPROVAL_AUTO_SYNC_INTERVAL`、`APPROVAL_AUTO_SYNC_LOOKBACK` 调整。手动审批同步入口继续保留。
 
 ### 重新同步加班到钉钉
 ```bash
@@ -261,6 +326,8 @@ docker build -t peopleops:latest .
 ```powershell
 .\deploy\build-and-deploy.ps1 -SkipConfigUpload
 ```
+
+发布前必读：[deploy/DEPLOYMENT_RUNBOOK.md](../deploy/DEPLOYMENT_RUNBOOK.md)。其中记录测试服固定地址、工作区部署密钥候选路径、Windows SSH 客户端选择、无 Docker 时的便携工具发布流程、回滚和公网冒烟检查。不得在命令文档中写入密钥内容或真实环境变量。
 
 脚本生成的测试镜像必须包含 `tools/attendance_toolbox`、独立 Python 虚拟环境及运行依赖；镜像构建后会自动执行 `runner.py --defaults` 冒烟校验，失败时不会继续上传部署。
 

@@ -2719,6 +2719,64 @@ func getVacationQuotaByYear(accessToken, opUserID, userID, leaveCode string, yea
 	return false, 0, nil
 }
 
+type VacationQuotaSnapshot struct {
+	UserID           string
+	LeaveCode        string
+	Year             int
+	TotalMinutes     int
+	UsedMinutes      int
+	RemainingMinutes int
+	SourceUpdatedAt  *time.Time
+}
+
+// GetVacationQuotaForOrg reads one user's quota from DingTalk for a sync job.
+func GetVacationQuotaForOrg(orgID, userID, leaveCode string, year int) (VacationQuotaSnapshot, error) {
+	cfg, err := ConfigForOrgID(strings.TrimSpace(orgID))
+	if err != nil {
+		return VacationQuotaSnapshot{}, err
+	}
+	opUserID, err := ResolveAdminUserIDFromConfig(cfg)
+	if err != nil {
+		return VacationQuotaSnapshot{}, err
+	}
+	token, err := getAccessTokenWithConfig(cfg)
+	if err != nil {
+		return VacationQuotaSnapshot{}, err
+	}
+	resp, err := postJSONOAPI(fmt.Sprintf("https://oapi.dingtalk.com/topapi/attendance/vacation/quota/list?access_token=%s", token), map[string]interface{}{"op_userid": opUserID, "userids": userID, "leave_code": leaveCode, "offset": 0, "size": 50})
+	if err != nil {
+		return VacationQuotaSnapshot{}, err
+	}
+	if code, _ := resp["errcode"].(float64); code != 0 {
+		return VacationQuotaSnapshot{}, fmt.Errorf("list vacation quota failed: %s", dingTalkErrorMessage(resp, code))
+	}
+	result, _ := resp["result"].(map[string]interface{})
+	items, _ := result["leave_quotas"].([]interface{})
+	for _, raw := range items {
+		item, ok := raw.(map[string]interface{})
+		if !ok || getString(item, "quota_cycle") != strconv.Itoa(year) {
+			continue
+		}
+		total := firstQuotaFloat(item, "quota_num_per_hour", "total_quota_num_per_hour")
+		remaining := firstQuotaFloat(item, "remaining_quota_num_per_hour", "balance_num_per_hour", "quota_num_per_hour")
+		used := firstQuotaFloat(item, "used_quota_num_per_hour", "used_num_per_hour")
+		if used == 0 && total >= remaining {
+			used = total - remaining
+		}
+		return VacationQuotaSnapshot{UserID: userID, LeaveCode: leaveCode, Year: year, TotalMinutes: int(math.Round(total * 60 / 100)), UsedMinutes: int(math.Round(used * 60 / 100)), RemainingMinutes: int(math.Round(remaining * 60 / 100))}, nil
+	}
+	return VacationQuotaSnapshot{UserID: userID, LeaveCode: leaveCode, Year: year}, nil
+}
+
+func firstQuotaFloat(values map[string]interface{}, keys ...string) float64 {
+	for _, key := range keys {
+		if value := getFloat(values, key); value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
 // InitVacationQuota 通过 quota/init 接口初始化（重置）指定员工的假期配额。
 // quotaPerDay / quotaPerHour 单位均为 1/100（例如 0 = 0天，100 = 1天，800 = 1天×8小时）。
 // year 决定生效的配额周期（start_time / end_time 自动设为该年 1-1 到 12-31）。
@@ -2809,7 +2867,7 @@ func resolveAnnualLeaveTypeForOrg(orgID, opUserID string) (string, float64, erro
 	}
 
 	leaveName := strings.TrimSpace(os.Getenv("DINGTALK_ANNUAL_LEAVE_NAME"))
-	if leaveName == "" {
+	if isPlaceholderLeaveName(leaveName) {
 		leaveName = "年假"
 	}
 	types, err := ListVacationTypesForOrg(orgID, opUserID)
@@ -2827,6 +2885,23 @@ func resolveAnnualLeaveTypeForOrg(orgID, opUserID string) (string, float64, erro
 		}
 	}
 	return "", 0, fmt.Errorf("annual leave type %q not found in DingTalk; set DINGTALK_ANNUAL_LEAVE_CODE", leaveName)
+}
+
+// isPlaceholderLeaveName detects an encoding placeholder accidentally written
+// into an environment file (for example "???"). Such a value must not be
+// sent into a DingTalk leave-type name lookup; the standard annual leave name
+// remains the safe fallback for an unset/invalid display-name configuration.
+func isPlaceholderLeaveName(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	for _, r := range value {
+		if r != '?' && r != '\ufffd' {
+			return false
+		}
+	}
+	return true
 }
 
 func createCompensatoryLeaveType(opUserID, leaveName string) (string, error) {
@@ -2927,6 +3002,38 @@ func resolveCompensatoryLeaveTypeForOrg(orgID, opUserID string) (string, float64
 	return resolveCompensatoryLeaveTypeWithConfig(cfg, opUserID)
 }
 
+// ResolveAnnualLeaveCodeForOrg exposes the configured annual leave type to
+// scheduled local-balance synchronization without making callers use the
+// package's internal type cache.
+func ResolveAnnualLeaveCodeForOrg(orgID string) (string, error) {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return "", err
+	}
+	opUserID, err := ResolveAdminUserIDFromConfig(cfg)
+	if err != nil {
+		return "", err
+	}
+	code, _, err := resolveAnnualLeaveTypeForOrg(orgID, opUserID)
+	return code, err
+}
+
+// ResolveCompensatoryLeaveCodeForOrg resolves the existing configured type.
+// It retains the historical resolver behavior for tenants that have no
+// explicit code yet, while keeping organization credentials scoped.
+func ResolveCompensatoryLeaveCodeForOrg(orgID string) (string, error) {
+	cfg, err := ConfigForOrgID(orgID)
+	if err != nil {
+		return "", err
+	}
+	opUserID, err := ResolveAdminUserIDFromConfig(cfg)
+	if err != nil {
+		return "", err
+	}
+	code, _, err := resolveCompensatoryLeaveTypeForOrg(orgID, opUserID)
+	return code, err
+}
+
 func resolveCompensatoryLeaveTypeForConfig(opUserID string, cfg AppConfig) (string, float64, error) {
 	return resolveCompensatoryLeaveTypeWithConfig(configFromAppConfig(cfg), opUserID)
 }
@@ -2940,10 +3047,6 @@ func resolveCompensatoryLeaveTypeWithConfig(cfg Config, opUserID string) (string
 	if code := strings.TrimSpace(os.Getenv("DINGTALK_COMPENSATORY_LEAVE_CODE")); code != "" {
 		return code, getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8), nil
 	}
-	if defaultCompensatoryLeaveCode != "" {
-		return defaultCompensatoryLeaveCode, getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8), nil
-	}
-
 	compensatoryLeaveTypeCacheMu.Lock()
 	defer compensatoryLeaveTypeCacheMu.Unlock()
 
@@ -2955,8 +3058,8 @@ func resolveCompensatoryLeaveTypeWithConfig(cfg Config, opUserID string) (string
 	if leaveName == "" {
 		leaveName = strings.TrimSpace(os.Getenv("DINGTALK_COMPENSATORY_LEAVE_NAME"))
 	}
-	if leaveName == "" {
-		leaveName = "手动发放"
+	if isPlaceholderLeaveName(leaveName) {
+		leaveName = "调休"
 	}
 
 	types, err := listVacationTypesWithConfig(cfg, opUserID)
@@ -2967,7 +3070,7 @@ func resolveCompensatoryLeaveTypeWithConfig(cfg Config, opUserID string) (string
 	// 优先查找所有类型的假期，不限制source和bizType
 	hoursPerDay := getEnvFloat("DINGTALK_LEAVE_HOURS_PER_DAY", 8)
 	for _, item := range types {
-		if item.LeaveName == leaveName {
+		if matchesCompensatoryLeaveName(item.LeaveName, leaveName) {
 			if item.HoursInPerDay > 0 {
 				hoursPerDay = item.HoursInPerDay
 			}
@@ -2981,41 +3084,24 @@ func resolveCompensatoryLeaveTypeWithConfig(cfg Config, opUserID string) (string
 		}
 	}
 
-	// 没有找到符合条件的假期类型，自动通过 API 创建一个
-	logrus.Infof("[leave-sync] no compensatory leave type found, creating one: name=%s", leaveName)
-	leaveCode, err := createCustomLeaveTypeWithConfig(cfg, opUserID, leaveName, false)
-	if err != nil {
-		// 如果创建失败，可能是因为已存在相同名称的假期类型
-		// 重新获取假期类型列表并查找已存在的假期类型
-		logrus.Warnf("[leave-sync] create leave type failed, trying to find existing one: %v", err)
-		types, err := listVacationTypesWithConfig(cfg, opUserID)
-		if err != nil {
-			return "", 0, fmt.Errorf("auto-create compensatory leave type %q failed and cannot find existing one: %w", leaveName, err)
-		}
-		// 再次查找所有类型的假期
-		for _, item := range types {
-			if item.LeaveName == leaveName {
-				if item.HoursInPerDay > 0 {
-					hoursPerDay = item.HoursInPerDay
-				}
-				compensatoryLeaveTypeCache[orgID] = cachedLeaveType{
-					leaveCode:   item.LeaveCode,
-					hoursPerDay: hoursPerDay,
-					expiry:      time.Now().Add(time.Hour),
-				}
-				logrus.Infof("[leave-sync] found existing compensatory leave type after creation attempt: name=%s leaveCode=%s source=%s bizType=%s", item.LeaveName, item.LeaveCode, item.Source, item.BizType)
-				return item.LeaveCode, hoursPerDay, nil
-			}
-		}
-		return "", 0, fmt.Errorf("auto-create compensatory leave type %q failed: %w", leaveName, err)
+	return "", 0, fmt.Errorf("compensatory leave type %q not found in DingTalk; set DINGTALK_LIEU_LEAVE_CODE", leaveName)
+}
+
+func matchesCompensatoryLeaveName(actual, configured string) bool {
+	actual = strings.TrimSpace(actual)
+	configured = strings.TrimSpace(configured)
+	if actual == "" || configured == "" {
+		return false
 	}
-	compensatoryLeaveTypeCache[orgID] = cachedLeaveType{
-		leaveCode:   leaveCode,
-		hoursPerDay: hoursPerDay,
-		expiry:      time.Now().Add(time.Hour),
+	if actual == configured {
+		return true
 	}
-	logrus.Infof("[leave-sync] created new compensatory leave type: name=%s leaveCode=%s", leaveName, leaveCode)
-	return leaveCode, hoursPerDay, nil
+	// DingTalk tenants commonly label the same lieu balance as 调休、补休 or
+	// 手动发放. When no explicit code is configured, accept these aliases.
+	if configured == "调休" {
+		return actual == "补休" || actual == "手动发放" || actual == "调休假"
+	}
+	return false
 }
 
 func getEnvFloat(key string, fallback float64) float64 {
@@ -4540,8 +4626,23 @@ func resolveDingTalkEmployeeID(raw map[string]interface{}) string {
 
 func getFloat(m map[string]interface{}, key string) float64 {
 	if v, ok := m[key]; ok {
-		if f, ok := v.(float64); ok {
-			return f
+		switch value := v.(type) {
+		case float64:
+			return value
+		case float32:
+			return float64(value)
+		case int:
+			return float64(value)
+		case int64:
+			return float64(value)
+		case json.Number:
+			if parsed, err := value.Float64(); err == nil {
+				return parsed
+			}
+		case string:
+			if parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil {
+				return parsed
+			}
 		}
 	}
 	return 0

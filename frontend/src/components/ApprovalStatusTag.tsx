@@ -3,13 +3,14 @@ import StatusTag from './StatusTag'
 
 type ApprovalStatusTagProps = {
   status: string
+  result?: string
   emptyLabel?: React.ReactNode
 }
 
 const APPROVAL_STATUS_META: Record<string, { color?: string; label: string }> = {
   completed: { color: 'green', label: '已完成' },
-  approved: { color: 'green', label: '已完成' },
-  agree: { color: 'green', label: '已完成' },
+  approved: { color: 'green', label: '已通过' },
+  agree: { color: 'green', label: '已通过' },
   in_progress: { color: 'blue', label: '审批中' },
   running: { color: 'blue', label: '审批中' },
   rejected: { color: 'red', label: '已拒绝' },
@@ -20,9 +21,15 @@ const APPROVAL_STATUS_META: Record<string, { color?: string; label: string }> = 
   pending: { color: 'orange', label: '待处理' },
 }
 
-const ApprovalStatusTag: React.FC<ApprovalStatusTagProps> = ({ status, emptyLabel = '—' }) => {
+const ApprovalStatusTag: React.FC<ApprovalStatusTagProps> = ({ status, result, emptyLabel = '—' }) => {
   const normalizedStatus = String(status || '').toLowerCase()
-  const meta = APPROVAL_STATUS_META[normalizedStatus]
+  const normalizedResult = String(result || '').toLowerCase()
+  const effectiveStatus = normalizedStatus === 'completed' && normalizedResult === 'refuse'
+    ? 'rejected'
+    : normalizedStatus === 'completed' && normalizedResult === 'agree'
+      ? 'approved'
+      : normalizedStatus
+  const meta = APPROVAL_STATUS_META[effectiveStatus]
   if (meta) {
     return <StatusTag color={meta.color}>{meta.label}</StatusTag>
   }

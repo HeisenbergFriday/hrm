@@ -36,8 +36,8 @@ describe('PeopleDataCenter 人事数据中心', () => {
   beforeEach(() => {
     mockSummary.mockReset().mockResolvedValue({ data: { employee_total: 3, active_employee_total: 2, local_employee_total: 2, mirror_employee_total: 1, business_total: 4, local_business_total: 3, mirror_business_total: 1, sync_failure_count: 0 } })
     mockEmployees.mockReset().mockResolvedValue({ data: { items: [
-      { id: 1, source_org_id: 'muteng', source_user_id: 'u1', employee_id: 'MT001', name: '张三', department_name: '人事部', position: 'HR', status: 'active', last_synced_at: '2026-09-21T10:00:00+08:00', is_mirror: false },
-      { id: 2, source_org_id: 'xiaotie', source_user_id: 'u2', employee_id: 'WY001', name: '李四', department_name: '内容部', position: '编导', status: 'active', last_synced_at: '2026-09-21T10:00:00+08:00', is_mirror: true },
+      { id: 1, source_org_id: 'muteng', source_user_id: 'u1', employee_id: 'MT001', name: '张三', department_name: '人事部', position: 'HR', status: 'active', source_updated_at: '2026-09-27T09:00:00+08:00', last_synced_at: '2026-10-01T10:00:00+08:00', is_mirror: false },
+      { id: 2, source_org_id: 'xiaotie', source_user_id: 'u2', employee_id: 'WY001', name: '李四', department_name: '内容部', position: '编导', status: 'active', source_updated_at: '2026-09-27T09:00:00+08:00', last_synced_at: '2026-10-01T10:00:00+08:00', is_mirror: true },
     ], total: 2, page: 1, page_size: 20 } })
     mockBusiness.mockReset().mockResolvedValue({ data: { items: [{ id: 7, source_org_id: 'xiaotie', entity_type: 'approval', source_key: 'proc-7', source_user_id: 'u2', payload: { title: '请假申请', applicant_name: '李四', status: 'COMPLETED', create_time: '2026-09-21T10:00:00+08:00' }, last_synced_at: '2026-09-21T10:00:00+08:00', sync_status: 'success', is_mirror: true }], total: 1, page: 1, page_size: 20 } })
     mockInboundLinks.mockReset().mockResolvedValue({ data: { items: [{ source_org_id: 'xiaotie', target_org_id: 'muteng', status: 'active', employee_sync: true, business_sync: true, business_scopes: 'attendance,approval,annual_leave_grant,overtime_match,performance_activity,performance_participant' }] } })
@@ -52,6 +52,12 @@ describe('PeopleDataCenter 人事数据中心', () => {
     expect(await screen.findByText('张三')).toBeInTheDocument()
     expect(screen.getByText('沐腾员工')).toBeInTheDocument()
     expect(screen.getAllByText('文娱员工').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('展示人员状态最后变更时间而不是同步时间', async () => {
+    renderPage()
+    expect((await screen.findAllByText('人员状态最后变更时间')).length).toBeGreaterThanOrEqual(1)
+    expect(await screen.findAllByText(new Date('2026-09-27T09:00:00+08:00').toLocaleString('zh-CN', { hour12: false }))).toHaveLength(2)
   })
 
   it('按员工来源筛选并区分本地跳转和文娱只读详情', async () => {

@@ -41,7 +41,6 @@ const TalentAnalysis = lazy(() => import('./pages/TalentAnalysis'))
 const SyncLog = lazy(() => import('./pages/SyncLog'))
 const Attendance = lazy(() => import('./pages/Attendance'))
 const AttendanceExport = lazy(() => import('./pages/AttendanceExport'))
-const AttendanceProcessing = lazy(() => import('./pages/AttendanceProcessing'))
 const AttendanceExternalSync = lazy(() => import('./pages/AttendanceExternalSync'))
 const AttendanceToolbox = lazy(() => import('./pages/AttendanceToolbox'))
 const WeekSchedule = lazy(() => import('./pages/WeekSchedule'))
@@ -51,7 +50,6 @@ const Approval = lazy(() => import('./pages/Approval'))
 const ApprovalTemplate = lazy(() => import('./pages/ApprovalTemplate'))
 const ApprovalInstance = lazy(() => import('./pages/ApprovalInstance'))
 const ApprovalDetail = lazy(() => import('./pages/ApprovalDetail'))
-const ApprovalStats = lazy(() => import('./pages/ApprovalStats'))
 const OAApprovalData = lazy(() => import('./pages/OAApprovalData'))
 const RoleManagement = lazy(() => import('./pages/RoleManagement'))
 const SyncJobs = lazy(() => import('./pages/SyncJobs'))
@@ -137,6 +135,7 @@ const routeMenuKeys: Record<string, string> = {
   '/organization': menuPermissionKey('organization-dashboard'),
   '/department-tree': menuPermissionKey('department-tree'),
   '/employees': menuPermissionKey('employees'),
+  '/people-data-center': menuPermissionKey('people-data-center'),
   '/sync-log': menuPermissionKey('sync-log'),
   '/attendance': menuPermissionKey('attendance'),
   '/attendance-export': menuPermissionKey('attendance-export'),
@@ -148,7 +147,6 @@ const routeMenuKeys: Record<string, string> = {
   '/approval': menuPermissionKey('approval-templates'),
   '/approval-templates': menuPermissionKey('approval-templates'),
   '/approval-instances': menuPermissionKey('approval-instances'),
-  '/approval-stats': menuPermissionKey('approval-stats'),
   '/oa-approval-data': menuPermissionKey('oa-approval-data'),
   '/role-management': menuPermissionKey('permission'),
   '/sync-jobs': menuPermissionKey('sync-jobs'),
@@ -182,6 +180,7 @@ function defaultOpenKeysForPath(pathname: string) {
     return [menuPermissionKey('attendance-group')]
   }
   if (pathname.startsWith('/approval') || pathname.startsWith('/oa-approval-data')) return [menuPermissionKey('approval-group')]
+  if (pathname.startsWith('/people-data-center')) return [menuPermissionKey('data-center-group')]
   if (pathname.startsWith('/sync-jobs')) return [menuPermissionKey('jobs-group')]
   if (pathname.startsWith('/audit')) return [menuPermissionKey('audit-group')]
   return [menuPermissionKey('organization-group')]
@@ -579,7 +578,7 @@ function App() {
               aria-label="打开菜单"
               onClick={() => setMobileMenuOpen(true)}
             />
-            <span className="app-header-title">{isMobile ? currentTitle : ''}</span>
+            <span className="app-header-title" aria-live="polite">{currentTitle}</span>
             <span className="app-header-spacer" />
             <Tooltip title={canSwitchOrganization ? undefined : '你缺少 organization_switch 权限，需要联系管理员添加'}>
               <Select
@@ -620,21 +619,34 @@ function App() {
                 <Route path="/people-data-center" element={<RouteGuard menuKey="menu:people-data-center"><PeopleDataCenter /></RouteGuard>} />
                 <Route path="/attendance" element={<RouteGuard menuKey="menu:attendance"><Attendance /></RouteGuard>} />
                 <Route path="/attendance-export" element={<RouteGuard menuKey="menu:attendance-export"><AttendanceExport /></RouteGuard>} />
-                <Route path="/attendance-processing" element={<RouteGuard menuKey="menu:attendance-processing"><AttendanceProcessing /></RouteGuard>} />
+                <Route
+                  path="/attendance-processing"
+                  element={(
+                    <RouteGuard menuKey={['menu:attendance-processing', 'menu:attendance-toolbox']}>
+                      <Navigate to="/attendance-toolbox" replace />
+                    </RouteGuard>
+                  )}
+                />
                 <Route path="/attendance/external-sync" element={<RouteGuard menuKey="menu:attendance-external-sync"><AttendanceExternalSync /></RouteGuard>} />
-                <Route path="/attendance-toolbox" element={<RouteGuard menuKey="menu:attendance-toolbox"><AttendanceToolbox /></RouteGuard>} />
+                <Route
+                  path="/attendance-toolbox"
+                  element={(
+                    <RouteGuard menuKey={['menu:attendance-toolbox', 'menu:attendance-processing']}>
+                      <AttendanceToolbox />
+                    </RouteGuard>
+                  )}
+                />
                 <Route path="/week-schedule" element={<RouteGuard menuKey="menu:week-schedule"><WeekSchedule /></RouteGuard>} />
                 <Route path="/employee-shift-config" element={<RouteGuard menuKey="menu:employee-shift-config"><EmployeeShiftConfig /></RouteGuard>} />
                 <Route path="/approval" element={<RouteGuard menuKey="menu:approval-templates"><Approval /></RouteGuard>} />
                 <Route path="/approval-templates" element={<RouteGuard menuKey="menu:approval-templates"><ApprovalTemplate /></RouteGuard>} />
                 <Route path="/approval-instances" element={<RouteGuard menuKey="menu:approval-instances"><ApprovalInstance /></RouteGuard>} />
                 <Route path="/approval-detail/:id" element={<RouteGuard menuKey="menu:approval-instances"><ApprovalDetail /></RouteGuard>} />
-                <Route path="/approval-stats" element={<RouteGuard menuKey="menu:approval-stats"><ApprovalStats /></RouteGuard>} />
                 <Route path="/oa-approval-data" element={<RouteGuard menuKey="menu:oa-approval-data"><OAApprovalData /></RouteGuard>} />
                 <Route path="/role-management" element={<RouteGuard menuKey="menu:permission"><RoleManagement /></RouteGuard>} />
                 <Route path="/sync-jobs" element={<RouteGuard menuKey="menu:sync-jobs"><SyncJobs /></RouteGuard>} />
                 <Route path="/audit-logs" element={<RouteGuard menuKey="menu:audit-logs" permissionCode="audit_log:read"><AuditLogs /></RouteGuard>} />
-                <Route path="/employee-profile" element={<RouteGuard menuKey="menu:employee-profile"><EmployeeProfile /></RouteGuard>} />
+                <Route path="/employee-profile" element={<RouteGuard menuKey={['menu:employee-profile', 'menu:employees']}><EmployeeProfile /></RouteGuard>} />
                 <Route path="/employee-flow" element={<RouteGuard menuKey="menu:employee-flow"><EmployeeFlow /></RouteGuard>} />
                 <Route path="/talent-analysis" element={<RouteGuard menuKey="menu:talent-analysis"><TalentAnalysis /></RouteGuard>} />
                 <Route path="/leave-overtime" element={<RouteGuard menuKey="menu:leave-overtime"><LeaveOvertime /></RouteGuard>} />
