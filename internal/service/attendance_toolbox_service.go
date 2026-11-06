@@ -159,6 +159,13 @@ func (s *AttendanceToolboxService) Run(ctx context.Context, module string, form 
 	if form == nil {
 		return nil, errors.New("请上传 Excel 文件")
 	}
+	targetMonth := ""
+	if values := form.Value[module+"_target_month"]; len(values) > 0 {
+		targetMonth = strings.TrimSpace(values[0])
+	}
+	if _, err := time.Parse("2006-01", targetMonth); err != nil || !strings.HasPrefix(targetMonth, "20") {
+		return nil, errors.New("请先选择处理月份（YYYY-MM）")
+	}
 	if s.engineDir == "" {
 		return nil, errors.New("未找到考勤工具箱 Python 引擎目录")
 	}
@@ -184,9 +191,7 @@ func (s *AttendanceToolboxService) Run(ctx context.Context, module string, form 
 			config[field] = values
 		}
 	}
-	if values := form.Value[module+"_target_month"]; len(values) > 0 {
-		config[module+"_target_month"] = values[0]
-	}
+	config[module+"_target_month"] = targetMonth
 
 	configJSON, err := json.Marshal(config)
 	if err != nil {
@@ -221,12 +226,72 @@ func (s *AttendanceToolboxService) Run(ctx context.Context, module string, form 
 		}
 		return nil, fmt.Errorf("考勤工具箱计算失败：%s", message)
 	}
-	if len(runner.Outputs) == 0 {
-		return nil, errors.New("考勤工具箱未生成结果文件")
+	return readAttendanceToolboxLegacyResult(workdir, module, runner.Outputs)
+}
+
+// Legacy blob responses cannot carry structured review status. Require a passed
+// integrity audit before returning business files, and keep metadata out of ZIPs.
+func readAttendanceToolboxLegacyResult(workdir, module string, outputs []attendanceToolboxRunnerOutput) (*AttendanceToolboxResult, error) {
+	var audit struct {
+		Status         string `json:"status"`
+		TotalsVerified bool   `json:"totals_verified"`
+		Issues         []struct {
+			Detail string `json:"detail"`
+		} `json:"issues"`
+	}
+	foundAudit := false
+	businessOutputs := make([]attendanceToolboxRunnerOutput, 0, len(outputs))
+	for _, output := range outputs {
+		name := strings.TrimSpace(output.FileName)
+		if name == "" {
+			name = filepath.Base(output.Path)
+		}
+		if name == "integrity_audit.json" {
+			if foundAudit {
+				return nil, errors.New("考勤工具箱完整性检查结果重复，请重新计算")
+			}
+			data, err := readAttendanceToolboxOutput(workdir, output.Path)
+			if err != nil {
+				return nil, err
+			}
+			if err := json.Unmarshal(data, &audit); err != nil {
+				return nil, errors.New("考勤工具箱完整性检查结果格式异常，请重新计算")
+			}
+			foundAudit = true
+			continue
+		}
+		if strings.EqualFold(output.Kind, "meta") || strings.EqualFold(output.Kind, "audit") {
+			continue
+		}
+		businessOutputs = append(businessOutputs, output)
+	}
+	if !foundAudit {
+		return nil, errors.New("考勤工具箱缺少完整性检查结果，请重新计算")
+	}
+	if audit.Status != "passed" || len(audit.Issues) > 0 {
+		details := make([]string, 0, 3)
+		for _, issue := range audit.Issues {
+			if detail := strings.TrimSpace(issue.Detail); detail != "" {
+				details = append(details, detail)
+			}
+			if len(details) == 3 {
+				break
+			}
+		}
+		if len(details) == 0 {
+			details = append(details, "请在考勤工具箱查看检查报告并处理问题后重新计算")
+		}
+		return nil, fmt.Errorf("考勤工具箱检查未通过：%s", strings.Join(details, "；"))
+	}
+	if !audit.TotalsVerified {
+		return nil, errors.New("考勤工具箱检查未通过：合计尚未通过回读验证，请重新计算")
+	}
+	if len(businessOutputs) == 0 {
+		return nil, errors.New("考勤工具箱未生成业务结果文件")
 	}
 
-	if len(runner.Outputs) == 1 {
-		output := runner.Outputs[0]
+	if len(businessOutputs) == 1 {
+		output := businessOutputs[0]
 		data, err := readAttendanceToolboxOutput(workdir, output.Path)
 		if err != nil {
 			return nil, err
@@ -245,7 +310,7 @@ func (s *AttendanceToolboxService) Run(ctx context.Context, module string, form 
 		}, nil
 	}
 
-	archive, err := zipAttendanceToolboxOutputs(workdir, runner.Outputs)
+	archive, err := zipAttendanceToolboxOutputs(workdir, businessOutputs)
 	if err != nil {
 		return nil, err
 	}
