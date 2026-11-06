@@ -132,7 +132,7 @@ update_when:
 | `dingtalk-stream` `multi-tenant` `credentials` `app-home-url` `fail-closed` | Stream 显式组织必须读取同一组织的 AppKey/Secret；Compose 禁止默认覆盖为 `default`；非 default 组织群图片推送必须配置组织级公网 HTTPS AppHomeURL/RedirectURI；上线核对 org、healthy、重启次数并执行真实绑定/推送 | [2026-07-29 Stream 连接错误组织导致群机器人无响应](development-issues/2026.md#2026-07-29-p1-dingtalk-stream-默认绑定错误组织导致群机器人无响应) |
 | `deploy` `upload-and-restart` | 上传失败续传用独立脚本，禁止改 `build-and-deploy.ps1` 行为 | cerebrum Decision Log |
 | `git` `merge` `release` | 跨分支冲突必须按语义单元核对生产代码、配套测试和 `go.mod/go.sum`；禁止按文件整侧选取后直接推送，至少执行编译、全量测试与双远端祖先检查 | [2026-07-23 双远端 master 合并遗漏依赖与安全配套代码](development-issues/2026.md#2026-07-23-p1-双远端-master-合并遗漏依赖与安全配套代码) |
-| `git` `dual-remote` `coding` `documentation` | 提交/同步前按 `.ai/COMMANDS.md` 使用已确认的 GitHub、Coding 独立地址；默认双端 `master` 发布，先抓取并确认可快进，再分别校验目标分支哈希；Coding 令牌需代码仓库读写权限；提交、推送、部署分别报告 | [2026-11-06 双远程同步约定缺失导致重复确认与漏推](development-issues/2026.md#2026-11-06-p2-双远程同步约定缺失导致重复确认与漏推) |
+| `git` `dual-remote` `coding` `documentation` | 使用 `.ai/COMMANDS.md` 中已确认的两端地址，默认发布到 `master`；GitHub 通过 PR 合并，再将最终提交快进到 Coding，分别校验哈希；令牌需代码仓库读写权限；提交、推送、部署分别报告 | [2026-11-06 双远程同步约定缺失导致重复确认与漏推](development-issues/2026.md#2026-11-06-p2-双远程同步约定缺失导致重复确认与漏推) |
 | `go` `security` `govulncheck` `docker` | Go 标准库出现可达漏洞时，最低工具链版本和发布构建镜像必须同步升级到修复版本；CI、`go.mod`、Dockerfile 禁止版本漂移 | [2026-08-18 Go 1.26.5 标准库漏洞阻塞发布](development-issues/2026.md#2026-08-18-p1-go-1265-标准库漏洞阻塞发布) |
 
 ### AI 协作 / 上下文

@@ -140,30 +140,37 @@ npm update
 - 执行前用 `git remote -v` 核对地址，已与本表一致时直接继续，无需再次询问 GitHub/Coding 地址或是否需要双端同步。Remote 缺失时按表中地址补充；现有地址与约定冲突时先说明差异，再明确目标。
 - 分支优先采用用户当次指定分支，否则固定以 `master` 为目标，不能根据当前开发分支或托管平台的默认浏览分支改变发布目标。`codex/redeploy-20261015` 是历史开发分支；Coding 网页默认分支曾为 `main`，均不改变发布到 `master` 的约定。
 - 只提交本次任务范围内的文件，保留无关改动和未跟踪文件。单纯补同步时直接使用已有提交。
-- 推送前重新抓取两端目标分支，确认两端当前头都是待发布提交的祖先；开发分支具备全部主分支历史时使用快进更新。两端必须分别推送、分别读取 `refs/heads/master`（或用户明确指定的目标分支）的哈希，并与本次提交完整哈希一致后才报告同步完成。一端失败时记录已成功的一端，修复后补同步失败端；禁止强推或覆盖远端历史。发生分叉时先检查提交关系，涉及合并时遵循问题日志中的双远端合并约束。
+- GitHub `master` 受保护，要求通过 Pull Request 更新：先推送工作分支，创建目标为 `master` 的 PR，按实际规则检查并合并，保留完整历史。2026-11-06 核实允许 merge commit、无需审批；每次仍须检查最新规则与检查结果，不绕过保护规则。用户已授权更新两端 `master` 时，PR 流程属于这项授权。
+- GitHub PR 合并后，抓取最终 `origin/master` 提交，再将同一提交正常快进到 Coding `master`。推送前重新抓取 Coding 目标分支，确认其当前头是待同步提交的祖先；发生分叉时先检查提交关系，涉及冲突合并时遵循问题日志中的双远端合并约束。
+- 两端必须分别读取 `refs/heads/master`（或用户明确指定的目标分支）的哈希，并与最终发布提交完整哈希一致后才报告同步完成。一端失败时记录已成功的一端，修复后补同步失败端；禁止强推或覆盖远端历史。
 
-### Windows PowerShell 同步已有提交
+### Windows PowerShell 同步 GitHub 已合并的发布提交
 
-先核对仓库地址、提交范围与当前分支；以下命令用于将已有提交同步到默认发布分支 `master`，前提是 Git 已能完成两端认证：
+先完成 GitHub 工作分支推送和目标为 `master` 的 PR 合并。以下命令核对当前待发布提交已包含在 GitHub `master` 中，再同步 Coding 并验收两端，前提是 Git 已能完成两端认证：
 
 ```powershell
 git status --short --branch
 git remote -v
 git log -1 --oneline
 $releaseBranch = 'master'
-$commit = git rev-parse --verify HEAD
+$sourceCommit = git rev-parse --verify HEAD
 if ($LASTEXITCODE -ne 0) { throw '无法确定待同步提交' }
 
-foreach ($remote in @('origin', 'coding')) {
-    git -c http.sslBackend=openssl fetch --no-tags $remote "refs/heads/${releaseBranch}:refs/remotes/${remote}/${releaseBranch}"
-    if ($LASTEXITCODE -ne 0) { throw "读取 $remote 的发布分支失败" }
-    git merge-base --is-ancestor "refs/remotes/${remote}/${releaseBranch}" $commit
-    if ($LASTEXITCODE -ne 0) { throw "$remote 的发布分支无法快进，需先检查分叉" }
-}
+git -c http.sslBackend=openssl fetch --no-tags origin "refs/heads/${releaseBranch}:refs/remotes/origin/${releaseBranch}"
+if ($LASTEXITCODE -ne 0) { throw '读取 GitHub 发布分支失败' }
+$commit = git rev-parse --verify "refs/remotes/origin/${releaseBranch}"
+if ($LASTEXITCODE -ne 0) { throw '无法确定 GitHub 合并结果' }
+git merge-base --is-ancestor $sourceCommit $commit
+if ($LASTEXITCODE -ne 0) { throw '当前提交尚未包含在 GitHub master 中，先完成 PR 合并' }
+
+git -c http.sslBackend=openssl fetch --no-tags coding "refs/heads/${releaseBranch}:refs/remotes/coding/${releaseBranch}"
+if ($LASTEXITCODE -ne 0) { throw '读取 Coding 发布分支失败' }
+git merge-base --is-ancestor "refs/remotes/coding/${releaseBranch}" $commit
+if ($LASTEXITCODE -ne 0) { throw 'Coding 发布分支无法快进，需先检查分叉' }
+git -c http.sslBackend=openssl push coding "${commit}:refs/heads/$releaseBranch"
+if ($LASTEXITCODE -ne 0) { throw 'Coding 推送失败，处理错误后补同步' }
 
 foreach ($remote in @('origin', 'coding')) {
-    git -c http.sslBackend=openssl push $remote "${commit}:refs/heads/$releaseBranch"
-    if ($LASTEXITCODE -ne 0) { throw "推送 $remote 失败，处理错误后补同步该远端" }
     $remoteRef = git -c http.sslBackend=openssl ls-remote --exit-code --heads $remote "refs/heads/$releaseBranch"
     if ($LASTEXITCODE -ne 0 -or -not $remoteRef -or (($remoteRef -split '\s+')[0] -ne $commit)) {
         throw "$remote 的分支提交校验失败"
