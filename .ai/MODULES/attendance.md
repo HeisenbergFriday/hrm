@@ -1,6 +1,6 @@
 ---
 purpose: 考勤模块业务规则说明
-last_updated: 2026-11-05
+last_updated: 2026-11-06
 source_of_truth:
   - internal/api/handlers.go（考勤相关 handler）
   - internal/api/attendance_toolbox_handlers.go（考勤工具箱上传计算 handler）
@@ -362,6 +362,10 @@ DingTalk process-code runtime mapping (`process_codes` keys; global env names ar
 
 ### 旧 `/attendance/processing/*` 兼容
 `leave` / `overtime` / `subsidy` / `final` / `parttime` 仍保留旧字段名与 Blob 响应，但已统一映射到 `AttendanceToolboxService`/runner；本轮不删除 `tools/attendance-processing` 副本。
+
+旧 `/attendance/processing/*` 与 `/attendance/toolbox/:module/run` 均须提交 `<module>_target_month`（`YYYY-MM`）。只有 `integrity_audit.json` 中 `status=passed`、`totals_verified=true` 且没有未处理问题时才返回业务文件；缺月份、检查失败或审计缺失/异常时返回错误。内部 `kind=meta` 与独立 `kind=audit` 不参与业务下载：一个业务 Excel 直接返回，多份业务文件才打包 ZIP。Excel 内的“文件检查/数据检查”页保留。
+
+当前页面优先调用结构化 `/attendance/toolbox/workflows/:module`，过滤 `kind=meta` 后按可下载文件数量决定 Excel 或 ZIP，待处理报告配合审计状态展示；旧页面地址已跳转至工具箱。排查下载格式时先区分当前页面和旧 Blob 入口，不能由旧入口测试推断当前页面一直返回 ZIP。
 
 ### 考勤工具箱文件兼容与校验口径
 

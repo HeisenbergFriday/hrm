@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,9 @@ func TestRunLegacyProcessing_LeaveMapsAndInvokesRunner(t *testing.T) {
 	w := multipart.NewWriter(&body)
 	writeFilePart(t, w, "input", "请假系统导出.xlsx", exportData)
 	writeFilePart(t, w, "schedule", "作息表.xlsx", scheduleData)
+	if err := w.WriteField("leave_target_month", "2026-03"); err != nil {
+		t.Fatal(err)
+	}
 	_ = w.Close()
 
 	form, err := multipart.NewReader(&body, w.Boundary()).ReadForm(32 << 20)
@@ -65,7 +69,25 @@ func TestRunLegacyProcessing_LeaveMapsAndInvokesRunner(t *testing.T) {
 	if filepath.Ext(result.FileName) != ".xlsx" {
 		t.Fatalf("unexpected result filename: %q", result.FileName)
 	}
-	validateXLSXWorkbook(t, result.Data, "请假明细", "实习生请假明细")
+	if result.ContentType != "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" {
+		t.Fatalf("unexpected result content type: %q", result.ContentType)
+	}
+	validateXLSXWorkbook(t, result.Data, "请假明细", "实习生请假明细", "文件检查", "数据检查")
+
+	t.Run("missing month", func(t *testing.T) {
+		form.Value["leave_target_month"] = nil
+		result, err := svc.RunLegacyProcessing(context.Background(), "leave", form)
+		if result != nil || err == nil || !strings.Contains(err.Error(), "请先选择处理月份") {
+			t.Fatalf("missing month must fail without a download: result=%v err=%v", result, err)
+		}
+	})
+	t.Run("month mismatch", func(t *testing.T) {
+		form.Value["leave_target_month"] = []string{"2026-04"}
+		result, err := svc.RunLegacyProcessing(context.Background(), "leave", form)
+		if result != nil || err == nil || !strings.Contains(err.Error(), "检查未通过") {
+			t.Fatalf("failed preflight must not return a report as success: result=%v err=%v", result, err)
+		}
+	})
 }
 
 func writeFilePart(t *testing.T, w *multipart.Writer, field, filename string, data []byte) {
