@@ -61,7 +61,7 @@ update_when:
 | `attendance-toolbox` `parttime` `day-column` `weekend-header` | 钉钉“每月打卡记录”的周末列可显示“六/日”而非日期数字；必须在连续数字日期锚点内推导周末日期，遇到统计字段立即停止，禁止静默丢弃整月周末 | [2026-09-28 兼职周末表头未识别导致出勤漏计](development-issues/2026.md#2026-09-28-p1-兼职周末表头未识别导致出勤漏计) |
 | `attendance-toolbox` `final` `roster` `identity-merge` | 最终汇总以花名册为人事主数据；钉钉月度考勤仅用非空值补充/纠正工号、姓名、考勤组、部门和岗位，禁止清空合同主体、人员类型及入/离职/转正日期 | [2026-09-02 最终表考勤身份覆盖清空花名册人事字段](development-issues/2026.md#2026-09-02-p1-最终表考勤身份覆盖清空花名册人事字段) |
 | `attendance-toolbox` `final` `roster` `person-union` `completeness` `identity-merge` | 最终汇总人员取在职/离职花名册与目标月月度考勤、请假、加班人员并集；人工考勤汇总表是结果异常时的可选兜底。活动记录必须同时带入姓名；同一正式工号只能输出一人；正式业务工号不得被钉钉 UserID 覆盖，当前主编号优先 MT | [2026-09-22 最终汇总按花名册取人导致人工考勤人员漏出](development-issues/2026.md#2026-09-22-p1-最终汇总按花名册取人导致人工考勤人员漏出) |
-| `attendance-toolbox` `integrity` `identity` `month` `audit` | 上传检查与计算共用门禁，错误不得吞掉；兼职人数和冲突在生成前核对；冲突记录原文件名及采用值；审计页与页面状态统一；模板颜色复用计算器常量，日期表头不得读取首行数据 | [2026-11-04 考勤工具箱先计算后审计导致问题被标记成功（2026-11-05 补齐）](development-issues/2026.md#2026-11-04-p1-考勤工具箱先计算后审计导致问题被标记成功) |
+| `attendance-toolbox` `integrity` `identity` `month` `audit` | 上传检查与计算共用门禁，错误不得吞掉；旧 Blob 入口须验证审计通过与合计回读，meta/audit 不参与业务打包；兼职人数和冲突在生成前核对；冲突记录原文件名及采用值；审计页与页面状态统一；模板颜色复用计算器常量，日期表头不得读取首行数据 | [2026-11-04 考勤工具箱先计算后审计导致问题被标记成功（2026-11-06 旧入口补齐）](development-issues/2026.md#2026-11-04-p1-考勤工具箱先计算后审计导致问题被标记成功) |
 | `attendance-toolbox` `roster` `dingtalk` `hrm` `regularization-date` | 钉钉 HRM 转正日期必须兼容标准/中文字段标识及 snake_case/camelCase 返回结构；同步成功但仅有转正日期时也不得标记为无字段 | [2026-09-22 钉钉 HRM 转正日期未进入同步花名册](development-issues/2026.md#2026-09-22-p1-钉钉-hrm-转正日期未进入同步花名册) |
 | `attendance-toolbox` `dingtalk` `approval` `time-window` | `processinstance/listids` 禁止直接提交超长或未来时间范围；客户端必须按最多 120 天连续分片、结束时间预留时钟偏差，并跨片去重、全局执行条数上限 | [2026-08-01 钉钉审批查询时间范围非法](development-issues/2026.md#2026-08-01-p1-钉钉审批查询时间范围非法导致工具箱同步失败) |
 | `attendance-toolbox` `structured-result` `auto-fill` | 自动回填必须从 structured run 按 `kind=export + flow_key` 下载业务表；审计/元数据不得上传，也不得因多文件而改走 ZIP 或重跑同步 | [2026-08-01 自动回填误判多文件](development-issues/2026.md#2026-08-01-p1-自动回填将审计文件计入结果导致同步成功后仍报错) |
@@ -133,7 +133,7 @@ update_when:
 | `deploy` `upload-and-restart` | 上传失败续传用独立脚本，禁止改 `build-and-deploy.ps1` 行为 | cerebrum Decision Log |
 | `git` `merge` `release` | 跨分支冲突必须按语义单元核对生产代码、配套测试和 `go.mod/go.sum`；禁止按文件整侧选取后直接推送，至少执行编译、全量测试与双远端祖先检查 | [2026-07-23 双远端 master 合并遗漏依赖与安全配套代码](development-issues/2026.md#2026-07-23-p1-双远端-master-合并遗漏依赖与安全配套代码) |
 | `git` `dual-remote` `coding` `documentation` | 使用 `.ai/COMMANDS.md` 中已确认的两端地址，默认发布到 `master`；GitHub 通过 PR 合并，再将最终提交快进到 Coding，分别校验哈希；令牌需代码仓库读写权限；提交、推送、部署分别报告 | [2026-11-06 双远程同步约定缺失导致重复确认与漏推](development-issues/2026.md#2026-11-06-p2-双远程同步约定缺失导致重复确认与漏推) |
-| `go` `security` `govulncheck` `docker` | Go 标准库出现可达漏洞时，最低工具链版本和发布构建镜像必须同步升级到修复版本；CI、`go.mod`、Dockerfile 禁止版本漂移 | [2026-08-18 Go 1.26.5 标准库漏洞阻塞发布](development-issues/2026.md#2026-08-18-p1-go-1265-标准库漏洞阻塞发布) |
+| `go` `security` `govulncheck` `docker` | Go 标准库出现可达漏洞时，最低工具链版本和发布构建镜像必须同步升级到修复版本；CI、`go.mod`、Dockerfile 禁止版本漂移；共享受影响实现的 `x/net` 等依赖也须升级 | [2026-08-18 Go 1.26.5 标准库漏洞阻塞发布（2026-11-06 补齐工具链与网络库）](development-issues/2026.md#2026-08-18-p1-go-1265-标准库漏洞阻塞发布) |
 
 ### AI 协作 / 上下文
 
